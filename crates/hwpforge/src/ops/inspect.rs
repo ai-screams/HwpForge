@@ -59,6 +59,7 @@ pub struct InspectOutput {
 /// which is what the CLI and the MCP server report as `paragraphs` today.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InspectReport {
     /// Document metadata.
     pub metadata: InspectMetadata,
@@ -85,16 +86,30 @@ pub struct InspectReport {
 /// The metadata fields both frontends show today.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InspectMetadata {
     /// Document title; empty when the document sets none.
     pub title: String,
     /// Document author; empty when the document sets none.
     pub author: String,
+    /// Document subject; empty when the document sets none.
+    pub subject: String,
+    /// Free-text description; empty when the document sets none.
+    pub description: String,
+    /// Who saved the document last; empty when unknown.
+    pub last_saved_by: String,
+    /// Creation timestamp as the document stores it (ISO 8601), if any.
+    pub created: Option<String>,
+    /// Last-modified timestamp as the document stores it (ISO 8601), if any.
+    pub modified: Option<String>,
+    /// Keyword list; empty when the document sets none.
+    pub keywords: Vec<String>,
 }
 
 /// One section's contribution to [`InspectReport`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InspectSection {
     /// Section index, 0-based.
     pub index: usize,
@@ -119,6 +134,7 @@ pub struct InspectSection {
 /// Style summary of the document's header definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InspectStyles {
     /// Distinct fonts, keyed by face name and language.
     pub fonts: Vec<FontSummary>,
@@ -131,6 +147,7 @@ pub struct InspectStyles {
 /// One font definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct FontSummary {
     /// Index in the header's font table.
     pub id: usize,
@@ -143,6 +160,7 @@ pub struct FontSummary {
 /// One character shape definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct CharShapeSummary {
     /// Index in the header's char-shape table.
     pub id: usize,
@@ -161,6 +179,7 @@ pub struct CharShapeSummary {
 /// One paragraph shape definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ParaShapeSummary {
     /// Index in the header's para-shape table.
     pub id: usize,
@@ -177,7 +196,7 @@ pub struct ParaShapeSummary {
 ///
 /// # Errors
 ///
-/// [`OpsError::Hwpx`] (code `DECODE_FAILED`) when the bytes are not a
+/// [`OpsError::Decode`] (code `DECODE_FAILED`) when the bytes are not a
 /// decodable HWPX package.
 ///
 /// # Examples
@@ -191,7 +210,7 @@ pub struct ParaShapeSummary {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsError> {
-    let decoded = HwpxDecoder::decode(hwpx)?;
+    let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
     let document = &decoded.document;
     let metadata = document.metadata();
 
@@ -218,6 +237,12 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
         metadata: InspectMetadata {
             title: metadata.title.clone().unwrap_or_default(),
             author: metadata.author.clone().unwrap_or_default(),
+            subject: metadata.subject.clone().unwrap_or_default(),
+            description: metadata.description.clone().unwrap_or_default(),
+            last_saved_by: metadata.last_saved_by.clone().unwrap_or_default(),
+            created: metadata.created.clone(),
+            modified: metadata.modified.clone(),
+            keywords: metadata.keywords.clone(),
         },
         sections: section_details.len(),
         paragraphs: section_details.iter().map(|s| s.paragraphs).sum(),

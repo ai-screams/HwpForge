@@ -30,28 +30,84 @@
 //! name and message. `tests/ops_error_inventory.rs` fails as
 //! soon as an inventoried variant has no explicit arm.
 //!
+//! Codec errors are **stage-tagged**: the same [`HwpxError`] variant means
+//! `DECODE_FAILED` when reading a package and `ENCODE_FAILED` when writing
+//! one, exactly as the CLI reports it today, so there is no `From<HwpxError>`
+//! — an operation says which stage failed through [`OpsError::decode`] /
+//! [`OpsError::encode`] (and `md_decode` / `md_encode` for Markdown). A
+//! nested Core or Foundation failure inside a codec error takes the stage's
+//! code too; only a direct [`OpsError::Core`] (document validation) is
+//! `VALIDATION_FAILED`.
+//!
 //! # Features
 //!
 //! `ops-hwpx` gives the HWPX-only operations, `ops-md` adds the Markdown
 //! ones, and `ops` is the alias for everything.
 
 #[cfg(feature = "ops-md")]
+pub mod convert;
+pub mod diff;
+pub mod edit;
+pub mod exchange;
+#[cfg(feature = "ops-md")]
 pub mod fs;
 pub mod inspect;
+pub mod inspect_meta;
+#[cfg(feature = "ops-md")]
+pub mod markdown;
+pub mod read;
+#[cfg(feature = "schemars")]
+pub mod schema;
+pub mod stamp;
+pub mod style;
 
 use hwpforge_core::CoreError;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
+use hwpforge_foundation::FoundationError;
 use hwpforge_smithy_hwpx::{
-    grid_addr::GridAddrError,
+    grid_addr::{GridAddrError, GridAddrWarning},
+    partition_semantic_loss,
     stamp::{CellStampError, StampError, StampMapError, StamperError},
     CellEditError, DecodeWarning, EncodeOutcome, EncodeWarning, FillError, HwpxError,
-    HwpxErrorCode, ReadError, SectionWorkflowError, StructuralEditError,
+    HwpxErrorCode, ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
+    StructuralWarning,
 };
 
 #[cfg(feature = "ops-md")]
 use hwpforge_smithy_md::{assets::AssetOutcome, MdError, MdErrorCode, MdWarning};
 
 pub use inspect::{inspect, InspectOptions, InspectOutput, InspectReport};
+pub use inspect_meta::InspectMeta;
+
+#[cfg(feature = "ops-md")]
+pub use convert::{convert_md, decode_md, ConvertMdOptions, ConvertMeta, ConvertOutput, MdDecoded};
+pub use diff::{diff, DiffMeta, DiffOutput};
+pub use edit::{
+    delete_para, fill, insert_para, set_cell, DeleteParaOptions, FillMeta, FillOptions, FillOutput,
+    InsertParaOptions, SetCellMeta, SetCellOptions, SetCellOutput, StructuralMeta,
+    StructuralOutput,
+};
+pub use exchange::{
+    export_section, from_json, patch, to_json, EncodeMeta, ExportSectionMeta, ExportSectionOptions,
+    ExportSectionOutput, FromJsonOptions, FromJsonOutput, PatchMeta, PatchOptions, PatchOutput,
+    ToJsonMeta, ToJsonOptions, ToJsonOutput,
+};
+#[cfg(feature = "ops-md")]
+pub use markdown::{to_md, MdExportMeta, MdExportOptions, MdExportOutput, MdMode};
+pub use read::{
+    fields, outline, read, FieldsMeta, FieldsOutput, OutlineMeta, OutlineOutput, ReadMeta,
+    ReadOptions, ReadOutput,
+};
+#[cfg(feature = "schemars")]
+pub use schema::{schema, SchemaKind, SchemaOptions, SchemaOutput};
+pub use stamp::{
+    stamp, stamp_plan, StampMeta, StampOptions, StampOutput, StampPlanMeta, StampPlanOutput,
+    StampedManifest,
+};
+pub use style::{
+    restyle, templates, validate, RestyleMeta, RestyleOptions, RestyleOutput, TemplateList,
+    TemplatesOutput, ValidateOutput, ValidateReport,
+};
 
 // ── errors ──────────────────────────────────────────────────────
 
@@ -63,22 +119,54 @@ pub use inspect::{inspect, InspectOptions, InspectOutput, InspectReport};
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
-    /// HWPX codec failure (decode, encode, packaging).
+    /// HWPX decode-stage failure: reading the package, parsing XML or
+    /// projecting it to Core. Build it with [`OpsError::decode`].
     #[error(transparent)]
-    Hwpx(#[from] HwpxError),
+    Decode(HwpxError),
 
-    /// Markdown codec failure.
+    /// HWPX encode-stage failure: serialising XML or writing the package.
+    /// Build it with [`OpsError::encode`].
+    #[error(transparent)]
+    Encode(HwpxError),
+
+    /// Markdown decode-stage failure (parsing Markdown, resolving assets).
+    /// Build it with [`OpsError::md_decode`].
     #[cfg(feature = "ops-md")]
     #[error(transparent)]
-    Md(#[from] MdError),
+    MdDecode(MdError),
+
+    /// Markdown encode-stage failure (exporting to Markdown).
+    /// Build it with [`OpsError::md_encode`].
+    #[cfg(feature = "ops-md")]
+    #[error(transparent)]
+    MdEncode(MdError),
+
+    /// Foundation primitive invariant failure that reached an operation
+    /// directly (bad unit, colour, index or identifier).
+    #[error(transparent)]
+    Foundation(#[from] FoundationError),
+
+    /// The style store could not be built from the resolved template
+    /// (`STYLE_STORE_FAILED`, as the CLI reports it). Build it with
+    /// [`OpsError::style_store`].
+    #[error("style store error: {0}")]
+    StyleStore(HwpxError),
+
+    /// Style references could not be rebound onto the store
+    /// (`STYLE_REBIND_FAILED`). Build it with [`OpsError::style_rebind`].
+    #[error("style rebind error: {0}")]
+    StyleRebind(HwpxError),
 
     /// Click-here field fill failure.
     #[error(transparent)]
     Fill(#[from] FillError),
 
-    /// Table cell edit failure.
+    /// Table cell edit failure. A `CellEditError::SemanticLoss` never
+    /// arrives here: `From<CellEditError>` turns it into
+    /// [`OpsError::EncodeSemanticLoss`] so every regenerating edit reports
+    /// the same envelope.
     #[error(transparent)]
-    CellEdit(#[from] CellEditError),
+    CellEdit(CellEditError),
 
     /// Read/projection failure (`outline`, `read`, `fields`).
     #[error(transparent)]
@@ -88,17 +176,25 @@ pub enum OpsError {
     #[error(transparent)]
     StructuralEdit(#[from] StructuralEditError),
 
-    /// Cell grid address check failure on an exported JSON tree.
+    /// Cell grid address **verification** failure on a JSON tree a caller
+    /// supplied (`from_json`, `patch`) — `GRID_ADDR_INVALID`.
     #[error(transparent)]
     GridAddr(#[from] GridAddrError),
+
+    /// Cell grid address **projection** failure while annotating an export
+    /// (`to_json`, `export_section`) — `GRID_ADDR_PROJECTION_FAILED`. Build
+    /// it with [`OpsError::grid_addr_projection`].
+    #[error(transparent)]
+    GridAddrProjection(GridAddrError),
 
     /// Section export/patch workflow failure.
     #[error(transparent)]
     SectionWorkflow(#[from] SectionWorkflowError),
 
-    /// Template stamping failure.
+    /// Template stamping failure. A `StamperError::SemanticLoss` never
+    /// arrives here (see [`OpsError::CellEdit`]).
     #[error(transparent)]
-    Stamper(#[from] StamperError),
+    Stamper(StamperError),
 
     /// Stamp request (map) parse or validation failure.
     #[error(transparent)]
@@ -112,6 +208,11 @@ pub enum OpsError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    /// A result could not be serialised to JSON (for example non-finite
+    /// chart data). Build it with [`OpsError::json_serialize`].
+    #[error("JSON serialize error: {0}")]
+    JsonSerialize(serde_json::Error),
+
     /// The requested style preset does not exist.
     #[error("preset not found: {name}")]
     PresetNotFound {
@@ -119,9 +220,24 @@ pub enum OpsError {
         name: String,
     },
 
-    /// Arguments were syntactically valid but semantically unusable.
+    /// Arguments were syntactically valid but semantically unusable, with
+    /// no more specific code than `INVALID_INPUT`.
     #[error("invalid input: {reason}")]
     InvalidInput {
+        /// What made the arguments unusable.
+        reason: String,
+    },
+
+    /// An argument rejection that reports its own stable code.
+    ///
+    /// The frontends validate some arguments before the library sees them
+    /// (an empty value map is `NO_VALUES`, mixed cell targets are
+    /// `INVALID_SET_CELL_ARGS`, …). Those rejections keep their dedicated
+    /// code and the frontend's wording.
+    #[error("invalid input: {reason}")]
+    Rejected {
+        /// The stable code this rejection reports.
+        code: OpsCode,
         /// What made the arguments unusable.
         reason: String,
     },
@@ -149,23 +265,32 @@ impl OpsError {
     #[must_use]
     pub fn code(&self) -> OpsCode {
         match self {
-            Self::Hwpx(e) => hwpx_code(e),
-            // `md_code` documents why the two asset-contract variants are
-            // `INVALID_INPUT` rather than an internal invariant.
+            Self::Decode(e) => hwpx_code(e, Stage::Decode),
+            Self::Encode(e) => hwpx_code(e, Stage::Encode),
+            // `md_code` documents why the two asset-contract variants keep
+            // dedicated codes instead of the stage code.
             #[cfg(feature = "ops-md")]
-            Self::Md(e) => md_code(e),
+            Self::MdDecode(e) => md_code(e, Stage::Decode),
+            #[cfg(feature = "ops-md")]
+            Self::MdEncode(e) => md_code(e, Stage::Encode),
+            Self::Foundation(_) => OpsCode::InternalInvariant,
+            Self::StyleStore(_) => OpsCode::StyleStoreFailed,
+            Self::StyleRebind(_) => OpsCode::StyleRebindFailed,
             Self::Fill(e) => fill_code(e),
             Self::CellEdit(e) => cell_edit_code(e),
             Self::Read(e) => read_code(e),
             Self::StructuralEdit(e) => structural_code(e),
             Self::GridAddr(e) => grid_addr_code(e),
+            Self::GridAddrProjection(_) => OpsCode::GridAddrProjectionFailed,
             Self::SectionWorkflow(e) => section_workflow_code(e),
             Self::Stamper(e) => stamper_code(e),
             Self::StampMap(e) => stamp_map_code(e),
             Self::Core(e) => core_code(e),
             Self::Json(_) => OpsCode::JsonParseFailed,
+            Self::JsonSerialize(_) => OpsCode::JsonSerializeFailed,
             Self::PresetNotFound { .. } => OpsCode::PresetNotFound,
             Self::InvalidInput { .. } => OpsCode::InvalidInput,
+            Self::Rejected { code, .. } => *code,
             Self::NoFonts => OpsCode::NoFonts,
             Self::EncodeSemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
         }
@@ -180,6 +305,100 @@ impl OpsError {
     pub fn hint(&self) -> Option<&'static str> {
         hint_for(self.code())
     }
+
+    /// Wraps an HWPX codec failure that happened while **decoding**.
+    #[must_use]
+    pub fn decode(error: HwpxError) -> Self {
+        Self::Decode(error)
+    }
+
+    /// Wraps an HWPX codec failure that happened while **encoding**.
+    #[must_use]
+    pub fn encode(error: HwpxError) -> Self {
+        Self::Encode(error)
+    }
+
+    /// Wraps a grid-address projection failure met while annotating an
+    /// export (the CLI's `GRID_ADDR_PROJECTION_FAILED`).
+    #[must_use]
+    pub fn grid_addr_projection(error: GridAddrError) -> Self {
+        Self::GridAddrProjection(error)
+    }
+
+    /// Wraps a JSON serialisation failure (the CLI's `JSON_SERIALIZE_FAILED`).
+    #[must_use]
+    pub fn json_serialize(error: serde_json::Error) -> Self {
+        Self::JsonSerialize(error)
+    }
+
+    /// Wraps a failure of building the style store from a template (the
+    /// CLI's `STYLE_STORE_FAILED` stage between decoding and encoding).
+    #[must_use]
+    pub fn style_store(error: HwpxError) -> Self {
+        Self::StyleStore(error)
+    }
+
+    /// Wraps a failure of rebinding style references onto the store (the
+    /// CLI's `STYLE_REBIND_FAILED` stage).
+    #[must_use]
+    pub fn style_rebind(error: HwpxError) -> Self {
+        Self::StyleRebind(error)
+    }
+
+    /// Wraps a Markdown failure that happened while **decoding** (parsing or
+    /// asset resolution).
+    #[cfg(feature = "ops-md")]
+    #[must_use]
+    pub fn md_decode(error: MdError) -> Self {
+        Self::MdDecode(error)
+    }
+
+    /// Wraps a Markdown failure that happened while **encoding** (export).
+    #[cfg(feature = "ops-md")]
+    #[must_use]
+    pub fn md_encode(error: MdError) -> Self {
+        Self::MdEncode(error)
+    }
+
+    /// The uniform fail-closed envelope: both lists keep their original
+    /// order and become [`WarningInfo`] through [`OpsWarning::info`].
+    #[must_use]
+    pub fn semantic_loss(warnings: Vec<EncodeWarning>, others: Vec<EncodeWarning>) -> Self {
+        let info = |w: EncodeWarning| OpsWarning::Encode(w).info();
+        Self::EncodeSemanticLoss {
+            warnings: warnings.into_iter().map(info).collect(),
+            others: others.into_iter().map(info).collect(),
+        }
+    }
+}
+
+impl From<CellEditError> for OpsError {
+    fn from(error: CellEditError) -> Self {
+        match error {
+            CellEditError::SemanticLoss { warnings, others } => {
+                Self::semantic_loss(warnings, others)
+            }
+            other => Self::CellEdit(other),
+        }
+    }
+}
+
+impl From<StamperError> for OpsError {
+    fn from(error: StamperError) -> Self {
+        match error {
+            StamperError::SemanticLoss { warnings, others } => {
+                Self::semantic_loss(warnings, others)
+            }
+            other => Self::Stamper(other),
+        }
+    }
+}
+
+/// Which codec stage an error came from — the stage decides the code.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    Decode,
+    Encode,
 }
 
 fn hint_for(code: OpsCode) -> Option<&'static str> {
@@ -242,12 +461,16 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
 // One function per wrapped enum. `tests/ops_error_inventory.rs` holds the
 // same tables as literal data and fails when an upstream variant is missing.
 
-fn hwpx_code(error: &HwpxError) -> OpsCode {
-    // Payload-bearing delegation first: a Core failure keeps the code it
-    // would have had on its own, whichever layer wrapped it.
-    if let HwpxError::Core(inner) = error {
-        return core_code(inner);
-    }
+// The stage decides the code: the CLI prints `DECODE_FAILED` for anything the
+// decoder returns and `ENCODE_FAILED` for anything the encoder returns,
+// including a nested Core or Foundation failure. Every variant this version
+// knows is still listed so a new upstream variant lands on
+// `UPSTREAM_UNMAPPED` and the inventory test asks for a decision.
+fn hwpx_code(error: &HwpxError, stage: Stage) -> OpsCode {
+    let stage_code = match stage {
+        Stage::Decode => OpsCode::DecodeFailed,
+        Stage::Encode => OpsCode::EncodeFailed,
+    };
     match error.code() {
         HwpxErrorCode::Zip
         | HwpxErrorCode::InvalidMimetype
@@ -255,11 +478,12 @@ fn hwpx_code(error: &HwpxError) -> OpsCode {
         | HwpxErrorCode::XmlParse
         | HwpxErrorCode::InvalidAttribute
         | HwpxErrorCode::IndexOutOfBounds
-        | HwpxErrorCode::InvalidStructure => OpsCode::DecodeFailed,
-        HwpxErrorCode::LayoutCacheDropped | HwpxErrorCode::XmlSerialize => OpsCode::EncodeFailed,
-        HwpxErrorCode::Io => OpsCode::IoFailed,
-        HwpxErrorCode::Foundation => OpsCode::InternalInvariant,
-        // `Core` is handled above; anything else is newer than this table.
+        | HwpxErrorCode::InvalidStructure
+        | HwpxErrorCode::LayoutCacheDropped
+        | HwpxErrorCode::XmlSerialize
+        | HwpxErrorCode::Io
+        | HwpxErrorCode::Core
+        | HwpxErrorCode::Foundation => stage_code,
         _ => OpsCode::UpstreamUnmapped,
     }
 }
@@ -272,13 +496,15 @@ fn core_code(error: &CoreError) -> OpsCode {
     }
 }
 
-/// Classifies a Markdown codec failure.
+/// Classifies a Markdown codec failure by stage.
 ///
-/// Every variant the CLI can already produce keeps the code the CLI prints
-/// (`MD_DECODE_FAILED` for the decode family, `INPUT_TOO_LARGE` for an
-/// oversized input).
+/// Decoding reports `MD_DECODE_FAILED` for the whole decode family — the CLI
+/// wraps the entire decode in one catch, so a nested Core or Foundation
+/// failure takes that code too. Encoding (Markdown export) reports
+/// `ENCODE_FAILED`, as the CLI does. An oversized input keeps
+/// `INPUT_TOO_LARGE` in both stages.
 ///
-/// The two asset-contract variants get dedicated codes.
+/// The two asset-contract variants get dedicated codes in both stages.
 /// [`MdError::AssetPlanMismatch`] and [`MdError::AssetIdentityConflict`] both
 /// mean that the assets a caller provisioned do not line up with the plan the
 /// document produced: a reply for an occurrence that was never planned, or two
@@ -289,10 +515,11 @@ fn core_code(error: &CoreError) -> OpsCode {
 /// `tests/ops_error_inventory.rs::asset_contract_violations_get_dedicated_codes`
 /// pins it (W1a adversarial review F6).
 #[cfg(feature = "ops-md")]
-fn md_code(error: &MdError) -> OpsCode {
-    if let MdError::Core(inner) = error {
-        return core_code(inner);
-    }
+fn md_code(error: &MdError, stage: Stage) -> OpsCode {
+    let stage_code = match stage {
+        Stage::Decode => OpsCode::MdDecodeFailed,
+        Stage::Encode => OpsCode::EncodeFailed,
+    };
     match error.code() {
         MdErrorCode::InvalidFrontmatter
         | MdErrorCode::FrontmatterUnclosed
@@ -306,13 +533,13 @@ fn md_code(error: &MdError) -> OpsCode {
         | MdErrorCode::LosslessParse
         | MdErrorCode::LosslessMissingAttribute
         | MdErrorCode::LosslessInvalidAttribute
-        | MdErrorCode::Blueprint => OpsCode::MdDecodeFailed,
+        | MdErrorCode::Blueprint
+        | MdErrorCode::Io
+        | MdErrorCode::Core
+        | MdErrorCode::Foundation => stage_code,
         MdErrorCode::FileTooLarge => OpsCode::InputTooLarge,
         MdErrorCode::AssetPlanMismatch => OpsCode::AssetPlanMismatch,
         MdErrorCode::AssetIdentityConflict => OpsCode::AssetIdentityConflict,
-        MdErrorCode::Io => OpsCode::IoFailed,
-        MdErrorCode::Foundation => OpsCode::InternalInvariant,
-        // `Core` is handled above; anything else is newer than this table.
         _ => OpsCode::UpstreamUnmapped,
     }
 }
@@ -475,6 +702,13 @@ pub enum OpsWarning {
     Encode(EncodeWarning),
     /// HWPX decoder warning.
     Decode(DecodeWarning),
+    /// Advisory diagnostic from a structural paragraph edit (for example an
+    /// index mark removed together with its paragraph).
+    Structural(StructuralWarning),
+    /// A table exported without grid addresses (`TABLE_GRID_UNADDRESSABLE`).
+    GridAddr(GridAddrWarning),
+    /// Section export/patch advisory (preservation metadata unavailable).
+    SectionWorkflow(SectionWorkflowWarning),
     /// Markdown encoder warning.
     #[cfg(feature = "ops-md")]
     Md(MdWarning),
@@ -484,17 +718,44 @@ pub enum OpsWarning {
 }
 
 impl OpsWarning {
+    /// Wraps an asset outcome that is worth reporting, or `None` for an
+    /// `Embedded` outcome — a successful embed is not a warning and belongs
+    /// only in the conversion report's `assets` list.
+    #[cfg(feature = "ops-md")]
+    #[must_use]
+    pub fn asset(outcome: AssetOutcome) -> Option<Self> {
+        match outcome {
+            AssetOutcome::Embedded { .. } => None,
+            other => Some(Self::Asset(other)),
+        }
+    }
+
     /// The wire shape of this warning: stable code, message, optional hint.
     ///
-    /// The codes reproduce the strings the CLI prints today
-    /// (`LAYOUT_CACHE_DROPPED`, `UNKNOWN_ENUM_VALUE`,
-    /// `TABLE_MERGE_FLATTENED`, …); `OTHER` is the same fallback the CLI
-    /// uses for a warning variant it does not know.
+    /// Codes the CLI already prints today keep their string:
+    /// `LAYOUT_CACHE_DROPPED`, `UNKNOWN_ENUM_VALUE`, `TABLE_MERGE_FLATTENED`,
+    /// and `OTHER` for a variant this version does not know. The rest are
+    /// **new canonical codes** that the frontends will adopt through their
+    /// compatibility tables: `NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`,
+    /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
+    /// `IMAGE_EMBED_SKIPPED`, `ASSET_DROPPED`, `ASSET_REMOTE`. The CLI's
+    /// `to-pdf` also files a decode-side `LayoutCacheDropped` under `OTHER`
+    /// and carries the `UnknownEnumValue` attribute in a separate `location`
+    /// field; here the attribute is part of the message.
     #[must_use]
     pub fn info(&self) -> WarningInfo {
         match self {
             Self::Encode(w) => WarningInfo::new(encode_warning_code(w), w.to_string()),
             Self::Decode(w) => WarningInfo::new(decode_warning_code(w), decode_warning_message(w)),
+            Self::Structural(w) => WarningInfo::new(structural_warning_code(w), w.to_string()),
+            Self::GridAddr(w) => WarningInfo::new(
+                "TABLE_GRID_UNADDRESSABLE",
+                format!(
+                    "table #{} in section {} exported without grid addresses: {}",
+                    w.table_ordinal, w.section, w.reason
+                ),
+            ),
+            Self::SectionWorkflow(w) => WarningInfo::new(w.code(), w.message()),
             #[cfg(feature = "ops-md")]
             Self::Md(w) => WarningInfo::new(md_warning_code(w), w.to_string()),
             #[cfg(feature = "ops-md")]
@@ -532,6 +793,13 @@ fn decode_warning_message(warning: &DecodeWarning) -> String {
             format!("layout cache dropped at {path}: {reason}")
         }
         other => format!("{other:?}"),
+    }
+}
+
+fn structural_warning_code(warning: &StructuralWarning) -> &'static str {
+    match warning {
+        StructuralWarning::IndexMarkRemoved { .. } => "INDEX_MARK_REMOVED",
+        _ => UNCLASSIFIED,
     }
 }
 
@@ -608,12 +876,9 @@ pub fn take_bytes_fail_closed(
 ) -> Result<(Vec<u8>, Vec<OpsWarning>), OpsError> {
     let EncodeOutcome { bytes, warnings } = outcome;
     if warnings.iter().any(EncodeWarning::is_semantic_loss) {
-        let (lost, others): (Vec<_>, Vec<_>) =
-            warnings.into_iter().partition(EncodeWarning::is_semantic_loss);
-        return Err(OpsError::EncodeSemanticLoss {
-            warnings: lost.iter().map(|w| OpsWarning::Encode(w.clone()).info()).collect(),
-            others: others.iter().map(|w| OpsWarning::Encode(w.clone()).info()).collect(),
-        });
+        // The split (and its order contract) lives in smithy-hwpx.
+        let (lost, others) = partition_semantic_loss(warnings);
+        return Err(OpsError::semantic_loss(lost, others));
     }
     Ok((bytes, warnings.into_iter().map(OpsWarning::Encode).collect()))
 }
@@ -645,6 +910,24 @@ mod tests {
             (OpsError::PresetNotFound { name: "gov".into() }, OpsCode::PresetNotFound),
             (OpsError::InvalidInput { reason: "two targets".into() }, OpsCode::InvalidInput),
             (OpsError::NoFonts, OpsCode::NoFonts),
+            (
+                OpsError::Rejected { code: OpsCode::NoValues, reason: "no field values".into() },
+                OpsCode::NoValues,
+            ),
+            (
+                OpsError::json_serialize(
+                    serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+                ),
+                OpsCode::JsonSerializeFailed,
+            ),
+            (
+                OpsError::style_store(HwpxError::InvalidStructure { detail: "no fonts".into() }),
+                OpsCode::StyleStoreFailed,
+            ),
+            (
+                OpsError::style_rebind(HwpxError::InvalidStructure { detail: "dangling".into() }),
+                OpsCode::StyleRebindFailed,
+            ),
             (
                 OpsError::EncodeSemanticLoss { warnings: Vec::new(), others: Vec::new() },
                 OpsCode::EncodeSemanticLoss,

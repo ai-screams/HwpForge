@@ -35,6 +35,12 @@ pub struct ManifestEntry {
 /// The audit scope. Extend it whenever `OpsError`/`OpsWarning` grows an arm.
 pub const MANIFEST: &[ManifestEntry] = &[
     ManifestEntry {
+        krate: "hwpforge-foundation",
+        file: "crates/hwpforge-foundation/src/error.rs",
+        wrapped: &["FoundationError"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/error.rs",
         wrapped: &["HwpxError"],
@@ -121,6 +127,29 @@ pub const MANIFEST: &[ManifestEntry] = &[
         not_wrapped: &[],
     },
     ManifestEntry {
+        krate: "hwpforge-smithy-hwpx",
+        file: "crates/hwpforge-smithy-hwpx/src/structural.rs",
+        wrapped: &["StructuralWarning"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
+        krate: "hwpforge-smithy-hwpx",
+        file: "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
+        wrapped: &["SectionWorkflowWarning"],
+        not_wrapped: &[],
+    },
+    ManifestEntry {
+        krate: "hwpforge-core",
+        file: "crates/hwpforge-core/src/table/grid.rs",
+        wrapped: &[],
+        not_wrapped: &[(
+            "GridError",
+            "table-grid projection failure; never returned by an API the ops layer calls \
+             directly — it reaches ops only wrapped as `CoreError`, `GridAddrError` or \
+             `ReadError::TableUnaddressable`",
+        )],
+    },
+    ManifestEntry {
         krate: "hwpforge-core",
         file: "crates/hwpforge-core/src/error.rs",
         wrapped: &["CoreError"],
@@ -190,8 +219,8 @@ pub struct EnumRecord {
 pub struct Inventory {
     /// Every enum the manifest names, in manifest order.
     pub enums: Vec<EnumRecord>,
-    /// Public `*Error`/`*Warning` enums found in manifest files that the
-    /// manifest does not name at all. Must stay empty.
+    /// Public `*Error`/`*Warning` enums found anywhere in the audited
+    /// crates' module trees that the manifest does not name. Must stay empty.
     pub unlisted_public_error_or_warning_enums: Vec<String>,
 }
 
@@ -211,7 +240,6 @@ pub fn workspace_root() -> PathBuf {
 pub fn collect() -> Inventory {
     let root = workspace_root();
     let mut enums = Vec::new();
-    let mut unlisted = Vec::new();
 
     for entry in MANIFEST {
         let path = root.join(entry.file);
@@ -237,13 +265,122 @@ pub fn collect() -> Inventory {
             );
         }
         enums.extend(found);
+    }
 
-        let mut sweep = Sweep { named: &named, unlisted: Vec::new() };
-        sweep.visit_file(&ast);
-        unlisted.extend(sweep.unlisted.into_iter().map(|name| format!("{}::{name}", entry.file)));
+    // Second pass, crate-wide: every source file reachable from each
+    // audited crate's `lib.rs` through out-of-line `mod` declarations is
+    // swept for public `*Error`/`*Warning` enums the manifest never names.
+    // Limiting the sweep to manifest files would let a new diagnostic enum
+    // in an unlisted module (or a re-export from one) go unnoticed.
+    let mut unlisted = Vec::new();
+    for krate in audited_crates() {
+        let named: Vec<&str> = MANIFEST
+            .iter()
+            .filter(|entry| entry.krate == krate)
+            .flat_map(|entry| {
+                entry.wrapped.iter().copied().chain(entry.not_wrapped.iter().map(|(n, _)| *n))
+            })
+            .collect();
+        let lib = root.join("crates").join(krate).join("src/lib.rs");
+        for file in module_tree(&lib) {
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            let ast = syn::parse_file(&source)
+                .unwrap_or_else(|e| panic!("{} does not parse: {e}", file.display()));
+            let mut sweep = Sweep { named: &named, unlisted: Vec::new() };
+            sweep.visit_file(&ast);
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            unlisted.extend(sweep.unlisted.into_iter().map(|name| format!("{rel}::{name}")));
+        }
     }
 
     Inventory { enums, unlisted_public_error_or_warning_enums: unlisted }
+}
+
+/// The crates the manifest covers, each swept from its `src/lib.rs`.
+fn audited_crates() -> Vec<&'static str> {
+    let mut crates: Vec<&'static str> = MANIFEST.iter().map(|entry| entry.krate).collect();
+    crates.sort_unstable();
+    crates.dedup();
+    crates
+}
+
+/// Every source file of a crate's module tree, starting at `lib.rs` and
+/// following out-of-line `mod name;` declarations (`name.rs`,
+/// `name/mod.rs`, or a `#[path = "…"]` override). Inline modules are part
+/// of their file and need no resolution. An unresolvable declaration is a
+/// panic, never a silent skip.
+///
+/// # Panics
+///
+/// When a file cannot be read or parsed, or a `mod name;` has no file.
+#[must_use]
+pub fn module_tree(lib: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    visit_module_file(lib, &mut files);
+    files
+}
+
+fn visit_module_file(file: &Path, files: &mut Vec<PathBuf>) {
+    let source =
+        std::fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let ast = syn::parse_file(&source)
+        .unwrap_or_else(|e| panic!("{} does not parse: {e}", file.display()));
+    files.push(file.to_path_buf());
+
+    let dir = file.parent().expect("module file has a directory");
+    let is_root = matches!(file.file_name().and_then(|n| n.to_str()), Some("lib.rs" | "mod.rs"));
+    let stem = file.file_stem().and_then(|s| s.to_str()).expect("module file stem");
+    // `foo.rs` declaring `mod bar;` resolves to `foo/bar.rs`; a root file
+    // (`lib.rs` / `mod.rs`) resolves siblings in its own directory.
+    let child_dir = if is_root { dir.to_path_buf() } else { dir.join(stem) };
+
+    collect_out_of_line_mods(&ast.items, &child_dir, files);
+}
+
+fn collect_out_of_line_mods(items: &[Item], child_dir: &Path, files: &mut Vec<PathBuf>) {
+    for item in items {
+        let Item::Mod(item_mod) = item else { continue };
+        match &item_mod.content {
+            // Inline module: its items live in the same file, but it may
+            // itself declare out-of-line children under `<dir>/<name>/`.
+            Some((_, inner)) => {
+                let nested = child_dir.join(item_mod.ident.to_string());
+                collect_out_of_line_mods(inner, &nested, files);
+            }
+            None => {
+                let name = item_mod.ident.to_string();
+                let explicit = item_mod.attrs.iter().find_map(path_attribute);
+                let candidates = match explicit {
+                    Some(rel) => vec![child_dir.join(rel)],
+                    None => vec![
+                        child_dir.join(format!("{name}.rs")),
+                        child_dir.join(&name).join("mod.rs"),
+                    ],
+                };
+                let Some(found) = candidates.iter().find(|c| c.is_file()) else {
+                    panic!(
+                        "`mod {name};` in {} has no file (tried {:?})",
+                        child_dir.display(),
+                        candidates
+                    );
+                };
+                visit_module_file(found, files);
+            }
+        }
+    }
+}
+
+/// The value of a `#[path = "…"]` attribute, if the item carries one.
+fn path_attribute(attr: &Attribute) -> Option<String> {
+    if !attr.path().is_ident("path") {
+        return None;
+    }
+    let syn::Meta::NameValue(nv) = &attr.meta else { return None };
+    let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value else {
+        return None;
+    };
+    Some(s.value())
 }
 
 fn walk_items(items: &[Item], named: &[&str], entry: &ManifestEntry, out: &mut Vec<EnumRecord>) {

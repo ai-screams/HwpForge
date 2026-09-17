@@ -20,8 +20,9 @@ md = ["dep:hwpforge-smithy-md"]
 ## Shared operation layer for the HWPX-only surfaces (inspect, exchange, read,
 ## edit, diff, stamp, style). Pulls the serde/error plumbing `ops` needs.
 ops-hwpx = ["hwpx", "dep:serde", "dep:serde_json", "dep:thiserror"]
-## Adds the Markdown operations (`convert_md`, `to_md`) to `ops`.
-ops-md = ["ops-hwpx", "md"]
+## Adds the Markdown operations (`convert_md`, `to_md`) to `ops`. `serde_bytes`
+## keeps the exported images as bytes instead of integer sequences.
+ops-md = ["ops-hwpx", "md", "dep:serde_bytes"]
 ## Convenience alias for the whole operation layer.
 ops = ["ops-md"]
 ## `JsonSchema` derives on the wire DTOs that `ops` owns, and on the exchange
@@ -37,6 +38,7 @@ hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", option
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0", optional = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+serde_bytes = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 

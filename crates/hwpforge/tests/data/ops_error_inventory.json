@@ -1,6 +1,52 @@
 {
   "enums": [
     {
+      "krate": "hwpforge-foundation",
+      "file": "crates/hwpforge-foundation/src/error.rs",
+      "name": "FoundationError",
+      "visibility": "pub",
+      "non_exhaustive": false,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "InvalidHwpUnit",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidColor",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "IndexOutOfBounds",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyIdentifier",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidField",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ParseError",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
       "krate": "hwpforge-smithy-hwpx",
       "file": "crates/hwpforge-smithy-hwpx/src/error.rs",
       "name": "HwpxError",
@@ -728,6 +774,73 @@
         },
         {
           "name": "LayoutCacheDropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+      "name": "StructuralWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "IndexMarkRemoved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
+      "name": "SectionWorkflowWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "PreservationMetadataUnavailable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-core",
+      "file": "crates/hwpforge-core/src/table/grid.rs",
+      "name": "GridError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": false,
+      "not_wrapped_reason": "table-grid projection failure; never returned by an API the ops layer calls directly — it reaches ops only wrapped as `CoreError`, `GridAddrError` or `ReadError::TableUnaddressable`",
+      "variants": [
+        {
+          "name": "TooLarge",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Overlap",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "OverhangsBottom",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NotTiled",
           "shape": "struct",
           "cfg": [],
           "discriminant": null

@@ -81,8 +81,6 @@ ops_codes! {
     PresetNotFound => "PRESET_NOT_FOUND",
     /// Input exceeds the accepted size limit.
     InputTooLarge => "INPUT_TOO_LARGE",
-    /// A library surfaced an I/O error although the ops layer passed it in-memory bytes.
-    IoFailed => "IO_FAILED",
     /// Provisioned assets do not line up with the document's asset plan (missing, extra, duplicate or reordered occurrence).
     AssetPlanMismatch => "ASSET_PLAN_MISMATCH",
     /// Two provisioned assets claim the same identity with different bytes.

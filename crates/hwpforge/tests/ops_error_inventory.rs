@@ -35,7 +35,8 @@ use hwpforge::hwpx::grid_addr::GridAddrError;
 use hwpforge::hwpx::stamp::{CellStampError, StampError, StampMapError, StamperError};
 use hwpforge::hwpx::{
     CellEditError, DecodeWarning, EncodeWarning, FillError, HwpxError, ParagraphPath, PathSeg,
-    ReadError, SectionWorkflowError, StructuralEditError,
+    ReadError, SectionWorkflowError, SectionWorkflowWarning, StructuralEditError,
+    StructuralWarning,
 };
 use hwpforge::md::assets::{AssetOutcome, RunLocator};
 use hwpforge::md::embed::ImageEmbedSkipReason;
@@ -62,11 +63,22 @@ const ERROR_MAPPING: Table = &[
             ("InvalidAttribute", "DECODE_FAILED"),
             ("IndexOutOfBounds", "DECODE_FAILED"),
             ("InvalidStructure", "DECODE_FAILED"),
-            ("LayoutCacheDropped", "ENCODE_FAILED"),
-            ("Io", "IO_FAILED"),
-            ("Core", "VALIDATION_FAILED"),
-            ("Foundation", "INTERNAL_INVARIANT"),
-            ("XmlSerialize", "ENCODE_FAILED"),
+            ("LayoutCacheDropped", "DECODE_FAILED"),
+            ("Io", "DECODE_FAILED"),
+            ("Core", "DECODE_FAILED"),
+            ("Foundation", "DECODE_FAILED"),
+            ("XmlSerialize", "DECODE_FAILED"),
+        ],
+    ),
+    (
+        "FoundationError",
+        &[
+            ("InvalidHwpUnit", "INTERNAL_INVARIANT"),
+            ("InvalidColor", "INTERNAL_INVARIANT"),
+            ("IndexOutOfBounds", "INTERNAL_INVARIANT"),
+            ("EmptyIdentifier", "INTERNAL_INVARIANT"),
+            ("InvalidField", "INTERNAL_INVARIANT"),
+            ("ParseError", "INTERNAL_INVARIANT"),
         ],
     ),
     (
@@ -222,13 +234,46 @@ const ERROR_MAPPING: Table = &[
             ("FileTooLarge", "INPUT_TOO_LARGE"),
             ("AssetPlanMismatch", "ASSET_PLAN_MISMATCH"),
             ("AssetIdentityConflict", "ASSET_IDENTITY_CONFLICT"),
-            ("Io", "IO_FAILED"),
-            ("Core", "VALIDATION_FAILED"),
+            ("Io", "MD_DECODE_FAILED"),
+            ("Core", "MD_DECODE_FAILED"),
             ("Blueprint", "MD_DECODE_FAILED"),
-            ("Foundation", "INTERNAL_INVARIANT"),
+            ("Foundation", "MD_DECODE_FAILED"),
         ],
     ),
 ];
+
+// The tables above are the DECODE stage (the wrappers `OpsError::Decode` /
+// `OpsError::MdDecode`). `encode_stage_reports_encode_failed` checks the
+// other stage: every HWPX variant → `ENCODE_FAILED`, every Markdown variant
+// → `ENCODE_FAILED` except the size and asset-contract codes, which are
+// stage-independent.
+
+fn foundation_errors() -> Vec<(&'static str, FoundationError)> {
+    vec![
+        ("InvalidHwpUnit", FoundationError::InvalidHwpUnit { value: 1 << 40, min: 0, max: 10 }),
+        (
+            "InvalidColor",
+            FoundationError::InvalidColor { component: "red".into(), value: "300".into() },
+        ),
+        (
+            "IndexOutOfBounds",
+            FoundationError::IndexOutOfBounds { index: 9, max: 2, type_name: "FontIndex" },
+        ),
+        ("EmptyIdentifier", FoundationError::EmptyIdentifier { item: "FontId".into() }),
+        (
+            "InvalidField",
+            FoundationError::InvalidField { field: "width".into(), reason: "negative".into() },
+        ),
+        (
+            "ParseError",
+            FoundationError::ParseError {
+                type_name: "Alignment".into(),
+                value: "sideways".into(),
+                valid_values: "left, right".into(),
+            },
+        ),
+    ]
+}
 
 const WARNING_MAPPING: Table = &[
     (
@@ -246,6 +291,11 @@ const WARNING_MAPPING: Table = &[
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
         ],
+    ),
+    ("StructuralWarning", &[("IndexMarkRemoved", "INDEX_MARK_REMOVED")]),
+    (
+        "SectionWorkflowWarning",
+        &[("PreservationMetadataUnavailable", "PRESERVATION_METADATA_UNAVAILABLE")],
     ),
     (
         "MdWarning",
@@ -584,8 +634,15 @@ fn md_errors() -> Vec<(&'static str, MdError)> {
 
 fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
     let mut all: BTreeMap<&'static str, Vec<(&'static str, OpsError)>> = BTreeMap::new();
-    all.insert("HwpxError", hwpx_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
+    all.insert(
+        "HwpxError",
+        hwpx_errors().into_iter().map(|(n, e)| (n, OpsError::decode(e))).collect(),
+    );
     all.insert("CoreError", core_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
+    all.insert(
+        "FoundationError",
+        foundation_errors().into_iter().map(|(n, e)| (n, e.into())).collect(),
+    );
     all.insert("FillError", fill_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
     all.insert(
         "CellEditError",
@@ -623,7 +680,10 @@ fn wrapped_errors() -> BTreeMap<&'static str, Vec<(&'static str, OpsError)>> {
         "StampMapError",
         stamp_map_errors().into_iter().map(|(n, e)| (n, e.into())).collect(),
     );
-    all.insert("MdError", md_errors().into_iter().map(|(n, e)| (n, e.into())).collect());
+    all.insert(
+        "MdError",
+        md_errors().into_iter().map(|(n, e)| (n, OpsError::md_decode(e))).collect(),
+    );
     all
 }
 
@@ -661,6 +721,26 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 }),
             ),
         ],
+    );
+    all.insert(
+        "SectionWorkflowWarning",
+        vec![(
+            "PreservationMetadataUnavailable",
+            OpsWarning::SectionWorkflow(SectionWorkflowWarning::PreservationMetadataUnavailable {
+                detail: "no linesegarray".into(),
+            }),
+        )],
+    );
+    all.insert(
+        "StructuralWarning",
+        vec![(
+            "IndexMarkRemoved",
+            OpsWarning::Structural(StructuralWarning::IndexMarkRemoved {
+                section: 0,
+                index: 3,
+                count: 2,
+            }),
+        )],
     );
     all.insert(
         "DecodeWarning",
@@ -769,6 +849,19 @@ fn inventory_matches_the_tracked_file() {
 }
 
 #[test]
+fn every_wrapped_payload_type_has_a_manifest_record() {
+    // The mapping tables name every enum `OpsError`/`OpsWarning` wrap; each
+    // of them must be a `wrapped` entry of the manifest, so adding an arm
+    // without extending the audit scope fails here instead of going unseen.
+    let manifest_wrapped: BTreeSet<&str> =
+        error_inventory::MANIFEST.iter().flat_map(|e| e.wrapped.iter().copied()).collect();
+    let table_names: BTreeSet<&str> =
+        ERROR_MAPPING.iter().chain(WARNING_MAPPING.iter()).map(|(name, _)| *name).collect();
+    let missing: Vec<&str> = table_names.difference(&manifest_wrapped).copied().collect();
+    assert!(missing.is_empty(), "mapped but not in the manifest's `wrapped` lists: {missing:?}");
+}
+
+#[test]
 fn manifest_files_hold_no_unnamed_diagnostic_enum() {
     let inventory = error_inventory::collect();
 
@@ -872,24 +965,86 @@ fn asset_contract_violations_get_dedicated_codes() {
     ];
 
     for (error, code, wire) in cases {
-        let classified = OpsError::Md(error);
+        let classified = OpsError::md_decode(error);
         assert_eq!(classified.code(), code, "{classified}");
         assert_eq!(classified.code().as_str(), wire);
     }
 }
 
 #[test]
-fn core_error_gets_the_same_code_through_either_wrapper() {
-    // `HwpxError: From<CoreError>` means the same Core failure can arrive
-    // wrapped at two different depths; the code must not depend on that.
-    for (variant, _) in core_errors() {
-        let direct = OpsError::Core(
-            core_errors().into_iter().find(|(n, _)| *n == variant).expect("variant").1,
+fn the_stage_wins_over_a_nested_core_error() {
+    // The CLI reports `DECODE_FAILED` for anything the decoder returns and
+    // `VALIDATION_FAILED` only for a direct `validate()` failure; a Core
+    // error nested inside a codec error therefore takes the stage's code.
+    for (variant, error) in core_errors() {
+        let direct = OpsError::Core(error);
+        let expected = match variant {
+            "Foundation" => OpsCode::InternalInvariant,
+            _ => OpsCode::ValidationFailed,
+        };
+        assert_eq!(direct.code(), expected, "direct CoreError::{variant}");
+    }
+    for (variant, error) in core_errors() {
+        let nested = OpsError::decode(HwpxError::Core(error));
+        assert_eq!(nested.code(), OpsCode::DecodeFailed, "decode-nested CoreError::{variant}");
+    }
+    for (variant, error) in core_errors() {
+        let nested = OpsError::encode(HwpxError::Core(error));
+        assert_eq!(nested.code(), OpsCode::EncodeFailed, "encode-nested CoreError::{variant}");
+    }
+}
+
+#[test]
+fn grid_addr_projection_reports_its_own_code() {
+    // Review-driven split (lane A): the CLI prints `GRID_ADDR_PROJECTION_FAILED`
+    // for an annotate failure and `GRID_ADDR_INVALID` for a verify failure.
+    for (variant, error) in grid_addr_errors() {
+        assert_eq!(
+            OpsError::grid_addr_projection(error).code(),
+            OpsCode::GridAddrProjectionFailed,
+            "GridAddrError::{variant}"
         );
-        let nested = OpsError::Hwpx(HwpxError::Core(
-            core_errors().into_iter().find(|(n, _)| *n == variant).expect("variant").1,
-        ));
-        assert_eq!(direct.code(), nested.code(), "CoreError::{variant}");
+    }
+}
+
+#[test]
+fn encode_stage_reports_encode_failed() {
+    for (variant, error) in hwpx_errors() {
+        assert_eq!(OpsError::encode(error).code(), OpsCode::EncodeFailed, "HwpxError::{variant}");
+    }
+    for (variant, error) in md_errors() {
+        let expected = match variant {
+            "FileTooLarge" => OpsCode::InputTooLarge,
+            "AssetPlanMismatch" => OpsCode::AssetPlanMismatch,
+            "AssetIdentityConflict" => OpsCode::AssetIdentityConflict,
+            _ => OpsCode::EncodeFailed,
+        };
+        assert_eq!(OpsError::md_encode(error).code(), expected, "MdError::{variant}");
+    }
+}
+
+#[test]
+fn semantic_loss_variants_become_the_uniform_envelope() {
+    // Review R2 #2: set-cell and stamp must fail closed with the same
+    // structured envelope restyle uses, not a wrapped upstream variant.
+    let cell: OpsError = CellEditError::SemanticLoss {
+        warnings: vec![semantic_loss()],
+        others: vec![EncodeWarning::LayoutCacheDropped { path: path(), reason: "ledger".into() }],
+    }
+    .into();
+    let stamp: OpsError =
+        StamperError::SemanticLoss { warnings: vec![semantic_loss()], others: Vec::new() }.into();
+    for (label, error) in [("cell", cell), ("stamp", stamp)] {
+        let OpsError::EncodeSemanticLoss { warnings, others } = &error else {
+            panic!("{label}: expected EncodeSemanticLoss, got {error:?}");
+        };
+        assert_eq!(warnings.len(), 1, "{label}");
+        assert_eq!(warnings[0].code, "NOTE_HEAD_SKIPPED", "{label}");
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss, "{label}");
+        if label == "cell" {
+            assert_eq!(others.len(), 1);
+            assert_eq!(others[0].code, "LAYOUT_CACHE_DROPPED");
+        }
     }
 }
 

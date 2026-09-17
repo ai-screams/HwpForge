@@ -101,3 +101,32 @@ fn empty_input_is_a_decode_failure() {
 
     assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
+
+#[test]
+fn metadata_carries_the_full_document_metadata_projection() {
+    // Review R2 #6: the report must carry everything the MCP inspect tool
+    // projects today (subject, created, modified, keywords) so the W2
+    // migration needs no second decode. Values are fixture-dependent; the
+    // contract here is the key set and the "empty, never missing" rule.
+    let out = inspect(&fixture("SimpleTable.hwpx"), &InspectOptions::default()).expect("inspect");
+    let json = serde_json::to_value(&out.report.metadata).expect("serialise");
+    let mut keys: Vec<&str> =
+        json.as_object().expect("object").keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "author",
+            "created",
+            "description",
+            "keywords",
+            "last_saved_by",
+            "modified",
+            "subject",
+            "title"
+        ]
+    );
+    assert!(json["keywords"].is_array(), "keywords is a list even when empty");
+    assert!(json["title"].is_string(), "text fields are empty strings, never null");
+    assert!(json["created"].is_null() || json["created"].is_string());
+}
