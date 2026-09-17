@@ -152,13 +152,15 @@ Rust 크레이트·npm 과 달리 Python wheel 은 release-plz 가 만들지 않
 
 ### 9.1 트리거와 대상
 
-| 이벤트                               | 태그 출처          | 게시 대상                           |
-| ------------------------------------ | ------------------ | ----------------------------------- |
-| `release: published` (umbrella `v*`) | `release.tag_name` | **PyPI**                            |
-| `push` — `py-v*` 태그                | `github.ref_name`  | **PyPI**                            |
-| `workflow_dispatch`                  | 입력 `tag`         | 입력 `target` (기본값 **TestPyPI**) |
+| 이벤트                               | 태그 출처                          | 게시 대상                           |
+| ------------------------------------ | ---------------------------------- | ----------------------------------- |
+| `release: published` (umbrella `v*`) | `release.tag_name`                 | **PyPI**                            |
+| `push` — `py-v*` 태그                | `github.ref_name`                  | **PyPI**                            |
+| `workflow_dispatch`                  | "Use workflow from" 에서 고른 태그 | 입력 `target` (기본값 **TestPyPI**) |
 
 프로덕션은 위 두 태그 이벤트이거나 dispatch 에서 `pypi` 를 명시적으로 고를 때만 선택된다. 리허설이 실수로 프로덕션을 치지 못하게 하는 구조적 장치이므로, 기본값을 바꾸지 않는다.
+
+수동 실행에는 태그 입력란이 없다. **Actions → PyPI Publish → Run workflow → "Use workflow from" 에서 `Tags` 를 고르고 태그를 선택**한 뒤 `target` 만 정한다. 브랜치를 고르면 `Resolve › Tag` 가 거부한다. 그 드롭다운에 태그가 보이려면 **그 태그의 트리에 `pypi-publish.yml` 이 있어야** 한다 — 이 워크플로가 main 에 들어가기 전에 찍힌 태그로는 수동 실행을 할 수 없다.
 
 ### 9.2 태그 문법
 
@@ -183,7 +185,7 @@ uv run --no-project --with packaging python .github/scripts/resolve_release_tag.
 
 1. 고칠 내용을 main 에 머지한다 (평시 Python 변경은 다음 워크스페이스 릴리스에 그냥 실려 나가므로, 이 절차는 **긴급 수정**용이다).
 2. 그 커밋에 태그를 붙인다 — `git tag py-v0.16.4.1 <commit>` 후 `git push origin py-v0.16.4.1`.
-3. 워크플로가 태그를 커밋 SHA 로 한 번 풀고, 매트릭스로 빌드해 PyPI 에 올린다. 문법 검사와 게시 스크립트는 **워크플로 자신의 커밋**에서 돌고(태그 트리의 `Cargo.toml` 은 API 로 내용만 읽는다), 태그의 소스를 체크아웃하는 것은 락파일 잡과 빌드 잡뿐이다. 그 두 잡에는 캐시 액션이 없다 — 릴리스 빌드는 cold 가 정상이고, 캐시는 기본 브랜치와 공유되기 때문이다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
+3. 워크플로는 **태그 ref 위에서** 돌고 모든 잡이 같은 커밋(`github.sha`)을 체크아웃한다 — 체크아웃할 ref 가 입력에서 오지 않으므로 기본 브랜치와 공유되는 캐시를 오염시킬 경로가 없다. 같은 이유로 이 워크플로에는 캐시 액션이 하나도 없다 (릴리스 빌드는 cold 가 정상이다). 게시 직전에 태그가 여전히 그 커밋을 가리키는지 다시 확인한다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
 
 release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌하지 않는다.
 
@@ -191,9 +193,9 @@ release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌
 
 첫 PyPI 업로드 전에 한 번 돈다. 전부 `workflow_dispatch` + `target=testpypi` 다.
 
-- [ ] 네 가지 태그 형태 각각으로 dispatch — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
-- [ ] 거부되어야 할 태그 하나를 일부러 넣어 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다.
-- [ ] **부분 게시 복구**: 여섯 개 중 **셋만** 먼저 올린 상태를 만든 뒤 워크플로를 돌린다. 아티팩트를 내려받아 손으로 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 를 먼저 실행하고(토큰 사용), 그다음 같은 태그로 워크플로를 dispatch 한다. 로그에 **skip 3 · upload 3** 이 찍히고 run 은 성공해야 한다. "한 번 게시한 뒤 그대로 재실행" 은 여섯 개 전부 skip 이라 복구 경로를 시험하지 못한다.
+- [ ] 네 가지 태그 형태 각각으로 실행 (각 태그를 "Use workflow from" 에서 고른다) — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
+- [ ] 거부되어야 할 태그 하나를 일부러 골라 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다. 브랜치를 골라 실행하는 것도 같은 자리에서 거부된다.
+- [ ] **부분 게시 복구**: 여섯 개 중 **셋만** 먼저 올린 상태를 만든 뒤 워크플로를 돌린다. 아티팩트를 내려받아 손으로 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 를 먼저 실행하고(토큰 사용), 그다음 같은 태그를 골라 워크플로를 실행한다. 로그에 **skip 3 · upload 3** 이 찍히고 run 은 성공해야 한다. "한 번 게시한 뒤 그대로 재실행" 은 여섯 개 전부 skip 이라 복구 경로를 시험하지 못한다.
 - [ ] **`--check-url` 실패 테스트**: 같은 파일명으로 내용이 다른 wheel 을 만들어 올려 본다. 건너뛰지 않고 **실패**해야 한다 (멱등성은 오직 이 검사에서 온다 — PyPI 는 파일명 재사용을 영구히 거부한다).
 - [ ] **sdist 강제 설치** — wheel 이 있으면 설치 해석기가 그것을 고르므로, 소스 배포를 실제로 컴파일해 보려면 명시적으로 막아야 한다 (Rust 1.92 + maturin 필요):
 

@@ -113,8 +113,13 @@ def _python_only_version(raw: str, cargo: str) -> str:
     return raw
 
 
-def resolve_target(event_name: str, input_target: str, is_python_only: bool) -> str:
-    """Production is reachable only from a release, a `py-v*` tag, or an explicit input."""
+def resolve_target(event_name: str, input_target: str, is_python_only: bool, ref_type: str = "tag") -> str:
+    """Production is reachable only from a release, a `py-v*` tag, or an explicit input.
+
+    `ref_type` is the kind of ref the run was started on. A manual run must be
+    started on a tag, because the tag is the only thing this workflow publishes
+    and the checked-out ref must never come from a text input.
+    """
     if event_name == "release":
         return "pypi"
     if event_name == "push":
@@ -122,6 +127,11 @@ def resolve_target(event_name: str, input_target: str, is_python_only: bool) -> 
             raise TagError("only py-v* tag pushes publish; workspace tags publish via release: published")
         return "pypi"
     if event_name == "workflow_dispatch":
+        if ref_type != "tag":
+            raise TagError(
+                f"a manual run must be started on a tag, not on a {ref_type or 'branch'}; "
+                "pick the tag under 'Use workflow from'"
+            )
         target = input_target or "testpypi"
         if target not in ("testpypi", "pypi"):
             raise TagError(f"target {target!r} is neither testpypi nor pypi")
@@ -158,6 +168,21 @@ ACCEPT_REJECT_TABLE: tuple[tuple[str, str, bool], ...] = (
 )
 
 
+# (event, input target, is_python_only, ref type) -> expected target, or None to reject.
+TARGET_TABLE: tuple[tuple[tuple[str, str, bool, str], str | None], ...] = (
+    (("release", "", False, "tag"), "pypi"),
+    (("push", "", True, "tag"), "pypi"),
+    (("push", "", False, "tag"), None),
+    (("workflow_dispatch", "testpypi", True, "tag"), "testpypi"),
+    (("workflow_dispatch", "pypi", False, "tag"), "pypi"),
+    (("workflow_dispatch", "", True, "tag"), "testpypi"),
+    (("workflow_dispatch", "testpypi", True, "branch"), None),
+    (("workflow_dispatch", "pypi", False, "branch"), None),
+    (("workflow_dispatch", "staging", True, "tag"), None),
+    (("schedule", "", True, "tag"), None),
+)
+
+
 def self_check() -> int:
     failures = 0
     for tag, cargo, should_accept in ACCEPT_REJECT_TABLE:
@@ -170,7 +195,18 @@ def self_check() -> int:
         failures += not ok
         verdict = "accept" if got else "reject"
         print(f"{'ok  ' if ok else 'FAIL'} {tag:<22} -> {verdict:<6} {detail}")
-    print(f"\n{len(ACCEPT_REJECT_TABLE) - failures}/{len(ACCEPT_REJECT_TABLE)} cases as expected")
+    for (event, target_in, python_only, ref_type), expected in TARGET_TABLE:
+        try:
+            got: str | None = resolve_target(event, target_in, python_only, ref_type)
+            detail = f"target={got}"
+        except TagError as exc:
+            got, detail = None, str(exc)
+        ok = got == expected
+        failures += not ok
+        label = f"{event}/{target_in or '-'}/{ref_type}"
+        print(f"{'ok  ' if ok else 'FAIL'} {label:<38} -> {detail}")
+    total = len(ACCEPT_REJECT_TABLE) + len(TARGET_TABLE)
+    print(f"\n{total - failures}/{total} cases as expected")
     return 1 if failures else 0
 
 
@@ -181,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cargo-toml", default="Cargo.toml", help="path to the workspace manifest")
     parser.add_argument("--event-name", default="", help="the GitHub event that triggered the run")
     parser.add_argument("--input-target", default="", help="the workflow_dispatch target input")
+    parser.add_argument("--ref-type", default="tag", help="the kind of ref the run started on")
     args = parser.parse_args(argv)
 
     if args.self_check:
@@ -192,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         cargo = cargo_version(handle.read())
     try:
         version, python_only = resolve_version(args.tag, cargo)
-        target = resolve_target(args.event_name, args.input_target, python_only)
+        target = resolve_target(args.event_name, args.input_target, python_only, args.ref_type)
     except TagError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

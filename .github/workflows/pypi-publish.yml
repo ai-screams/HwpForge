@@ -35,11 +35,10 @@ on:
   push:
     tags: ["py-v*"]
   workflow_dispatch:
+    # 태그를 문자열 입력으로 받지 않는다. 운영자는 "Use workflow from" 에서 태그를
+    # 고르고, 그러면 `github.ref`/`github.sha` 가 곧 그 태그와 커밋이 된다 —
+    # 체크아웃하는 ref 가 입력에서 오지 않아야 캐시 오염 경로가 닫힌다.
     inputs:
-      tag:
-        description: "Tag to publish (vX.Y.Z or py-vX.Y.Z[.N][.postM])"
-        required: true
-        type: string
       target:
         description: "Publish target"
         type: choice
@@ -53,7 +52,7 @@ permissions:
 
 concurrency:
   # 태그 단위. 게시 중인 run 을 취소하면 부분 게시 상태가 남으므로 취소하지 않는다.
-  group: pypi-publish-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  group: pypi-publish-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -66,24 +65,26 @@ jobs:
     timeout-minutes: 15
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
-      sha: ${{ steps.deref.outputs.sha }}
       target: ${{ steps.validate.outputs.target }}
       version: ${{ steps.validate.outputs.version }}
       is_python_only: ${{ steps.validate.outputs.is_python_only }}
+      lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
-      - name: Resolve the tag from the event
+      - name: Resolve the tag from the ref
         id: raw
-        # 이벤트마다 태그가 있는 자리가 다르다. 값은 env 로 넘겨 셸 주입을 막는다.
-        # `release: published` 는 정식 릴리스와 프리릴리스를 **둘 다** 포함하므로
-        # (GitHub 이벤트 문서), 프리릴리스·draft 는 여기서 소리내어 거부한다.
-        # `if:` 로 건너뛰면 required check 를 충족한 것처럼 보일 수 있다.
+        # 세 이벤트 모두 태그 ref 위에서 돈다: `release: published` 와 `py-v*` push
+        # 는 태그가 곧 ref 이고, 수동 실행은 "Use workflow from" 에서 태그를 고른다.
+        # 그래서 태그 이름은 언제나 `github.ref_name` 이고 커밋은 `github.sha` 다.
+        # 릴리스 이벤트는 릴리스가 가리키는 태그와 ref 가 같은지 확인하고,
+        # 프리릴리스·draft 는 소리내어 거부한다 (`if:` 로 건너뛰면 required check 를
+        # 충족한 것처럼 보인다).
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
           RELEASE_DRAFT: ${{ github.event.release.draft }}
-          REF_NAME: ${{ github.ref_name }}
-          INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           case "$EVENT_NAME" in
@@ -96,40 +97,26 @@ jobs:
                 echo "::error::this release is a draft; publish it first"
                 exit 1
               fi
-              tag="$RELEASE_TAG"
+              if [ "$RELEASE_TAG" != "$REF_NAME" ]; then
+                echo "::error::the release names tag '$RELEASE_TAG' but the run is on '$REF_NAME'"
+                exit 1
+              fi
               ;;
-            push) tag="$REF_NAME" ;;
-            workflow_dispatch) tag="$INPUT_TAG" ;;
+            push) ;;
+            workflow_dispatch)
+              if [ "$REF_TYPE" != "tag" ]; then
+                echo "::error::this run started on a $REF_TYPE, not a tag; pick the tag under 'Use workflow from'"
+                exit 1
+              fi
+              ;;
             *) echo "::error::unsupported event $EVENT_NAME"; exit 1 ;;
           esac
-          [ -n "$tag" ] || { echo "::error::no tag for event $EVENT_NAME"; exit 1; }
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Dereference the tag to a commit SHA
-        id: deref
-        # 체크아웃 전에 API 로 푼다 — 체크아웃에 태그 **이름**을 넘기면 같은 이름의
-        # 브랜치가 이긴다. annotated 태그는 태그 오브젝트를 한 번 더 푼다.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.raw.outputs.tag }}
-        run: |
-          set -euo pipefail
-          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')"
-          kind="${ref%% *}"
-          sha="${ref##* }"
-          if [ "$kind" = "tag" ]; then
-            sha="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.object.sha')"
-          fi
-          case "$sha" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-            *) echo "::error::refs/tags/$TAG did not resolve to a commit SHA (got '$sha')"; exit 1 ;;
-          esac
-          echo "refs/tags/$TAG -> $sha"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          [ -n "$REF_NAME" ] || { echo "::error::no ref name for event $EVENT_NAME"; exit 1; }
+          echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # **신뢰 ref** 를 받는다 — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이고,
-          # 그 코드는 워크플로 자신의 커밋에서 와야 한다. 태그의 소스를 체크아웃하는
-          # 곳은 `lock`·`build` 둘뿐이며, 둘 다 캐시 액션이 없다.
+          # `github.sha` = 이 태그의 커밋. 모든 잡이 같은 것을 받는다 — 입력에서
+          # 유도된 ref 를 체크아웃하는 곳은 이제 하나도 없다.
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -138,18 +125,6 @@ jobs:
           # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
           # 워크플로가 체크아웃하는 ref 는 입력에서 온다 (캐시 오염 경로).
           enable-cache: false
-      - name: Read Cargo.toml from the tag
-        # 버전 일치는 **태그가 가리키는 트리**의 워크스페이스 버전과 맞춰야 한다.
-        # 신뢰 ref 를 체크아웃했으므로 그 파일만 API 로 가져온다 — 태그의 코드를
-        # 실행하지 않고 내용만 읽는 경로다.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.deref.outputs.sha }}
-        run: |
-          set -euo pipefail
-          gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$SHA" > "$RUNNER_TEMP/tag-Cargo.toml"
-          [ -s "$RUNNER_TEMP/tag-Cargo.toml" ] || { echo "::error::Cargo.toml at $SHA is empty"; exit 1; }
       - name: Validate the tag grammar
         id: validate
         # 문법·버전 일치 규칙은 `.github/scripts/resolve_release_tag.py` 가 소유하고,
@@ -157,32 +132,17 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TARGET: ${{ inputs.target }}
+          REF_TYPE: ${{ github.ref_type }}
           TAG: ${{ steps.raw.outputs.tag }}
         run: >-
           uv run --no-project --with packaging
           python .github/scripts/resolve_release_tag.py
           --tag "$TAG" --event-name "$EVENT_NAME" --input-target "$INPUT_TARGET"
-          --cargo-toml "$RUNNER_TEMP/tag-Cargo.toml"
+          --ref-type "$REF_TYPE"
       - name: Self-check the tag grammar table
         run: >-
           uv run --no-project --with packaging
           python .github/scripts/resolve_release_tag.py --self-check
-
-  lock:
-    name: "Resolve › Lockfile"
-    needs: [resolve]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    outputs:
-      sha256: ${{ steps.lock.outputs.sha256 }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # 락파일은 **태그의 매니페스트**에서 풀어야 의미가 있다 — 신뢰 ref 의
-          # 트리로 풀면 조용히 다른 해석이 된다. 그래서 이 잡만 `build` 와 함께
-          # 태그 SHA 를 체크아웃하고, 대신 캐시 액션을 하나도 두지 않는다.
-          ref: ${{ needs.resolve.outputs.sha }}
-          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup show
       - name: Generate the shared lockfile
@@ -206,7 +166,7 @@ jobs:
 
   build:
     name: "Build › ${{ matrix.name }}"
-    needs: [resolve, lock]
+    needs: [resolve]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
@@ -286,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -299,7 +259,7 @@ jobs:
           name: cargo-lock
       - name: Verify the shared lockfile
         env:
-          LOCK_SHA256: ${{ needs.lock.outputs.sha256 }}
+          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
           WHEN: before the build
         run: bash .github/scripts/verify_lockfile.sh
       - name: Pin the Python-only version
@@ -324,7 +284,7 @@ jobs:
           args: ${{ matrix.args }} --out ${{ github.workspace }}/dist
       - name: Re-verify the lockfile after the build
         env:
-          LOCK_SHA256: ${{ needs.lock.outputs.sha256 }}
+          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
           WHEN: after the build
         run: bash .github/scripts/verify_lockfile.sh
       - name: Restore pyproject.toml
@@ -401,7 +361,7 @@ jobs:
       - name: Assert the tag still points at the commit we built
         env:
           TAG: ${{ needs.resolve.outputs.tag }}
-          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: bash .github/scripts/assert_tag_sha.sh
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -445,7 +405,7 @@ jobs:
       - name: Assert the tag still points at the commit we built
         env:
           TAG: ${{ needs.resolve.outputs.tag }}
-          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: bash .github/scripts/assert_tag_sha.sh
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
@@ -482,7 +442,7 @@ jobs:
       - name: Assert the tag still points at the commit we built
         env:
           TAG: ${{ needs.resolve.outputs.tag }}
-          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: bash .github/scripts/assert_tag_sha.sh
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
