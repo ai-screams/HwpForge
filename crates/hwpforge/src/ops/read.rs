@@ -15,9 +15,9 @@
 //! No second decode is involved: the twins return the warnings from the same
 //! decode that produced the projection.
 //!
-//! [`fields`] is the one exception to the wire shape, not to the contract —
-//! it collects the warnings like its siblings, but its wire wrapper has no
-//! `warnings` key at all (see [`FieldsMeta`]).
+//! Every wrapper in this module carries the list, [`fields`] included: a
+//! decode that dropped a layout cache has to be visible to a caller that only
+//! ever sees the wire shape.
 //!
 //! # Argument validation
 //!
@@ -119,8 +119,6 @@ pub struct FieldsOutput {
     /// Fields in document order, duplicates and unnamed ones kept.
     pub fields: Vec<FieldInfo>,
     /// Decoder warnings for this document, in decoder order.
-    ///
-    /// Deliberately **not** part of [`FieldsMeta`].
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -128,27 +126,30 @@ pub struct FieldsOutput {
 ///
 /// # Keys
 ///
-/// `fields` — and nothing else. This is the one operation in this module
-/// whose wire shape has no `warnings` key, because the design's return table
-/// lists `fields` among the operations that cannot warn. The Rust output
-/// still carries a `warnings` list so that the type matches its siblings and
-/// so a future decode-warning channel has somewhere to go without breaking
-/// this key set.
+/// `fields`, `warnings`.
+///
+/// The design's return table once listed this operation among those that
+/// cannot warn, and the wrapper had no `warnings` key. It does decode, so it
+/// can warn — a dropped layout cache is the common one — and a caller that
+/// only sees the wire shape could not tell a clean read from a lossy one.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct FieldsMeta {
     /// Fields in document order.
     pub fields: Vec<FieldInfo>,
+    /// Non-fatal diagnostics.
+    pub warnings: Vec<WarningInfo>,
 }
 
 impl FieldsOutput {
     /// The wire shape of this result.
-    ///
-    /// Drops `warnings`; see [`FieldsMeta`] for why.
     #[must_use]
     pub fn meta(&self) -> FieldsMeta {
-        FieldsMeta { fields: self.fields.clone() }
+        FieldsMeta {
+            fields: self.fields.clone(),
+            warnings: self.warnings.iter().map(OpsWarning::info).collect(),
+        }
     }
 }
 

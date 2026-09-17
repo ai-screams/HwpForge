@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::ops::read::fields;
+use hwpforge::ops::OpsWarning;
 
 fn hwpx_fixture(name: &str) -> Vec<u8> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
@@ -68,16 +69,17 @@ fn only_click_here_fields_are_listed() {
 }
 
 #[test]
-fn meta_has_exactly_one_key_and_it_is_not_warnings() {
+fn meta_carries_the_fields_and_the_warning_list() {
     let out = fields(&repo_fixture("fields/clickhere_named.hwpx")).expect("fields");
 
     let value = serde_json::to_value(out.meta()).expect("serialise meta");
 
-    assert_eq!(keys(&value), ["fields"].map(String::from).into_iter().collect(), "{value}");
-    assert!(
-        value.get("warnings").is_none(),
-        "the design's return table says this operation cannot warn: {value}"
+    assert_eq!(
+        keys(&value),
+        ["fields", "warnings"].map(String::from).into_iter().collect(),
+        "{value}"
     );
+    assert_eq!(value["warnings"], serde_json::json!([]), "a clean decode still declares the key");
 }
 
 #[test]
@@ -97,22 +99,31 @@ fn a_clean_document_carries_an_empty_warning_list() {
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }
 
-/// `fields` decodes, so it collects the decoder's warnings — even though its
-/// wire shape deliberately has no `warnings` key.
+/// `fields` decodes, so it collects the decoder's warnings — and reports them.
 ///
-/// The Rust output is the contract here: dropping the list would make the
-/// operation disagree with its siblings about what a decode reported.
+/// A frontend that only ever sees the wire shape (the Python bindings return
+/// nothing else) could not otherwise tell a clean read from one whose layout
+/// cache was dropped.
 #[test]
-fn decode_warnings_reach_the_rust_output_even_though_the_wire_shape_omits_them() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+fn a_dropped_layout_cache_reaches_both_the_output_and_the_wire_shape() {
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = fields(&bytes).expect("fields");
 
-    let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
-    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
-    // The wire shape still has exactly one key.
+    assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+    assert!(
+        matches!(out.warnings[0], OpsWarning::Decode(_)),
+        "a decode warning, not a re-encode one: {:?}",
+        out.warnings[0]
+    );
+    assert_eq!(out.warnings[0].info().code, "LAYOUT_CACHE_DROPPED");
+
     let value = serde_json::to_value(out.meta()).expect("serialise meta");
-    assert_eq!(keys(&value), ["fields"].map(String::from).into_iter().collect());
+    assert_eq!(
+        value["warnings"],
+        serde_json::json!([serde_json::to_value(out.warnings[0].info()).expect("warning")]),
+        "the wire shape carries the same list the output does: {value}"
+    );
 }
 
 #[test]
