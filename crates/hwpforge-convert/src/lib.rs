@@ -8,6 +8,7 @@
 #![deny(missing_docs)]
 
 mod layout_hint_patch;
+pub mod ops;
 mod style_store_border_fill;
 mod style_store_convert;
 mod warning_utils;
