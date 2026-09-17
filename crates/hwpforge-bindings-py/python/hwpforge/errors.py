@@ -10,8 +10,9 @@ __all__ = ["HwpForgeError"]
 class HwpForgeError(Exception):
     """An operation refused the work it was given.
 
-    The extension module constructs this class directly, so its four-argument
-    signature is part of the contract between the Rust and Python layers.
+    The extension module constructs this class directly, so its five-argument
+    signature (``code, message, hint, cause, details``) is part of the contract
+    between the Rust and Python layers.
 
     Attributes:
         code: The stable code for the failure, for example ``"DECODE_FAILED"``

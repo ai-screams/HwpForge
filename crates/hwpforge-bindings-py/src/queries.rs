@@ -54,8 +54,9 @@ pub(crate) fn outline<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bou
 ///     data: The HWPX package.
 ///
 /// Returns:
-///     The fields in document order. This is the one report with no
-///     `warnings` key.
+///     ``{"fields", "warnings"}``: the fields in document order and the
+///     decoder warnings raised while reading the input (empty list when
+///     the read was clean).
 #[pyfunction]
 #[pyo3(signature = (data, /))]
 pub(crate) fn fields<'py>(py: Python<'py>, data: PyBackedBytes) -> PyResult<Bound<'py, PyAny>> {
