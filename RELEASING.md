@@ -141,3 +141,87 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - **publish 검증**: crates.io API 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>` 로 확인.
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험. (`release-plz-v0.3.159` 는 **CLI**(`release-plz/release-plz`) 릴리스 태그이며, `.github/workflows/release-plz.yml` 이 실제로 고정하는 `release-plz/action@…v0.5.131` 과는 버전 계열이 다르다 — action 이 내부적으로 vendor 하는 CLI 버전은 별개이므로, 재현 시 `gh release list --repo release-plz/release-plz --limit 5` 로 최신 CLI 태그를 다시 조회할 것.)
 - **npm 토큰**: granular 토큰 90일 만료(npm 은 인증 실패를 **E404 로 위장**), 재발급 시 **"Bypass 2FA" 필수**(없으면 E403). ⚠️ 현 토큰 **~2026-10-10 재만료** — 영구 해결은 npm Trusted Publishing(OIDC) 전환.
+
+---
+
+## 9. Python 배포 (PyPI)
+
+Rust 크레이트·npm 과 달리 Python wheel 은 release-plz 가 만들지 않는다. `.github/workflows/pypi-publish.yml` 이 별도로 돌고, 버전은 여전히 release-plz 가 계산한 워크스페이스 버전을 따른다. 아래 절차는 그 워크플로를 사람이 어떻게 부르는지를 적는다.
+
+### 9.1 트리거와 대상
+
+| 이벤트                               | 태그 출처          | 게시 대상                           |
+| ------------------------------------ | ------------------ | ----------------------------------- |
+| `release: published` (umbrella `v*`) | `release.tag_name` | **PyPI**                            |
+| `push` — `py-v*` 태그                | `github.ref_name`  | **PyPI**                            |
+| `workflow_dispatch`                  | 입력 `tag`         | 입력 `target` (기본값 **TestPyPI**) |
+
+프로덕션은 위 두 태그 이벤트이거나 dispatch 에서 `pypi` 를 명시적으로 고를 때만 선택된다. 리허설이 실수로 프로덕션을 치지 못하게 하는 구조적 장치이므로, 기본값을 바꾸지 않는다.
+
+### 9.2 태그 문법
+
+워크스페이스 릴리스 태그는 `vX.Y.Z` 하나뿐이고 Cargo 워크스페이스 버전과 **정확히** 같아야 한다. Python 전용 태그는 네 가지뿐이다.
+
+| 형태                | 예                   | 언제                            |
+| ------------------- | -------------------- | ------------------------------- |
+| `py-vX.Y.Z`         | `py-v0.16.4`         | 같은 버전을 그대로 다시 게시    |
+| `py-vX.Y.Z.postM`   | `py-v0.16.4.post1`   | 같은 소스를 다시 빌드 (M ≥ 1)   |
+| `py-vX.Y.Z.N`       | `py-v0.16.4.1`       | Python 층만 고친 릴리스 (N ≥ 1) |
+| `py-vX.Y.Z.N.postM` | `py-v0.16.4.1.post2` | 그 릴리스의 재빌드              |
+
+epoch·pre-release·dev·local 세그먼트와 다섯 번째 release 성분은 거부된다. PEP 440 정규화 결과가 `py-v` 를 뗀 문자열과 **글자 그대로** 같아야 하므로 `py-v0.16.04` 도 거부된다. 앞 세 성분은 항상 현재 Cargo 버전이어야 하고, Rust 크레이트 버전은 이 경로에서 절대 바뀌지 않는다. `post` 는 PEP 440 이 "소프트웨어에 영향 없는 정정" 으로 한정하므로 **코드 변경에는 쓰지 않는다** — 코드가 바뀌면 `.N` 이다.
+
+규칙의 소유자는 `.github/scripts/resolve_release_tag.py` 이고, 같은 파일의 `--self-check` 가 수용·거부 표를 계정 없이 재현한다.
+
+```console
+uv run --no-project --with packaging python .github/scripts/resolve_release_tag.py --self-check
+```
+
+### 9.3 Python 전용 태그를 붙이는 절차
+
+1. 고칠 내용을 main 에 머지한다 (평시 Python 변경은 다음 워크스페이스 릴리스에 그냥 실려 나가므로, 이 절차는 **긴급 수정**용이다).
+2. 그 커밋에 태그를 붙인다 — `git tag py-v0.16.4.1 <commit>` 후 `git push origin py-v0.16.4.1`.
+3. 워크플로가 그 태그를 체크아웃해 문법을 검사하고, 매트릭스로 빌드해 PyPI 에 올린다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
+
+release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌하지 않는다.
+
+### 9.4 TestPyPI 리허설 체크리스트
+
+첫 PyPI 업로드 전에 한 번 돈다. 전부 `workflow_dispatch` + `target=testpypi` 다.
+
+- [ ] 네 가지 태그 형태 각각으로 dispatch — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
+- [ ] 거부되어야 할 태그 하나를 일부러 넣어 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다.
+- [ ] **부분 게시 시뮬레이션**: 한 번 게시한 뒤 같은 태그로 다시 돌린다. 이미 올라간 파일은 `--check-url` 로 건너뛰고 나머지만 올라가며 run 은 성공해야 한다.
+- [ ] **`--check-url` 실패 테스트**: 같은 파일명으로 내용이 다른 wheel 을 만들어 올려 본다. 건너뛰지 않고 **실패**해야 한다 (멱등성은 오직 이 검사에서 온다 — PyPI 는 파일명 재사용을 영구히 거부한다).
+- [ ] 설치 확인 — 새 환경에서:
+
+```console
+uv venv /tmp/hf-rehearsal
+uv pip install --python /tmp/hf-rehearsal/bin/python --index-url https://test.pypi.org/simple/ "hwpforge==<ver>"
+uv run --python /tmp/hf-rehearsal/bin/python python -c "import hwpforge, sys; print(hwpforge.__version__, sys.platform)"
+```
+
+- [ ] 레지스트리 실측 — `curl -s https://test.pypi.org/pypi/hwpforge/json | jq '.info.version, (.urls[].filename)'`. 프로덕션은 같은 명령의 `https://pypi.org/pypi/hwpforge/json`.
+
+### 9.5 릴리스 동결 규칙
+
+`pypi-publish.yml` 이 main 에 들어가고 9.4 리허설과 9.6 선행 작업이 끝나기 전에는 **Release PR 을 큐에 넣지 않는다**. 먼저 머지하면 Python 워크플로 없는 릴리스가 나가고, `release: published` 이벤트는 재생할 수 없어 첫 wheel 을 그 릴리스에서 만들 기회가 사라진다. 머지 큐 조작 규칙 자체는 §8 에 있다.
+
+### 9.6 사용자(관리자) 선행 작업
+
+워크플로는 이 표가 채워지기 전에는 **조용히 건너뛰지 않고 실패한다** — `--trusted-publishing always` 는 토큰으로 되돌아가지 않고 그 자리에서 죽는다.
+
+| 무엇                          | 값                                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| PyPI 계정 + 2FA               | 이름 `hwpforge` 는 예약되지 않는다 — pending publisher 는 선점 장치가 아니므로 첫 업로드를 미루지 않는다 |
+| TestPyPI 계정 + 2FA           | 리허설용, 별도 계정                                                                                      |
+| PyPI pending publisher        | owner `ai-screams` · repository `HwpForge` · workflow `pypi-publish.yml` · environment `pypi`            |
+| TestPyPI pending publisher    | 같은 값에 environment `testpypi`                                                                         |
+| GitHub environment `pypi`     | 같은 이름으로 생성. 필요하면 reviewer 를 붙여 수동 승인 게이트로 쓴다                                    |
+| GitHub environment `testpypi` | 같은 이름으로 생성, reviewer 없이                                                                        |
+
+증빙은 `gh api repos/ai-screams/HwpForge/environments` 출력을 `.docs/prs/` 에 남긴다. 토큰은 쓰지 않는다 — OIDC 뿐이다.
+
+### 9.7 이용자에게 알릴 것
+
+정확 핀(`==X.Y.Z`)을 쓰는 이용자는 `py-vX.Y.Z.N` 로 나가는 Python 전용 수정을 받지 못한다. 문서와 안내에서는 `\~=X.Y.Z` 를 권한다.

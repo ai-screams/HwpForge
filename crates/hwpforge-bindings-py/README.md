@@ -14,9 +14,37 @@ server use.
 pip install hwpforge
 ```
 
-Wheels are published for CPython 3.9 and newer (a single `abi3` wheel per platform) on
-Linux x86_64/aarch64, macOS arm64/x86_64 and Windows x64. Free-threaded builds are not
-supported yet. Building from the source distribution needs Rust 1.92 and maturin.
+With [uv](https://docs.astral.sh/uv/): `uv add hwpforge` in a project, or `uv pip install hwpforge` in an environment.
+
+Pin with `~=` rather than `==`. A Python-only fix ships as `X.Y.Z.N`, and an exact pin never receives it.
+
+### What is published
+
+| Artifact                           | Platform            | Needs                 |
+| ---------------------------------- | ------------------- | --------------------- |
+| `cp39-abi3-manylinux_2_28_x86_64`  | Linux x86_64        | glibc 2.28 or newer   |
+| `cp39-abi3-manylinux_2_28_aarch64` | Linux aarch64       | glibc 2.28 or newer   |
+| `cp39-abi3-macosx_11_0_arm64`      | macOS arm64         | macOS 11 or newer     |
+| `cp39-abi3-macosx_10_12_x86_64`    | macOS x86_64        | macOS 10.12 or newer  |
+| `cp39-abi3-win_amd64`              | Windows x64         | —                     |
+| `hwpforge-<version>.tar.gz`        | source distribution | Rust 1.92 and maturin |
+
+One `abi3` wheel per platform covers CPython 3.9 and newer. Free-threaded builds are not
+supported, because the stable ABI does not cover them.
+
+### Hosts without an index
+
+The wheel is a zip file and the package declares no runtime dependencies, so it can be
+unpacked and imported without pip. On Debian 12 (glibc 2.36) or anything newer:
+
+```console
+python3 -c "import zipfile; zipfile.ZipFile('hwpforge-<version>-cp39-abi3-manylinux_2_28_x86_64.whl').extractall('/opt/hf')"
+PYTHONPATH=/opt/hf python3 -c "import hwpforge; print(hwpforge.__version__)"
+```
+
+Every wheel and the source distribution are attached to the matching
+[GitHub Release](https://github.com/ai-screams/HwpForge/releases), so an air-gapped host
+can be served from there as well as from PyPI.
 
 ## Example
 

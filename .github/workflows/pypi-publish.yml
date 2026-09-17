@@ -1,0 +1,351 @@
+# =============================================================================
+# HwpForge — PyPI 배포 (Python 바인딩 에픽 설계 §2.4)
+# =============================================================================
+#
+# 세 가지 이벤트로만 돈다. 태그는 이벤트별로 다른 곳에서 뽑는다.
+#   release: published   umbrella `v*` 태그 (release-plz 가 만든 워크스페이스 릴리스)
+#   push: tags py-v*     Python 전용 릴리스·재빌드
+#   workflow_dispatch    리허설 (기본 대상 = TestPyPI)
+#
+# 프로덕션(`pypi`)은 위 두 태그 이벤트이거나 dispatch 에서 명시적으로 고를 때만
+# 선택된다. 리허설이 실수로 프로덕션을 치지 못하게 하는 구조적 장치다.
+#
+# 멱등성은 오직 `uv publish --check-url` 에서 온다 — PyPI 는 파일명 재사용을
+# 절대 허용하지 않으므로, 버전 단위 사전 검사로 건너뛰지 않는다 (설계 §2.4).
+#
+# 사용자(관리자) 선행 작업이 없으면 이 워크플로는 **조용히 건너뛰지 않고 실패**한다:
+# GitHub environment(`pypi`·`testpypi`)와 PyPI 쪽 pending publisher 가 없으면
+# `--trusted-publishing always` 가 인증을 못 만들고 그 자리에서 죽는다.
+# =============================================================================
+
+name: PyPI Publish
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ["py-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (vX.Y.Z or py-vX.Y.Z[.N][.postM])"
+        required: true
+        type: string
+      target:
+        description: "Publish target"
+        type: choice
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
+
+permissions:
+  contents: read
+
+concurrency:
+  # 태그 단위. 게시 중인 run 을 취소하면 부분 게시 상태가 남으므로 취소하지 않는다.
+  group: pypi-publish-${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  MATURIN_VERSION: ">=1.15,<2"
+
+jobs:
+  resolve:
+    name: "Resolve › Tag"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      target: ${{ steps.validate.outputs.target }}
+      version: ${{ steps.validate.outputs.version }}
+      is_python_only: ${{ steps.validate.outputs.is_python_only }}
+      lock_sha256: ${{ steps.lock.outputs.sha256 }}
+    steps:
+      - name: Resolve the tag from the event
+        id: raw
+        # 이벤트마다 태그가 있는 자리가 다르다. 값은 env 로 넘겨 셸 주입을 막는다.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            release) tag="$RELEASE_TAG" ;;
+            push) tag="$REF_NAME" ;;
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            *) echo "::error::unsupported event $EVENT_NAME"; exit 1 ;;
+          esac
+          [ -n "$tag" ] || { echo "::error::no tag for event $EVENT_NAME"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          # 브랜치 머리가 아니라 **그 태그**를 받는다.
+          ref: ${{ steps.raw.outputs.tag }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - name: Validate the tag grammar
+        id: validate
+        # 문법·버전 일치 규칙은 `.github/scripts/resolve_release_tag.py` 가 소유하고,
+        # 같은 파일의 `--self-check` 가 수용/거부 표를 로컬에서 재현한다.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET: ${{ inputs.target }}
+          TAG: ${{ steps.raw.outputs.tag }}
+        run: >-
+          uv run --no-project --with packaging
+          python .github/scripts/resolve_release_tag.py
+          --tag "$TAG" --event-name "$EVENT_NAME" --input-target "$INPUT_TARGET"
+      - name: Self-check the tag grammar table
+        run: >-
+          uv run --no-project --with packaging
+          python .github/scripts/resolve_release_tag.py --self-check
+      - name: Install Rust toolchain
+        run: rustup show
+      - name: Generate the shared lockfile
+        id: lock
+        # Cargo.lock 은 이 레포에서 미추적이다. 여기서 한 번 풀고 그 파일을 매트릭스
+        # 전원이 내려받아 `--locked` 로 빌드해야 플랫폼별 wheel 이 서로 다른 의존성
+        # 해석으로 나오지 않는다 (설계 §2.4 wheel 매트릭스).
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          uv run --no-project python - <<'PY' > "$RUNNER_TEMP/lock.sha256"
+          import hashlib
+
+          print(hashlib.sha256(open("Cargo.lock", "rb").read()).hexdigest())
+          PY
+          # 마지막 줄만 취해 uv 가 stdout 에 무언가 적더라도 GITHUB_OUTPUT 이
+          # 오염되지 않게 한다 (형식이 깨지면 스텝 출력이 통째로 무효가 된다).
+          digest="$(tail -n 1 "$RUNNER_TEMP/lock.sha256")"
+          [ -n "$digest" ] || { echo "::error::could not hash Cargo.lock"; exit 1; }
+          echo "sha256=$digest" >> "$GITHUB_OUTPUT"
+          echo "lockfile sha256: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          retention-days: 7
+          if-no-files-found: error
+
+  build:
+    name: "Build › ${{ matrix.name }}"
+    needs: [resolve]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubuntu-22.04
+            command: build
+            target: x86_64
+            manylinux: "2_28"
+            args: --release --locked
+            smoke: true
+          - name: linux-aarch64
+            runner: ubuntu-24.04-arm
+            command: build
+            target: aarch64
+            manylinux: "2_28"
+            args: --release --locked
+            smoke: true
+          - name: macos-arm64
+            runner: macos-14
+            command: build
+            target: aarch64-apple-darwin
+            manylinux: auto
+            args: --release --locked
+            smoke: false
+          - name: macos-x86_64
+            runner: macos-13
+            command: build
+            target: x86_64-apple-darwin
+            manylinux: auto
+            args: --release --locked
+            smoke: false
+          - name: windows-x64
+            runner: windows-latest
+            command: build
+            target: x64
+            manylinux: auto
+            args: --release --locked
+            smoke: false
+          - name: sdist
+            runner: ubuntu-22.04
+            command: sdist
+            target: ""
+            manylinux: auto
+            args: ""
+            smoke: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - uses: actions/download-artifact@v7
+        with:
+          name: cargo-lock
+      - name: Verify the shared lockfile
+        env:
+          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          uv run --no-project python - <<'PY'
+          import hashlib
+          import os
+          import sys
+
+          want = os.environ["LOCK_SHA256"]
+          got = hashlib.sha256(open("Cargo.lock", "rb").read()).hexdigest()
+          print(f"expected {want}")
+          print(f"actual   {got}")
+          if want != got:
+              sys.exit("::error::Cargo.lock differs from the resolve job's resolution")
+          PY
+      - name: Pin the Python-only version
+        # `py-v*` 만 해당. 러너의 일회용 체크아웃에서 pyproject 를 제자리 수정하고,
+        # 빌드 뒤 원본을 되돌려 `git diff --exit-code` 로 증명한다. 커밋은 없다.
+        if: needs.resolve.outputs.is_python_only == 'true'
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat crates/hwpforge-bindings-py/pyproject.toml > "$RUNNER_TEMP/pyproject.orig"
+          uv run --no-project python .github/scripts/pin_pyproject_version.py \
+            crates/hwpforge-bindings-py/pyproject.toml "$VERSION"
+          git --no-pager diff -- crates/hwpforge-bindings-py/pyproject.toml
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: ${{ matrix.command }}
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          maturin-version: ${{ env.MATURIN_VERSION }}
+          working-directory: crates/hwpforge-bindings-py
+          args: ${{ matrix.args }} --out ${{ github.workspace }}/dist
+      - name: Restore pyproject.toml
+        if: needs.resolve.outputs.is_python_only == 'true'
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP/pyproject.orig" > crates/hwpforge-bindings-py/pyproject.toml
+          git diff --exit-code -- crates/hwpforge-bindings-py/pyproject.toml
+      - name: Assert filenames and metadata carry the resolved version
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: >-
+          uv run --no-project python .github/scripts/check_dist.py dist "$VERSION"
+      - name: Debian 12 import smoke (no pip, same architecture)
+        if: matrix.smoke
+        # 계획 부록 A-1 과 같은 경로. 러너 아키텍처가 곧 컨테이너 아키텍처다.
+        run: |
+          set -euo pipefail
+          cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/
+          cp tests/fixtures/fields/clickhere_named.hwpx dist/fixture.hwpx
+          cat > dist/run_smoke.sh <<'SH'
+          set -eu
+          python3 - <<'PY'
+          import glob
+          import zipfile
+
+          whl = sorted(glob.glob("/w/hwpforge-*.whl"))[0]
+          zipfile.ZipFile(whl).extractall("/opt/hf")
+          print("unpacked:", whl)
+          PY
+          PYTHONPATH=/opt/hf python3 /w/smoke_unpacked_wheel.py /w/fixture.hwpx
+          SH
+          docker run --rm -v "$PWD/dist:/w" python:3.11-slim-bookworm bash /w/run_smoke.sh
+          rm -f dist/run_smoke.sh dist/smoke_unpacked_wheel.py dist/fixture.hwpx
+      - uses: actions/upload-artifact@v7
+        with:
+          # v4 이후 아티팩트는 불변이라 매트릭스 잡들이 같은 이름에 덧쓸 수 없다.
+          # 잡별로 올리고 게시 잡이 패턴으로 한 폴더에 합친다.
+          name: dist-${{ needs.resolve.outputs.tag }}-${{ matrix.name }}
+          path: dist
+          retention-days: 14
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: "Publish › TestPyPI"
+    needs: [resolve, build]
+    if: needs.resolve.outputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: testpypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: dist-${{ needs.resolve.outputs.tag }}-*
+          merge-multiple: true
+          path: dist
+      - name: Publish to TestPyPI
+        env:
+          TARGET_NAME: TestPyPI
+          PUBLISH_URL: https://test.pypi.org/legacy/
+          CHECK_URL: https://test.pypi.org/simple/
+        run: bash .github/scripts/publish_dist.sh
+  publish-pypi:
+    name: "Publish › PyPI"
+    needs: [resolve, build]
+    if: needs.resolve.outputs.target == 'pypi'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: dist-${{ needs.resolve.outputs.tag }}-*
+          merge-multiple: true
+          path: dist
+      - name: Publish to PyPI
+        env:
+          TARGET_NAME: PyPI
+          PUBLISH_URL: https://upload.pypi.org/legacy/
+          CHECK_URL: https://pypi.org/simple/
+        run: bash .github/scripts/publish_dist.sh
+
+  attach-to-release:
+    name: "Attach › GitHub Release"
+    needs: [resolve, publish-pypi]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: dist-${{ needs.resolve.outputs.tag }}-*
+          merge-multiple: true
+          path: dist
+      - name: Upload the artifacts to the release
+        # 설계 §2.4 "상대 전달": 상대는 Release 에서 manylinux_2_28 wheel 을 받는다.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          find dist -maxdepth 1 -type f -print
+          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
