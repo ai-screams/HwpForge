@@ -16,8 +16,10 @@
 //! thin wrapper that drops the warnings; that keeps existing consumers byte
 //! identical while giving the operations layer a lossless path.
 //!
-//! Both carriers are `#[non_exhaustive]`, so a third diagnostic channel can
-//! be added later without breaking the callers added today.
+//! There are three carriers — one per codec pass a facade can run, plus
+//! [`WithCodecWarnings`] for the regenerating editors that run both. All are
+//! `#[non_exhaustive]`, so a further diagnostic channel can be added later
+//! without breaking the callers added today.
 
 use crate::decoder::DecodeWarning;
 use crate::encoder::EncodeWarning;
@@ -108,6 +110,57 @@ impl<T> WithEncodeWarnings<T> {
     }
 }
 
+/// A result plus **both** codec channels: what decoding the input reported,
+/// and the non-semantic warnings of the encode that produced the output.
+///
+/// Returned by the twins of the regenerating editors that do both halves in
+/// one call — today [`HwpxStamper::stamp_with_diagnostics`](crate::stamp::HwpxStamper::stamp_with_diagnostics)
+/// and its v2 sibling. A facade that only decodes uses
+/// [`WithDecodeWarnings`]; one whose only internal codec pass is the encode
+/// uses [`WithEncodeWarnings`].
+///
+/// # Scope
+///
+/// `decode_warnings` comes from the **input** decode alone. A regenerating
+/// edit decodes several other packages on the way — the admission gate's
+/// no-op round trip, the v2 fixed-point check, and the output re-read that
+/// builds the manifest — but each of those reads bytes that are either
+/// discarded verification artefacts or derived from the input decode already
+/// reported, so carrying them would restate a subset as if it were new.
+///
+/// `encode_warnings` keeps the contract [`WithEncodeWarnings`] documents:
+/// semantic loss never appears here, because it is the fail-closed path and
+/// produces no bytes at all.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct WithCodecWarnings<T> {
+    /// The payload the twin's plain counterpart returns on its own.
+    pub value: T,
+    /// Every warning the decoder raised for the **input**, in decoder order.
+    pub decode_warnings: Vec<DecodeWarning>,
+    /// Non-semantic encoder warnings from the encode that produced the
+    /// output bytes, in encoder order.
+    pub encode_warnings: Vec<EncodeWarning>,
+}
+
+impl<T> WithCodecWarnings<T> {
+    /// Pairs a result with both codec channels.
+    #[must_use]
+    pub fn new(
+        value: T,
+        decode_warnings: Vec<DecodeWarning>,
+        encode_warnings: Vec<EncodeWarning>,
+    ) -> Self {
+        Self { value, decode_warnings, encode_warnings }
+    }
+
+    /// Drops both channels, yielding what the plain entry point returns.
+    #[must_use]
+    pub fn into_value(self) -> T {
+        self.value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +179,18 @@ mod tests {
 
         assert_eq!(diagnosed.warnings.len(), 1);
         assert_eq!(diagnosed.into_value(), 42);
+    }
+
+    #[test]
+    fn the_codec_carrier_keeps_its_two_channels_apart() {
+        let decode = DecodeWarning::LayoutCacheDropped { path: path(), reason: "in".to_string() };
+        let encode = EncodeWarning::LayoutCacheDropped { path: path(), reason: "out".to_string() };
+
+        let diagnosed = WithCodecWarnings::new("bytes", vec![decode.clone()], vec![encode.clone()]);
+
+        assert_eq!(diagnosed.decode_warnings, vec![decode]);
+        assert_eq!(diagnosed.encode_warnings, vec![encode]);
+        assert_eq!(diagnosed.into_value(), "bytes");
     }
 
     #[test]

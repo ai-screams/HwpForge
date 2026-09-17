@@ -97,7 +97,11 @@ fn fills_a_named_field_and_reports_what_it_replaced() {
     assert_eq!(out.filled[0].section, 0);
     assert_eq!(out.filled[0].previous, "회사 이메일을 입력하세요", "the hint was the body");
     assert_eq!(body(&out.bytes, 0, "user_email"), "hanyul@example.com");
-    assert!(out.warnings.is_empty(), "the filler has no warning channel yet");
+    assert!(
+        out.warnings.is_empty(),
+        "a cleanly decoding template reports nothing: {:?}",
+        out.warnings
+    );
 }
 
 #[test]
@@ -223,4 +227,40 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(keys(&value), ["filled", "warnings"]);
     assert_eq!(value["filled"][0]["name"], "user_email");
     assert_eq!(value["warnings"], serde_json::json!([]));
+}
+
+/// A package whose decode raises `LAYOUT_CACHE_DROPPED` **and** whose named
+/// click-here field is fillable.
+///
+/// No pre-existing fixture is both: the only two documents in the tree that
+/// warn carry no field at all, and every field fixture decodes cleanly. This
+/// one is this codec's own output with the last paragraph's
+/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
+/// shape a third-party edit leaves behind. The decoder refuses to promote a
+/// guessed coordinate and reports the drop instead (`decoder::section`).
+///
+/// Being this codec's own output also keeps the package admissible, so the
+/// same fixture backs the decode-warning tests of `insert_para`,
+/// `delete_para` and `stamp`, and the four surfaces cannot disagree about
+/// what "a document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
+/// `fill` resolves the requested names against a decode of the package, so
+/// the caller hears what that decode reported.
+///
+/// The count is part of the contract. `fill` decodes once to resolve the
+/// names and the preserving patcher decodes the base again for every touched
+/// section; only the first decode is reported, so one warning stays one
+/// warning however many sections an edit touches.
+#[test]
+fn decode_warnings_reach_the_fill_output() {
+    let out = fill(&warning_fixture(), &pairs(&[("user_email", "a@b.c")]), &FillOptions::default())
+        .expect("fill");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one decode, reported once: {codes:?}");
+    assert_eq!(out.filled.len(), 1, "the edit itself still happened");
 }

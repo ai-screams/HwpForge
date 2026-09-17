@@ -368,3 +368,34 @@ fn a_successful_edit_reports_the_encoders_nonsemantic_warnings() {
     );
     assert_eq!(codes, Vec::<String>::new(), "this encode raises nothing: {codes:?}");
 }
+
+/// A package that warns on decode, is admissible, and holds one 2x2 table.
+///
+/// This codec's own output with one paragraph's `<hp:linesegarray>` pointing
+/// past the end of that paragraph's text — the shape a third-party edit
+/// leaves behind — so the decoder refuses to promote a guessed coordinate and
+/// reports the drop. The same fixture backs the decode-warning tests of
+/// `fill`, `insert_para`, `delete_para` and `stamp`, so the five editing
+/// surfaces cannot disagree about what "a document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
+/// The edit admits its input by decoding it, so the caller hears what that
+/// decode reported — in front of the encode channel it already carried.
+///
+/// One warning, not two: the admission gate also decodes its own no-op
+/// re-encode, but that package is a discarded verification artefact.
+#[test]
+fn decode_warnings_reach_the_set_cell_output() {
+    let out = set_cell(
+        &warning_fixture(),
+        &SetCellOptions::default().with_table(0).with_at("0,1").with_text("류한율"),
+    )
+    .expect("set_cell");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
+    assert_eq!(out.results.len(), 1, "the edit itself still happened");
+}

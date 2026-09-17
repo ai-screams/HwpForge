@@ -244,3 +244,47 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(value["manifest"]["fields"].as_array().expect("fields").len(), 2);
     assert_eq!(value["warnings"], serde_json::json!([]));
 }
+
+/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
+/// admissible.
+///
+/// It is this codec's own output with the last paragraph's
+/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
+/// shape a third-party edit leaves behind — so the decoder refuses to
+/// promote a guessed coordinate and reports the drop instead. Being our own
+/// output is what keeps it admissible: the two native documents in the tree
+/// that warn both fail the gate on uncarried ZIP entries.
+///
+/// The same fixture backs the decode-warning tests of `fill`, `insert_para`,
+/// `delete_para` and `stamp`, so the four surfaces cannot disagree about
+/// what "a document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
+/// A stamp decodes its input behind the admission gate, so the caller hears
+/// what that decode reported.
+///
+/// The documented order is decode first, then the successful encode's
+/// non-semantic warnings; the encode half is empty for every document
+/// reachable today (its only member needs `emit_layout_cache`, which a
+/// preserve-first editor never sets), so what is asserted here is the decode
+/// half and the absence of anything after it.
+///
+/// One warning, not four: the admission gate decodes the re-encoded package,
+/// the manifest decodes the output, and the v2 path decodes a fixed-point
+/// re-encode. Those three describe packages that are either discarded or
+/// derived from the decode already reported, so only the input decode is
+/// carried.
+#[test]
+fn decode_warnings_reach_the_stamp_output() {
+    let bytes = warning_fixture();
+    let request = StampMap::Legacy(approve_all(&bytes));
+
+    let out = stamp(&bytes, &request, &StampOptions::default()).expect("stamp");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
+    assert!(out.manifest.is_some(), "the stamp itself still happened");
+}

@@ -183,3 +183,52 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(value["inserted"], 0);
     assert_eq!(value["warnings"], serde_json::json!([]));
 }
+
+/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
+/// admissible.
+///
+/// It is this codec's own output with the last paragraph's
+/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
+/// shape a third-party edit leaves behind — so the decoder refuses to
+/// promote a guessed coordinate and reports the drop instead. Being our own
+/// output is what keeps it admissible: the two native documents in the tree
+/// that warn both fail the gate on uncarried ZIP entries.
+///
+/// The same fixture backs the decode-warning tests of `fill`, `insert_para`,
+/// `delete_para` and `stamp`, so the four surfaces cannot disagree about
+/// what "a document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
+/// The delete admits its input by decoding it, so the caller hears what that
+/// decode reported even when the paragraph it removes has nothing to advise
+/// about.
+///
+/// One warning, not two: the best-effort advisory scan decodes the package a
+/// second time, and the admission gate and self-verify decode two derived
+/// packages, but only the editor's own input decode is reported.
+#[test]
+fn decode_warnings_reach_the_delete_output() {
+    let out = delete_para(&warning_fixture(), &DeleteParaOptions::default().with_indexes(vec![3]))
+        .expect("delete");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
+    assert_eq!(out.deleted, 1, "the edit itself still happened");
+}
+
+/// The documented merge order, on the one operation that has both channels:
+/// what the decode reported comes first, then what the edit itself advises.
+///
+/// Paragraph 2 of the fixture carries an index mark, so deleting it produces
+/// one of each.
+#[test]
+fn the_decode_warning_precedes_the_delete_advisory() {
+    let out = delete_para(&warning_fixture(), &DeleteParaOptions::default().with_indexes(vec![2]))
+        .expect("delete");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED", "INDEX_MARK_REMOVED"], "documented order");
+}

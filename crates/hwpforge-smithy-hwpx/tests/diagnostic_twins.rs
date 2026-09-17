@@ -240,8 +240,218 @@ fn set_cells_twin_returns_the_same_package_as_the_plain_entry_point() {
         "the twin must not change the output document"
     );
     assert!(
-        diagnosed.warnings.is_empty(),
+        diagnosed.encode_warnings.is_empty(),
         "no committed fixture reaches a non-semantic encode warning: {:?}",
-        diagnosed.warnings
+        diagnosed.encode_warnings
     );
+    assert!(
+        diagnosed.decode_warnings.is_empty(),
+        "this package is this codec's own clean output: {:?}",
+        diagnosed.decode_warnings
+    );
+}
+
+// ── the editing twins (W1b review R3) ───────────────────────────
+//
+// `fill`, `insert_paragraphs`, `delete_paragraphs` and the stamper's
+// admission decode were the entry points still dropping the decoder's
+// warnings after the R2 pass. They all need one fixture that both warns and
+// survives the admission gate, which the two native warning documents do not:
+// each fails the gate on uncarried ZIP entries.
+
+/// A package that warns on decode **and** is admissible.
+///
+/// This codec's own output with the last paragraph's `<hp:linesegarray>`
+/// pointing past the end of that paragraph's text — the shape a third-party
+/// edit leaves behind. The decoder refuses to promote a guessed coordinate
+/// and reports the drop instead. It also carries a named, fillable
+/// click-here field, an index mark and one `(   )` stamp candidate, so the
+/// same document reaches all four editing paths.
+fn editable_warning_fixture() -> Vec<u8> {
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/stale-line-cache.hwpx");
+    std::fs::read(path).unwrap_or_else(|e| panic!("editable warning fixture: {e}"))
+}
+
+#[test]
+fn the_editable_warning_fixture_still_produces_a_decode_warning() {
+    let decoded =
+        hwpforge_smithy_hwpx::HwpxDecoder::decode(&editable_warning_fixture()).expect("decode");
+
+    assert_eq!(
+        decoded.warnings.iter().filter(|w| is_cache_dropped(w)).count(),
+        1,
+        "the fixture is the premise of the tests below: {:?}",
+        decoded.warnings
+    );
+}
+
+#[test]
+fn fill_reports_decode_warnings_and_keeps_its_outcome() {
+    let bytes = editable_warning_fixture();
+    let values: std::collections::BTreeMap<String, String> =
+        [("user_email".to_string(), "hanyul@example.com".to_string())].into_iter().collect();
+
+    let diagnosed = HwpxFiller::fill_with_diagnostics(&bytes, &values).expect("fill twin");
+    let plain = HwpxFiller::fill(&bytes, &values).expect("fill");
+
+    assert!(diagnosed.warnings.iter().any(is_cache_dropped), "{:?}", diagnosed.warnings);
+    assert_eq!(
+        diagnosed.warnings.len(),
+        1,
+        "the preserving patcher re-decodes per touched section; that must not multiply the list"
+    );
+    assert!(same_payload(&plain.filled, &diagnosed.value.filled), "the twin fills the same fields");
+    assert!(
+        same_payload(
+            &HwpxFiller::list_fields(&plain.bytes).expect("fields"),
+            &HwpxFiller::list_fields(&diagnosed.value.bytes).expect("fields")
+        ),
+        "the twin must not change the output document"
+    );
+}
+
+#[test]
+fn the_structural_twins_report_decode_warnings_and_keep_their_bytes() {
+    use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
+
+    let bytes = editable_warning_fixture();
+    let anchor = ParagraphLocator { section: 0, index: 2 };
+    let texts = vec!["끼움".to_string()];
+
+    let inserted = HwpxStructuralEditor::insert_paragraphs_with_diagnostics(
+        &bytes,
+        anchor,
+        InsertPosition::After,
+        &texts,
+    )
+    .expect("insert twin");
+    let inserted_plain =
+        HwpxStructuralEditor::insert_paragraphs(&bytes, anchor, InsertPosition::After, &texts)
+            .expect("insert");
+
+    assert!(inserted.warnings.iter().any(is_cache_dropped), "{:?}", inserted.warnings);
+    assert_eq!(inserted.warnings.len(), 1, "only the input decode is reported");
+    assert_eq!(inserted_plain, inserted.value, "the twin must not change the bytes");
+
+    let targets = [ParagraphLocator { section: 0, index: 3 }];
+    let deleted = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(&bytes, &targets)
+        .expect("delete twin");
+    let deleted_plain = HwpxStructuralEditor::delete_paragraphs(&bytes, &targets).expect("delete");
+
+    assert!(deleted.warnings.iter().any(is_cache_dropped), "{:?}", deleted.warnings);
+    assert_eq!(deleted.warnings.len(), 1, "only the input decode is reported");
+    assert_eq!(deleted_plain, deleted.value, "the twin must not change the bytes");
+}
+
+/// Editing nothing decodes nothing, so the no-op returns an empty list rather
+/// than the warnings of a decode it never ran.
+#[test]
+fn the_structural_no_ops_report_nothing_because_they_never_decode() {
+    use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
+
+    let bytes = editable_warning_fixture();
+    let anchor = ParagraphLocator { section: 0, index: 0 };
+
+    let inserted = HwpxStructuralEditor::insert_paragraphs_with_diagnostics(
+        &bytes,
+        anchor,
+        InsertPosition::After,
+        &[],
+    )
+    .expect("insert no-op");
+    let deleted = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(&bytes, &[])
+        .expect("delete no-op");
+
+    assert!(inserted.warnings.is_empty(), "{:?}", inserted.warnings);
+    assert!(deleted.warnings.is_empty(), "{:?}", deleted.warnings);
+    assert_eq!(inserted.value, bytes, "a no-op is byte identical");
+    assert_eq!(deleted.value, bytes, "a no-op is byte identical");
+}
+
+/// The stamper's twin carries the **input** decode, not the output re-read
+/// that builds the manifest, and keeps the encode channel separate.
+#[test]
+fn the_stamp_twin_reports_the_input_decode_beside_the_encode_channel() {
+    use hwpforge_smithy_hwpx::stamp::{StampAction, StampSpec};
+
+    let bytes = editable_warning_fixture();
+    let specs: Vec<StampSpec> = HwpxStamper::plan_bytes_v2(&bytes)
+        .expect("plan")
+        .text
+        .into_iter()
+        .map(|candidate| StampSpec {
+            section: candidate.section,
+            path: candidate.path,
+            span: candidate.span,
+            marker: candidate.marker,
+            action: StampAction::Field { name: "성명".to_string(), hint: None },
+        })
+        .collect();
+    assert_eq!(specs.len(), 1, "the fixture offers exactly one candidate");
+
+    let diagnosed = HwpxStamper::stamp_with_diagnostics(&bytes, &specs).expect("stamp twin");
+    let plain = HwpxStamper::stamp(&bytes, &specs).expect("stamp");
+
+    assert!(
+        diagnosed.decode_warnings.iter().any(is_cache_dropped),
+        "{:?}",
+        diagnosed.decode_warnings
+    );
+    assert_eq!(
+        diagnosed.decode_warnings.len(),
+        1,
+        "the gate, the fixed point and the manifest decode too; none of those is reported"
+    );
+    assert!(
+        diagnosed.encode_warnings.is_empty(),
+        "no committed fixture reaches a non-semantic encode warning: {:?}",
+        diagnosed.encode_warnings
+    );
+    // Compared through the decoded fields rather than the manifest: the
+    // manifest embeds a hash of the output, and this codec's
+    // packages are not byte-reproducible across two runs (a ZIP header field
+    // differs), which predates this change — the same reason the cell
+    // editor's twin test compares a decoded projection.
+    assert!(
+        same_payload(
+            &HwpxFiller::list_fields(&plain.bytes).expect("fields"),
+            &HwpxFiller::list_fields(&diagnosed.value.bytes).expect("fields")
+        ),
+        "the twin must not change the output document"
+    );
+}
+
+/// The cell editor's twin carries the input decode beside the encode
+/// channel, exactly as the stamper's does.
+#[test]
+fn the_set_cells_twin_reports_the_input_decode_beside_the_encode_channel() {
+    let bytes = editable_warning_fixture();
+    let specs = vec![hwpforge_smithy_hwpx::CellSpec {
+        table: 0,
+        target: hwpforge_smithy_hwpx::CellTarget::At(hwpforge_core::table::grid::GridCoord::new(
+            0, 1,
+        )),
+        text: "류한율".to_string(),
+    }];
+
+    let diagnosed = HwpxCellEditor::set_cells_with_diagnostics(&bytes, &specs).expect("twin");
+    let plain = HwpxCellEditor::set_cells(&bytes, &specs).expect("set_cells");
+
+    assert!(
+        diagnosed.decode_warnings.iter().any(is_cache_dropped),
+        "{:?}",
+        diagnosed.decode_warnings
+    );
+    assert_eq!(
+        diagnosed.decode_warnings.len(),
+        1,
+        "the gate re-decodes its own no-op encode; that must not be reported too"
+    );
+    assert!(
+        diagnosed.encode_warnings.is_empty(),
+        "no committed fixture reaches a non-semantic encode warning: {:?}",
+        diagnosed.encode_warnings
+    );
+    assert_eq!(plain.outcome, diagnosed.value.outcome, "the twin must not change what was edited");
 }

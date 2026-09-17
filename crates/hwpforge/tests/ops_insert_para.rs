@@ -65,7 +65,11 @@ fn inserts_a_block_after_its_anchor() {
 
     assert_eq!((out.inserted, out.deleted), (2, 0));
     assert_eq!(texts(&out.bytes), ["첫째", "둘째", "새 A", "새 B", "셋째"]);
-    assert!(out.warnings.is_empty(), "the structural editor has no warning channel yet");
+    assert!(
+        out.warnings.is_empty(),
+        "a cleanly decoding document reports nothing: {:?}",
+        out.warnings
+    );
 }
 
 #[test]
@@ -158,4 +162,43 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(value["inserted"], 1);
     assert_eq!(value["deleted"], 0);
     assert_eq!(value["warnings"], serde_json::json!([]));
+}
+
+/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
+/// admissible.
+///
+/// It is this codec's own output with the last paragraph's
+/// `<hp:linesegarray>` pointing past the end of that paragraph's text — the
+/// shape a third-party edit leaves behind — so the decoder refuses to
+/// promote a guessed coordinate and reports the drop instead. Being our own
+/// output is what keeps it admissible: the two native documents in the tree
+/// that warn both fail the gate on uncarried ZIP entries.
+///
+/// The same fixture backs the decode-warning tests of `fill`, `insert_para`,
+/// `delete_para` and `stamp`, so the four surfaces cannot disagree about
+/// what "a document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
+/// The insert admits its input by decoding it, so the caller hears what that
+/// decode reported. Inserting has no advisory scan of its own, so the
+/// decoder's list is the whole list.
+///
+/// The count is part of the contract: the admission gate decodes the
+/// re-encoded package as well, and the self-verify decodes the output, but
+/// those two are verification artefacts of packages the caller never
+/// receives, so only the input decode is reported.
+#[test]
+fn decode_warnings_reach_the_insert_output() {
+    let out = insert_para(
+        &warning_fixture(),
+        &InsertParaOptions::default().with_anchor(2).with_text(owned(&["끼움"])),
+    )
+    .expect("insert");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
+    assert_eq!((out.inserted, out.deleted), (1, 0), "the edit itself still happened");
 }

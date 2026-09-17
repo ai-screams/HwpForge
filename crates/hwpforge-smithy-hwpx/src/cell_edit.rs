@@ -550,17 +550,25 @@ impl HwpxCellEditor {
     /// See [`CellEditError`].
     pub fn set_cells(base: &[u8], specs: &[CellSpec]) -> Result<CellEditResult, CellEditError> {
         Self::set_cells_with_diagnostics(base, specs)
-            .map(crate::diagnostics::WithEncodeWarnings::into_value)
+            .map(crate::diagnostics::WithCodecWarnings::into_value)
     }
 
-    /// Edits table cells, keeping the successful encode's non-semantic
-    /// warnings.
+    /// Edits table cells, keeping both codec channels: what decoding the
+    /// input reported, and the successful encode's non-semantic warnings.
     ///
     /// Same bytes and same outcome as [`HwpxCellEditor::set_cells`], which is
     /// a thin wrapper over this function; the difference is only that the
     /// diagnostics survive.
     ///
-    /// # What the warnings mean
+    /// # What the decode warnings mean
+    ///
+    /// They come from the admission gate's read of `base` — the decode whose
+    /// document this edit mutates, so it is the one that says what the codec
+    /// could not carry across the regeneration. The gate also re-decodes its
+    /// own no-op encode; that package is a discarded verification artefact,
+    /// so its diagnostics are not reported as if they described the result.
+    ///
+    /// # What the encode warnings mean
     ///
     /// Semantic-loss warnings never appear here — they are the fail-closed
     /// path and produce [`CellEditError::SemanticLoss`] with no bytes. What
@@ -583,14 +591,14 @@ impl HwpxCellEditor {
     pub fn set_cells_with_diagnostics(
         base: &[u8],
         specs: &[CellSpec],
-    ) -> Result<crate::diagnostics::WithEncodeWarnings<CellEditResult>, CellEditError> {
+    ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
         let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
 
-        let HwpxDocument { mut document, style_store, image_store, .. } = d0;
+        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
         let outcome = apply_set_cells(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
@@ -617,7 +625,11 @@ impl HwpxCellEditor {
         // renderer does not reflow (and repaginate) the whole document.
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
-        Ok(crate::diagnostics::WithEncodeWarnings::new(CellEditResult { bytes, outcome }, others))
+        Ok(crate::diagnostics::WithCodecWarnings::new(
+            CellEditResult { bytes, outcome },
+            decode_warnings,
+            others,
+        ))
     }
 }
 

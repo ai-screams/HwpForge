@@ -266,6 +266,14 @@ pub fn collect() -> Inventory {
     // swept for public `*Error`/`*Warning` enums the manifest never names.
     // Limiting the sweep to manifest files would let a new diagnostic enum
     // in an unlisted module (or a re-export from one) go unnoticed.
+    //
+    // The inventory identifies a diagnostic by `(crate, enum name)` and the
+    // ops payload derivation keeps only the last path segment, so two public
+    // diagnostic enums with the same name in different modules of one crate
+    // would be conflated. That is legal Rust; here it is flagged so the
+    // manifest (and the ops arm) name the module explicitly when it happens.
+    let mut public_diagnostics: std::collections::BTreeMap<(&str, String), Vec<String>> =
+        std::collections::BTreeMap::new();
     let mut unlisted = Vec::new();
     for krate in audited_crates() {
         let named: Vec<&str> = MANIFEST
@@ -284,9 +292,23 @@ pub fn collect() -> Inventory {
             let mut sweep = Sweep { named: &named, unlisted: Vec::new() };
             sweep.visit_file(&ast);
             let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let mut all_public = PublicDiagnostics::default();
+            all_public.visit_file(&ast);
+            for name in all_public.names {
+                public_diagnostics.entry((krate, name)).or_default().push(rel.clone());
+            }
             unlisted.extend(sweep.unlisted.into_iter().map(|name| format!("{rel}::{name}")));
         }
     }
+    let collisions: Vec<String> = public_diagnostics
+        .iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|((krate, name), files)| format!("{krate}::{name} in {files:?}"))
+        .collect();
+    assert!(
+        collisions.is_empty(),
+        "same-named public diagnostic enums in one crate (the inventory cannot tell them apart): {collisions:?}"
+    );
 
     Inventory { enums, unlisted_public_error_or_warning_enums: unlisted }
 }
@@ -493,6 +515,25 @@ fn visibility_of(vis: &Visibility) -> String {
 
 fn attribute_text(attr: &Attribute) -> String {
     quote::quote!(#attr).to_string()
+}
+
+/// Every public `*Error`/`*Warning` enum name in one file (for the
+/// same-name collision check).
+#[derive(Default)]
+struct PublicDiagnostics {
+    names: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for PublicDiagnostics {
+    fn visit_item_enum(&mut self, item: &'ast ItemEnum) {
+        let name = item.ident.to_string();
+        if matches!(item.vis, Visibility::Public(_))
+            && (name.ends_with("Error") || name.ends_with("Warning"))
+        {
+            self.names.push(name);
+        }
+        syn::visit::visit_item_enum(self, item);
+    }
 }
 
 /// Second pass: public `*Error`/`*Warning` enums the manifest never names.

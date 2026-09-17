@@ -25,12 +25,24 @@
 //! [`stamp_plan`] is a query: it decodes and projects, so it reports the
 //! decoder's warnings ([`OpsWarning::Decode`]).
 //!
-//! [`stamp`] is a regenerating edit, so it reports the other half of its
-//! fail-closed contract ([`OpsWarning::Encode`]): an encode that loses
-//! meaning produces no bytes, and an encode that succeeds hands back its
-//! **non-semantic** warnings. Only the encode that produced the output is
-//! reported — the admission gate and the v2 fixed-point check also encode,
-//! but those packages are discarded verification artefacts.
+//! [`stamp`] runs both halves of the codec, so it reports both, in that
+//! order: **what decoding the input reported ([`OpsWarning::Decode`]), then
+//! what the successful encode raised ([`OpsWarning::Encode`])**.
+//!
+//! The decode half is the admission gate's read of the input — the decode
+//! whose document this stamp mutates, so it is the one that says what the
+//! codec could not carry across the regeneration. Three further decodes run
+//! and none is reported: the gate re-decodes its own no-op encode, the v2
+//! fixed-point check decodes a re-encode, and the manifest re-reads the
+//! output. Each reads a package that is either discarded or derived from the
+//! decode already reported, so carrying them would report one document's
+//! losses more than once.
+//!
+//! The encode half is the other half of the fail-closed contract: an encode
+//! that loses meaning produces no bytes, and an encode that succeeds hands
+//! back its **non-semantic** warnings. Only the encode that produced the
+//! output is reported — the admission gate and the v2 fixed-point check also
+//! encode, but those packages are discarded verification artefacts.
 //!
 //! That encode list is empty for every document available today: the only
 //! non-semantic `EncodeWarning` is `LayoutCacheDropped`, which the encoder
@@ -180,7 +192,9 @@ pub struct StampOutput {
     /// The output inventory, unless [`StampOptions::with_manifest`] turned
     /// it off.
     pub manifest: Option<StampedManifest>,
-    /// Non-fatal diagnostics. See the module docs for why this is empty.
+    /// What decoding the input reported, then the successful encode's
+    /// non-semantic warnings — see the module docs for the order and for
+    /// which of the codec passes on this path are reported.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -248,13 +262,14 @@ pub fn stamp(
     request: &StampMap,
     opts: &StampOptions,
 ) -> Result<StampOutput, OpsError> {
-    let (bytes, manifest, encode_warnings) = match request {
+    let (bytes, manifest, decode_warnings, encode_warnings) = match request {
         StampMap::Legacy(specs) => {
             let diagnosed = HwpxStamper::stamp_with_diagnostics(hwpx, specs)?;
             (
                 diagnosed.value.bytes,
                 StampedManifest::V1(diagnosed.value.manifest),
-                diagnosed.warnings,
+                diagnosed.decode_warnings,
+                diagnosed.encode_warnings,
             )
         }
         StampMap::V2(envelope) => {
@@ -262,15 +277,17 @@ pub fn stamp(
             (
                 diagnosed.value.bytes,
                 StampedManifest::V2(diagnosed.value.manifest),
-                diagnosed.warnings,
+                diagnosed.decode_warnings,
+                diagnosed.encode_warnings,
             )
         }
     };
-    Ok(StampOutput {
-        bytes,
-        manifest: opts.manifest.then_some(manifest),
-        warnings: encode_warnings.into_iter().map(OpsWarning::Encode).collect(),
-    })
+    // Documented order: the input decode first, then the encode that produced
+    // the output.
+    let mut warnings: Vec<OpsWarning> =
+        decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(encode_warnings.into_iter().map(OpsWarning::Encode));
+    Ok(StampOutput { bytes, manifest: opts.manifest.then_some(manifest), warnings })
 }
 
 #[cfg(test)]

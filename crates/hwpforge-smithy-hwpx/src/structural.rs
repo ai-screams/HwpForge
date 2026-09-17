@@ -282,13 +282,42 @@ impl HwpxStructuralEditor {
         base: &[u8],
         targets: &[ParagraphLocator],
     ) -> Result<Vec<u8>, StructuralEditError> {
+        Self::delete_paragraphs_with_diagnostics(base, targets)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Deletes paragraphs, keeping the warnings the **input** decode raised.
+    ///
+    /// Same bytes as [`Self::delete_paragraphs`], which is a thin wrapper over
+    /// this function.
+    ///
+    /// # Which decode
+    ///
+    /// Only the admission gate's decode of `base` is reported. That gate also
+    /// decodes its own re-encode, and the self-verify decodes the output;
+    /// both read packages the caller never receives, so their diagnostics
+    /// would describe something other than the result. The advisory scan the
+    /// operations layer runs beside this call decodes `base` a second time,
+    /// which is why merging its warnings in here would double-report.
+    ///
+    /// Deleting nothing decodes nothing, so the empty-target no-op returns an
+    /// empty list rather than the warnings of a decode it never ran.
+    ///
+    /// # Errors
+    ///
+    /// See [`StructuralEditError`].
+    pub fn delete_paragraphs_with_diagnostics(
+        base: &[u8],
+        targets: &[ParagraphLocator],
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
         // Deleting nothing is a byte-identical no-op (the CLI/MCP surfaces nudge
         // the caller with an explicit "no target" error instead).
         if targets.is_empty() {
-            return Ok(base.to_vec());
+            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
         }
         // ── input admission: base must round-trip so we can verify ──
         let d0 = admit(base)?;
+        let decode_warnings = d0.warnings.clone();
         let sections = d0.document.sections();
 
         // ── preflight: ranges, duplicates, rejection rules ──
@@ -405,7 +434,7 @@ impl HwpxStructuralEditor {
         };
         self_verify(&bytes, &expected_doc)?;
 
-        Ok(bytes)
+        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
     }
 
     /// Inserts one new paragraph, preserving every other byte of the package.
@@ -455,6 +484,34 @@ impl HwpxStructuralEditor {
         position: InsertPosition,
         texts: &[String],
     ) -> Result<Vec<u8>, StructuralEditError> {
+        Self::insert_paragraphs_with_diagnostics(base, anchor, position, texts)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Inserts a block, keeping the warnings the **input** decode raised.
+    ///
+    /// Same bytes as [`Self::insert_paragraphs`], which is a thin wrapper over
+    /// this function. The reported decode is the admission gate's read of
+    /// `base`, for the reasons
+    /// [`Self::delete_paragraphs_with_diagnostics`] spells out; inserting has
+    /// no advisory scan of its own, so that decode is the whole list.
+    ///
+    /// There is no encoder channel here even though this path encodes the
+    /// declared delta. That encode exists only to source the new paragraphs'
+    /// bytes, which are then spliced into the original XML; the package it
+    /// produced is thrown away, so its diagnostics would describe something
+    /// the caller never receives.
+    ///
+    /// # Errors
+    ///
+    /// See [`StructuralEditError`]; each text must be a single paragraph
+    /// (no newline), else [`StructuralEditError::MultiParagraphText`].
+    pub fn insert_paragraphs_with_diagnostics(
+        base: &[u8],
+        anchor: ParagraphLocator,
+        position: InsertPosition,
+        texts: &[String],
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
         for text in texts {
             if text.contains('\n') || text.contains('\r') {
                 return Err(StructuralEditError::MultiParagraphText);
@@ -464,11 +521,12 @@ impl HwpxStructuralEditor {
         // empty-target behaviour; binding surfaces nudge with their own
         // "no text" errors).
         if texts.is_empty() {
-            return Ok(base.to_vec());
+            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
         }
 
         // ── input admission ──
         let d0 = admit(base)?;
+        let decode_warnings = d0.warnings.clone();
 
         let sections = d0.document.sections();
         let section =
@@ -605,7 +663,7 @@ impl HwpxStructuralEditor {
         };
         self_verify(&bytes, &expected_doc)?;
 
-        Ok(bytes)
+        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
     }
 }
 

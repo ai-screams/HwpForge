@@ -83,7 +83,7 @@ pub use cell_edit::{
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
-pub use diagnostics::{WithDecodeWarnings, WithEncodeWarnings};
+pub use diagnostics::{WithCodecWarnings, WithDecodeWarnings, WithEncodeWarnings};
 pub use diff::{
     CellTextChange, DiffDiagnostics, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer,
     PackageDiff, ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,

@@ -15,25 +15,35 @@
 //!
 //! # Warnings
 //!
-//! Only [`delete_para`] reports any today, through the library's advisory
-//! scan: deleting a paragraph takes its index-mark entries out of the
-//! document index, which is intended but worth saying out loud.
+//! All four edits read the package before they change it, so all four report
+//! what that read found. The merge order is the same everywhere: **what the
+//! decode reported first, then what the edit itself has to say.**
 //!
-//! [`set_cell`] adds the other half of its fail-closed contract: an encode
-//! that loses meaning produces no bytes, and an encode that succeeds hands
-//! back whatever **non-semantic** warnings it raised, through
-//! [`HwpxCellEditor::set_cells_with_diagnostics`]. That list is empty for
-//! every document available today — the only non-semantic `EncodeWarning` is
+//! | operation | decoder warnings | then |
+//! | -- | -- | -- |
+//! | [`fill`] | the name-resolution decode | — |
+//! | [`insert_para`] | the admission decode | — |
+//! | [`delete_para`] | the admission decode | the advisory scan (`INDEX_MARK_REMOVED`) |
+//! | [`set_cell`] | the admission decode | the successful encode's non-semantic warnings |
+//!
+//! Each operation reports **one** decode, even though several run. The
+//! preserving patcher behind [`fill`] re-decodes the base once per touched
+//! section, [`delete_para`]'s advisory scan decodes it again, and the
+//! admission gate decodes its own no-op re-encode: every one of those reads
+//! either the same input a second time or a package the caller never
+//! receives, so merging them would report one document's losses several
+//! times over. The count therefore does not grow with the size of the edit.
+//!
+//! [`set_cell`] is the one **regenerating** edit here, so it has a second
+//! channel the other three do not: the other half of its fail-closed
+//! contract ([`HwpxCellEditor::set_cells_with_diagnostics`]). An encode that
+//! loses meaning produces no bytes, and an encode that succeeds hands back
+//! whatever **non-semantic** warnings it raised. That list is empty for every
+//! document available today (the only non-semantic `EncodeWarning` is
 //! `LayoutCacheDropped`, which the encoder raises only under
 //! `EncodeOptions::emit_layout_cache`, an opt-in a preserve-first editor must
-//! never set — but it is now carried rather than discarded, so a future
-//! warning reaches the caller without an API change.
-//!
-//! [`fill`], [`insert_para`] and [`delete_para`] still report only what their
-//! library entry points return. They are preserving edits, so they have no
-//! encode to warn about; their base decode is not reported today, which is
-//! the same defect class the review raised for the queries and is recorded as
-//! follow-up rather than fixed here.
+//! never set), but it is carried rather than discarded, so a future warning
+//! reaches the caller without an API change.
 
 use std::collections::BTreeMap;
 
@@ -76,7 +86,8 @@ pub struct FillOutput {
     pub bytes: Vec<u8>,
     /// The fields that were filled, in document order.
     pub filled: Vec<FilledField>,
-    /// Non-fatal diagnostics. Always empty — see the module docs.
+    /// What decoding the package to resolve the names reported, in decoder
+    /// order. Filling adds nothing of its own — see the module docs.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -152,8 +163,12 @@ pub fn fill(
         }
     }
 
-    let outcome = HwpxFiller::fill(hwpx, &map)?;
-    Ok(FillOutput { bytes: outcome.bytes, filled: outcome.filled, warnings: Vec::new() })
+    let diagnosed = HwpxFiller::fill_with_diagnostics(hwpx, &map)?;
+    Ok(FillOutput {
+        bytes: diagnosed.value.bytes,
+        filled: diagnosed.value.filled,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 // ── set_cell ────────────────────────────────────────────────────
@@ -234,7 +249,9 @@ pub struct SetCellOutput {
     pub bytes: Vec<u8>,
     /// One record per applied edit, in spec order.
     pub results: Vec<SetCellResult>,
-    /// Non-fatal diagnostics. Always empty — see the module docs.
+    /// What the admission decode reported, then the successful encode's
+    /// non-semantic warnings — see the module docs for the order. The encode
+    /// half is empty for every document reachable today.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -293,10 +310,15 @@ pub struct SetCellMeta {
 pub fn set_cell(hwpx: &[u8], opts: &SetCellOptions) -> Result<SetCellOutput, OpsError> {
     let specs = build_specs(opts)?;
     let diagnosed = HwpxCellEditor::set_cells_with_diagnostics(hwpx, &specs)?;
+    // Documented order: the input decode first, then the encode that produced
+    // the output.
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
     Ok(SetCellOutput {
         bytes: diagnosed.value.bytes,
         results: diagnosed.value.outcome.cells,
-        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Encode).collect(),
+        warnings,
     })
 }
 
@@ -446,8 +468,9 @@ pub struct StructuralOutput {
     pub inserted: usize,
     /// Paragraphs deleted; zero for [`insert_para`].
     pub deleted: usize,
-    /// Advisory diagnostics about what the edit took with it. Only
-    /// [`delete_para`] produces any; [`insert_para`] always reports none.
+    /// What the admission decode reported, then — for [`delete_para`] only —
+    /// the advisories about what the edit took with it. [`insert_para`] has
+    /// no advisory scan, so its list is the decoder's alone.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -513,8 +536,15 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
     }
     let position = if opts.before { InsertPosition::Before } else { InsertPosition::After };
     let anchor = ParagraphLocator { section: opts.section, index: opts.anchor };
-    let bytes = HwpxStructuralEditor::insert_paragraphs(hwpx, anchor, position, &opts.text)?;
-    Ok(StructuralOutput { bytes, inserted: opts.text.len(), deleted: 0, warnings: Vec::new() })
+    let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_diagnostics(
+        hwpx, anchor, position, &opts.text,
+    )?;
+    Ok(StructuralOutput {
+        bytes: diagnosed.value,
+        inserted: opts.text.len(),
+        deleted: 0,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 /// Deletes top-level paragraphs from one section, all-or-nothing.
@@ -559,12 +589,18 @@ pub fn delete_para(hwpx: &[u8], opts: &DeleteParaOptions) -> Result<StructuralOu
     // succeeds. An undecodable input or an out-of-range target yields
     // nothing here and is refused by the editor on the next line.
     let advisories = scan_delete_warnings(hwpx, &targets);
-    let bytes = HwpxStructuralEditor::delete_paragraphs(hwpx, &targets)?;
+    let diagnosed = HwpxStructuralEditor::delete_paragraphs_with_diagnostics(hwpx, &targets)?;
+    // Documented order: what the decode reported, then what the edit advises.
+    // The scan above decodes the package a second time; its warnings are the
+    // editor's own, already reported, so only its advisories are taken.
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(advisories.into_iter().map(OpsWarning::Structural));
     Ok(StructuralOutput {
-        bytes,
+        bytes: diagnosed.value,
         inserted: 0,
         deleted: opts.indexes.len(),
-        warnings: advisories.into_iter().map(OpsWarning::Structural).collect(),
+        warnings,
     })
 }
 
