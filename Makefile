@@ -1,4 +1,4 @@
-.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
+.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
 
 AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
 AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
@@ -27,6 +27,7 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  make check            Cargo check (workspace)"
+	@echo "  make check-features   Cargo check every hwpforge feature combination"
 	@echo "  make test             Run tests (cargo-nextest, workspace)"
 	@echo "  make test-ci          Run tests with CI profile (nextest + junit)"
 	@echo "  make clippy           Run clippy linter (workspace)"
@@ -85,6 +86,20 @@ install-tools:
 
 check:
 	cargo check --workspace --all-targets --all-features
+
+# The umbrella crate is the one place where feature wiring can break a
+# consumer silently: a default-feature user must still compile, and the ops
+# layer must not leak into builds that did not ask for it. Each combination
+# starts from --no-default-features so nothing is enabled by accident.
+check-features:
+	cargo check -p hwpforge --no-default-features
+	cargo check -p hwpforge --no-default-features --features hwpx
+	cargo check -p hwpforge --no-default-features --features md
+	cargo check -p hwpforge --no-default-features --features ops-hwpx
+	cargo check -p hwpforge --no-default-features --features ops-md
+	cargo check -p hwpforge --no-default-features --features ops
+	cargo check -p hwpforge --no-default-features --features schemars
+	cargo check -p hwpforge --no-default-features --features full
 
 test:
 	cargo nextest run --workspace --all-features

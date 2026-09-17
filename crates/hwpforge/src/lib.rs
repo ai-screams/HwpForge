@@ -12,6 +12,10 @@
 //! |---------|---------|-------------|
 //! | `hwpx`  | ✅      | HWPX encoder/decoder |
 //! | `md`    | —       | Markdown ↔ Core conversion |
+//! | `ops-hwpx` | —    | [`ops`]: shared HWPX operations (inspect, exchange, read, edit, diff, stamp, style) |
+//! | `ops-md` | —      | [`ops`]: the Markdown operations on top of `ops-hwpx` |
+//! | `ops`   | —       | Alias for `ops-md` |
+//! | `schemars` | —    | `JsonSchema` derives on the wire DTOs |
 //! | `full`  | —       | All features |
 //!
 //! # Quick Start
@@ -73,3 +77,8 @@ pub use hwpforge_smithy_hwpx as hwpx;
 /// Markdown codec (GFM decoder + lossy/lossless encoder).
 #[cfg(feature = "md")]
 pub use hwpforge_smithy_md as md;
+
+// The module carries its own `//!` docs; an outer doc comment here would
+// make rustdoc resolve the module's intra-doc links in this scope instead.
+#[cfg(feature = "ops-hwpx")]
+pub mod ops;

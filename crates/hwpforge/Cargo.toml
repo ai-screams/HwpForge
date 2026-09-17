@@ -17,7 +17,17 @@ description = "Programmatic control of Korean HWP/HWPX documents — read, write
 default = ["hwpx"]
 hwpx = ["dep:hwpforge-smithy-hwpx"]
 md = ["dep:hwpforge-smithy-md"]
-full = ["hwpx", "md"]
+## Shared operation layer for the HWPX-only surfaces (inspect, exchange, read,
+## edit, diff, stamp, style). Pulls the serde/error plumbing `ops` needs.
+ops-hwpx = ["hwpx", "dep:serde", "dep:serde_json", "dep:thiserror"]
+## Adds the Markdown operations (`convert_md`, `to_md`) to `ops`.
+ops-md = ["ops-hwpx", "md"]
+## Convenience alias for the whole operation layer.
+ops = ["ops-md"]
+## `JsonSchema` derives on the wire DTOs that `ops` owns, and on the exchange
+## DTOs it hands through. `?` keeps this from switching the HWPX codec on.
+schemars = ["dep:schemars", "hwpforge-smithy-hwpx?/schemars"]
+full = ["hwpx", "md", "ops"]
 
 [dependencies]
 hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0" }
@@ -25,3 +35,14 @@ hwpforge-core = { path = "../hwpforge-core", version = "0" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", optional = true }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0", optional = true }
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[dev-dependencies]
+# 오류·경고 인벤토리 테스트 전용 — 정규식·중괄호 세기 파서 대신 실제 Rust
+# 파서로 상류 enum 을 읽는다 (`tests/support/error_inventory.rs`).
+quote = "1"
+serde_json = { workspace = true }
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }

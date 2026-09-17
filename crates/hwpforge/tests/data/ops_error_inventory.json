@@ -1,0 +1,1066 @@
+{
+  "enums": [
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/error.rs",
+      "name": "HwpxError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Zip",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidMimetype",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MissingFile",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "XmlParse",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidAttribute",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "IndexOutOfBounds",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidStructure",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LayoutCacheDropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Io",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Core",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Foundation",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "XmlSerialize",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/fill.rs",
+      "name": "FillError",
+      "visibility": "pub",
+      "non_exhaustive": false,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "EmptyValue",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnknownField",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateFieldName",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnfillableField",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Workflow",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/cell_edit.rs",
+      "name": "CellEditError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "TableNotFound",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableGridInvalid",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "CellNotFound",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LabelAmbiguous",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NonTextContent",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TargetDuplicate",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TargetConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NotRoundTripSafe",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UncarriedZipEntries",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SemanticLoss",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/read.rs",
+      "name": "ReadError",
+      "visibility": "pub",
+      "non_exhaustive": false,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ParaRangeInvalid",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableUnaddressable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FieldNotFound",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+      "name": "StructuralEditError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NotRoundTripSafe",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UncarriedZipEntries",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ParagraphOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateTarget",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ReferenceStranded",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "HardBreakLoss",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptySection",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionPropertiesParagraph",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SpanCountMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DeltaMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MultiParagraphText",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InsertBeforeSectionProperties",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
+      "name": "StructuralWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": false,
+      "not_wrapped_reason": "surfaced by insert_para/delete_para, which W1b phase 2 adds; OpsWarning gains the arm with the operation",
+      "variants": [
+        {
+          "name": "IndexMarkRemoved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/grid_addr.rs",
+      "name": "GridAddrError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "ShapeMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AddrMalformed",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AddrMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AddrOnUnaddressableTable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
+      "name": "SectionWorkflowWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": false,
+      "not_wrapped_reason": "surfaced by to_json/patch, which W1b phase 2 adds; OpsWarning gains the arm with the operation",
+      "variants": [
+        {
+          "name": "PreservationMetadataUnavailable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
+      "name": "SectionWorkflowError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Decode",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionOutOfRange",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SectionIndexMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "PreservingPatch",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/stamp/stamper.rs",
+      "name": "StamperError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Codec",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NotRoundTripSafe",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UncarriedZipEntries",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Stamp",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ManifestInvariant",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SourceHashMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "CellStamp",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DeltaMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "SemanticLoss",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/stamp/apply.rs",
+      "name": "StampError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "UnknownSpec",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MarkerMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateSpec",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateName",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NameCollision",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UncoveredCandidate",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyName",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/stamp/apply_cells.rs",
+      "name": "CellStampError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "TableNotFound",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TableGridInvalid",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NotAnAnchor",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TargetNotStampable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LabelDrift",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnknownCandidate",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateTarget",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyName",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BlankHint",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateName",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NameCollision",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UncoveredCandidate",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/stamp/request.rs",
+      "name": "StampMapError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Parse",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnsupportedShape",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnsupportedVersion",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidSourceHash",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "BlankHint",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/encoder/mod.rs",
+      "name": "EncodeWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "LayoutCacheDropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NoteHeadSkipped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TitleMarkSkipped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NoteRestartIgnored",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-hwpx",
+      "file": "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
+      "name": "DecodeWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "UnknownEnumValue",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LayoutCacheDropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-core",
+      "file": "crates/hwpforge-core/src/error.rs",
+      "name": "CoreError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Validation",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Foundation",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidStructure",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-core",
+      "file": "crates/hwpforge-core/src/error.rs",
+      "name": "ValidationError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": false,
+      "not_wrapped_reason": "reached only through CoreError::Validation, which classifies the whole family as VALIDATION_FAILED",
+      "variants": [
+        {
+          "name": "EmptyDocument",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptySection",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyParagraph",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyTable",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyTableRow",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidSpan",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyTextBox",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidGroupChild",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyFootnote",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyEndnote",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidPolygon",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidShapeDimension",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyChartData",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyEquation",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyCategoryLabels",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MismatchedSeriesLengths",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyTableCell",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NonLeadingTableHeaderRow",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidSummaryToken",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-md",
+      "file": "crates/hwpforge-smithy-md/src/error.rs",
+      "name": "MdError",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "InvalidFrontmatter",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FrontmatterUnclosed",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "TemplateResolution",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "UnsupportedStructure",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "OrphanNoteDefinition",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "DuplicateNoteDefinition",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "EmptyNoteDefinition",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NestedNoteReference",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "NoteExpansionBudgetExceeded",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LosslessParse",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LosslessMissingAttribute",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "LosslessInvalidAttribute",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "FileTooLarge",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AssetPlanMismatch",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "AssetIdentityConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Io",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Core",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Blueprint",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Foundation",
+          "shape": "tuple",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-md",
+      "file": "crates/hwpforge-smithy-md/src/encoder/mod.rs",
+      "name": "MdWarning",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "MergedCellsFlattened",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ImageEmbedSkipped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    },
+    {
+      "krate": "hwpforge-smithy-md",
+      "file": "crates/hwpforge-smithy-md/src/assets/mod.rs",
+      "name": "AssetOutcome",
+      "visibility": "pub",
+      "non_exhaustive": true,
+      "wrapped": true,
+      "variants": [
+        {
+          "name": "Embedded",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Dropped",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "Remote",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        }
+      ]
+    }
+  ],
+  "unlisted_public_error_or_warning_enums": []
+}
