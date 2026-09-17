@@ -557,8 +557,12 @@ pub struct Section {
 }
 
 impl Section {
-    /// 이 섹션의 모든 문단(본문·머리말·꼬리말·바탕쪽 + 각 문단의 중첩)을
-    /// 문서 순서로 방문한다.
+    /// 이 섹션의 문단을 문서 순서로 방문한다 — 본문 → 머리말 → 꼬리말 →
+    /// 바탕쪽, 각 문단은 자신을 먼저 방문한 뒤 run 안으로 내려간다.
+    ///
+    /// 정확한 재귀 대상(표 셀·표/도형 캡션·각주/미주·메모·묶음 자식)과
+    /// **이미지 캡션 문단을 방문하지 않는 알려진 갭**은
+    /// [`crate::document::Document::for_each_paragraph_mut`] 문서에 있다.
     pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
         self.walk_paragraphs_mut(&mut f);
     }
@@ -582,7 +586,8 @@ impl Section {
         }
     }
 
-    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서 동일.
+    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
+    /// 대상이 동일하며, 이미지 캡션 갭도 동일하게 적용된다.
     pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {
         self.walk_paragraphs(&mut f);
     }

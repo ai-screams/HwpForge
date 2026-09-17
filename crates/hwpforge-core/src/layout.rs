@@ -316,8 +316,15 @@ mod tests {
         }
 
         #[test]
-        fn immutable_walker_does_not_descend_into_image_runs() {
-            // 가변판과 같은 선택 — 이미지 run 은 재귀 대상이 아니다.
+        fn image_caption_paragraphs_are_skipped_documents_known_gap() {
+            // 이것은 의도된 계약이 아니라 **현 동작의 기록**이다: 표·글상자
+            // 캡션은 방문되는데 이미지 캡션만 빠진다. 재귀 대상을 넓히면
+            // 캐시 정규화·편집 파이프라인 등 기존 호출자 전부의 동작이
+            // 바뀌므로 픽스처를 갖춘 별도 슬라이스로 다룬다
+            // (`.docs/followups.md`). 그때 이 테스트는 갱신 대상이다.
+            //
+            // 지금 잠그는 것: 두 순회가 **같은 선택**을 한다는 점 — 한쪽만
+            // 고치면 문단 방문 번호가 어긋나기 때문이다.
             use crate::image::{Image, ImageFormat};
 
             let mut img = Image::new(
