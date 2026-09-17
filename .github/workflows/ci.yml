@@ -476,7 +476,7 @@ jobs:
           command: build
           target: x86_64
           manylinux: "2_28"
-          maturin-version: ">=1.15,<2"
+          maturin-version: v1.15.0 # 액션은 태그된 릴리스 정확 버전만 받는다(범위 불가) — pypi-publish.yml 과 같은 값
           working-directory: crates/hwpforge-bindings-py
           args: --release --out ${{ github.workspace }}/dist
       - name: Build sdist

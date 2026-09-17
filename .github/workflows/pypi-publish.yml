@@ -56,7 +56,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  MATURIN_VERSION: ">=1.15,<2"
+  MATURIN_VERSION: v1.15.0 # 태그된 릴리스 정확 버전만 허용(범위 불가, 4차 run 실측) — ci.yml 과 같은 값
 
 jobs:
   resolve:
