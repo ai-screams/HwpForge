@@ -70,7 +70,6 @@ jobs:
       target: ${{ steps.validate.outputs.target }}
       version: ${{ steps.validate.outputs.version }}
       is_python_only: ${{ steps.validate.outputs.is_python_only }}
-      lock_sha256: ${{ steps.lock.outputs.sha256 }}
     steps:
       - name: Resolve the tag from the event
         id: raw
@@ -128,12 +127,29 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # 태그 이름이 아니라 방금 푼 커밋 SHA 를 받는다.
-          ref: ${{ steps.deref.outputs.sha }}
+          # **신뢰 ref** 를 받는다 — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이고,
+          # 그 코드는 워크플로 자신의 커밋에서 와야 한다. 태그의 소스를 체크아웃하는
+          # 곳은 `lock`·`build` 둘뿐이며, 둘 다 캐시 액션이 없다.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
+          # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
+          # 워크플로가 체크아웃하는 ref 는 입력에서 온다 (캐시 오염 경로).
+          enable-cache: false
+      - name: Read Cargo.toml from the tag
+        # 버전 일치는 **태그가 가리키는 트리**의 워크스페이스 버전과 맞춰야 한다.
+        # 신뢰 ref 를 체크아웃했으므로 그 파일만 API 로 가져온다 — 태그의 코드를
+        # 실행하지 않고 내용만 읽는 경로다.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.deref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$SHA" > "$RUNNER_TEMP/tag-Cargo.toml"
+          [ -s "$RUNNER_TEMP/tag-Cargo.toml" ] || { echo "::error::Cargo.toml at $SHA is empty"; exit 1; }
       - name: Validate the tag grammar
         id: validate
         # 문법·버전 일치 규칙은 `.github/scripts/resolve_release_tag.py` 가 소유하고,
@@ -146,10 +162,27 @@ jobs:
           uv run --no-project --with packaging
           python .github/scripts/resolve_release_tag.py
           --tag "$TAG" --event-name "$EVENT_NAME" --input-target "$INPUT_TARGET"
+          --cargo-toml "$RUNNER_TEMP/tag-Cargo.toml"
       - name: Self-check the tag grammar table
         run: >-
           uv run --no-project --with packaging
           python .github/scripts/resolve_release_tag.py --self-check
+
+  lock:
+    name: "Resolve › Lockfile"
+    needs: [resolve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      sha256: ${{ steps.lock.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 락파일은 **태그의 매니페스트**에서 풀어야 의미가 있다 — 신뢰 ref 의
+          # 트리로 풀면 조용히 다른 해석이 된다. 그래서 이 잡만 `build` 와 함께
+          # 태그 SHA 를 체크아웃하고, 대신 캐시 액션을 하나도 두지 않는다.
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup show
       - name: Generate the shared lockfile
@@ -160,14 +193,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo generate-lockfile
-          uv run --no-project python - <<'PY' > "$RUNNER_TEMP/lock.sha256"
-          import hashlib
-
-          print(hashlib.sha256(open("Cargo.lock", "rb").read()).hexdigest())
-          PY
-          # 마지막 줄만 취해 uv 가 stdout 에 무언가 적더라도 GITHUB_OUTPUT 이
-          # 오염되지 않게 한다 (형식이 깨지면 스텝 출력이 통째로 무효가 된다).
-          digest="$(tail -n 1 "$RUNNER_TEMP/lock.sha256")"
+          digest="$(sha256sum Cargo.lock | cut -d" " -f1)"
           [ -n "$digest" ] || { echo "::error::could not hash Cargo.lock"; exit 1; }
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "lockfile sha256: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
@@ -180,7 +206,7 @@ jobs:
 
   build:
     name: "Build › ${{ matrix.name }}"
-    needs: [resolve]
+    needs: [resolve, lock]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     defaults:
@@ -265,12 +291,15 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
+          # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
+          # 워크플로가 체크아웃하는 ref 는 입력에서 온다 (캐시 오염 경로).
+          enable-cache: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: cargo-lock
       - name: Verify the shared lockfile
         env:
-          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
+          LOCK_SHA256: ${{ needs.lock.outputs.sha256 }}
           WHEN: before the build
         run: bash .github/scripts/verify_lockfile.sh
       - name: Pin the Python-only version
@@ -295,7 +324,7 @@ jobs:
           args: ${{ matrix.args }} --out ${{ github.workspace }}/dist
       - name: Re-verify the lockfile after the build
         env:
-          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
+          LOCK_SHA256: ${{ needs.lock.outputs.sha256 }}
           WHEN: after the build
         run: bash .github/scripts/verify_lockfile.sh
       - name: Restore pyproject.toml
@@ -360,11 +389,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
+          # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
+          # 워크플로가 체크아웃하는 ref 는 입력에서 온다 (캐시 오염 경로).
+          enable-cache: false
       - name: Assert the tag still points at the commit we built
         env:
           TAG: ${{ needs.resolve.outputs.tag }}
@@ -400,11 +433,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
+          # 릴리스 빌드는 의도적으로 cold 다 — 캐시는 기본 브랜치와 공유되고, 이
+          # 워크플로가 체크아웃하는 ref 는 입력에서 온다 (캐시 오염 경로).
+          enable-cache: false
       - name: Assert the tag still points at the commit we built
         env:
           TAG: ${{ needs.resolve.outputs.tag }}
@@ -439,7 +476,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Assert the tag still points at the commit we built
         env:

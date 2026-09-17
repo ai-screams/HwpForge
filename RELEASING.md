@@ -183,7 +183,7 @@ uv run --no-project --with packaging python .github/scripts/resolve_release_tag.
 
 1. 고칠 내용을 main 에 머지한다 (평시 Python 변경은 다음 워크스페이스 릴리스에 그냥 실려 나가므로, 이 절차는 **긴급 수정**용이다).
 2. 그 커밋에 태그를 붙인다 — `git tag py-v0.16.4.1 <commit>` 후 `git push origin py-v0.16.4.1`.
-3. 워크플로가 그 태그를 체크아웃해 문법을 검사하고, 매트릭스로 빌드해 PyPI 에 올린다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
+3. 워크플로가 태그를 커밋 SHA 로 한 번 풀고, 매트릭스로 빌드해 PyPI 에 올린다. 문법 검사와 게시 스크립트는 **워크플로 자신의 커밋**에서 돌고(태그 트리의 `Cargo.toml` 은 API 로 내용만 읽는다), 태그의 소스를 체크아웃하는 것은 락파일 잡과 빌드 잡뿐이다. 그 두 잡에는 캐시 액션이 없다 — 릴리스 빌드는 cold 가 정상이고, 캐시는 기본 브랜치와 공유되기 때문이다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
 
 release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌하지 않는다.
 
