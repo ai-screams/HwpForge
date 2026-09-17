@@ -19,13 +19,21 @@
 //! scan: deleting a paragraph takes its index-mark entries out of the
 //! document index, which is intended but worth saying out loud.
 //!
-//! The other three have no warning channel to pass through.
-//! [`FillOutcome`](hwpforge_smithy_hwpx::FillOutcome) and
-//! [`SetCellOutcome`](hwpforge_smithy_hwpx::SetCellOutcome) document that
-//! adding one is a public-field (semver) change still awaiting approval, and
-//! `insert_paragraphs` returns bare bytes. Their `warnings` field is part of
-//! the operation contract and is populated the moment the library grows the
-//! channel; until then those edits either fail closed or succeed silently.
+//! [`set_cell`] adds the other half of its fail-closed contract: an encode
+//! that loses meaning produces no bytes, and an encode that succeeds hands
+//! back whatever **non-semantic** warnings it raised, through
+//! [`HwpxCellEditor::set_cells_with_diagnostics`]. That list is empty for
+//! every document available today — the only non-semantic `EncodeWarning` is
+//! `LayoutCacheDropped`, which the encoder raises only under
+//! `EncodeOptions::emit_layout_cache`, an opt-in a preserve-first editor must
+//! never set — but it is now carried rather than discarded, so a future
+//! warning reaches the caller without an API change.
+//!
+//! [`fill`], [`insert_para`] and [`delete_para`] still report only what their
+//! library entry points return. They are preserving edits, so they have no
+//! encode to warn about; their base decode is not reported today, which is
+//! the same defect class the review raised for the queries and is recorded as
+//! follow-up rather than fixed here.
 
 use std::collections::BTreeMap;
 
@@ -89,6 +97,7 @@ impl FillOutput {
 /// [`FilledField`] is `Serialize`-only upstream.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct FillMeta {
     /// The fields that were filled, in document order.
     pub filled: Vec<FilledField>,
@@ -246,6 +255,7 @@ impl SetCellOutput {
 /// [`SetCellResult`] is `Serialize`-only upstream and has no `schemars`
 /// derive.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct SetCellMeta {
     /// One record per applied edit, in spec order.
     pub results: Vec<SetCellResult>,
@@ -282,8 +292,12 @@ pub struct SetCellMeta {
 /// ```
 pub fn set_cell(hwpx: &[u8], opts: &SetCellOptions) -> Result<SetCellOutput, OpsError> {
     let specs = build_specs(opts)?;
-    let result = HwpxCellEditor::set_cells(hwpx, &specs)?;
-    Ok(SetCellOutput { bytes: result.bytes, results: result.outcome.cells, warnings: Vec::new() })
+    let diagnosed = HwpxCellEditor::set_cells_with_diagnostics(hwpx, &specs)?;
+    Ok(SetCellOutput {
+        bytes: diagnosed.value.bytes,
+        results: diagnosed.value.outcome.cells,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Encode).collect(),
+    })
 }
 
 /// Turns the options into the spec list the library takes.
@@ -452,6 +466,7 @@ impl StructuralOutput {
 /// Wire shape of a [`StructuralOutput`] minus its bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct StructuralMeta {
     /// Paragraphs inserted.
     pub inserted: usize,

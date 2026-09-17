@@ -738,7 +738,11 @@ impl OpsWarning {
     /// **new canonical codes** that the frontends will adopt through their
     /// compatibility tables: `NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`,
     /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
-    /// `IMAGE_EMBED_SKIPPED`, `ASSET_DROPPED`, `ASSET_REMOTE`. The CLI's
+    /// `IMAGE_EMBED_SKIPPED`. `ASSET_DROPPED` and `ASSET_REMOTE` are
+    /// **reserved, not emitted**: `convert_md` reports an excluded image once,
+    /// through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
+    /// and keeps the typed disposition in its `assets` list; the two codes
+    /// exist for a future asset provider that reports outcomes directly. The CLI's
     /// `to-pdf` also files a decode-side `LayoutCacheDropped` under `OTHER`
     /// and carries the `UnknownEnumValue` attribute in a separate `location`
     /// field; here the attribute is part of the message.

@@ -63,7 +63,7 @@ fn finds_the_text_candidates_a_document_offers() {
     assert_eq!(out.plan.schema_version, STAMP_MAP_VERSION);
     assert!(out.plan.cells.is_empty(), "the only cell already has authored content");
     assert!(out.plan.skipped_tables.is_empty(), "the table tiles a well-formed grid");
-    assert!(out.warnings.is_empty(), "the planner has no warning channel yet");
+    assert!(out.warnings.is_empty(), "this document decodes cleanly: {:?}", out.warnings);
 }
 
 #[test]

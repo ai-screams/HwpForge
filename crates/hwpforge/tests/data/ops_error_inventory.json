@@ -390,8 +390,7 @@
       "name": "StructuralWarning",
       "visibility": "pub",
       "non_exhaustive": true,
-      "wrapped": false,
-      "not_wrapped_reason": "surfaced by insert_para/delete_para, which W1b phase 2 adds; OpsWarning gains the arm with the operation",
+      "wrapped": true,
       "variants": [
         {
           "name": "IndexMarkRemoved",
@@ -441,8 +440,7 @@
       "name": "SectionWorkflowWarning",
       "visibility": "pub",
       "non_exhaustive": true,
-      "wrapped": false,
-      "not_wrapped_reason": "surfaced by to_json/patch, which W1b phase 2 adds; OpsWarning gains the arm with the operation",
+      "wrapped": true,
       "variants": [
         {
           "name": "PreservationMetadataUnavailable",
@@ -774,38 +772,6 @@
         },
         {
           "name": "LayoutCacheDropped",
-          "shape": "struct",
-          "cfg": [],
-          "discriminant": null
-        }
-      ]
-    },
-    {
-      "krate": "hwpforge-smithy-hwpx",
-      "file": "crates/hwpforge-smithy-hwpx/src/structural.rs",
-      "name": "StructuralWarning",
-      "visibility": "pub",
-      "non_exhaustive": true,
-      "wrapped": true,
-      "variants": [
-        {
-          "name": "IndexMarkRemoved",
-          "shape": "struct",
-          "cfg": [],
-          "discriminant": null
-        }
-      ]
-    },
-    {
-      "krate": "hwpforge-smithy-hwpx",
-      "file": "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
-      "name": "SectionWorkflowWarning",
-      "visibility": "pub",
-      "non_exhaustive": true,
-      "wrapped": true,
-      "variants": [
-        {
-          "name": "PreservationMetadataUnavailable",
           "shape": "struct",
           "cfg": [],
           "discriminant": null

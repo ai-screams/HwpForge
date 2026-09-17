@@ -20,13 +20,23 @@
 //! [`StampedManifest`] carries whichever the request produced instead of
 //! normalising one into the other. `schema_version` discriminates them.
 //!
-//! # Why `warnings` is empty today
+//! # Warnings
 //!
-//! Neither `plan_bytes_v2` nor the two stamp entry points returns a warning
-//! channel: the planner drops the decoder's warnings and the stampers either
-//! fail closed on an encode warning or succeed silently. The field is part
-//! of the operation contract and is populated once the library grows the
-//! channel.
+//! [`stamp_plan`] is a query: it decodes and projects, so it reports the
+//! decoder's warnings ([`OpsWarning::Decode`]).
+//!
+//! [`stamp`] is a regenerating edit, so it reports the other half of its
+//! fail-closed contract ([`OpsWarning::Encode`]): an encode that loses
+//! meaning produces no bytes, and an encode that succeeds hands back its
+//! **non-semantic** warnings. Only the encode that produced the output is
+//! reported — the admission gate and the v2 fixed-point check also encode,
+//! but those packages are discarded verification artefacts.
+//!
+//! That encode list is empty for every document available today: the only
+//! non-semantic `EncodeWarning` is `LayoutCacheDropped`, which the encoder
+//! raises only under `EncodeOptions::emit_layout_cache`, an opt-in a
+//! preserve-first editor must never set. It is carried rather than discarded
+//! so a future warning needs no API change.
 
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{
@@ -44,7 +54,7 @@ use super::{OpsError, OpsWarning};
 pub struct StampPlanOutput {
     /// Both candidate classes plus the source hash an approval map must pin.
     pub plan: StampPlanV2,
-    /// Non-fatal diagnostics. See the module docs for why this is empty.
+    /// Decoder warnings for this document, in decoder order.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -66,6 +76,7 @@ impl StampPlanOutput {
 /// Deriving `Deserialize` or `JsonSchema` is not possible: [`StampPlanV2`]
 /// is `Serialize`-only upstream.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct StampPlanMeta {
     /// The plan itself, inlined into this object.
     #[serde(flatten)]
@@ -96,7 +107,11 @@ pub struct StampPlanMeta {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn stamp_plan(hwpx: &[u8]) -> Result<StampPlanOutput, OpsError> {
-    Ok(StampPlanOutput { plan: HwpxStamper::plan_bytes_v2(hwpx)?, warnings: Vec::new() })
+    let diagnosed = HwpxStamper::plan_bytes_v2_with_diagnostics(hwpx)?;
+    Ok(StampPlanOutput {
+        plan: diagnosed.value,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 // ── stamp ───────────────────────────────────────────────────────
@@ -185,6 +200,7 @@ impl StampOutput {
 /// Deriving `Deserialize` or `JsonSchema` is not possible: both manifest
 /// shapes are `Serialize`-only upstream.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct StampMeta {
     /// The output inventory; absent when the caller asked for no manifest.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,17 +248,29 @@ pub fn stamp(
     request: &StampMap,
     opts: &StampOptions,
 ) -> Result<StampOutput, OpsError> {
-    let (bytes, manifest) = match request {
+    let (bytes, manifest, encode_warnings) = match request {
         StampMap::Legacy(specs) => {
-            let result = HwpxStamper::stamp(hwpx, specs)?;
-            (result.bytes, StampedManifest::V1(result.manifest))
+            let diagnosed = HwpxStamper::stamp_with_diagnostics(hwpx, specs)?;
+            (
+                diagnosed.value.bytes,
+                StampedManifest::V1(diagnosed.value.manifest),
+                diagnosed.warnings,
+            )
         }
         StampMap::V2(envelope) => {
-            let result = HwpxStamper::stamp_v2(hwpx, envelope)?;
-            (result.bytes, StampedManifest::V2(result.manifest))
+            let diagnosed = HwpxStamper::stamp_v2_with_diagnostics(hwpx, envelope)?;
+            (
+                diagnosed.value.bytes,
+                StampedManifest::V2(diagnosed.value.manifest),
+                diagnosed.warnings,
+            )
         }
     };
-    Ok(StampOutput { bytes, manifest: opts.manifest.then_some(manifest), warnings: Vec::new() })
+    Ok(StampOutput {
+        bytes,
+        manifest: opts.manifest.then_some(manifest),
+        warnings: encode_warnings.into_iter().map(OpsWarning::Encode).collect(),
+    })
 }
 
 #[cfg(test)]

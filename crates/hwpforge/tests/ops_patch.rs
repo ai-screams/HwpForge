@@ -69,7 +69,36 @@ fn meta_keys_are_section_and_warnings() {
 
     assert_eq!(keys(&value), ["section", "warnings"].map(String::from).into_iter().collect());
     assert_eq!(value["section"], serde_json::json!(0));
-    assert_eq!(value["warnings"], serde_json::json!([]), "a preserving patch has no encode stage");
+}
+
+/// A preserving patch has no encoder, but it does decode the base.
+///
+/// The `warnings` channel must carry whatever the library produced on the
+/// path; for `patch` that is the base decode, which used to be dropped and
+/// the wrapper hard-coded to empty. `SimpleEdit.hwpx` is a committed fixture
+/// whose decode drops a layout cache, so the loss is observable rather than
+/// theoretical.
+#[test]
+fn the_base_decode_warnings_reach_the_caller() {
+    let bytes = fixture("SimpleEdit.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleEdit.hwpx", 0));
+
+    let out = patch(&bytes, &opts).expect("patch");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(!codes.is_empty(), "a patch that decodes must report what the decode found");
+    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+}
+
+/// The other half: a clean base means a genuinely empty list.
+#[test]
+fn a_clean_base_reports_nothing() {
+    let bytes = fixture("SimpleTable.hwpx");
+    let opts = PatchOptions::default().with_patch(exported_section_text("SimpleTable.hwpx", 0));
+
+    let out = patch(&bytes, &opts).expect("patch");
+
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }
 
 #[test]

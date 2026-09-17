@@ -99,6 +99,7 @@ pub struct ToJsonOutput {
 /// addresses and therefore keeps the staleness check.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ToJsonMeta {
     /// The annotated export tree.
     pub document: serde_json::Value,
@@ -208,14 +209,19 @@ pub struct ExportSectionOutput {
     /// The same section as JSON, **with** cell grid addresses annotated —
     /// the payload [`patch`] expects back.
     pub section: serde_json::Value,
-    /// Workflow warnings first, then one [`OpsWarning::GridAddr`] per table
-    /// that could not be given grid addresses.
+    /// Decoder warnings first, then workflow warnings, then one
+    /// [`OpsWarning::GridAddr`] per table that could not be given grid
+    /// addresses.
     ///
-    /// The workflow one is the warning that matters:
+    /// The order follows the pipeline: the decode happens first and
+    /// describes the input, the workflow warning describes the export, and
+    /// the grid warnings describe the annotation pass over the result. The
+    /// workflow one is the warning that matters most —
     /// `PRESERVATION_METADATA_UNAVAILABLE` means the section cannot be
-    /// patched back, only rebuilt. Decode warnings never appear here,
-    /// because the section workflow decodes internally and does not hand
-    /// them back.
+    /// patched back, only rebuilt.
+    ///
+    /// This is the same decode-warning channel [`to_json`] reports, so the
+    /// two whole-document exports now agree.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -226,10 +232,11 @@ pub struct ExportSectionOutput {
 /// `section`, `warnings`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ExportSectionMeta {
     /// The annotated section export tree.
     pub section: serde_json::Value,
-    /// Workflow warnings first, then unaddressable tables.
+    /// Decoder warnings, then workflow warnings, then unaddressable tables.
     pub warnings: Vec<WarningInfo>,
 }
 
@@ -268,17 +275,24 @@ impl ExportSectionOutput {
 ///
 /// let bytes = std::fs::read("document.hwpx")?;
 /// let out = export_section(&bytes, &ExportSectionOptions::default().with_section(1))?;
-/// assert!(out.warnings.is_empty(), "this section can be patched back");
+/// for warning in &out.warnings {
+///     eprintln!("{}: {}", warning.info().code, warning.info().message);
+/// }
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn export_section(
     hwpx: &[u8],
     opts: &ExportSectionOptions,
 ) -> Result<ExportSectionOutput, OpsError> {
-    let outcome = HwpxPatcher::export_section_for_edit(hwpx, opts.section, opts.styles)?;
+    let diagnosed =
+        HwpxPatcher::export_section_for_edit_with_diagnostics(hwpx, opts.section, opts.styles)?;
+    let outcome = diagnosed.value;
     let exported = outcome.exported;
+    // Merge order (documented on `ExportSectionOutput::warnings`):
+    // decoder → workflow → grid.
     let mut warnings: Vec<OpsWarning> =
-        outcome.warning.into_iter().map(OpsWarning::SectionWorkflow).collect();
+        diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(outcome.warning.into_iter().map(OpsWarning::SectionWorkflow));
 
     let mut section = serde_json::to_value(&exported).map_err(OpsError::json_serialize)?;
     let unaddressed =
@@ -336,6 +350,7 @@ pub struct FromJsonOutput {
 /// `warnings`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct EncodeMeta {
     /// Encode warnings.
     pub warnings: Vec<WarningInfo>,
@@ -456,8 +471,12 @@ pub struct PatchOutput {
     pub section: usize,
     /// Section count of the output package, which a patch never changes.
     pub sections: usize,
-    /// Non-fatal diagnostics; always empty, because a preserving patch does
-    /// not re-encode the package and so has no encode warnings.
+    /// Decoder warnings for the base package, in decoder order.
+    ///
+    /// There are no *encode* warnings here and there never will be: a
+    /// preserving patch splices one section's XML and leaves every other ZIP
+    /// entry alone, so no encoder runs. The base is still decoded, to check
+    /// the replacement against it, and that decode reports.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -468,6 +487,7 @@ pub struct PatchOutput {
 /// `section`, `warnings`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct PatchMeta {
     /// Which section was replaced.
     pub section: usize,
@@ -527,16 +547,21 @@ pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> 
 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 
-    let SectionPatchOutcome { bytes, patched_section, sections } =
-        HwpxPatcher::patch_exported_section(hwpx, opts.section, &exported)?;
+    let diagnosed =
+        HwpxPatcher::patch_exported_section_with_diagnostics(hwpx, opts.section, &exported)?;
+    let SectionPatchOutcome { bytes, patched_section, sections } = diagnosed.value;
 
-    Ok(PatchOutput { bytes, section: patched_section, sections, warnings: Vec::new() })
+    Ok(PatchOutput {
+        bytes,
+        section: patched_section,
+        sections,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_smithy_hwpx::grid_addr::GridAddrWarning;
 
     #[test]
     fn styles_default_to_included_for_both_exports() {
@@ -569,21 +594,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unaddressable_table_keeps_the_cli_wording() {
-        // The classification lives in `OpsWarning::info`; this pins that the
-        // string a frontend prints has not drifted from the CLI's.
-        let info = OpsWarning::GridAddr(GridAddrWarning {
-            section: 2,
-            table_ordinal: 7,
-            reason: "row 1 overlaps".into(),
-        })
-        .info();
-
-        assert_eq!(info.code, "TABLE_GRID_UNADDRESSABLE");
-        assert_eq!(
-            info.message,
-            "table #7 in section 2 exported without grid addresses: row 1 overlaps"
-        );
-    }
+    // `TABLE_GRID_UNADDRESSABLE` used to be pinned here by constructing the
+    // warning by hand, which proved the wording but never that an operation
+    // can reach it. It is now exercised end to end — encode a ragged table,
+    // run `to_json`, read the code and the message off `meta()` — in
+    // `tests/ops_to_json.rs::a_ragged_table_warns_through_the_operation`.
 }

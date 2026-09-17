@@ -277,3 +277,32 @@ fn a_field_read_serialises_its_list_under_the_fields_key() {
     assert!(value["paragraphs"].is_null());
     assert!(value["table"].is_null());
 }
+
+/// Every `read` target decodes, so every target reports the decode.
+///
+/// The three targets take different library paths (`read_paragraphs`,
+/// `read_table`, `read_field`), and each used to drop the decoder's warnings
+/// independently, so they are asserted separately rather than through one
+/// representative target.
+#[test]
+fn decode_warnings_reach_the_caller_on_the_section_target() {
+    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+
+    let out = read(&bytes, &ReadOptions::default().with_section(0)).expect("read");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(!codes.is_empty(), "a decoding query must report what the decode found");
+    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+    assert!(out.paragraphs.is_some(), "a warning does not stop the projection");
+}
+
+#[test]
+fn a_clean_document_reports_no_warnings_on_any_target() {
+    let bytes = hwpx_fixture("SimpleTable.hwpx");
+
+    let section = read(&bytes, &ReadOptions::default().with_section(0)).expect("read");
+    let table = read(&bytes, &ReadOptions::default().with_table(0)).expect("read");
+
+    assert!(section.warnings.is_empty(), "{:?}", section.warnings);
+    assert!(table.warnings.is_empty(), "{:?}", table.warnings);
+}

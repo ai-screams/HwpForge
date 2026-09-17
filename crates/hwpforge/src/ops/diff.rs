@@ -6,9 +6,9 @@
 //! the bytes moved without the meaning moving, which is what a re-encode
 //! looks like.
 //!
-//! This is a query, so it never emits bytes and never edits. Like the other
-//! read-only operations it decodes internally through the library facade,
-//! which drops the decoder's warnings — see [`DiffOutput::warnings`].
+//! This is a query, so it never emits bytes and never edits. Both inputs are
+//! decoded, and both decodes report — see [`DiffOutput::warnings`] for the
+//! order.
 
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{DocumentDiff, HwpxDiffer};
@@ -22,12 +22,14 @@ use super::{OpsError, OpsWarning};
 pub struct DiffOutput {
     /// The semantic and package channels, and whether they found nothing.
     pub diff: DocumentDiff,
-    /// Non-fatal diagnostics.
+    /// Decoder warnings from **both** inputs: every warning from `base`
+    /// first, then every warning from `revised`, each group in decoder
+    /// order.
     ///
-    /// Always empty today: [`HwpxDiffer::diff`] decodes both inputs itself
-    /// and does not hand back the decoder's warning list. The field is part
-    /// of the shape every operation output shares, so a future warning
-    /// channel needs no signature change.
+    /// A diff decodes two documents, so the list needs a stated provenance
+    /// rule or a caller cannot tell which document a warning belongs to.
+    /// Base-then-revised matches the argument order, which is the only
+    /// ordering a caller can predict without reading the warnings.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -44,6 +46,7 @@ pub struct DiffOutput {
 /// file and the MCP tool response.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct DiffMeta {
     /// The diff report, flattened into this object.
     #[serde(flatten)]
@@ -97,6 +100,15 @@ impl DiffOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn diff(base: &[u8], revised: &[u8]) -> Result<DiffOutput, OpsError> {
-    let diff = HwpxDiffer::diff(base, revised).map_err(OpsError::decode)?;
-    Ok(DiffOutput { diff, warnings: Vec::new() })
+    let diagnosed = HwpxDiffer::diff_with_diagnostics(base, revised).map_err(OpsError::decode)?;
+
+    // Base first, then revised — the documented provenance rule.
+    let warnings: Vec<OpsWarning> = diagnosed
+        .base_warnings
+        .into_iter()
+        .chain(diagnosed.revised_warnings)
+        .map(OpsWarning::Decode)
+        .collect();
+
+    Ok(DiffOutput { diff: diagnosed.diff, warnings })
 }

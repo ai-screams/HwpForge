@@ -46,6 +46,7 @@ use super::inspect::{InspectOutput, InspectReport};
 /// back.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct InspectMeta {
     /// The structural report, flattened into this object.
     #[serde(flatten)]

@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use hwpforge::foundation::diagnostics::OpsCode;
-use hwpforge::ops::exchange::{export_section, ExportSectionOptions};
+use hwpforge::ops::exchange::{export_section, to_json, ExportSectionOptions, ToJsonOptions};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../hwpforge-smithy-hwpx/tests/fixtures/");
@@ -139,4 +139,45 @@ fn the_preservation_warning_reaches_the_meta() {
         "a frontend prints this: {}",
         value["warnings"][0]
     );
+}
+
+/// `export_section` reports decode warnings, exactly as `to_json` does.
+///
+/// The phase-2 design says both exports unify their warning reporting. The
+/// section workflow used to decode internally and drop the list, so this
+/// surface silently disagreed with `to_json` on the same document.
+#[test]
+fn decode_warnings_reach_the_caller_as_they_do_for_to_json() {
+    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+
+    let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export_section");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(!codes.is_empty(), "a decoding export must report what the decode found");
+    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+
+    // The two exports must agree about the decode. `export_section` also
+    // carries its own workflow warning, which `to_json` has no notion of, so
+    // the comparison is over the decode-warning subset.
+    let whole = to_json(&bytes, &ToJsonOptions::default()).expect("to_json");
+    let whole_codes: Vec<String> = whole.meta().warnings.into_iter().map(|w| w.code).collect();
+    let decode_only: Vec<String> =
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").cloned().collect();
+    assert_eq!(decode_only, whole_codes, "the two exports must report the same decode");
+}
+
+/// The documented merge order is decoder → workflow → grid.
+#[test]
+fn decoder_warnings_come_before_the_workflow_warning() {
+    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+
+    let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export_section");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    let decoder_at = codes.iter().position(|c| c == "LAYOUT_CACHE_DROPPED");
+    let workflow_at = codes.iter().position(|c| c == "PRESERVATION_METADATA_UNAVAILABLE");
+    assert!(decoder_at.is_some(), "{codes:?}");
+    if let (Some(decoder), Some(workflow)) = (decoder_at, workflow_at) {
+        assert!(decoder < workflow, "decoder warnings come first: {codes:?}");
+    }
 }

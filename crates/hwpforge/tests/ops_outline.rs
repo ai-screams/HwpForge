@@ -134,12 +134,28 @@ fn nested_table_document() -> Vec<u8> {
         .expect("encode")
 }
 
+/// A decoding query reports what the decode found.
+///
+/// The same committed fixture backs the decode-warning tests for `to_json`,
+/// `read` and `fields`, so the surfaces cannot disagree about what counts as
+/// a document that warns.
 #[test]
-fn decode_warnings_are_not_observable_through_this_surface() {
-    // `HwpxReader::outline` decodes internally and drops `decoded.warnings`,
-    // so the list is empty by construction today. The field exists so the
-    // wire shape does not change when the reader starts reporting them.
-    let out = outline(&hwpx_fixture("sample1.hwpx")).expect("outline");
+fn decode_warnings_reach_the_caller() {
+    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+
+    let out = outline(&bytes).expect("outline");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(!codes.is_empty(), "a decoding query must not report an empty list");
+    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+    // `outline` asks the field walk to decode a second time; that must not
+    // turn one warning into two.
+    assert_eq!(codes.len(), 1, "{codes:?}");
+}
+
+#[test]
+fn a_clean_document_reports_nothing() {
+    let out = outline(&hwpx_fixture("SimpleTable.hwpx")).expect("outline");
 
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }

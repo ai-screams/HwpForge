@@ -3,17 +3,21 @@
 //! These three operations never change a document. They decode the input,
 //! project a view of it, and hand back a wire DTO the library already owns.
 //!
-//! # Where the warnings went
+//! # Warnings
 //!
-//! [`HwpxReader`] and [`HwpxFiller::list_fields`] decode internally and drop
-//! the decoder's warning list, so every `warnings` field in this module is
-//! empty today. The fields exist anyway, because the alternative — decoding a
-//! second time just to collect warnings — would double the cost of every
-//! query, and because adding the field later would change the wire shape the
-//! Python stub declares. When the reader facade starts reporting its decode
-//! warnings, these operations carry them without any caller-visible change.
-//! [`fields`] is the one exception: its wire wrapper has no `warnings` key at
-//! all (see [`FieldsMeta`]).
+//! A query that decodes reports what the decode found. Each operation here
+//! calls the library's `*_with_diagnostics` entry point, so a document whose
+//! decode drops a layout cache says so (code `LAYOUT_CACHE_DROPPED`) instead
+//! of returning an empty list the caller cannot distinguish from a clean
+//! read. The warnings arrive in decoder order and are wrapped as
+//! [`OpsWarning::Decode`].
+//!
+//! No second decode is involved: the twins return the warnings from the same
+//! decode that produced the projection.
+//!
+//! [`fields`] is the one exception to the wire shape, not to the contract —
+//! it collects the warnings like its siblings, but its wire wrapper has no
+//! `warnings` key at all (see [`FieldsMeta`]).
 //!
 //! # Argument validation
 //!
@@ -24,7 +28,7 @@
 
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
 use hwpforge_smithy_hwpx::{
-    DocumentOutline, FieldInfo, HwpxFiller, HwpxReader, ParagraphsView, TableView,
+    DecodeWarning, DocumentOutline, FieldInfo, HwpxFiller, HwpxReader, ParagraphsView, TableView,
 };
 use serde::Serialize;
 
@@ -38,7 +42,7 @@ use super::{OpsError, OpsWarning};
 pub struct OutlineOutput {
     /// Headings, tables, fields and bookmarks, with their locations.
     pub outline: DocumentOutline,
-    /// Non-fatal diagnostics; always empty today (see the module docs).
+    /// Decoder warnings for this document, in decoder order.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -49,6 +53,7 @@ pub struct OutlineOutput {
 /// `outline`, `warnings`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct OutlineMeta {
     /// The navigation map, exactly as the library serialises it.
     pub outline: DocumentOutline,
@@ -98,8 +103,11 @@ impl OutlineOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn outline(hwpx: &[u8]) -> Result<OutlineOutput, OpsError> {
-    let outline = HwpxReader::outline(hwpx).map_err(OpsError::decode)?;
-    Ok(OutlineOutput { outline, warnings: Vec::new() })
+    let diagnosed = HwpxReader::outline_with_diagnostics(hwpx).map_err(OpsError::decode)?;
+    Ok(OutlineOutput {
+        outline: diagnosed.value,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 // ── fields ──────────────────────────────────────────────────────
@@ -110,7 +118,7 @@ pub fn outline(hwpx: &[u8]) -> Result<OutlineOutput, OpsError> {
 pub struct FieldsOutput {
     /// Fields in document order, duplicates and unnamed ones kept.
     pub fields: Vec<FieldInfo>,
-    /// Non-fatal diagnostics; always empty today (see the module docs).
+    /// Decoder warnings for this document, in decoder order.
     ///
     /// Deliberately **not** part of [`FieldsMeta`].
     pub warnings: Vec<OpsWarning>,
@@ -128,6 +136,7 @@ pub struct FieldsOutput {
 /// this key set.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct FieldsMeta {
     /// Fields in document order.
     pub fields: Vec<FieldInfo>,
@@ -166,8 +175,11 @@ impl FieldsOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn fields(hwpx: &[u8]) -> Result<FieldsOutput, OpsError> {
-    let fields = HwpxFiller::list_fields(hwpx).map_err(OpsError::decode)?;
-    Ok(FieldsOutput { fields, warnings: Vec::new() })
+    let diagnosed = HwpxFiller::list_fields_with_diagnostics(hwpx).map_err(OpsError::decode)?;
+    Ok(FieldsOutput {
+        fields: diagnosed.value,
+        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
+    })
 }
 
 // ── read ────────────────────────────────────────────────────────
@@ -243,7 +255,7 @@ pub struct ReadOutput {
     pub table: Option<TableView>,
     /// Every field of the requested name, when `field` was the target.
     pub fields: Option<Vec<FieldInfo>>,
-    /// Non-fatal diagnostics; always empty today (see the module docs).
+    /// Decoder warnings for this document, in decoder order.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -258,6 +270,7 @@ pub struct ReadOutput {
 /// optional ones.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct ReadMeta {
     /// Paragraph range view, or `null`.
     pub paragraphs: Option<ParagraphsView>,
@@ -330,30 +343,38 @@ pub fn read(hwpx: &[u8], opts: &ReadOptions) -> Result<ReadOutput, OpsError> {
 
     if let Some(section) = opts.section {
         let range = opts.paras.as_deref().map(parse_paras).transpose()?;
+        let diagnosed = HwpxReader::read_paragraphs_with_diagnostics(hwpx, section, range)?;
         return Ok(ReadOutput {
-            paragraphs: Some(HwpxReader::read_paragraphs(hwpx, section, range)?),
+            paragraphs: Some(diagnosed.value),
             table: None,
             fields: None,
-            warnings: Vec::new(),
+            warnings: decode_warnings(diagnosed.warnings),
         });
     }
 
     if let Some(ordinal) = opts.table {
+        let diagnosed = HwpxReader::read_table_with_diagnostics(hwpx, ordinal)?;
         return Ok(ReadOutput {
             paragraphs: None,
-            table: Some(HwpxReader::read_table(hwpx, ordinal)?),
+            table: Some(diagnosed.value),
             fields: None,
-            warnings: Vec::new(),
+            warnings: decode_warnings(diagnosed.warnings),
         });
     }
 
     let name = opts.field.as_deref().expect("target validation leaves field as the only target");
+    let diagnosed = HwpxReader::read_field_with_diagnostics(hwpx, name)?;
     Ok(ReadOutput {
         paragraphs: None,
         table: None,
-        fields: Some(HwpxReader::read_field(hwpx, name)?),
-        warnings: Vec::new(),
+        fields: Some(diagnosed.value),
+        warnings: decode_warnings(diagnosed.warnings),
     })
+}
+
+/// Wraps a decoder warning list as operation warnings, preserving order.
+fn decode_warnings(warnings: Vec<DecodeWarning>) -> Vec<OpsWarning> {
+    warnings.into_iter().map(OpsWarning::Decode).collect()
 }
 
 /// Parses `"A..B"` (inclusive) or a single `"N"` into an inclusive pair.

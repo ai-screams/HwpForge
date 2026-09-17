@@ -850,15 +850,45 @@ fn inventory_matches_the_tracked_file() {
 
 #[test]
 fn every_wrapped_payload_type_has_a_manifest_record() {
-    // The mapping tables name every enum `OpsError`/`OpsWarning` wrap; each
-    // of them must be a `wrapped` entry of the manifest, so adding an arm
-    // without extending the audit scope fails here instead of going unseen.
+    // The payload types are read from `OpsError`/`OpsWarning` themselves (not
+    // from a hand-kept list), so adding an arm without extending the audit
+    // scope — or without a mapping table — fails here instead of going unseen.
     let manifest_wrapped: BTreeSet<&str> =
         error_inventory::MANIFEST.iter().flat_map(|e| e.wrapped.iter().copied()).collect();
     let table_names: BTreeSet<&str> =
         ERROR_MAPPING.iter().chain(WARNING_MAPPING.iter()).map(|(name, _)| *name).collect();
-    let missing: Vec<&str> = table_names.difference(&manifest_wrapped).copied().collect();
-    assert!(missing.is_empty(), "mapped but not in the manifest's `wrapped` lists: {missing:?}");
+    // Not audited as enums: `serde_json::Error` is external and classified by
+    // stage; `GridAddrWarning` is a struct.
+    let not_enums: BTreeSet<&str> = ["Error", "GridAddrWarning"].into_iter().collect();
+    // Reached through another wrapped enum rather than as a direct payload.
+    let nested: BTreeSet<&str> = ["StampError", "CellStampError"].into_iter().collect();
+
+    let derived = error_inventory::wrapped_payloads_of_ops();
+    let derived: BTreeSet<&str> =
+        derived.iter().map(String::as_str).filter(|n| !not_enums.contains(n)).collect();
+
+    let not_in_manifest: Vec<&str> = derived.difference(&manifest_wrapped).copied().collect();
+    assert!(
+        not_in_manifest.is_empty(),
+        "wrapped by ops but absent from MANIFEST.wrapped: {not_in_manifest:?}"
+    );
+    let not_in_tables: Vec<&str> = derived.difference(&table_names).copied().collect();
+    assert!(
+        not_in_tables.is_empty(),
+        "wrapped by ops but without a mapping table: {not_in_tables:?}"
+    );
+    let stale: Vec<&str> = table_names
+        .iter()
+        .copied()
+        .filter(|n| !derived.contains(n) && !nested.contains(n))
+        .collect();
+    assert!(stale.is_empty(), "mapping table for a type ops no longer wraps: {stale:?}");
+    for n in &nested {
+        assert!(
+            manifest_wrapped.contains(n) && table_names.contains(n),
+            "nested {n} must stay audited"
+        );
+    }
 }
 
 #[test]

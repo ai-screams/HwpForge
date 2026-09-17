@@ -136,11 +136,15 @@ pub struct SchemaOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn schema(opts: &SchemaOptions) -> Result<SchemaOutput, OpsError> {
-    let mut schema = match opts.kind {
-        SchemaKind::Document => serde_json::to_value(schema_for!(Document<Draft>))?,
-        SchemaKind::ExportedDocument => serde_json::to_value(schema_for!(ExportedDocument))?,
-        SchemaKind::ExportedSection => serde_json::to_value(schema_for!(ExportedSection))?,
-    };
+    let mut schema =
+        match opts.kind {
+            SchemaKind::Document => serde_json::to_value(schema_for!(Document<Draft>))
+                .map_err(OpsError::json_serialize)?,
+            SchemaKind::ExportedDocument => serde_json::to_value(schema_for!(ExportedDocument))
+                .map_err(OpsError::json_serialize)?,
+            SchemaKind::ExportedSection => serde_json::to_value(schema_for!(ExportedSection))
+                .map_err(OpsError::json_serialize)?,
+        };
     inject_cell_addr(&mut schema);
     Ok(SchemaOutput { schema })
 }

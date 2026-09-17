@@ -91,12 +91,28 @@ fn the_meta_payload_is_the_library_dto_unchanged() {
 }
 
 #[test]
-fn the_rust_output_still_carries_a_warning_list() {
+fn a_clean_document_carries_an_empty_warning_list() {
     let out = fields(&repo_fixture("fields/clickhere_named.hwpx")).expect("fields");
 
-    // Empty today, and deliberately absent from the wire shape; the field
-    // exists so the type matches its siblings.
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+/// `fields` decodes, so it collects the decoder's warnings — even though its
+/// wire shape deliberately has no `warnings` key.
+///
+/// The Rust output is the contract here: dropping the list would make the
+/// operation disagree with its siblings about what a decode reported.
+#[test]
+fn decode_warnings_reach_the_rust_output_even_though_the_wire_shape_omits_them() {
+    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+
+    let out = fields(&bytes).expect("fields");
+
+    let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
+    assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+    // The wire shape still has exactly one key.
+    let value = serde_json::to_value(out.meta()).expect("serialise meta");
+    assert_eq!(keys(&value), ["fields"].map(String::from).into_iter().collect());
 }
 
 #[test]

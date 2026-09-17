@@ -50,6 +50,7 @@ impl TemplatesOutput {
 ///
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct TemplateList {
     /// The built-in presets, in declaration order.
     pub presets: Vec<PresetInfo>,
@@ -125,6 +126,7 @@ impl RestyleOutput {
 /// The `restyle` wire payload: `{ "preset": …, "warnings": [ … ] }`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
 pub struct RestyleMeta {
     /// The preset that was applied.
     pub preset: String,
@@ -351,9 +353,18 @@ mod tests {
         assert_eq!(RestyleOptions::default().with_preset("classic").preset, "classic");
     }
 
-    // A package that decodes but fails `Document::validate` cannot be built
-    // from the shipped fixtures, and hand-rolling one would need a ZIP
-    // writer this crate does not depend on. So the failed-verdict rendering
+    // The `ok: false` branch is genuinely reachable, not dead code: a
+    // section carrying no paragraphs decodes cleanly and then fails
+    // `Document::validate` with `EmptySection`. That is proven against real
+    // bytes in `smithy-hwpx`, by
+    // `patch::tests::a_section_without_paragraphs_decodes_into_a_document_core_rejects`,
+    // which is where the crate's only package writer lives.
+    //
+    // It cannot be driven end to end from here: no public API produces such
+    // a package (`HwpxEncoder::encode` takes a `Document<Validated>`, so the
+    // type state forbids it), and mutating one would need a ZIP writer this
+    // crate does not depend on. Reaching it from `validate()` therefore
+    // needs a committed fixture. Until then the failed-verdict *rendering*
     // is pinned here, where the output struct can be built directly.
     #[test]
     fn a_failed_verdict_renders_under_the_validation_failed_code() {

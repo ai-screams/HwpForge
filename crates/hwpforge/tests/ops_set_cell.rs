@@ -136,7 +136,11 @@ fn replaces_the_text_of_a_coordinate_addressed_cell() {
     assert_eq!(out.results[0].resolution, CellResolution::Exact);
     assert!(!out.results[0].cleared);
     assert_eq!(cell_texts(&out.bytes), ["성명", "류한율", "소속", ""]);
-    assert!(out.warnings.is_empty(), "the editor has no warning channel yet");
+    // A successful regenerating edit now reports the encode's non-semantic
+    // warnings instead of a hard-coded empty list. This document produces
+    // none — see `a_successful_edit_reports_the_encoders_nonsemantic_warnings`
+    // for why an empty list here is the right answer and not a dropped one.
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }
 
 #[test]
@@ -333,4 +337,34 @@ fn meta_carries_exactly_the_documented_keys() {
     assert_eq!(keys(&value), ["results", "warnings"]);
     assert_eq!(value["results"][0]["resolution"], "exact");
     assert_eq!(value["warnings"], serde_json::json!([]));
+}
+
+/// The success half of `set_cell`'s warning contract.
+///
+/// The failure half (semantic loss ⇒ no bytes) is covered above. This pins
+/// the other half: the operation forwards whatever **non-semantic** warnings
+/// the successful encode raised, rather than hard-coding an empty vector as
+/// it used to.
+///
+/// The list is empty for every document reachable here, and that is a
+/// property of the encoder rather than of this wiring: the only non-semantic
+/// `EncodeWarning` is `LayoutCacheDropped`, which the encoder raises only
+/// when `EncodeOptions::emit_layout_cache` is set — an opt-in a
+/// preserve-first editor must never set. The forwarding itself is proven
+/// where the outcome can be built directly, in `smithy-hwpx`'s
+/// `encoder::tests::split_successful_encode`.
+#[test]
+fn a_successful_edit_reports_the_encoders_nonsemantic_warnings() {
+    let out = set_cell(
+        &labelled_table(),
+        &SetCellOptions::default().with_table(0).with_at("0,1").with_text("류한율"),
+    )
+    .expect("set_cell");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(
+        codes.iter().all(|code| code != "NOTE_HEAD_SKIPPED" && code != "TITLE_MARK_SKIPPED"),
+        "a semantic-loss warning must fail the edit, never ride along: {codes:?}"
+    );
+    assert_eq!(codes, Vec::<String>::new(), "this encode raises nothing: {codes:?}");
 }

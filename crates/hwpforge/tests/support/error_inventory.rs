@@ -67,12 +67,8 @@ pub const MANIFEST: &[ManifestEntry] = &[
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/structural.rs",
-        wrapped: &["StructuralEditError"],
-        not_wrapped: &[(
-            "StructuralWarning",
-            "surfaced by insert_para/delete_para, which W1b phase 2 adds; \
-             OpsWarning gains the arm with the operation",
-        )],
+        wrapped: &["StructuralEditError", "StructuralWarning"],
+        not_wrapped: &[],
     },
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
@@ -83,12 +79,8 @@ pub const MANIFEST: &[ManifestEntry] = &[
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
-        wrapped: &["SectionWorkflowError"],
-        not_wrapped: &[(
-            "SectionWorkflowWarning",
-            "surfaced by to_json/patch, which W1b phase 2 adds; \
-             OpsWarning gains the arm with the operation",
-        )],
+        wrapped: &["SectionWorkflowError", "SectionWorkflowWarning"],
+        not_wrapped: &[],
     },
     ManifestEntry {
         krate: "hwpforge-smithy-hwpx",
@@ -124,18 +116,6 @@ pub const MANIFEST: &[ManifestEntry] = &[
         krate: "hwpforge-smithy-hwpx",
         file: "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
         wrapped: &["DecodeWarning"],
-        not_wrapped: &[],
-    },
-    ManifestEntry {
-        krate: "hwpforge-smithy-hwpx",
-        file: "crates/hwpforge-smithy-hwpx/src/structural.rs",
-        wrapped: &["StructuralWarning"],
-        not_wrapped: &[],
-    },
-    ManifestEntry {
-        krate: "hwpforge-smithy-hwpx",
-        file: "crates/hwpforge-smithy-hwpx/src/section_workflow.rs",
-        wrapped: &["SectionWorkflowWarning"],
         not_wrapped: &[],
     },
     ManifestEntry {
@@ -241,6 +221,20 @@ pub fn collect() -> Inventory {
     let root = workspace_root();
     let mut enums = Vec::new();
 
+    // A diagnostic must be recorded exactly once: two manifest entries naming
+    // the same (crate, enum) would double it in the tracked inventory and let
+    // one entry call it wrapped while the other calls it not.
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in MANIFEST {
+        for name in entry.wrapped.iter().copied().chain(entry.not_wrapped.iter().map(|(n, _)| *n)) {
+            assert!(
+                seen.insert((entry.krate, name)),
+                "manifest names {}::{name} twice",
+                entry.krate
+            );
+        }
+    }
+
     for entry in MANIFEST {
         let path = root.join(entry.file);
         let source = std::fs::read_to_string(&path)
@@ -332,27 +326,36 @@ fn visit_module_file(file: &Path, files: &mut Vec<PathBuf>) {
     let is_root = matches!(file.file_name().and_then(|n| n.to_str()), Some("lib.rs" | "mod.rs"));
     let stem = file.file_stem().and_then(|s| s.to_str()).expect("module file stem");
     // `foo.rs` declaring `mod bar;` resolves to `foo/bar.rs`; a root file
-    // (`lib.rs` / `mod.rs`) resolves siblings in its own directory.
+    // (`lib.rs` / `mod.rs`) resolves siblings in its own directory. An
+    // explicit `#[path]` on a top-level declaration is relative to the
+    // directory of the file that carries it, whatever kind of file it is.
     let child_dir = if is_root { dir.to_path_buf() } else { dir.join(stem) };
 
-    collect_out_of_line_mods(&ast.items, &child_dir, files);
+    collect_out_of_line_mods(&ast.items, &child_dir, dir, files);
 }
 
-fn collect_out_of_line_mods(items: &[Item], child_dir: &Path, files: &mut Vec<PathBuf>) {
+fn collect_out_of_line_mods(
+    items: &[Item],
+    child_dir: &Path,
+    path_base: &Path,
+    files: &mut Vec<PathBuf>,
+) {
     for item in items {
         let Item::Mod(item_mod) = item else { continue };
         match &item_mod.content {
             // Inline module: its items live in the same file, but it may
-            // itself declare out-of-line children under `<dir>/<name>/`.
+            // itself declare out-of-line children under `<dir>/<name>/`;
+            // inside an inline module an explicit `#[path]` is relative to
+            // that nested directory too.
             Some((_, inner)) => {
                 let nested = child_dir.join(item_mod.ident.to_string());
-                collect_out_of_line_mods(inner, &nested, files);
+                collect_out_of_line_mods(inner, &nested, &nested, files);
             }
             None => {
                 let name = item_mod.ident.to_string();
                 let explicit = item_mod.attrs.iter().find_map(path_attribute);
                 let candidates = match explicit {
-                    Some(rel) => vec![child_dir.join(rel)],
+                    Some(rel) => vec![path_base.join(rel)],
                     None => vec![
                         child_dir.join(format!("{name}.rs")),
                         child_dir.join(&name).join("mod.rs"),
@@ -369,6 +372,43 @@ fn collect_out_of_line_mods(items: &[Item], child_dir: &Path, files: &mut Vec<Pa
             }
         }
     }
+}
+
+/// The payload type names that `OpsError` and `OpsWarning` wrap, read from
+/// the ops module's own source so the manifest cannot silently fall behind a
+/// new arm. Only the last path segment is kept (`serde_json::Error` →
+/// `Error`); every tuple-variant payload is returned, whatever its name.
+///
+/// Known limits, on purpose: this is syntactic. Diagnostics produced by
+/// `include!` or by a macro, and enums re-exported from another crate under
+/// a different name, are not discovered — the manifest still has to list
+/// them by hand.
+#[must_use]
+pub fn wrapped_payloads_of_ops() -> Vec<String> {
+    let file = workspace_root().join("crates/hwpforge/src/ops/mod.rs");
+    let source =
+        std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    let ast = syn::parse_file(&source)
+        .unwrap_or_else(|e| panic!("{} does not parse: {e}", file.display()));
+    let mut out = Vec::new();
+    for item in &ast.items {
+        let Item::Enum(item_enum) = item else { continue };
+        let ident = item_enum.ident.to_string();
+        if ident != "OpsError" && ident != "OpsWarning" {
+            continue;
+        }
+        for variant in &item_enum.variants {
+            let Fields::Unnamed(unnamed) = &variant.fields else { continue };
+            for field in &unnamed.unnamed {
+                let syn::Type::Path(type_path) = &field.ty else { continue };
+                let Some(last) = type_path.path.segments.last() else { continue };
+                out.push(last.ident.to_string());
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// The value of a `#[path = "…"]` attribute, if the item carries one.

@@ -139,6 +139,7 @@ impl MdExportOutput {
 /// published exchange schema anyway — [`schema`](fn@super::schema) describes the JSON
 /// document types, not the FFI result envelopes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MdExportMeta {
     /// The rendering that produced the Markdown.
     pub mode: String,

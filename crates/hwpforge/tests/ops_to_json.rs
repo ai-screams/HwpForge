@@ -144,3 +144,67 @@ fn decode_warnings_reach_the_caller() {
     assert!(codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
     assert!(out.document.get("document").is_some(), "a warning does not stop the export");
 }
+
+/// An unaddressable table warns, through the operation, not by hand.
+///
+/// `TABLE_GRID_UNADDRESSABLE` used to be covered only by constructing the
+/// warning directly, which proved the wording but not that any operation can
+/// produce it. A ragged table — one row with two cells, the next with one —
+/// has no derivable strict grid, so the annotation pass skips it and says so.
+///
+/// The message is asserted here too, so the direct-construction test it
+/// replaces loses no coverage.
+#[test]
+fn a_ragged_table_warns_through_the_operation() {
+    use hwpforge::core::image::ImageStore;
+    use hwpforge::core::run::Run;
+    use hwpforge::core::table::{Table, TableCell, TableRow};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Section};
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+    use hwpforge::hwpx::HwpxEncoder;
+
+    let width = HwpUnit::new(8000).expect("width");
+    let cell = |text: &str| {
+        TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text(text, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            width,
+        )
+    };
+    // Row 0 has two cells, row 1 has one: the rows do not tile a rectangle.
+    let ragged =
+        Table::new(vec![TableRow::new(vec![cell("A"), cell("B")]), TableRow::new(vec![cell("C")])]);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(ragged, CharShapeIndex::new(0)));
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    styles.push_char_shape(HwpxCharShape::default());
+    styles.push_para_shape(HwpxParaShape::default());
+    let bytes =
+        HwpxEncoder::encode(&document.validate().expect("validate"), &styles, &ImageStore::new())
+            .expect("encode");
+
+    let out = to_json(&bytes, &ToJsonOptions::default()).expect("to_json");
+
+    let warnings = out.meta().warnings;
+    assert!(!warnings.is_empty(), "an unaddressable table must warn");
+    let unaddressable = warnings
+        .iter()
+        .find(|w| w.code == "TABLE_GRID_UNADDRESSABLE")
+        .unwrap_or_else(|| panic!("no grid warning in {warnings:?}"));
+    assert!(
+        unaddressable.message.starts_with("table #0 in section 0 exported without grid addresses:"),
+        "the CLI wording must not drift: {}",
+        unaddressable.message
+    );
+    // The export still succeeds — an unaddressable table is a warning, not a
+    // failure.
+    assert!(out.document.get("document").is_some());
+    assert!(addresses(&out.document).is_empty(), "the skipped table got no addresses");
+}

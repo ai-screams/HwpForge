@@ -132,6 +132,7 @@ impl ConvertOutput {
 /// type and carries no `JsonSchema` derive, and re-modelling it here to
 /// gain one would fork a wire type another crate owns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ConvertMeta {
     /// One entry per planned image, in document order.
     pub assets: Vec<AssetOutcome>,

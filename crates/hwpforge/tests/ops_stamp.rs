@@ -101,7 +101,13 @@ fn a_legacy_map_stamps_and_reports_the_v1_manifest() {
         .filter_map(|field| field.name)
         .collect();
     assert_eq!(names, ["성명", "동의"], "the stamped fields are discoverable");
-    assert!(out.warnings.is_empty(), "the stamper has no warning channel yet");
+    // A successful stamp now reports the encode's non-semantic warnings
+    // instead of a hard-coded empty list; this document produces none. The
+    // only non-semantic `EncodeWarning` needs `emit_layout_cache`, which a
+    // preserve-first editor never sets, so an empty list here is the real
+    // answer rather than a dropped one. The forwarding is proven in
+    // `smithy-hwpx`'s `encoder::tests::split_successful_encode`.
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }
 
 #[test]

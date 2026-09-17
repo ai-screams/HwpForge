@@ -180,16 +180,31 @@ fn meta_carries_exactly_the_preset_and_warnings_keys() {
     assert!(value["warnings"].is_array());
 }
 
+/// Anything reaching `warnings` is something the caller may ignore.
+///
+/// The loop below is only meaningful if it has something to iterate, so the
+/// exact list is pinned first. It is empty, and that is a property of the
+/// encoder rather than of this operation: the only non-semantic
+/// `EncodeWarning` is `LayoutCacheDropped`, which the encoder raises solely
+/// under `EncodeOptions::emit_layout_cache` — an opt-in no editing surface
+/// sets. No committed fixture reaches it.
+///
+/// Pinning emptiness rather than waving at it means the day a fixture does
+/// produce one, this test fails and the classification assertion below stops
+/// being decorative. The non-empty half of the same contract is already
+/// covered by `semantic_loss_returns_no_bytes_at_all`, where the refusal
+/// carries both warning groups.
 #[test]
 fn every_returned_warning_is_non_semantic() {
-    // The semantic ones are an error by construction; anything reaching
-    // `warnings` must therefore be something the caller may ignore.
     let out = restyle(&fixture("sample1.hwpx"), &RestyleOptions::default().with_preset("modern"))
         .expect("restyle");
 
-    for warning in out.warnings.iter().map(|w| w.info()) {
-        assert_ne!(warning.code, "NOTE_HEAD_SKIPPED", "{warning:?}");
-        assert_ne!(warning.code, "NOTE_RESTART_IGNORED", "{warning:?}");
-        assert_ne!(warning.code, "TITLE_MARK_SKIPPED", "{warning:?}");
+    let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
+    assert_eq!(codes, Vec::<String>::new(), "this encode raises nothing: {codes:?}");
+
+    for code in &codes {
+        assert_ne!(code, "NOTE_HEAD_SKIPPED", "{codes:?}");
+        assert_ne!(code, "NOTE_RESTART_IGNORED", "{codes:?}");
+        assert_ne!(code, "TITLE_MARK_SKIPPED", "{codes:?}");
     }
 }
