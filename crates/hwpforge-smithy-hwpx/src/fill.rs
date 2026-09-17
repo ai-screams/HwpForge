@@ -251,7 +251,23 @@ impl HwpxFiller {
     ///
     /// 패키지 디코드에 실패하면 [`HwpxError`] 를 반환한다.
     pub fn list_fields(base: &[u8]) -> HwpxResult<Vec<FieldInfo>> {
+        Self::list_fields_with_diagnostics(base)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// 모든 누름틀을 나열하되 **디코더 경고를 함께** 돌려준다.
+    ///
+    /// 투영 결과는 [`HwpxFiller::list_fields`] 와 동일하다 — 그쪽이 이
+    /// 함수의 얇은 래퍼라 둘이 어긋날 수 없다.
+    ///
+    /// # Errors
+    ///
+    /// 패키지 디코드에 실패하면 [`HwpxError`] 를 반환한다.
+    pub fn list_fields_with_diagnostics(
+        base: &[u8],
+    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<FieldInfo>>> {
         let mut decoded = HwpxDecoder::decode(base)?;
+        let warnings = decoded.warnings.clone();
         let mut fields = Vec::new();
         for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
             visit_section_fields(section, section_idx, &mut |slot| {
@@ -273,7 +289,7 @@ impl HwpxFiller {
                 }
             });
         }
-        Ok(fields)
+        Ok(crate::diagnostics::WithDecodeWarnings::new(fields, warnings))
     }
 
     /// 이름 → 값 맵으로 누름틀을 채운 새 패키지 바이트를 만든다.

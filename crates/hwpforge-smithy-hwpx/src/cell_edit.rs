@@ -549,6 +549,41 @@ impl HwpxCellEditor {
     ///
     /// See [`CellEditError`].
     pub fn set_cells(base: &[u8], specs: &[CellSpec]) -> Result<CellEditResult, CellEditError> {
+        Self::set_cells_with_diagnostics(base, specs)
+            .map(crate::diagnostics::WithEncodeWarnings::into_value)
+    }
+
+    /// Edits table cells, keeping the successful encode's non-semantic
+    /// warnings.
+    ///
+    /// Same bytes and same outcome as [`HwpxCellEditor::set_cells`], which is
+    /// a thin wrapper over this function; the difference is only that the
+    /// diagnostics survive.
+    ///
+    /// # What the warnings mean
+    ///
+    /// Semantic-loss warnings never appear here — they are the fail-closed
+    /// path and produce [`CellEditError::SemanticLoss`] with no bytes. What
+    /// is returned is the remainder, which describes the regenerated package
+    /// without claiming its meaning changed.
+    ///
+    /// The warnings come from the encode that produced the bytes, and they
+    /// are reported **before** the layout-cache carry step runs. A
+    /// [`EncodeWarning::LayoutCacheDropped`](crate::EncodeWarning::LayoutCacheDropped)
+    /// therefore means "this encode did not emit that cache", not "the
+    /// output lacks it": the layout-carry step may put an untouched
+    /// paragraph's original cache back afterwards. Reporting the
+    /// encode verbatim is deliberate — filtering would require proving which
+    /// paths the carry restored, and a dropped-then-restored cache is still
+    /// worth telling the caller about.
+    ///
+    /// # Errors
+    ///
+    /// See [`CellEditError`].
+    pub fn set_cells_with_diagnostics(
+        base: &[u8],
+        specs: &[CellSpec],
+    ) -> Result<crate::diagnostics::WithEncodeWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
         let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
@@ -572,17 +607,17 @@ impl HwpxCellEditor {
         // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
         // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
         // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
-        if encode_outcome.warnings.iter().any(|w| w.is_semantic_loss()) {
-            let (warnings, others) =
-                crate::encoder::partition_semantic_loss(encode_outcome.warnings);
-            return Err(CellEditError::SemanticLoss { warnings, others });
-        }
-        let bytes = encode_outcome.bytes;
+        // R2 HIGH 1: the non-semantic half is no longer discarded — it is
+        // what `set_cells_with_diagnostics` hands back on success. The
+        // split is shared with the stamper (`split_successful_encode`), so
+        // the two editors cannot drift apart.
+        let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
+            .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
-        Ok(CellEditResult { bytes, outcome })
+        Ok(crate::diagnostics::WithEncodeWarnings::new(CellEditResult { bytes, outcome }, others))
     }
 }
 

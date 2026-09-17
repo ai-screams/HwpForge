@@ -53,6 +53,7 @@ pub mod cell_edit;
 mod color;
 pub mod decoder;
 pub mod default_styles;
+pub mod diagnostics;
 mod diff;
 mod encoder;
 pub mod error;
@@ -82,9 +83,10 @@ pub use cell_edit::{
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
+pub use diagnostics::{WithDecodeWarnings, WithEncodeWarnings};
 pub use diff::{
-    CellTextChange, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer, PackageDiff,
-    ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
+    CellTextChange, DiffDiagnostics, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer,
+    PackageDiff, ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
     COMPARISON_NOTE, RAW_CAP,
 };
 pub use encoder::{

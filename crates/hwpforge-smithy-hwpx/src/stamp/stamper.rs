@@ -52,11 +52,13 @@ pub struct HwpxStamper;
 ///
 /// 어떤 경고가 의미 손상인지는 [`crate::EncodeWarning::is_semantic_loss`]
 /// 가 단독으로 정의한다 (편집기별 손수 목록 금지).
+/// R2 HIGH 1: 성공 시 **비의미 경고를 함께** 돌려준다 (과거엔 바이트만
+/// 남기고 버렸다 — `*_with_diagnostics` 트윈이 이 목록을 싣는다).
 fn encode_fail_closed(
     validated: &hwpforge_core::Document<hwpforge_core::Validated>,
     style_store: &crate::style_store::HwpxStyleStore,
     image_store: &hwpforge_core::image::ImageStore,
-) -> Result<Vec<u8>, StamperError> {
+) -> Result<(Vec<u8>, Vec<crate::EncodeWarning>), StamperError> {
     let outcome = HwpxEncoder::encode_with_diagnostics(
         validated,
         style_store,
@@ -67,11 +69,8 @@ fn encode_fail_closed(
     // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
     // 호출자가 어떤 경고였는지 알 수 없었다). Display 문자열은 불변이라
     // 프론트엔드 출력은 그대로다.
-    if outcome.warnings.iter().any(|w| w.is_semantic_loss()) {
-        let (warnings, others) = crate::encoder::partition_semantic_loss(outcome.warnings);
-        return Err(StamperError::SemanticLoss { warnings, others });
-    }
-    Ok(outcome.bytes)
+    crate::encoder::split_successful_encode(outcome)
+        .map_err(|(warnings, others)| StamperError::SemanticLoss { warnings, others })
 }
 
 /// Result of a successful [`HwpxStamper::stamp`].
@@ -277,15 +276,35 @@ impl HwpxStamper {
     ///
     /// [`StamperError::Codec`] when the input fails to decode.
     pub fn plan_bytes_v2(base: &[u8]) -> Result<StampPlanV2, StamperError> {
+        Self::plan_bytes_v2_with_diagnostics(base)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Enumerates both candidate classes, keeping the decoder's warnings.
+    ///
+    /// Same plan as [`HwpxStamper::plan_bytes_v2`], which is a thin wrapper
+    /// over this function. Planning is a **query** — it decodes and projects,
+    /// mutating nothing — so the decoder's diagnostics are the only ones this
+    /// path can produce.
+    ///
+    /// # Errors
+    ///
+    /// [`StamperError::Codec`] when the input fails to decode.
+    pub fn plan_bytes_v2_with_diagnostics(
+        base: &[u8],
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<StampPlanV2>, StamperError> {
         let decoded = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
         let cells = plan_cells(&decoded.document);
-        Ok(StampPlanV2 {
-            schema_version: super::request::STAMP_MAP_VERSION,
-            source_sha256: sha256_hex(base),
-            text: plan(&decoded.document),
-            cells: cells.candidates,
-            skipped_tables: cells.skipped_tables,
-        })
+        Ok(crate::diagnostics::WithDecodeWarnings::new(
+            StampPlanV2 {
+                schema_version: super::request::STAMP_MAP_VERSION,
+                source_sha256: sha256_hex(base),
+                text: plan(&decoded.document),
+                cells: cells.candidates,
+                skipped_tables: cells.skipped_tables,
+            },
+            decoded.warnings,
+        ))
     }
 
     /// Stamps the input with the approved specs, all-or-nothing.
@@ -299,6 +318,38 @@ impl HwpxStamper {
     ///
     /// See [`StamperError`].
     pub fn stamp(base: &[u8], specs: &[StampSpec]) -> Result<StampResult, StamperError> {
+        Self::stamp_with_diagnostics(base, specs)
+            .map(crate::diagnostics::WithEncodeWarnings::into_value)
+    }
+
+    /// Stamps the input, keeping the successful encode's non-semantic
+    /// warnings.
+    ///
+    /// Same bytes, manifest and outcome as [`HwpxStamper::stamp`], which is a
+    /// thin wrapper over this function.
+    ///
+    /// # What the warnings mean
+    ///
+    /// Semantic-loss warnings never appear here — they are the fail-closed
+    /// path and produce [`StamperError::SemanticLoss`] with no bytes.
+    ///
+    /// The list comes from the single encode that produced the output. The
+    /// admission gate's no-op round trip encodes too, but that output is
+    /// discarded, so reporting its diagnostics would describe a package the
+    /// caller never receives. The warnings are also captured **before** the
+    /// layout-cache carry step, so
+    /// [`EncodeWarning::LayoutCacheDropped`](crate::EncodeWarning::LayoutCacheDropped)
+    /// means "this encode did not emit that cache", not "the output lacks
+    /// it" — see [`HwpxCellEditor::set_cells_with_diagnostics`](crate::HwpxCellEditor::set_cells_with_diagnostics)
+    /// for the same contract stated in full.
+    ///
+    /// # Errors
+    ///
+    /// See [`StamperError`].
+    pub fn stamp_with_diagnostics(
+        base: &[u8],
+        specs: &[StampSpec],
+    ) -> Result<crate::diagnostics::WithEncodeWarnings<StampResult>, StamperError> {
         // ── admission gate ──────────────────────────────────────────
         let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
         let e0 = encode_hwpx(&d0)?;
@@ -311,7 +362,7 @@ impl HwpxStamper {
         let outcome = apply(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let bytes = encode_fail_closed(&validated, &style_store, &image_store)?;
+        let (bytes, warnings) = encode_fail_closed(&validated, &style_store, &image_store)?;
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -321,7 +372,10 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(format!("output list_fields: {e}")))?;
         let manifest = build_manifest(base, &bytes, &fields, &outcome)?;
-        Ok(StampResult { bytes, manifest, outcome })
+        Ok(crate::diagnostics::WithEncodeWarnings::new(
+            StampResult { bytes, manifest, outcome },
+            warnings,
+        ))
     }
 
     /// Stamps a v2 request (class-A text + class-B cells), all-or-nothing.
@@ -338,6 +392,28 @@ impl HwpxStamper {
     /// See [`StamperError`] — notably [`StamperError::SourceHashMismatch`],
     /// [`StamperError::CellStamp`], and [`StamperError::DeltaMismatch`].
     pub fn stamp_v2(base: &[u8], request: &StampRequestV2) -> Result<StampResultV2, StamperError> {
+        Self::stamp_v2_with_diagnostics(base, request)
+            .map(crate::diagnostics::WithEncodeWarnings::into_value)
+    }
+
+    /// Stamps a v2 request, keeping the successful encode's non-semantic
+    /// warnings.
+    ///
+    /// Same bytes, manifest and outcome as [`HwpxStamper::stamp_v2`], which
+    /// is a thin wrapper over this function. The warning contract is the one
+    /// [`HwpxStamper::stamp_with_diagnostics`] documents; v2 additionally
+    /// encodes during the fixed-point check, and those diagnostics are
+    /// likewise not reported, because that package is a discarded
+    /// verification artefact rather than the result.
+    ///
+    /// # Errors
+    ///
+    /// See [`StamperError`] — notably [`StamperError::SourceHashMismatch`],
+    /// [`StamperError::CellStamp`], and [`StamperError::DeltaMismatch`].
+    pub fn stamp_v2_with_diagnostics(
+        base: &[u8],
+        request: &StampRequestV2,
+    ) -> Result<crate::diagnostics::WithEncodeWarnings<StampResultV2>, StamperError> {
         // ── source-hash pinning (drift rejection) ───────────────────
         let actual = sha256_hex(base);
         if !actual.eq_ignore_ascii_case(&request.source_sha256) {
@@ -381,7 +457,7 @@ impl HwpxStamper {
 
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let bytes = encode_fail_closed(&validated, &style_store, &image_store)?;
+        let (bytes, warnings) = encode_fail_closed(&validated, &style_store, &image_store)?;
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -403,11 +479,14 @@ impl HwpxStamper {
         let fields = HwpxFiller::list_fields(&bytes)
             .map_err(|e| StamperError::Codec(format!("output list_fields: {e}")))?;
         let manifest = build_manifest_v2(base, &bytes, &fields, &text_outcome, &cell_outcome)?;
-        Ok(StampResultV2 {
-            bytes,
-            manifest,
-            outcome: StampOutcomeV2 { text: text_outcome, cells: cell_outcome },
-        })
+        Ok(crate::diagnostics::WithEncodeWarnings::new(
+            StampResultV2 {
+                bytes,
+                manifest,
+                outcome: StampOutcomeV2 { text: text_outcome, cells: cell_outcome },
+            },
+            warnings,
+        ))
     }
 }
 

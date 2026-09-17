@@ -73,6 +73,36 @@ impl HwpxPatcher {
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
     ) -> HwpxResult<Vec<u8>> {
+        Self::patch_section_preserving_with_diagnostics(
+            base_bytes,
+            section_idx,
+            replacement,
+            styles,
+            preservation,
+        )
+        .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Patches a single section preservingly, keeping the decoder's warnings.
+    ///
+    /// Same bytes as [`HwpxPatcher::patch_section_preserving`], which is a
+    /// thin wrapper over this function. The patch itself splices XML rather
+    /// than re-encoding the package, so the only diagnostics on this path
+    /// come from decoding the base to check the replacement against it.
+    ///
+    /// # Errors
+    ///
+    /// [`HwpxError::InvalidStructure`] when the preservation metadata is
+    /// missing, stale or aimed at another section, or when the replacement
+    /// makes a change the preserving path cannot express; decode failures
+    /// surface as themselves.
+    pub fn patch_section_preserving_with_diagnostics(
+        base_bytes: &[u8],
+        section_idx: usize,
+        replacement: &Section,
+        styles: Option<&HwpxStyleStore>,
+        preservation: Option<&SectionPreservation>,
+    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<u8>>> {
         let preservation = preservation.ok_or_else(|| HwpxError::InvalidStructure {
             detail:
                 "missing preservation metadata; re-export the section with the current to-json command"
@@ -99,6 +129,7 @@ impl HwpxPatcher {
         }
 
         let mut decoded = HwpxDecoder::decode(base_bytes)?;
+        let decode_warnings = decoded.warnings.clone();
         let base_section =
             decoded.document.sections().get(section_idx).cloned().ok_or_else(|| {
                 HwpxError::InvalidStructure {
@@ -213,11 +244,14 @@ impl HwpxPatcher {
         }
 
         if patched_section_xml == base_section_xml {
-            return Ok(base_bytes.to_vec());
+            return Ok(crate::diagnostics::WithDecodeWarnings::new(
+                base_bytes.to_vec(),
+                decode_warnings,
+            ));
         }
 
         raw_package.replace_text_entry(&expected_section_path, patched_section_xml);
-        raw_package.write()
+        Ok(crate::diagnostics::WithDecodeWarnings::new(raw_package.write()?, decode_warnings))
     }
 }
 
@@ -1844,6 +1878,94 @@ mod tests {
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;
+
+    /// A decodable package can still hold a document Core rejects.
+    ///
+    /// This is the reachability question behind `ops::validate`'s `ok: false`
+    /// branch (W1b review R2, finding 10). The encoder cannot produce such a
+    /// package — `HwpxEncoder::encode` takes a `Document<Validated>`, so the
+    /// type state makes an invalid document unencodable — but a package from
+    /// another producer can carry a section with no paragraphs, and the
+    /// decoder reports it faithfully rather than inventing a paragraph.
+    ///
+    /// The failed verdict is therefore a real branch, not dead code.
+    ///
+    /// The neighbouring case is the opposite: a `<hp:p>` stripped of its runs
+    /// decodes with a synthesised run, so `EmptyParagraph` is **not**
+    /// reachable this way. Both are asserted, so a decoder change that starts
+    /// synthesising sections (or stops synthesising runs) is caught here.
+    ///
+    /// It lives in this module because `RawPackage` is the crate's only
+    /// package writer and is `pub(crate)`.
+    #[test]
+    fn a_section_without_paragraphs_decodes_into_a_document_core_rejects() {
+        use crate::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+        use crate::HwpxEncoder;
+        use hwpforge_core::image::ImageStore;
+        use hwpforge_core::run::Run;
+        use hwpforge_core::{Document, PageSettings, Paragraph};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+        let para = |text: &str| {
+            Paragraph::with_runs(
+                vec![Run::text(text, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(
+            vec![para("hello"), para("world")],
+            PageSettings::a4(),
+        ));
+        let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(HwpxCharShape::default());
+        styles.push_para_shape(HwpxParaShape::default());
+        let bytes = HwpxEncoder::encode(&document.validate().unwrap(), &styles, &ImageStore::new())
+            .unwrap();
+        let section_entry = section_path(0);
+
+        // ── a paragraph with no runs: the decoder fills one in ──────
+        let mut pkg = RawPackage::read(&bytes).unwrap();
+        let xml = pkg.read_text_entry(&section_entry).unwrap();
+        let second_para = r#"<hp:p id="1" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">"#;
+        let runless = xml.replace(
+            &format!("{second_para}<hp:run charPrIDRef=\"0\"><hp:t>world</hp:t></hp:run></hp:p>"),
+            &format!("{second_para}</hp:p>"),
+        );
+        assert_ne!(runless, xml, "the fixture XML shape changed; update this test");
+        pkg.replace_text_entry(&section_entry, runless);
+        let decoded = crate::HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+        assert!(
+            decoded.document.sections()[0].paragraphs.iter().all(|p| !p.runs.is_empty()),
+            "the decoder synthesises a run, so EmptyParagraph is unreachable this way"
+        );
+        assert!(decoded.document.validate().is_ok());
+
+        // ── a section with no paragraphs: Core rejects it ───────────
+        let mut pkg = RawPackage::read(&bytes).unwrap();
+        let xml = pkg.read_text_entry(&section_entry).unwrap();
+        let first_para = xml.find("><hp:p").map(|i| i + 1).unwrap();
+        let sec_close = xml.rfind("</hs:sec>").unwrap();
+        pkg.replace_text_entry(
+            &section_entry,
+            format!("{}{}", &xml[..first_para], &xml[sec_close..]),
+        );
+
+        let decoded = crate::HwpxDecoder::decode(&pkg.write().unwrap())
+            .expect("an empty section still decodes");
+
+        assert_eq!(decoded.document.sections().len(), 1);
+        assert!(decoded.document.sections()[0].paragraphs.is_empty());
+        assert!(
+            matches!(
+                decoded.document.validate(),
+                Err(hwpforge_core::CoreError::Validation(
+                    hwpforge_core::ValidationError::EmptySection { section_index: 0 }
+                ))
+            ),
+            "`ops::validate` reports ok:false for exactly this document"
+        );
+    }
 
     #[test]
     fn encode_text_inner_converts_inline_text_to_hpx_mixed_content() {

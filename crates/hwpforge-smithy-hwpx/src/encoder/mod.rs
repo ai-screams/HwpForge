@@ -579,6 +579,27 @@ pub fn partition_semantic_loss(
     warnings.into_iter().partition(EncodeWarning::is_semantic_loss)
 }
 
+/// preserve-first 편집기의 인코드 결과를 성공/fail-closed 로 가른다.
+///
+/// 의미 손상 경고가 하나라도 있으면 `Err((의미 손상, 그 외))` — 호출자가
+/// 각자의 오류형(`StamperError::SemanticLoss` ·
+/// `CellEditError::SemanticLoss`)으로 감싼다. 없으면
+/// `Ok((바이트, 비의미 경고))` — **R2 HIGH 1**: 과거엔 이 지점에서 비의미
+/// 경고를 버리고 바이트만 남겼다.
+///
+/// 편집기마다 복제하지 않고 한 곳에 둔다 (분류의 정의는
+/// [`EncodeWarning::is_semantic_loss`] 하나뿐이라는 계약의 연장).
+pub(crate) fn split_successful_encode(
+    outcome: EncodeOutcome,
+) -> Result<(Vec<u8>, Vec<EncodeWarning>), (Vec<EncodeWarning>, Vec<EncodeWarning>)> {
+    let (semantic, others) = partition_semantic_loss(outcome.warnings);
+    if semantic.is_empty() {
+        Ok((outcome.bytes, others))
+    } else {
+        Err((semantic, others))
+    }
+}
+
 impl std::fmt::Display for EncodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -918,6 +939,87 @@ mod tests {
     };
 
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
+
+    /// R2 HIGH 1 — the defect was that a *successful* encode kept only the
+    /// bytes. These four cases pin the split both editors now share.
+    ///
+    /// The encoder cannot be driven to emit a non-semantic warning through
+    /// `set_cells`/`stamp` (the only one, `LayoutCacheDropped`, needs
+    /// `EncodeOptions::emit_layout_cache`, which preserve-first editors must
+    /// never set), so the outcome is constructed directly here. That keeps
+    /// the assertion about the code under test rather than about which
+    /// fixture happens to trip the encoder.
+    mod split_successful_encode {
+        use super::*;
+
+        fn path() -> crate::decoder::ParagraphPath {
+            crate::decoder::ParagraphPath(vec![crate::decoder::PathSeg::Section(0)])
+        }
+
+        fn cache_dropped(reason: &str) -> EncodeWarning {
+            EncodeWarning::LayoutCacheDropped { path: path(), reason: reason.to_string() }
+        }
+
+        fn semantic(reason: &str) -> EncodeWarning {
+            EncodeWarning::NoteHeadSkipped { path: path(), reason: reason.to_string() }
+        }
+
+        #[test]
+        fn a_successful_encode_carries_its_nonsemantic_warnings() {
+            let outcome = EncodeOutcome {
+                bytes: vec![1, 2, 3],
+                warnings: vec![cache_dropped("first"), cache_dropped("second")],
+            };
+
+            let (bytes, warnings) =
+                split_successful_encode(outcome).expect("no semantic loss means success");
+
+            assert_eq!(bytes, vec![1, 2, 3]);
+            assert_eq!(
+                warnings,
+                vec![cache_dropped("first"), cache_dropped("second")],
+                "non-semantic warnings must survive the success path, in encoder order"
+            );
+        }
+
+        #[test]
+        fn a_clean_encode_carries_an_empty_list() {
+            let outcome = EncodeOutcome { bytes: vec![7], warnings: Vec::new() };
+
+            let (bytes, warnings) = split_successful_encode(outcome).expect("success");
+
+            assert_eq!(bytes, vec![7]);
+            assert!(warnings.is_empty());
+        }
+
+        #[test]
+        fn semantic_loss_fails_closed_and_keeps_both_groups() {
+            let outcome = EncodeOutcome {
+                bytes: vec![9],
+                warnings: vec![cache_dropped("kept"), semantic("titleMark"), cache_dropped("too")],
+            };
+
+            let (loss, others) =
+                split_successful_encode(outcome).expect_err("semantic loss must fail closed");
+
+            assert_eq!(loss, vec![semantic("titleMark")]);
+            assert_eq!(
+                others,
+                vec![cache_dropped("kept"), cache_dropped("too")],
+                "the non-semantic remainder rides along with the refusal, in order"
+            );
+        }
+
+        #[test]
+        fn fail_closed_produces_no_bytes_at_all() {
+            let outcome =
+                EncodeOutcome { bytes: vec![1, 2, 3], warnings: vec![semantic("titleMark")] };
+
+            // The `Err` variant has no byte channel, so a caller cannot
+            // reach the output of an encode that lost meaning.
+            assert!(split_successful_encode(outcome).is_err());
+        }
+    }
 
     /// Creates a minimal validated document + style store for testing.
     fn minimal_doc_and_store() -> (Document<Validated>, HwpxStyleStore) {
