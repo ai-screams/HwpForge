@@ -32,9 +32,19 @@
 //! the one thing that looks like I/O and is not: the directories are handed
 //! to the renderer as configuration, and the renderer's own font resolver
 //! opens them. That is smithy-pdf's pre-existing I/O, unchanged by this
-//! layer — no path is opened, created or written here. Callers that must
-//! avoid all disk access leave `font_dirs` empty and accept
-//! [`PdfErrorCode::FontUnresolved`] for any face the document names.
+//! layer — no path is opened, created or written here.
+//!
+//! Empty `font_dirs` is therefore **not on its own** a no-I/O guarantee: the
+//! renderer's own discovery policy decides where else it looks.
+//! [`FontDiscovery::Platform`](hwpforge_smithy_pdf::font::FontDiscovery::Platform)
+//! reads `HOME`/`LOCALAPPDATA` and scans the system font directories, and
+//! [`HancomBundle`](hwpforge_smithy_pdf::font::FontDiscovery::HancomBundle)
+//! scans the bundle's fixed directory. A caller that must touch no disk at all
+//! leaves `font_dirs` empty **and** keeps
+//! [`ToPdfOptions::discovery`] at its
+//! [`ExplicitOnly`](hwpforge_smithy_pdf::font::FontDiscovery::ExplicitOnly)
+//! default, and accepts [`PdfErrorCode::FontUnresolved`] for any face the
+//! document names.
 //!
 //! # Errors and codes
 //!
@@ -47,8 +57,13 @@
 //! the defining crate's own stable method first ([`Hwp5Error::code`],
 //! [`PdfError::code`]) and only what is left falls through to
 //! [`OpsCode::UpstreamUnmapped`]. Enums defined in *this* crate
-//! ([`ConvertOpsError`], [`ConvertOpsWarning`], [`ConvertWarning`]) are
-//! matched without a wildcard so the compiler catches a new variant.
+//! ([`ConvertOpsError`], [`ConvertOpsWarning`], [`ConvertWarning`],
+//! [`ConvertError`]) are matched without a wildcard so the compiler catches a
+//! new variant.
+//!
+//! What the compiler cannot catch — a *new upstream* variant absorbed by a
+//! wildcard — `tests/ops_inventory.rs` does: it parses the upstream enums and
+//! fails when one grows a variant the tables here do not name.
 //!
 //! # Warnings keep their stage
 //!
@@ -67,8 +82,9 @@ use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
 use hwpforge_smithy_hwp5::{Hwp5Error, Hwp5ErrorCode, Hwp5Warning};
 use hwpforge_smithy_hwpx::{DecodeWarning, EncodeWarning, HwpxError};
 use hwpforge_smithy_pdf::{PdfError, PdfErrorCode, PdfWarning};
+use serde::{Deserialize, Serialize};
 
-use crate::ConvertWarning;
+use crate::{ConvertError, ConvertWarning};
 
 pub use hwp5::{convert_hwp5, ConvertHwp5Options, ConvertHwp5Output, Hwp5Meta};
 pub use pdf::{to_pdf, PdfMeta, ToPdfOptions, ToPdfOutput};
@@ -86,19 +102,22 @@ const OTHER: &str = "OTHER";
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum ConvertOpsError {
-    /// HWP5 read or HWP5 → HWPX conversion failure.
+    /// HWP5 read or HWP5 → HWPX conversion failure, with the stage that
+    /// raised it.
     ///
-    /// Classified per variant by [`Hwp5Error::code`] — see
-    /// [`ConvertOpsError::code`] for the table and its one known imprecision.
+    /// The stage is what the classification turns on: only
+    /// [`ConvertError::Decode`] says the *input file* could not be read. See
+    /// [`ConvertOpsError::code`] for the table.
     #[error(transparent)]
-    Hwp5(Hwp5Error),
+    Convert(ConvertError),
 
     /// HWPX **decode**-stage failure: reading the package, parsing its XML or
     /// projecting it to Core.
     ///
-    /// Encoding has no arm because neither operation encodes HWPX directly:
-    /// `convert_hwp5` encodes inside [`crate::hwp5_to_hwpx_bytes_with_options`],
-    /// which reports through [`Hwp5Error`], and `to_pdf` only ever reads.
+    /// This is the decode of an HWPX package handed to `to_pdf`, never of one
+    /// this crate generated: `convert_hwp5` encodes inside
+    /// [`crate::hwp5_to_hwpx_bytes_with_diagnostics`], whose own encode and
+    /// layout-patch failures arrive as [`Convert`](Self::Convert).
     #[error(transparent)]
     Decode(HwpxError),
 
@@ -142,24 +161,30 @@ impl ConvertOpsError {
     ///
     /// # The HWP5 table
     ///
-    /// [`Hwp5Error`] is `#[non_exhaustive]`, so classification goes through
-    /// its own [`Hwp5Error::code`] and every known code is listed explicitly;
-    /// a future variant lands on [`OpsCode::UpstreamUnmapped`] instead of
-    /// being silently folded into a neighbour.
+    /// The conversion is staged, and the stage decides the code: only the
+    /// decode stage can say the input file was unreadable.
     ///
-    /// | [`Hwp5ErrorCode`] | [`OpsCode`] | why |
+    /// | [`ConvertError`] stage | [`OpsCode`] | why |
     /// | -- | -- | -- |
-    /// | `NotHwp5`, `Cfb`, `MissingStream`, `RecordParse`, `UnsupportedVersion`, `PasswordProtected`, `Encoding`, `Io`, `Foundation` | `Hwp5DecodeFailed` | the container, its records or a primitive built from them could not be read |
-    /// | `Core` | `Hwp5ConvertFailed` | produced at exactly one place — the `validate()` of the decoded document in [`crate::hwp5_to_hwpx_bytes_with_options`] — so the bytes were read and the conversion is what failed |
+    /// | `Decode` | per [`Hwp5ErrorCode`], see below | the container, its records or a primitive built from them could not be read |
+    /// | `Validate` | `Hwp5ConvertFailed` | the bytes were read; the document they describe failed Core validation |
+    /// | `Encode` | `Hwp5ConvertFailed` | the HWPX encoder refused the decoded document |
+    /// | `LayoutPatch` | `Hwp5ConvertFailed` | the layout-hint replay failed on a package *this crate generated* |
     ///
-    /// **Known imprecision.** [`crate::hwp5_to_hwpx_bytes_with_options`]
-    /// re-labels an HWPX *encode* failure as [`Hwp5Error::Cfb`], and the
-    /// layout-hint patch pass reports through `Cfb` and `MissingStream` too.
-    /// Those failures therefore report `HWP5_DECODE_FAILED` although they
-    /// happen after decoding. The variant is the only stable signal this
-    /// layer has, and inventing a distinction from the error's message text
-    /// would be guesswork; separating them properly needs an error variant
-    /// that smithy-hwp5 does not have today.
+    /// Within the decode stage, [`Hwp5Error`] is `#[non_exhaustive]`, so
+    /// classification goes through its own [`Hwp5Error::code`] and every known
+    /// code is listed explicitly; a future variant lands on
+    /// [`OpsCode::UpstreamUnmapped`] instead of being silently folded into a
+    /// neighbour.
+    ///
+    /// | [`Hwp5ErrorCode`] | [`OpsCode`] |
+    /// | -- | -- |
+    /// | `NotHwp5`, `Cfb`, `MissingStream`, `RecordParse`, `UnsupportedVersion`, `PasswordProtected`, `Encoding`, `Io`, `Foundation` | `Hwp5DecodeFailed` |
+    /// | `Core` | `Hwp5ConvertFailed` — a Core error propagated out of the decoder is a conversion failure, not an unreadable file |
+    ///
+    /// This is the same split the CLI publishes: `convert-hwp5` reports
+    /// `HWP5_DECODE_FAILED` only for the inspect pass and
+    /// `HWP5_CONVERT_FAILED` for everything the conversion itself raises.
     ///
     /// # The rest
     ///
@@ -184,7 +209,7 @@ impl ConvertOpsError {
     #[must_use]
     pub fn code(&self) -> OpsCode {
         match self {
-            Self::Hwp5(e) => hwp5_code(e),
+            Self::Convert(e) => convert_code(e),
             Self::Decode(_) => OpsCode::DecodeFailed,
             Self::Core(_) => OpsCode::ValidationFailed,
             Self::Pdf(_) => OpsCode::PdfRenderFailed,
@@ -201,6 +226,10 @@ impl ConvertOpsError {
     /// corpus tallies depend on the distinction, so the finer code stays
     /// reachable instead of being collapsed here.
     ///
+    /// This is the coarse accessor: it is
+    /// [`cause_info().code`](Self::cause_info), and a frontend that also needs
+    /// the `kind` and `location` the CLI prints calls `cause_info` instead.
+    ///
     /// # Examples
     ///
     /// ```
@@ -212,9 +241,34 @@ impl ConvertOpsError {
     /// ```
     #[must_use]
     pub fn cause(&self) -> Option<PdfErrorCode> {
+        self.cause_info().map(|cause| cause.code)
+    }
+
+    /// The renderer's full machine-readable cause, for a PDF render failure
+    /// only: the stage, the renderer's code, and the variant-specific `kind`
+    /// and `location` that [`cause`](Self::cause) alone cannot carry.
+    ///
+    /// This is exactly what the CLI's `to-pdf --json` prints as its `cause`
+    /// block, so a frontend reproduces that block from here instead of
+    /// re-matching the wrapped [`PdfError`]. `kind` distinguishes failures
+    /// that share a code — a cell that mixes non-text content versus any
+    /// other admission refusal — and `location` is the `s0/p1/t0r0c0` path
+    /// corpus triage sorts by.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_convert::ops::{to_pdf, ToPdfOptions};
+    ///
+    /// let error = to_pdf(b"neither container", &ToPdfOptions::default())
+    ///     .expect_err("unrecognised bytes");
+    /// assert!(error.cause_info().is_none(), "only a render failure has a cause");
+    /// ```
+    #[must_use]
+    pub fn cause_info(&self) -> Option<PdfCause> {
         match self {
-            Self::Pdf(e) => Some(e.code()),
-            Self::Hwp5(_)
+            Self::Pdf(e) => Some(pdf_cause(e)),
+            Self::Convert(_)
             | Self::Decode(_)
             | Self::Core(_)
             | Self::UnrecognizedFormat
@@ -262,8 +316,24 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
     })
 }
 
-/// Classifies an HWP5 failure. See [`ConvertOpsError::code`] for the table
-/// and the `Cfb` imprecision it documents.
+/// Classifies a staged conversion failure. See [`ConvertOpsError::code`] for
+/// the table.
+///
+/// [`ConvertError`] is this crate's own enum, so the match has no wildcard: a
+/// new stage is a compile error here rather than a silent `HWP5_DECODE_FAILED`.
+fn convert_code(error: &ConvertError) -> OpsCode {
+    match error {
+        // The decode stage keeps the per-variant table: a Core error that
+        // propagates out of the decoder is a conversion failure, and flattening
+        // the whole stage to one code would lose that.
+        ConvertError::Decode(e) => hwp5_code(e),
+        ConvertError::Validate(_) | ConvertError::Encode(_) | ConvertError::LayoutPatch(_) => {
+            OpsCode::Hwp5ConvertFailed
+        }
+    }
+}
+
+/// Classifies an HWP5 decode-stage failure. See [`ConvertOpsError::code`].
 fn hwp5_code(error: &Hwp5Error) -> OpsCode {
     match error.code() {
         Hwp5ErrorCode::NotHwp5
@@ -278,6 +348,156 @@ fn hwp5_code(error: &Hwp5Error) -> OpsCode {
         Hwp5ErrorCode::Core => OpsCode::Hwp5ConvertFailed,
         _ => OpsCode::UpstreamUnmapped,
     }
+}
+
+// ── the PDF cause ───────────────────────────────────────────────
+
+/// The stage a [`PdfCause`] reports. Only the renderer produces one.
+const RENDER_STAGE: &str = "render";
+
+/// Every [`PdfErrorCode`] this crate knows.
+///
+/// [`PdfErrorCode`] is `#[non_exhaustive]` and exposes no `ALL`, so the list
+/// is written out here to give [`PdfCause`] a wire round-trip. It is not a
+/// hand-maintained guess: `tests/ops_inventory.rs` parses smithy-pdf and fails
+/// when the enum grows a variant this array does not name.
+const KNOWN_PDF_ERROR_CODES: &[PdfErrorCode] = &[
+    PdfErrorCode::NoRenderableCache,
+    PdfErrorCode::MissingLayoutCache,
+    PdfErrorCode::UnsupportedContent,
+    PdfErrorCode::InternalInvariant,
+    PdfErrorCode::GlyphsUnavailable,
+    PdfErrorCode::AmbiguousHeaderFooter,
+    PdfErrorCode::FontUnresolved,
+    PdfErrorCode::FontStyleUnavailable,
+    PdfErrorCode::ImageDataMissing,
+    PdfErrorCode::UnsupportedImageFormat,
+    PdfErrorCode::ImageDecodeFailed,
+    PdfErrorCode::InvalidImageGeometry,
+    PdfErrorCode::ImageAssetConflict,
+    PdfErrorCode::FontAxisMismatch,
+    PdfErrorCode::FontEmbedRestricted,
+    PdfErrorCode::FontFaceAmbiguous,
+    PdfErrorCode::InvalidCache,
+    PdfErrorCode::FontIo,
+    PdfErrorCode::StyleUnavailable,
+    PdfErrorCode::Backend,
+];
+
+/// The renderer's machine-readable cause behind a `PDF_RENDER_FAILED`.
+///
+/// `PDF_RENDER_FAILED` is deliberately one top-level code, but it covers a
+/// missing layout cache, an unresolvable face and a licence-restricted font
+/// alike. This is the detail beneath it, in the shape the CLI's
+/// `to-pdf --json` already publishes as its `cause` block: the same field
+/// names, the same `kind`/`location` per variant, the same omission of an
+/// absent field.
+///
+/// `#[non_exhaustive]`: read the fields, do not construct it — a future
+/// renderer detail is a new field here.
+///
+/// # Serde
+///
+/// `code` travels as its stable [`PdfErrorCode::as_str`] spelling, never as a
+/// Rust variant name. Deserialising a code this build does not know is an
+/// error rather than a silent default, because the whole value of the cause is
+/// that it is exact. The same goes for `stage`: `&'static str` cannot come out
+/// of a deserialiser at all, so [`Deserialize`] maps the one legal spelling
+/// back to its literal and refuses anything else.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PdfCause {
+    /// The pipeline stage — always `"render"` today.
+    pub stage: &'static str,
+    /// The renderer's own classification.
+    #[serde(serialize_with = "serialize_pdf_error_code")]
+    pub code: PdfErrorCode,
+    /// Sub-kind when the failure carries one, e.g. what an admission refusal
+    /// refused or which band was ambiguous.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Document-coordinate path when the failure carries one, e.g. `"s0/p7"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+/// Writes a [`PdfErrorCode`] as its stable SCREAMING_SNAKE spelling.
+fn serialize_pdf_error_code<S: serde::Serializer>(
+    code: &PdfErrorCode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(code.as_str())
+}
+
+impl<'de> Deserialize<'de> for PdfCause {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        /// The owned mirror of [`PdfCause`] — the shape actually on the wire.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            stage: String,
+            code: String,
+            #[serde(default)]
+            kind: Option<String>,
+            #[serde(default)]
+            location: Option<String>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.stage != RENDER_STAGE {
+            return Err(serde::de::Error::custom(format!(
+                "unknown cause stage {:?} (only {RENDER_STAGE:?} exists)",
+                wire.stage
+            )));
+        }
+        let code = KNOWN_PDF_ERROR_CODES
+            .iter()
+            .copied()
+            .find(|known| known.as_str() == wire.code)
+            .ok_or_else(|| {
+                serde::de::Error::custom(format!("unknown PDF error code {:?}", wire.code))
+            })?;
+        Ok(Self { stage: RENDER_STAGE, code, kind: wire.kind, location: wire.location })
+    }
+}
+
+/// Reproduces the CLI's `pdf_error_cause` (`commands/to_pdf.rs`).
+///
+/// The code comes from [`PdfError::code`], which is smithy-pdf's own
+/// wildcard-free match. Only `kind` and `location` are read off the variant,
+/// and [`PdfError`] is `#[non_exhaustive]` from here, so that match needs a
+/// fallback arm. A new variant therefore keeps its correct code and reports no
+/// kind or location instead of a guessed one — and `tests/ops_inventory.rs`
+/// fails before a release can ship that gap.
+fn pdf_cause(error: &PdfError) -> PdfCause {
+    let (kind, location): (Option<String>, Option<String>) = match error {
+        PdfError::NoRenderableCache { section } => (None, Some(format!("s{section}"))),
+        PdfError::MissingLayoutCache { first, .. } => (None, Some(first.clone())),
+        PdfError::UnsupportedContent { kind, location } => {
+            (Some((*kind).to_string()), Some(location.clone()))
+        }
+        PdfError::InternalInvariant { .. } => (None, None),
+        PdfError::GlyphsUnavailable { location, .. } => (None, Some(location.clone())),
+        PdfError::AmbiguousHeaderFooter { kind, .. } => (Some((*kind).to_string()), None),
+        PdfError::FontUnresolved { .. } => (None, None),
+        PdfError::FontStyleUnavailable { location, .. } => (None, Some(location.clone())),
+        PdfError::ImageDataMissing { location, .. } => (None, Some(location.clone())),
+        PdfError::UnsupportedImageFormat { format, location, .. } => {
+            (Some((*format).to_string()), Some(location.clone()))
+        }
+        PdfError::ImageDecodeFailed { location, .. } => (None, Some(location.clone())),
+        PdfError::InvalidImageGeometry { location, .. } => (None, Some(location.clone())),
+        PdfError::ImageAssetConflict { location, .. } => (None, Some(location.clone())),
+        PdfError::FontAxisMismatch { location, .. } => (None, Some(location.clone())),
+        PdfError::FontEmbedRestricted { .. } => (None, None),
+        PdfError::FontFaceAmbiguous { .. } => (None, None),
+        PdfError::InvalidCache { .. } => (None, None),
+        PdfError::FontIo(_) => (None, None),
+        PdfError::StyleUnavailable { location, .. } => (None, Some(location.clone())),
+        PdfError::Backend(_) => (None, None),
+        _ => (None, None),
+    };
+    PdfCause { stage: RENDER_STAGE, code: error.code(), kind, location }
 }
 
 // ── warnings ────────────────────────────────────────────────────

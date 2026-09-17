@@ -4,7 +4,7 @@ use hwpforge_foundation::diagnostics::WarningInfo;
 use serde::{Deserialize, Serialize};
 
 use super::{ConvertOpsError, ConvertOpsWarning};
-use crate::{hwp5_to_hwpx_bytes_with_options, ConvertOptions};
+use crate::{hwp5_to_hwpx_bytes_with_diagnostics, ConvertOptions};
 
 /// Options for [`convert_hwp5`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -67,6 +67,10 @@ impl ConvertHwp5Output {
 /// `Serialize` and `Deserialize`, plus `JsonSchema` under the `schemars`
 /// feature — the same contract the umbrella's `*Meta` wrappers carry, so a
 /// frontend can describe every operation's payload with one flag.
+///
+/// `#[non_exhaustive]`, like the output it comes from: a later field is a
+/// wire addition, not a source break for whoever destructures it.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Hwp5Meta {
@@ -77,7 +81,7 @@ pub struct Hwp5Meta {
 /// Converts HWP5 bytes to HWPX bytes.
 ///
 /// This is the operation-layer face of
-/// [`hwp5_to_hwpx_bytes_with_options`](crate::hwp5_to_hwpx_bytes_with_options):
+/// [`hwp5_to_hwpx_bytes_with_diagnostics`](crate::hwp5_to_hwpx_bytes_with_diagnostics):
 /// the same pipeline (decode to Core → map the style store → validate →
 /// encode HWPX → patch layout hints), with the shared error and warning
 /// model around it. Nothing is read from or written to disk.
@@ -88,10 +92,11 @@ pub struct Hwp5Meta {
 ///
 /// # Errors
 ///
-/// [`ConvertOpsError::Hwp5`], classified as `HWP5_DECODE_FAILED` when the
-/// container or its records could not be read and `HWP5_CONVERT_FAILED` when
-/// the decoded document failed validation. See [`ConvertOpsError::code`] for
-/// the full table.
+/// [`ConvertOpsError::Convert`], which names the stage that failed:
+/// `HWP5_DECODE_FAILED` when the container or its records could not be read,
+/// and `HWP5_CONVERT_FAILED` for every stage after that — validation, HWPX
+/// encoding and the layout-hint replay. See [`ConvertOpsError::code`] for the
+/// full table.
 ///
 /// # Examples
 ///
@@ -110,7 +115,7 @@ pub fn convert_hwp5(
 ) -> Result<ConvertHwp5Output, ConvertOpsError> {
     let options = ConvertOptions::default().with_carry_layout_cache(opts.carry_layout_cache);
     let (bytes, warnings) =
-        hwp5_to_hwpx_bytes_with_options(hwp5, options).map_err(ConvertOpsError::Hwp5)?;
+        hwp5_to_hwpx_bytes_with_diagnostics(hwp5, options).map_err(ConvertOpsError::Convert)?;
     Ok(ConvertHwp5Output {
         bytes,
         warnings: warnings.into_iter().map(ConvertOpsWarning::Convert).collect(),

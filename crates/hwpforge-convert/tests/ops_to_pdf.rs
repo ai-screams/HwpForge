@@ -14,10 +14,17 @@
 //! `to_pdf` still sniffs, decodes, validates and renders real HWPX bytes —
 //! and only the font names differ, so the whole suite runs on any checkout.
 //!
-//! One test is gated on the Hancom bundle and skips without it: the HWP5 leg
-//! rendered all the way to a PDF. Its CI-runnable counterpart,
-//! `hwp5_input_reaches_the_renderer_through_the_convert_leg`, proves the same
-//! plumbing by showing the pipeline gets as far as the renderer.
+//! The HWP5 leg cannot be retyped that way — its face names come out of the
+//! binary, not out of a store this test can edit — so it is covered from the
+//! other side: `with_declared_face` writes the committed synthetic font into a
+//! temporary directory with its `name` table rewritten to declare the face the
+//! fixture asks for. Exact-face resolution is untouched; the directory simply
+//! contains a file that declares that name.
+//! `hwp5_input_renders_end_to_end_on_any_checkout` is therefore CI-enforced,
+//! and `an_undeclared_face_is_still_refused_rather_than_substituted` is its
+//! guard. `hwp5_input_renders_end_to_end_when_hancom_fonts_present` keeps the
+//! same path on the real Hancom faces and prints a `SKIPPED` line where they
+//! are absent.
 
 use std::path::{Path, PathBuf};
 
@@ -250,11 +257,144 @@ fn hwp5_input_reaches_the_renderer_through_the_convert_leg() {
     );
 }
 
+/// The face every Hancom-authored fixture in `pdf-rules/` asks for.
+///
+/// Measured, not assumed: converting `rules-bold.hwp` emits exactly one
+/// `<hh:font face="…">` and it is this one. The renderer resolves faces
+/// through the font file's own `name` table, so this is the name a font must
+/// *declare* — not what its file is called.
+const HWP5_FIXTURE_FACE: &str = "함초롬바탕";
+
+/// A copy of `font` whose `name` table declares `face`.
+///
+/// The exact-face contract stays intact: this does not teach the resolver to
+/// accept a different typeface, it hands it a file that genuinely declares the
+/// name the document asks for — the deterministic equivalent of installing
+/// that face. Only the `name` table is replaced (appended at the end, with the
+/// table directory repointed); the glyphs, metrics and the `OS/2` table the
+/// embedding-licence gate reads are the committed synthetic face's own.
+fn with_declared_face(font: &[u8], face: &str) -> Vec<u8> {
+    fn utf16be(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_be_bytes).collect()
+    }
+
+    // A minimal format-0 `name` table: family, subfamily, full name, all as
+    // Windows/UCS-2/en-US records, which is what `ttf_parser` decodes.
+    let entries: [(u16, Vec<u8>); 3] =
+        [(1, utf16be(face)), (2, utf16be("Regular")), (4, utf16be(face))];
+    let count = u16::try_from(entries.len()).expect("three records");
+    let mut records = Vec::new();
+    let mut storage = Vec::new();
+    for (name_id, text) in &entries {
+        records.extend_from_slice(&3u16.to_be_bytes()); // platform: Windows
+        records.extend_from_slice(&1u16.to_be_bytes()); // encoding: UCS-2
+        records.extend_from_slice(&0x0409u16.to_be_bytes()); // language: en-US
+        records.extend_from_slice(&name_id.to_be_bytes());
+        records.extend_from_slice(&u16::try_from(text.len()).expect("short name").to_be_bytes());
+        records
+            .extend_from_slice(&u16::try_from(storage.len()).expect("short table").to_be_bytes());
+        storage.extend_from_slice(text);
+    }
+    let mut table = Vec::new();
+    table.extend_from_slice(&0u16.to_be_bytes()); // format 0
+    table.extend_from_slice(&count.to_be_bytes());
+    table.extend_from_slice(&(6 + 12 * count).to_be_bytes()); // string storage offset
+    table.extend_from_slice(&records);
+    table.extend_from_slice(&storage);
+
+    let num_tables = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let mut out = font.to_vec();
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    let offset = u32::try_from(out.len()).expect("font is small");
+    let length = u32::try_from(table.len()).expect("table is small");
+    out.extend_from_slice(&table);
+
+    let mut repointed = false;
+    for index in 0..num_tables {
+        let record = 12 + 16 * index;
+        if &font[record..record + 4] == b"name" {
+            out[record + 8..record + 12].copy_from_slice(&offset.to_be_bytes());
+            out[record + 12..record + 16].copy_from_slice(&length.to_be_bytes());
+            repointed = true;
+        }
+    }
+    assert!(repointed, "the committed synthetic face has a name table");
+    out
+}
+
+/// A font directory holding the synthetic face under the fixture's face name.
+fn fixture_face_font_dir() -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("hwp5-fixture-face");
+    std::fs::create_dir_all(&dir).expect("create the font directory");
+    let source = std::fs::read(test_font_dir().join("HwpForgeTest-Regular.ttf"))
+        .expect("the committed synthetic face");
+    std::fs::write(dir.join("fixture-face.ttf"), with_declared_face(&source, HWP5_FIXTURE_FACE))
+        .expect("write the renamed face");
+    dir
+}
+
 #[test]
-fn hwp5_input_renders_end_to_end_with_the_hancom_bundle() {
-    // fixture-optional: needs the Hancom font bundle, which CI does not have.
+fn hwp5_input_renders_end_to_end_on_any_checkout() {
+    // The CI-enforced success path: HWP5 bytes in, a real PDF out, with no
+    // machine-specific font installed. `hwp5_input_reaches_the_renderer_…`
+    // only proves the pipeline *reaches* the renderer; this one proves the
+    // renderer finishes.
+    let output = to_pdf(
+        &fixture("rules-bold.hwp"),
+        &ToPdfOptions::default().with_font_dirs(vec![fixture_face_font_dir()]).with_degraded(true),
+    )
+    .expect("render");
+
+    assert!(output.bytes.starts_with(b"%PDF-"), "PDF header");
+    assert!(output.pages >= 1, "pages = {}", output.pages);
+    assert!(output.bytes.len() > 1_000, "real content ({} bytes)", output.bytes.len());
+
+    // The HWP5 leg really ran: the input is an OLE2 container, and the only
+    // route from OLE2 bytes to a PDF is the convert leg. (This fixture
+    // converts cleanly, so there is no "convert"-stage warning to point at —
+    // a silent leg, not an absent one.)
+    assert!(
+        fixture("rules-bold.hwp").starts_with(&[0xD0, 0xCF, 0x11, 0xE0]),
+        "the fixture is HWP5, not an HWPX package with a .hwp name"
+    );
+    for warning in &output.warnings {
+        assert!(matches!(warning.stage(), "convert" | "decode" | "render"), "{}", warning.stage());
+    }
+    // The degradation is named, never silent.
+    assert!(
+        codes(&output.warnings).iter().all(|code| code != "OTHER"),
+        "{:?}",
+        codes(&output.warnings)
+    );
+}
+
+#[test]
+fn an_undeclared_face_is_still_refused_rather_than_substituted() {
+    // The guard on the test above: the synthetic face resolves *because* it
+    // declares the fixture's name, not because the resolver gave up and picked
+    // something. The same directory without the rename resolves nothing.
+    let error = to_pdf(
+        &fixture("rules-bold.hwp"),
+        &ToPdfOptions::default().with_font_dirs(vec![test_font_dir()]).with_degraded(true),
+    )
+    .expect_err("no file declares the fixture's face");
+
+    assert_eq!(error.code(), OpsCode::PdfRenderFailed);
+    assert_eq!(error.cause(), Some(PdfErrorCode::FontUnresolved));
+}
+
+#[test]
+fn hwp5_input_renders_end_to_end_when_hancom_fonts_present() {
+    // fixture-optional: the real Hancom faces are the machine-specific half of
+    // the pair, so this test is *skipped*, not passed, without them —
+    // `hwp5_input_renders_end_to_end_on_any_checkout` is what CI enforces.
     if !Path::new(HANCOM_TTF_DIR).exists() {
-        eprintln!("skip: Hancom 폰트 번들 없음");
+        eprintln!(
+            "SKIPPED hwp5_input_renders_end_to_end_when_hancom_fonts_present: \
+             Hancom 폰트 번들 없음 ({HANCOM_TTF_DIR})"
+        );
         return;
     }
 
@@ -271,4 +411,69 @@ fn hwp5_input_renders_end_to_end_with_the_hancom_bundle() {
     for warning in &output.warnings {
         assert!(matches!(warning.stage(), "convert" | "decode" | "render"), "{}", warning.stage());
     }
+}
+
+// ── the committed fixture pair ──────────────────────────────────
+
+/// The document half of the pair the Python bindings render.
+const PY_FIXTURE: &str = "crates/hwpforge-bindings-py/tests/fixtures/synthetic_face.hwpx";
+
+/// The font half: one committed synthetic face, copied byte for byte from
+/// smithy-pdf's own test fonts.
+const PY_FONT_DIR: &str = "crates/hwpforge-bindings-py/tests/fixtures/fonts";
+
+/// The one face in that directory, and the only face the document names.
+const PY_FONT_FILE: &str = "HwpForgeTest-Regular.ttf";
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
+}
+
+#[test]
+fn the_committed_fixture_pair_renders_with_no_installed_font() {
+    // The pair exists because a pytest suite cannot build fonts or rewrite
+    // name tables at test time: both halves are on disk, and this is what
+    // proves they still fit each other. The options are the ones the Python
+    // lane passes — explicit discovery, fatal mode, no cache rejection — so a
+    // regression here is a regression there.
+    let bytes = std::fs::read(workspace_root().join(PY_FIXTURE)).expect("the committed document");
+    let options = ToPdfOptions::default()
+        .with_font_dirs(vec![workspace_root().join(PY_FONT_DIR)])
+        .with_discovery(FontDiscovery::ExplicitOnly)
+        .with_degraded(false)
+        .with_partial_cache_reject(false);
+
+    let output = to_pdf(&bytes, &options).expect("render");
+
+    assert!(output.bytes.starts_with(b"%PDF-"), "PDF header");
+    assert_eq!(output.pages, 1, "the whole document fits one page");
+    assert!(
+        output.warnings.is_empty(),
+        "the pair renders clean — no degradation, no skip: {:?}",
+        codes(&output.warnings)
+    );
+
+    // The report the Python layer hands back is exactly these two keys.
+    let value = serde_json::to_value(output.meta()).expect("serialise meta");
+    let mut keys: Vec<&String> = value.as_object().expect("an object").keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec!["pages", "warnings"], "the FFI key set is a contract");
+}
+
+#[test]
+fn the_committed_font_is_the_synthetic_face_unmodified() {
+    // The copy is the whole point: if smithy-pdf regenerates its test fonts,
+    // the pair must be refreshed rather than silently drifting.
+    let committed = std::fs::read(workspace_root().join(PY_FONT_DIR).join(PY_FONT_FILE))
+        .expect("the committed font");
+    let source = std::fs::read(test_font_dir().join(PY_FONT_FILE)).expect("the source font");
+    assert_eq!(committed, source, "re-copy {PY_FONT_FILE} from smithy-pdf's test fonts");
+
+    // One face is all the directory holds — the document names exactly one.
+    let entries: Vec<String> = std::fs::read_dir(workspace_root().join(PY_FONT_DIR))
+        .expect("read the font directory")
+        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".ttf"))
+        .collect();
+    assert_eq!(entries, vec![PY_FONT_FILE.to_string()]);
 }

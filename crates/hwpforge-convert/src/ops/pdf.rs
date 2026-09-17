@@ -11,7 +11,7 @@ use hwpforge_smithy_pdf::{
 use serde::{Deserialize, Serialize};
 
 use super::{ConvertOpsError, ConvertOpsWarning};
-use crate::{hwp5_to_hwpx_bytes_with_options, ConvertOptions};
+use crate::{hwp5_to_hwpx_bytes_with_diagnostics, ConvertOptions};
 
 /// OLE2/CFB magic — the HWP5 container.
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -46,8 +46,12 @@ pub struct ToPdfOptions {
     ///
     /// These are **configuration handed to the renderer**, not I/O this layer
     /// performs: smithy-pdf's font resolver opens them while building its
-    /// face table. `to_pdf` itself opens no path. A document whose fonts are
-    /// found in none of these directories fails with
+    /// face table. `to_pdf` itself opens no path.
+    ///
+    /// Leaving this empty is **half** of a no-disk-access guarantee: the
+    /// resolver also scans whatever [`discovery`](Self::discovery) allows, and
+    /// only the default [`FontDiscovery::ExplicitOnly`] allows nothing. A
+    /// document whose fonts are found in none of these directories fails with
     /// [`PdfErrorCode::FontUnresolved`](hwpforge_smithy_pdf::PdfErrorCode::FontUnresolved) —
     /// the renderer never substitutes a different typeface, because a
     /// silently swapped font changes the layout it is replaying.
@@ -56,6 +60,12 @@ pub struct ToPdfOptions {
     /// Where the renderer may look **in addition to** `font_dirs`. Default
     /// [`FontDiscovery::ExplicitOnly`], which keeps rendering deterministic
     /// across machines.
+    ///
+    /// This is also the setting that decides whether the render touches the
+    /// disk at all beyond `font_dirs`: [`FontDiscovery::Platform`] reads
+    /// `HOME` (or `LOCALAPPDATA`) and scans the system font directories, and
+    /// [`FontDiscovery::HancomBundle`] scans the bundle's fixed directory.
+    /// Only `ExplicitOnly` scans nothing of its own.
     ///
     /// This is the typed enum, not a string. Parsing `"explicit" | "hancom" |
     /// "platform"` belongs to whichever frontend accepts text, which is why
@@ -163,7 +173,9 @@ impl ToPdfOutput {
 /// # Serde
 ///
 /// `Serialize` and `Deserialize`, plus `JsonSchema` under the `schemars`
-/// feature — see [`Hwp5Meta`](super::Hwp5Meta).
+/// feature — see [`Hwp5Meta`](super::Hwp5Meta). `#[non_exhaustive]` for the
+/// same reason it is.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PdfMeta {
@@ -192,11 +204,13 @@ pub struct PdfMeta {
 /// # Errors
 ///
 /// - [`ConvertOpsError::UnrecognizedFormat`] — the bytes are neither container.
-/// - [`ConvertOpsError::Hwp5`] — the HWP5 leg failed.
+/// - [`ConvertOpsError::Convert`] — the HWP5 leg failed, at the stage the
+///   error names.
 /// - [`ConvertOpsError::Decode`] — the HWPX package could not be read.
 /// - [`ConvertOpsError::Core`] — the decoded document failed validation.
 /// - [`ConvertOpsError::Pdf`] — the render failed;
-///   [`ConvertOpsError::cause`] carries the renderer's own code.
+///   [`ConvertOpsError::cause_info`] carries the renderer's own code, kind and
+///   location.
 ///
 /// # Examples
 ///
@@ -215,11 +229,11 @@ pub fn to_pdf(data: &[u8], opts: &ToPdfOptions) -> Result<ToPdfOutput, ConvertOp
     let converted;
     let hwpx_bytes: &[u8] = match format {
         SourceFormat::Hwp5 => {
-            let (bytes, convert_warnings) = hwp5_to_hwpx_bytes_with_options(
+            let (bytes, convert_warnings) = hwp5_to_hwpx_bytes_with_diagnostics(
                 data,
                 ConvertOptions::default().with_carry_layout_cache(true),
             )
-            .map_err(ConvertOpsError::Hwp5)?;
+            .map_err(ConvertOpsError::Convert)?;
             warnings.extend(convert_warnings.into_iter().map(ConvertOpsWarning::Convert));
             converted = bytes;
             &converted

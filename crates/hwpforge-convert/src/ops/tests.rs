@@ -13,10 +13,12 @@
 //! `#[non_exhaustive]` and none exposes an `ALL` const, so this crate cannot
 //! enumerate the variants that exist — the case lists are hand-written, and a
 //! twenty-third [`PdfWarning`] would be absorbed by the `_` arm as `OTHER`
-//! with every test still green. Closing that gap needs the syn-based
-//! inventory the umbrella runs (`crates/hwpforge/tests/support/error_inventory.rs`
-//! plus `tests/data/ops_error_inventory.json`) extended to cover these
-//! tables.
+//! with every test still green.
+//!
+//! That half is `tests/ops_inventory.rs`, which parses the upstream enums
+//! with `syn` and fails when one grows a variant the tables here do not name.
+//! The two are complements: the inventory proves the tables are *complete*,
+//! these tests prove they are *right*.
 
 use std::path::PathBuf;
 
@@ -25,6 +27,7 @@ use hwpforge_smithy_hwpx::{ParagraphPath, PathSeg};
 use hwpforge_smithy_pdf::font::FaceStyle;
 
 use super::*;
+use crate::LayoutPatchError;
 
 fn path() -> ParagraphPath {
     ParagraphPath(vec![PathSeg::Section(0)])
@@ -70,16 +73,84 @@ fn every_hwp5_error_code_is_classified() {
 
     let mut seen: Vec<Hwp5ErrorCode> = Vec::new();
     for (error, expected) in cases {
-        let wrapped = ConvertOpsError::Hwp5(error);
+        let wrapped = ConvertOpsError::Convert(ConvertError::Decode(error));
         assert_eq!(wrapped.code(), expected, "{wrapped}");
         assert!(!wrapped.to_string().is_empty());
         assert!(wrapped.cause().is_none(), "only a render failure has a cause");
-        let ConvertOpsError::Hwp5(inner) = &wrapped else { unreachable!() };
+        assert!(wrapped.cause_info().is_none(), "…and that includes the detailed cause");
+        let ConvertOpsError::Convert(ConvertError::Decode(inner)) = &wrapped else {
+            unreachable!()
+        };
         seen.push(inner.code());
     }
     seen.sort_by_key(|code| *code as u16);
     seen.dedup();
     assert_eq!(seen.len(), 10, "one case per known Hwp5ErrorCode");
+}
+
+#[test]
+fn every_post_decode_stage_reports_convert_failed() {
+    // The finding this fixes: an HWPX encode failure and a layout-patch
+    // failure used to arrive as `Hwp5Error::Cfb`/`MissingStream` and so
+    // claimed the *source file* could not be read.
+    //
+    // Why by construction and not from bytes: none of the three post-decode
+    // stages is reachable from an input this suite can supply. `Validate`
+    // needs an HWP5 file that decodes cleanly and then fails Core validation;
+    // `Encode` needs the HWPX encoder to refuse a document the decoder just
+    // produced; and `LayoutPatch` only ever inspects a package *this crate
+    // generated moments earlier*, so reaching it means the encoder and the
+    // patcher disagree. The decode stage is the one with a byte-level test —
+    // `tests/ops_convert_hwp5.rs` drives it with garbage, a ZIP and a
+    // truncated container.
+    let cases: Vec<(ConvertError, OpsCode, &str)> = vec![
+        (
+            ConvertError::Validate(CoreError::InvalidStructure {
+                context: "document".into(),
+                reason: "no sections".into(),
+            }),
+            OpsCode::Hwp5ConvertFailed,
+            "validate",
+        ),
+        (
+            ConvertError::Encode(HwpxError::XmlSerialize { detail: "section0.xml".into() }),
+            OpsCode::Hwp5ConvertFailed,
+            "encode",
+        ),
+        (
+            ConvertError::LayoutPatch(LayoutPatchError::Package {
+                detail: "finish hwpx patch package: io".into(),
+            }),
+            OpsCode::Hwp5ConvertFailed,
+            "layout-patch",
+        ),
+        (
+            ConvertError::LayoutPatch(LayoutPatchError::MissingEntry {
+                name: "Contents/section3.xml".into(),
+            }),
+            OpsCode::Hwp5ConvertFailed,
+            "layout-patch",
+        ),
+    ];
+
+    for (error, expected, stage) in cases {
+        assert_eq!(error.stage(), stage);
+        let wrapped = ConvertOpsError::Convert(error);
+        assert_eq!(wrapped.code(), expected, "{wrapped}");
+        assert_eq!(wrapped.code().as_str(), "HWP5_CONVERT_FAILED");
+        assert!(wrapped.hint().is_some(), "the caller is told what to check");
+    }
+}
+
+#[test]
+fn a_decode_stage_core_error_still_reports_convert_failed() {
+    // The decode stage keeps the per-variant table rather than flattening to
+    // one code: a Core error that propagates out of the decoder means the
+    // container was read and the projection is what failed.
+    let error = ConvertOpsError::Convert(ConvertError::Decode(Hwp5Error::Core(
+        CoreError::InvalidStructure { context: "document".into(), reason: "no sections".into() },
+    )));
+    assert_eq!(error.code(), OpsCode::Hwp5ConvertFailed);
 }
 
 #[test]
@@ -123,11 +194,203 @@ fn only_a_render_failure_exposes_the_renderer_code() {
     let render = ConvertOpsError::Pdf(PdfError::NoRenderableCache { section: 3 });
     assert_eq!(render.cause(), Some(PdfErrorCode::NoRenderableCache));
     assert_eq!(render.cause().map(PdfErrorCode::as_str), Some("NO_RENDERABLE_CACHE"));
+    // The coarse accessor is the detailed one's `code` — one source of truth.
+    assert_eq!(render.cause(), render.cause_info().map(|cause| cause.code));
 
-    assert!(ConvertOpsError::UnrecognizedFormat.cause().is_none());
-    assert!(ConvertOpsError::Decode(HwpxError::InvalidMimetype { actual: "x".into() })
-        .cause()
-        .is_none());
+    for error in [
+        ConvertOpsError::UnrecognizedFormat,
+        ConvertOpsError::Decode(HwpxError::InvalidMimetype { actual: "x".into() }),
+        ConvertOpsError::Rejected {
+            code: OpsCode::InvalidDiscovery,
+            reason: "unknown discovery mode".into(),
+        },
+    ] {
+        assert!(error.cause().is_none(), "{error}");
+        assert!(error.cause_info().is_none(), "{error}");
+    }
+}
+
+/// The CLI's `pdf_error_cause` expectations, variant for variant.
+///
+/// Copied from `hwpforge-bindings-cli`'s `pdf_error_cause_maps_every_variant`
+/// so the two mappers cannot drift: `cause_info()` exists precisely so W3 can
+/// delete the CLI's own 20-arm mapper and print this instead.
+fn cli_cause_cases() -> Vec<(PdfError, &'static str, Option<&'static str>, Option<&'static str>)> {
+    let loc = || "s0/p1/t0r0c0".to_string();
+    vec![
+        (PdfError::NoRenderableCache { section: 2 }, "NO_RENDERABLE_CACHE", None, Some("s2")),
+        (
+            PdfError::MissingLayoutCache { count: 3, first: "s0/p7".into() },
+            "MISSING_LAYOUT_CACHE",
+            None,
+            Some("s0/p7"),
+        ),
+        (
+            PdfError::UnsupportedContent { kind: "table mixed with inline image", location: loc() },
+            "UNSUPPORTED_CONTENT",
+            Some("table mixed with inline image"),
+            Some("s0/p1/t0r0c0"),
+        ),
+        (PdfError::InternalInvariant { detail: "d".into() }, "INTERNAL_INVARIANT", None, None),
+        (
+            PdfError::GlyphsUnavailable { face: "f".into(), count: 1, location: loc() },
+            "GLYPHS_UNAVAILABLE",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::AmbiguousHeaderFooter { kind: "header", detail: "d".into() },
+            "AMBIGUOUS_HEADER_FOOTER",
+            Some("header"),
+            None,
+        ),
+        (PdfError::FontUnresolved { face: "f".into() }, "FONT_UNRESOLVED", None, None),
+        (
+            PdfError::FontStyleUnavailable {
+                face: "f".into(),
+                style: FaceStyle::Bold,
+                location: loc(),
+            },
+            "FONT_STYLE_UNAVAILABLE",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::ImageDataMissing { key: "k".into(), location: loc() },
+            "IMAGE_DATA_MISSING",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::UnsupportedImageFormat { key: "k".into(), format: "Bmp", location: loc() },
+            "UNSUPPORTED_IMAGE_FORMAT",
+            Some("Bmp"),
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::ImageDecodeFailed { key: "k".into(), detail: "d".into(), location: loc() },
+            "IMAGE_DECODE_FAILED",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::InvalidImageGeometry { key: "k".into(), detail: "d".into(), location: loc() },
+            "INVALID_IMAGE_GEOMETRY",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::ImageAssetConflict { key: "k".into(), location: loc() },
+            "IMAGE_ASSET_CONFLICT",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::FontAxisMismatch { location: loc(), fonts: vec!["a".into()] },
+            "FONT_AXIS_MISMATCH",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (
+            PdfError::FontEmbedRestricted {
+                face: "f".into(),
+                path: "/x".into(),
+                reason: "r".into(),
+            },
+            "FONT_EMBED_RESTRICTED",
+            None,
+            None,
+        ),
+        (
+            PdfError::FontFaceAmbiguous {
+                face: "f".into(),
+                style: FaceStyle::Bold,
+                detail: "d".into(),
+            },
+            "FONT_FACE_AMBIGUOUS",
+            None,
+            None,
+        ),
+        (PdfError::InvalidCache { detail: "d".into() }, "INVALID_CACHE", None, None),
+        (
+            PdfError::FontIo(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),
+            "FONT_IO",
+            None,
+            None,
+        ),
+        (
+            PdfError::StyleUnavailable { what: "font name", location: loc() },
+            "STYLE_UNAVAILABLE",
+            None,
+            Some("s0/p1/t0r0c0"),
+        ),
+        (PdfError::Backend("b".into()), "BACKEND", None, None),
+    ]
+}
+
+#[test]
+fn cause_info_reproduces_the_cli_cause_for_every_variant() {
+    let cases = cli_cause_cases();
+    assert_eq!(cases.len(), 20, "one case per known PdfError variant");
+
+    for (error, code, kind, location) in cases {
+        let cause = ConvertOpsError::Pdf(error).cause_info().expect("a render failure has a cause");
+        assert_eq!(cause.stage, "render");
+        assert_eq!(cause.code.as_str(), code);
+        assert_eq!(cause.kind.as_deref(), kind, "{code} kind");
+        assert_eq!(cause.location.as_deref(), location, "{code} location");
+    }
+}
+
+#[test]
+fn a_cause_round_trips_through_its_wire_form() {
+    // The wire shape is the CLI's `cause` block: an absent kind or location is
+    // omitted, not serialised as null.
+    let cause =
+        ConvertOpsError::Pdf(PdfError::MissingLayoutCache { count: 3, first: "s0/p7".into() })
+            .cause_info()
+            .expect("a cause");
+
+    let value = serde_json::to_value(&cause).expect("serialise");
+    let mut keys: Vec<&String> = value.as_object().expect("an object").keys().collect();
+    keys.sort();
+    assert_eq!(keys, vec!["code", "location", "stage"], "an absent kind is omitted");
+    assert_eq!(value["code"], "MISSING_LAYOUT_CACHE", "the stable string, not a Rust name");
+
+    let parsed: PdfCause = serde_json::from_value(value).expect("deserialise");
+    assert_eq!(parsed, cause);
+
+    // The other side of `skip_serializing_if`: a cause that has a kind keeps
+    // it, because `kind` is what separates two refusals sharing one code.
+    let with_kind = ConvertOpsError::Pdf(PdfError::UnsupportedContent {
+        kind: "table mixed with inline image",
+        location: "s0/p1/t0r0c0".into(),
+    })
+    .cause_info()
+    .expect("a cause");
+    let value = serde_json::to_value(&with_kind).expect("serialise");
+    assert_eq!(value["kind"], "table mixed with inline image");
+    assert_eq!(serde_json::from_value::<PdfCause>(value).expect("deserialise"), with_kind);
+
+    // A code this build does not know is refused rather than defaulted: a
+    // cause that guesses is worse than no cause.
+    let unknown = serde_json::json!({ "stage": "render", "code": "FROM_THE_FUTURE" });
+    assert!(serde_json::from_value::<PdfCause>(unknown).is_err());
+    let unknown_stage = serde_json::json!({ "stage": "shape", "code": "BACKEND" });
+    assert!(serde_json::from_value::<PdfCause>(unknown_stage).is_err());
+}
+
+#[test]
+fn every_known_pdf_error_code_is_named_in_the_wire_table() {
+    // `KNOWN_PDF_ERROR_CODES` is what makes the wire form round-trip; the
+    // samples above are the proof that it covers what `code()` can return.
+    for (error, code, _, _) in cli_cause_cases() {
+        assert!(
+            KNOWN_PDF_ERROR_CODES.contains(&error.code()),
+            "{code} is missing from KNOWN_PDF_ERROR_CODES"
+        );
+    }
+    assert_eq!(KNOWN_PDF_ERROR_CODES.len(), 20);
 }
 
 #[test]
