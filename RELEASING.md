@@ -155,10 +155,9 @@ Rust 크레이트·npm 과 달리 Python wheel 은 release-plz 가 만들지 않
 | 이벤트                               | 태그 출처                          | 게시 대상                           |
 | ------------------------------------ | ---------------------------------- | ----------------------------------- |
 | `release: published` (umbrella `v*`) | `release.tag_name`                 | **PyPI**                            |
-| `push` — `py-v*` 태그                | `github.ref_name`                  | **PyPI**                            |
 | `workflow_dispatch`                  | "Use workflow from" 에서 고른 태그 | 입력 `target` (기본값 **TestPyPI**) |
 
-프로덕션은 위 두 태그 이벤트이거나 dispatch 에서 `pypi` 를 명시적으로 고를 때만 선택된다. 리허설이 실수로 프로덕션을 치지 못하게 하는 구조적 장치이므로, 기본값을 바꾸지 않는다.
+**태그를 푸시하는 것만으로는 아무 일도 일어나지 않는다.** `py-v*` push 트리거는 제거했다 — 리허설에 쓸 태그를 origin 에 올려야 "Use workflow from" 목록에 뜨는데, 그 준비 동작이 곧 프로덕션 게시가 되어 버리고(그리고 그 파일명을 영구히 태워 이후 릴리스 업로드를 hash 불일치로 깨뜨리고) 만다. 프로덕션에 닿는 길은 릴리스 이벤트와 명시적 수동 실행 둘뿐이고, 기본값은 TestPyPI 다.
 
 수동 실행에는 태그 입력란이 없다. **Actions → PyPI Publish → Run workflow → "Use workflow from" 에서 `Tags` 를 고르고 태그를 선택**한 뒤 `target` 만 정한다. 브랜치를 고르면 `Resolve › Tag` 가 거부한다. 그 드롭다운에 태그가 보이려면 **그 태그의 트리에 `pypi-publish.yml` 이 있어야** 한다 — 이 워크플로가 main 에 들어가기 전에 찍힌 태그로는 수동 실행을 할 수 없다.
 
@@ -184,14 +183,15 @@ uv run --no-project --with packaging python .github/scripts/resolve_release_tag.
 ### 9.3 Python 전용 태그를 붙이는 절차
 
 1. 고칠 내용을 main 에 머지한다 (평시 Python 변경은 다음 워크스페이스 릴리스에 그냥 실려 나가므로, 이 절차는 **긴급 수정**용이다).
-2. 그 커밋에 태그를 붙인다 — `git tag py-v0.16.4.1 <commit>` 후 `git push origin py-v0.16.4.1`.
-3. 워크플로는 **태그 ref 위에서** 돌고 모든 잡이 같은 커밋(`github.sha`)을 체크아웃한다 — 체크아웃할 ref 가 입력에서 오지 않으므로 기본 브랜치와 공유되는 캐시를 오염시킬 경로가 없다. 같은 이유로 이 워크플로에는 캐시 액션이 하나도 없다 (릴리스 빌드는 cold 가 정상이다). 게시 직전에 태그가 여전히 그 커밋을 가리키는지 다시 확인한다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
+2. 그 커밋에 태그를 붙여 푸시한다 — `git tag py-v0.16.4.1 <commit>` 후 `git push origin py-v0.16.4.1`. 이 푸시는 아무것도 실행하지 않는다. 태그를 "Use workflow from" 목록에 띄우는 것이 전부다.
+3. **Actions → PyPI Publish → Run workflow → "Use workflow from" 에서 그 태그를 고르고 `target: pypi`** 로 실행한다. TestPyPI 로 먼저 한 번 돌려 보고 싶으면 같은 태그에 `target: testpypi` 로 실행한 뒤 다시 `pypi` 로 실행하면 된다 — 두 대상은 서로 다른 environment 와 index 를 쓴다.
+4. 워크플로는 **태그 ref 위에서** 돌고 모든 잡이 같은 커밋(`github.sha`)을 체크아웃한다 — 체크아웃할 ref 가 입력에서 오지 않으므로 기본 브랜치와 공유되는 캐시를 오염시킬 경로가 없다. 같은 이유로 이 워크플로에는 캐시 액션이 하나도 없다 (릴리스 빌드는 cold 가 정상이다). 게시 직전에 태그가 여전히 그 커밋을 가리키는지 다시 확인한다. `pyproject.toml` 의 `dynamic = ["version"]` 은 러너의 일회용 체크아웃에서만 정적 버전으로 바뀌고 빌드 뒤 원본이 복원된다 (`git diff --exit-code` 로 증명). 저장소에는 아무것도 커밋되지 않는다.
 
 release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌하지 않는다.
 
 ### 9.4 TestPyPI 리허설 체크리스트
 
-첫 PyPI 업로드 전에 한 번 돈다. 전부 `workflow_dispatch` + `target=testpypi` 다.
+첫 PyPI 업로드 전에 한 번 돈다. 전부 `workflow_dispatch` + `target=testpypi` 다. 리허설용 `py-v*` 태그를 origin 에 푸시해도 아무 워크플로도 돌지 않으므로(§9.1), 태그를 먼저 전부 올려 두고 하나씩 골라 실행하면 된다.
 
 - [ ] 네 가지 태그 형태 각각으로 실행 (각 태그를 "Use workflow from" 에서 고른다) — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
 - [ ] 거부되어야 할 태그 하나를 일부러 골라 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다. 브랜치를 골라 실행하는 것도 같은 자리에서 거부된다.
