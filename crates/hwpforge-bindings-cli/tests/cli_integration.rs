@@ -4873,3 +4873,76 @@ fn to_pdf_human_mode_error_output() {
     assert_eq!(code, 2);
     assert!(stderr.contains("UNRECOGNIZED_FORMAT"), "{stderr}");
 }
+
+/// R1 F4 회귀 잠금 (CLI stamp): 의미 손상은 typed `StamperError::SemanticLoss`
+/// 가 됐지만, CLI 가 내보내는 **코드·메시지·exit code 는 과거 `Codec` 경로와
+/// 바이트 동일**해야 한다. 명시 arm 이 빠지면 `other` 로 떨어져 코드가
+/// STAMP_CODEC_FAILED → STAMP_FAILED 로 조용히 바뀐다.
+///
+/// fixture 는 `smithy-hwpx/tests/note_numbering_roundtrip.rs` 의
+/// `stamper_fails_closed_on_note_head_skip` 과 같은 구성이다: 각주 본문의
+/// 첫 문단이 heading 이라 번호 머리를 넣을 안전한 지점이 없다.
+#[test]
+fn stamp_semantic_loss_keeps_the_codec_error_contract() {
+    use hwpforge_core::control::Control;
+    use hwpforge_core::image::ImageStore;
+    use hwpforge_core::page::PageSettings;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::Section;
+    use hwpforge_core::{Document, Paragraph};
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+    use hwpforge_smithy_hwpx::HwpxEncoder;
+
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    let mut heading_body = Paragraph::with_runs(
+        vec![Run::text("제목 각주", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    heading_body.heading_level = Some(1);
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::control(Control::footnote(vec![heading_body]), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let validated = doc.validate().expect("validate");
+    let base = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+
+    let tmp = test_tmp();
+    let src = tmp.join("titlemark-note.hwpx");
+    std::fs::write(&src, &base).unwrap();
+    // 빈 legacy 맵 = `HwpxStamper::stamp(&base, &[])` 와 같은 경로.
+    let map = tmp.join("empty-map.json");
+    std::fs::write(&map, "[]").unwrap();
+    let out = tmp.join("stamped.hwpx");
+
+    let (err, _, code) = run_json(&[
+        "stamp",
+        src.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+
+    assert_eq!(code, 2, "exit code 는 과거 Codec 경로와 같아야 한다: {err}");
+    assert_eq!(err["code"], "STAMP_CODEC_FAILED", "{err}");
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("encode produced a semantic-loss warning (fail-closed): "),
+        "메시지가 드리프트했다 (접두사 없는 형태여야 한다): {message}"
+    );
+    assert!(message.contains("note number head skipped"), "{message}");
+    assert!(!out.exists(), "fail-closed 인데 산출물이 생성됐다");
+}
