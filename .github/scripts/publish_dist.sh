@@ -59,6 +59,6 @@ fi
 # the failure is easy to miss in a long log. Say it in the job's error channel
 # and keep uv's status as this script's status.
 if [ "$status" -ne 0 ]; then
-  echo "::error::uv publish failed against ${TARGET_NAME} (exit ${status}); the usual causes are a missing or mismatched Trusted Publishing record (owner, repository, workflow file, environment) and a file that already exists with different contents"
+  echo "::error::uv publish failed against ${TARGET_NAME} (exit ${status}); the usual causes, most likely first: the artifacts differ from what is already on the index because this run rebuilt them (re-run the publish job of the run that built the published artifacts instead of dispatching again), a missing or mismatched Trusted Publishing record (owner, repository, workflow file, environment), or a file that already exists with different contents"
   exit "$status"
 fi

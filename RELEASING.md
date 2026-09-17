@@ -195,14 +195,21 @@ release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌
 
 - [ ] 네 가지 태그 형태 각각으로 실행 (각 태그를 "Use workflow from" 에서 고른다) — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
 - [ ] 거부되어야 할 태그 하나를 일부러 골라 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다. 브랜치를 골라 실행하는 것도 같은 자리에서 거부된다.
-- [ ] **부분 게시 복구**: 여섯 개 중 **셋만** 먼저 올린 상태를 만든 뒤 워크플로를 돌린다. 아티팩트를 내려받아 손으로 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 를 먼저 실행하고(토큰 사용), 그다음 같은 태그를 골라 워크플로를 실행한다. 로그에 **skip 3 · upload 3** 이 찍히고 run 은 성공해야 한다. "한 번 게시한 뒤 그대로 재실행" 은 여섯 개 전부 skip 이라 복구 경로를 시험하지 못한다.
+- [ ] **부분 게시 복구**: 여섯 개 중 **셋만** 올라간 상태를 만든 뒤, 그 아티팩트를 만든 **run 의 게시 잡만 다시 돌린다**. 아티팩트를 내려받아 손으로 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 를 먼저 실행하고(토큰 사용), 그다음 **Actions → 그 run → "Re-run failed jobs"** 로 `Publish › TestPyPI` 만 다시 돌린다. 로그에 **skip 3 · upload 3** 이 찍히고 run 은 성공해야 한다. 아티팩트는 14일 보관되므로 그 안에는 언제든 가능하다.
+
+  **새로 dispatch 하면 안 된다.** 새 run 은 wheel 을 다시 빌드하는데 바이트가 재현되지 않아(빌드가 reproducible 하지 않다) `--check-url` 이 첫 기존 파일에서 거부한다 — `Local file and index file do not match for hwpforge-…-macosx_10_12_x86_64.whl. Local: sha256=542c9b…, Remote: sha256=8380a9…` (exit 2). 이것은 고장이 아니라 **안전 속성**이다: 이미 올라간 파일을 덮어쓰지 않는다. 토큰이 없어 부분 상태를 만들 수 없으면, **같은 run 의 게시 잡을 그대로 한 번 더 돌려** 여섯 개 전부 `File … already exists, skipping` 으로 건너뛰고 성공하는 것을 증거로 삼는다.
 - [ ] **`--check-url` 실패 테스트**: 같은 파일명으로 내용이 다른 wheel 을 만들어 올려 본다. 건너뛰지 않고 **실패**해야 한다 (멱등성은 오직 이 검사에서 온다 — PyPI 는 파일명 재사용을 영구히 거부한다).
 - [ ] **sdist 강제 설치** — wheel 이 있으면 설치 해석기가 그것을 고르므로, 소스 배포를 실제로 컴파일해 보려면 명시적으로 막아야 한다 (Rust 1.92 + maturin 필요):
 
 ```console
 uv venv /tmp/hf-sdist
-uv pip install --python /tmp/hf-sdist/bin/python --no-binary hwpforge --index-url https://test.pypi.org/simple/ "hwpforge==<ver>"
+uv pip install --python /tmp/hf-sdist/bin/python --no-binary hwpforge \
+  --index-url https://pypi.org/simple/ \
+  --extra-index-url https://test.pypi.org/simple/ \
+  --index-strategy unsafe-best-match "hwpforge==<ver>"
 ```
+
+빌드 의존성(maturin)은 **PyPI** 에서 와야 한다 — TestPyPI 에는 maturin 0.7.9 뿐이라 `--index-url` 을 TestPyPI 로만 두면 소스 빌드가 깨진다. 그래서 기본 인덱스는 PyPI, TestPyPI 는 추가 인덱스로 두고 `--index-strategy unsafe-best-match` 로 양쪽을 함께 본다. wheel 경로는 의존성이 없으므로 `--index-url` 만으로 충분하다.
 
 - [ ] 설치 확인 (wheel 경로) — 새 환경에서:
 
@@ -213,6 +220,8 @@ uv run --python /tmp/hf-rehearsal/bin/python python -c "import hwpforge, sys; pr
 ```
 
 - [ ] 레지스트리 실측 — `curl -s https://test.pypi.org/pypi/hwpforge/json | jq '.info.version, (.urls[].filename)'`. 프로덕션은 같은 명령의 `https://pypi.org/pypi/hwpforge/json`.
+
+**2026-09-18 리허설에서 실측한 것**: 네 가지 태그 형태 각각이 TestPyPI 에 6개 파일(wheel 5 + sdist)을 올렸다 · 새 가상환경에서 wheel 설치·import 성공 · sdist 강제 설치가 소스에서 1분 08초에 빌드됨 · 같은 run 의 게시 잡 재실행이 6개 전부 `already exists, skipping` 으로 통과 · 이미 게시된 태그를 새로 dispatch 하면 재빌드된 바이트가 달라 `--check-url` 이 거부(exit 2). 남은 것은 토큰으로 만든 진짜 3/6 부분 상태에서의 복구와 프로덕션 첫 업로드다.
 
 ### 9.5 릴리스 동결 규칙
 
