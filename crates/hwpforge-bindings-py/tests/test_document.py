@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from conftest import FONT_UNRESOLVED
+from conftest import FONT_UNRESOLVED, all_paragraphs
 
 import hwpforge
 from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextResult
@@ -373,3 +373,115 @@ def test_the_exception_survives_reloading_its_module() -> None:
     assert measured["package_alias_rebound"]
     assert measured["package_raises_live_class"]
     assert measured["package_caught_by_package"]
+
+
+def _texts(document: Document) -> list[str]:
+    """The text of every top-level paragraph of section 0, read back from the bytes."""
+    return [paragraph["text"] for paragraph in all_paragraphs(document.to_bytes())]
+
+
+def test_insert_para_takes_a_string_as_one_paragraph(generated_bytes: bytes) -> None:
+    """A string is one paragraph, not one paragraph per character.
+
+    `Vec<String>` on the Rust side and `Sequence[str]` in the stub are both
+    satisfied by a `str`, which iterates as single characters, so this is the
+    one shape a type checker cannot catch for us.
+    """
+    document = Document.from_bytes(generated_bytes)
+    before = _texts(document)
+
+    result = document.insert_para(section=0, anchor=0, text="가나다")
+    after = _texts(result.document)
+
+    assert result.report["inserted"] == 1
+    assert len(after) == len(before) + 1, f"expected one new paragraph, got {after}"
+    assert "가나다" in after
+    assert "가" not in after, "the string must not have been split into characters"
+
+
+def test_insert_para_takes_a_sequence_as_one_paragraph_each(generated_bytes: bytes) -> None:
+    document = Document.from_bytes(generated_bytes)
+    before = _texts(document)
+
+    result = document.insert_para(section=0, anchor=0, text=["가", "나"])
+    after = _texts(result.document)
+
+    assert result.report["inserted"] == 2
+    assert len(after) == len(before) + 2
+    assert "가" in after
+    assert "나" in after
+
+
+def test_insert_para_refuses_bytes_and_non_string_elements(generated_bytes: bytes) -> None:
+    document = Document.from_bytes(generated_bytes)
+
+    with pytest.raises(TypeError):
+        document.insert_para(section=0, anchor=0, text=b"x")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TypeError):
+        document.insert_para(section=0, anchor=0, text=["가", 1])  # ty: ignore[invalid-argument-type]
+
+
+def test_insert_para_with_nothing_to_insert_is_refused(generated_bytes: bytes) -> None:
+    with pytest.raises(HwpForgeError) as caught:
+        Document.from_bytes(generated_bytes).insert_para(section=0, anchor=0, text=[])
+
+    assert caught.value.code == "INSERT_TEXT_REQUIRED"
+
+
+def test_a_fill_is_still_there_after_saving_and_reopening(tmp_path, fields_bytes: bytes) -> None:
+    """The point of the library: the edit is in the file, not only in the report."""
+    filled = Document.from_bytes(fields_bytes).fill({"user_email": EMAIL})
+    path = tmp_path / "filled.hwpx"
+    filled.document.save(path)
+
+    reopened = Document.open(path)
+
+    current = {field["name"]: field["current"] for field in reopened.fields()["fields"]}
+    assert current["user_email"] == EMAIL
+
+
+def test_a_cell_edit_is_still_there_after_saving_and_reopening(
+    tmp_path, generated_bytes: bytes
+) -> None:
+    edited = Document.from_bytes(generated_bytes).set_cell(table=0, at="1,1", text="채운 값")
+    path = tmp_path / "celled.hwpx"
+    edited.document.save(path)
+
+    table = Document.open(path).read(table=0)["table"]
+
+    assert table is not None
+    cells = {(cell["row"], cell["col"]): cell["text"] for cell in table["cells"]}
+    assert cells[(1, 1)] == "채운 값"
+
+
+def test_an_inserted_paragraph_is_still_there_after_saving_and_reopening(
+    tmp_path, generated_bytes: bytes
+) -> None:
+    inserted = Document.from_bytes(generated_bytes).insert_para(
+        section=0, anchor=0, text="저장 뒤에도 남는 문단"
+    )
+    path = tmp_path / "inserted.hwpx"
+    inserted.document.save(path)
+
+    assert "저장 뒤에도 남는 문단" in _texts(Document.open(path))
+
+
+@pytest.mark.parametrize(
+    ("name", "call"),
+    [
+        ("font_dirs", lambda doc: doc.to_pdf(font_dirs="/tmp")),
+        ("indexes", lambda doc: doc.delete_para(section=0, indexes="01")),
+        ("specs", lambda doc: doc.set_cell(specs="x")),
+    ],
+)
+def test_document_does_not_widen_a_string_into_a_sequence(
+    name: str, call, generated_bytes: bytes
+) -> None:
+    """The wrapper passes sequences through so the extension's guard sees them.
+
+    Coercing with `list()` here would turn `font_dirs="/tmp"` into four
+    one-character directories and hand them on as a well-formed list, and the
+    caller would only ever see a font that failed to resolve.
+    """
+    with pytest.raises(TypeError):
+        call(Document.from_bytes(generated_bytes))

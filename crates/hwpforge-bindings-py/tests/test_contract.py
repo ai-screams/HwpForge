@@ -347,3 +347,38 @@ def test_a_warning_is_absent_or_a_string_never_none(stale_line_cache_bytes: byte
         if "hint" in warning:
             assert isinstance(warning["hint"], str)
             assert warning["hint"]
+
+
+def _delete_with_a_string(data: bytes) -> object:
+    return _hwpforge.delete_para(data, section=0, indexes="01")  # ty: ignore[invalid-argument-type]
+
+
+def _set_cell_with_a_string(data: bytes) -> object:
+    return _hwpforge.set_cell(data, specs="x")  # ty: ignore[invalid-argument-type]
+
+
+def _render_with_a_string(data: bytes) -> object:
+    # ty cannot flag this one: a `str` genuinely satisfies `Sequence[str]`, so
+    # the runtime refusal is the only thing standing between a caller and four
+    # one-character font directories.
+    return _hwpforge.to_pdf(data, font_dirs="/tmp")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(_delete_with_a_string, id="indexes"),
+        pytest.param(_set_cell_with_a_string, id="specs"),
+        pytest.param(_render_with_a_string, id="font_dirs"),
+    ],
+)
+def test_a_string_is_never_taken_as_a_sequence_of_characters(call, generated_bytes) -> None:
+    """Every sequence parameter refuses a bare string rather than iterating it.
+
+    A `str` satisfies `Sequence[str]`, so a caller who passes one where a list
+    belongs gets no help from the type checker. Each of these would otherwise
+    mean something absurd but well-formed: two paragraph indexes from `"01"`,
+    four one-character font directories from a path.
+    """
+    with pytest.raises(TypeError):
+        call(generated_bytes)

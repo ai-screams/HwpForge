@@ -115,7 +115,9 @@ pub(crate) fn set_cell<'py>(
 ///     data: The HWPX package.
 ///     section: Index of the section to edit.
 ///     anchor: Index of the paragraph the new ones go next to.
-///     text: One string per paragraph to insert.
+///     text: The paragraphs to insert — one string for a single paragraph, or
+///         a sequence of strings for one paragraph each. A `str` is not
+///         exploded into its characters, and `bytes` is refused.
 ///     before: Whether to insert above the anchor instead of below it.
 ///
 /// Returns:
@@ -127,14 +129,14 @@ pub(crate) fn insert_para<'py>(
     data: PyBackedBytes,
     section: usize,
     anchor: usize,
-    text: Vec<String>,
+    text: &Bound<'py, PyAny>,
     before: bool,
 ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyAny>)> {
     let bytes: &[u8] = &data;
     let options = ops::InsertParaOptions::default()
         .with_section(section)
         .with_anchor(anchor)
-        .with_text(text)
+        .with_text(args::paragraph_texts("text", text)?)
         .with_before(before);
     let output = py.detach(|| ops::insert_para(bytes, &options)).or_py(py)?;
     bytes_and_meta(py, &output.bytes, &output.meta())

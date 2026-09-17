@@ -17,8 +17,8 @@ Example:
 
 from __future__ import annotations
 
-import os
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
 from typing import TYPE_CHECKING
 
 # The extension module resolves `hwpforge.errors.HwpForgeError` by name every
@@ -33,6 +33,7 @@ from .document import Document
 from .results import BytesResult, DocumentResult, TextResult
 
 if TYPE_CHECKING:
+    import os
     from typing import Literal
 
     from ._hwpforge import (
@@ -58,8 +59,8 @@ __all__ = [
 ]
 
 try:
-    __version__ = version("hwpforge")
-except PackageNotFoundError:  # pragma: no cover - only when run from a source tree
+    __version__ = _version("hwpforge")
+except _PackageNotFoundError:  # pragma: no cover - only when run from a source tree
     __version__ = "0.0.0+unknown"
 
 
@@ -158,3 +159,11 @@ def schema(
         The schema, as a `dict`.
     """
     return _hwpforge.schema(kind=kind)
+
+
+# The public surface is `__all__` plus the submodules. The names imported to
+# build it are not part of it, so the ones that survive to runtime are unbound
+# here: `os` and `Literal` are only ever annotations (postponed, so never
+# evaluated), the metadata helpers are aliased private, and these two are done
+# with their work by the time the module finishes executing.
+del TYPE_CHECKING, annotations

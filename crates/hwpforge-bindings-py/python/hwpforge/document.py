@@ -45,6 +45,10 @@ class Document:
     are equal, and every editing method returns a new document rather than
     changing this one.
 
+    The format runs one way: an old binary HWP5 file can be read in through
+    [`convert_hwp5`][hwpforge.convert_hwp5], but everything from there on is
+    HWPX, and there is no path back from HWPX to HWP5.
+
     Example:
         >>> doc = Document.open("proposal.hwpx")  # doctest: +SKIP
         >>> doc = doc.fill({"applicant": "홍길동"}).document  # doctest: +SKIP
@@ -104,7 +108,7 @@ class Document:
     # ── the bytes back out ──────────────────────────────────────
 
     def to_bytes(self) -> bytes:
-        """Return the document's bytes.
+        """Return the document's bytes, which are always an HWPX package.
 
         Returns:
             The HWPX package, byte for byte as it is held.
@@ -112,7 +116,10 @@ class Document:
         return self._data
 
     def save(self, path: str | os.PathLike[str]) -> None:
-        """Write the document to a file.
+        """Write the document to a file, always as an HWPX package.
+
+        HwpForge does not write the old binary HWP5 format, whatever the
+        document was read from, so name the file `.hwpx`.
 
         Args:
             path: The file to write. An existing file is replaced.
@@ -317,7 +324,8 @@ class Document:
         """Render the document to PDF.
 
         Args:
-            font_dirs: Directories to load fonts from.
+            font_dirs: Directories to load fonts from. A bare string is
+                refused rather than read as one directory per character.
             discovery: Where else to look for fonts. ``"explicit"`` looks only
                 in `font_dirs`, which is the only deterministic choice.
             degraded: Substitute a fallback face instead of failing when a font
@@ -334,7 +342,7 @@ class Document:
         """
         data, report = _hwpforge.to_pdf(
             self._data,
-            font_dirs=list(font_dirs),
+            font_dirs=font_dirs,
             discovery=discovery,
             degraded=degraded,
             partial_cache_reject=partial_cache_reject,
@@ -399,7 +407,7 @@ class Document:
             right_of=right_of,
             below=below,
             text=text,
-            specs=None if specs is None else list(specs),
+            specs=specs,
         )
         return DocumentResult(Document(data), report)
 
@@ -437,18 +445,20 @@ class Document:
             HwpForgeError: If an index is out of range, or if deleting would
                 leave the section unreadable.
         """
-        data, report = _hwpforge.delete_para(self._data, section=section, indexes=list(indexes))
+        data, report = _hwpforge.delete_para(self._data, section=section, indexes=indexes)
         return DocumentResult(Document(data), report)
 
     def insert_para(
-        self, *, section: int, anchor: int, text: Sequence[str], before: bool = False
+        self, *, section: int, anchor: int, text: str | Sequence[str], before: bool = False
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs inserted; the receiver is unchanged.
 
         Args:
             section: The index of the section to edit.
             anchor: The paragraph to insert next to, by index.
-            text: One string per paragraph to insert.
+            text: One paragraph as a string, or one string per paragraph. A
+                string is a single paragraph, never one paragraph per
+                character.
             before: Insert above the anchor instead of below it.
 
         Returns:
@@ -458,7 +468,7 @@ class Document:
             HwpForgeError: If the anchor is out of range.
         """
         data, report = _hwpforge.insert_para(
-            self._data, section=section, anchor=anchor, text=list(text), before=before
+            self._data, section=section, anchor=anchor, text=text, before=before
         )
         return DocumentResult(Document(data), report)
 

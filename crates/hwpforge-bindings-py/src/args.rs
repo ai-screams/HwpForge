@@ -15,8 +15,9 @@ use hwpforge::ops::OpsError;
 use hwpforge_convert::ops::ConvertOpsError;
 use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_smithy_pdf::font::FontDiscovery;
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyString};
 use pythonize::depythonize;
 use serde::de::DeserializeOwned;
 
@@ -43,6 +44,60 @@ pub(crate) fn discovery(name: &str) -> Result<FontDiscovery, ConvertOpsError> {
             reason: format!("unknown discovery mode '{other}' (expected explicit|hancom|platform)"),
         }),
     }
+}
+
+/// Reads the paragraph texts of `insert_para`.
+///
+/// One string means one paragraph, and a sequence means one paragraph per
+/// element. Both are accepted because the difference is invisible in Python:
+/// a `str` *is* a sequence of one-character strings, so a caller that passes
+/// prose where a list belongs would otherwise get one paragraph per character.
+/// PyO3 refuses that shape on its own (`Vec<T>` rejects `PyString` before it
+/// tries the sequence protocol), but refusing is not the useful answer when
+/// the intent is unambiguous: a single string is a single paragraph.
+///
+/// `bytes` is rejected rather than decoded. It is a sequence too, and
+/// `b"ab"` iterates into integers, so accepting it would mean guessing an
+/// encoding for something the caller never said was text.
+///
+/// # Errors
+///
+/// `TypeError` naming the argument when the value is `bytes`, is not
+/// iterable, or holds an element that is not a string.
+pub(crate) fn paragraph_texts(name: &str, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    if let Ok(single) = value.cast::<PyString>() {
+        return Ok(vec![single.extract::<String>()?]);
+    }
+    if value.is_instance_of::<PyBytes>() {
+        return Err(PyTypeError::new_err(format!(
+            "{name}: expected a str or a sequence of str, got bytes"
+        )));
+    }
+    let items = value.try_iter().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "{name}: expected a str or a sequence of str, got {}",
+            type_name(value)
+        ))
+    })?;
+    items
+        .enumerate()
+        .map(|(index, item)| {
+            let item = item?;
+            item.cast::<PyString>()
+                .map_err(|_| {
+                    PyTypeError::new_err(format!(
+                        "{name}[{index}]: expected str, got {}",
+                        type_name(&item)
+                    ))
+                })?
+                .extract()
+        })
+        .collect()
+}
+
+/// The Python type name of a value, for a message a caller can act on.
+fn type_name(value: &Bound<'_, PyAny>) -> String {
+    value.get_type().name().map_or_else(|_| "?".to_owned(), |name| name.to_string())
 }
 
 /// Reads a stamp request — the v1 spec list or the v2 envelope — from the
@@ -105,6 +160,60 @@ fn stamp_map_from_json(value: &serde_json::Value) -> Result<StampMap, OpsError> 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// These need an interpreter, which the test binary has because it links
+    /// against one (the extension-module feature is off outside maturin).
+    mod paragraphs {
+        use super::*;
+
+        fn texts(source: &str) -> PyResult<Vec<String>> {
+            // The test binary embeds an interpreter rather than being loaded
+            // by one, so it has to start before any Python API is touched.
+            Python::initialize();
+            Python::attach(|py| {
+                let value = py.eval(&std::ffi::CString::new(source).unwrap(), None, None)?;
+                paragraph_texts("text", &value)
+            })
+        }
+
+        #[test]
+        fn one_string_is_one_paragraph_not_one_per_character() {
+            assert_eq!(texts("'검토용 문단'").unwrap(), vec!["검토용 문단".to_owned()]);
+        }
+
+        #[test]
+        fn a_sequence_is_one_paragraph_per_element() {
+            assert_eq!(texts("['가', '나']").unwrap(), vec!["가".to_owned(), "나".to_owned()]);
+            assert_eq!(texts("('가', '나')").unwrap(), vec!["가".to_owned(), "나".to_owned()]);
+            assert!(texts("[]").unwrap().is_empty());
+        }
+
+        #[test]
+        fn bytes_is_refused_rather_than_decoded() {
+            let error = texts("b'ab'").expect_err("bytes is not text");
+
+            Python::initialize();
+            Python::attach(|py| {
+                assert!(error.is_instance_of::<PyTypeError>(py));
+                assert!(error.to_string().contains("text"), "{error}");
+                assert!(error.to_string().contains("bytes"), "{error}");
+            });
+        }
+
+        #[test]
+        fn a_non_string_element_names_the_argument_and_its_index() {
+            let error = texts("['가', 2]").expect_err("2 is not a paragraph");
+
+            assert!(error.to_string().contains("text[1]"), "{error}");
+        }
+
+        #[test]
+        fn something_that_is_not_a_sequence_at_all_is_refused() {
+            let error = texts("7").expect_err("an int is not paragraphs");
+
+            assert!(error.to_string().contains("text"), "{error}");
+        }
+    }
 
     #[test]
     fn every_discovery_spelling_maps_to_its_variant() {

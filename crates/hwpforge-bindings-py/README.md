@@ -8,6 +8,16 @@ renderer. The Python package is a thin layer over that library, so the operation
 option names and their error codes are the same ones the command line tool and the MCP
 server use.
 
+## What it reads and writes
+
+Reads `.hwpx`, and `.hwp` (HWP5) through `hwpforge.convert_hwp5`. That conversion is one
+way: the result is an HWPX document, and the original `.hwp` is never written back.
+
+Writes `.hwpx` only. There is no `.hwp` output, and Hancom Office opens `.hwpx` natively.
+Documents also export to Markdown, JSON and PDF. A PDF needs the document's own fonts
+present on the host, passed through `font_dirs`, because nothing is substituted for a font
+that is missing.
+
 ## Install
 
 ```console

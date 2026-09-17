@@ -453,8 +453,17 @@ def diff(base: bytes, /, *, revised: bytes) -> DiffReport: ...
 def delete_para(
     data: bytes, /, *, section: int, indexes: Sequence[int]
 ) -> tuple[bytes, StructuralReport]: ...
+
+# `text` is one paragraph when it is a string, and one paragraph per element
+# when it is a sequence. A `str` is never treated as a sequence of characters.
 def insert_para(
-    data: bytes, /, *, section: int, anchor: int, text: Sequence[str], before: bool = ...
+    data: bytes,
+    /,
+    *,
+    section: int,
+    anchor: int,
+    text: str | Sequence[str],
+    before: bool = ...,
 ) -> tuple[bytes, StructuralReport]: ...
 def fill(data: bytes, /, *, values: Mapping[str, str]) -> tuple[bytes, FillReport]: ...
 
