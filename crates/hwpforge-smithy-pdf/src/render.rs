@@ -236,9 +236,12 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
     let mut table =
         FontTable::new(FontResolver::with_discovery(&options.font_dirs, options.discovery)?);
     let pages = build_paint_pages(input, options, &layout.pages, &mut table, &mut warnings)?;
+    // 방출 쪽 수 = Paint IR 페이지 수: `write_pdf` 는 `Page` 하나당 krilla
+    // 쪽 하나를 열고, 실패는 스킵이 아니라 에러다 (성공 경로 = 1:1).
+    let page_count = pages.len();
     let bytes =
         crate::backend::write_pdf(&pages, &table.fonts, options.failure_mode, &mut warnings)?;
-    Ok(PdfOutput { bytes, warnings })
+    Ok(PdfOutput { bytes, pages: page_count, warnings })
 }
 
 /// PageLayout 들을 Paint IR 페이지로 변환한다 (W2a 시임 — synthetic

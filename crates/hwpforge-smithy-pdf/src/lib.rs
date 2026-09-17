@@ -117,6 +117,12 @@ pub struct PdfOptions {
 pub struct PdfOutput {
     /// PDF 바이트.
     pub bytes: Vec<u8>,
+    /// **이 PDF 에 실제로 방출된** 쪽 수 (렌더러 집계 — 바이트 재파싱 아님).
+    ///
+    /// 원본 문서의 쪽 수가 아니다: [`PartialCachePolicy::WarnAndSkip`] 은
+    /// 캐시 결손 문단을 건너뛰므로 한컴 원본보다 적을 수 있다
+    /// ([`PdfWarning::ParagraphSkipped`] 로 표면화된다).
+    pub pages: usize,
     /// 비치명 경고 (스킵된 문단·regular 외 run 등 — no-fake-support).
     pub warnings: Vec<PdfWarning>,
 }
@@ -495,6 +501,121 @@ pub enum PdfError {
     Backend(String),
 }
 
+/// [`PdfError`] 의 안정 분류 — 스크립트·집계가 붙잡는 계약.
+///
+/// 형제 크레이트(`HwpxError::code` · `MdError::code`)와 같은 자리를
+/// 차지하지만 표현이 다르다: 저쪽은 숫자 코드(`E4000`), 이쪽은
+/// SCREAMING_SNAKE 문자열이다.
+/// 이유는 CLI `to-pdf` 가 이미 [`PdfError`] 를 그 문자열로 방출하고 있고
+/// (`--json` 의 `cause.code`), 코드를 크레이트로 올린 목적이 그 계약을
+/// 한 곳에 고정하는 것이기 때문이다. 숫자 대역은 배정하지 않았다.
+///
+/// `#[non_exhaustive]` — 새 실패 종류가 생기면 variant 가 는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PdfErrorCode {
+    /// 렌더 가능한 조판 캐시가 없는 섹션.
+    NoRenderableCache,
+    /// [`PartialCachePolicy::Reject`] 하의 캐시 결손 문단.
+    MissingLayoutCache,
+    /// 미지원 콘텐츠 (admission 거부).
+    UnsupportedContent,
+    /// 내부 불변식 위반 (코드 결함의 안전망).
+    InternalInvariant,
+    /// 폰트에 없는 글리프 (Fatal 모드).
+    GlyphsUnavailable,
+    /// 머리말/꼬리말 후보 다중 매치.
+    AmbiguousHeaderFooter,
+    /// 폰트 파일 미해결.
+    FontUnresolved,
+    /// 요청 스타일 face 미보유 (Fatal 모드).
+    FontStyleUnavailable,
+    /// 이미지 바이트가 스토어에 없음.
+    ImageDataMissing,
+    /// 렌더 불가 이미지 포맷.
+    UnsupportedImageFormat,
+    /// 이미지 디코드 실패.
+    ImageDecodeFailed,
+    /// 무효 이미지 표시 기하.
+    InvalidImageGeometry,
+    /// 같은 canonical key 에 서로 다른 바이트.
+    ImageAssetConflict,
+    /// charPr 언어축 폰트 불일치 (Fatal 모드).
+    FontAxisMismatch,
+    /// 폰트 임베드 라이선스 거부.
+    FontEmbedRestricted,
+    /// 폰트 face 신호 충돌 (결정 불가).
+    FontFaceAmbiguous,
+    /// 조판 캐시 형식 정합 위반.
+    InvalidCache,
+    /// 폰트 파일 IO 실패.
+    FontIo,
+    /// [`StyleLookup`] 이 렌더 필수 속성을 제공하지 않음.
+    StyleUnavailable,
+    /// PDF 백엔드(krilla) 실패.
+    Backend,
+}
+
+impl PdfErrorCode {
+    /// 안정 문자열 (SCREAMING_SNAKE) — CLI `to-pdf --json` 의
+    /// `cause.code` 와 같은 값이다.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoRenderableCache => "NO_RENDERABLE_CACHE",
+            Self::MissingLayoutCache => "MISSING_LAYOUT_CACHE",
+            Self::UnsupportedContent => "UNSUPPORTED_CONTENT",
+            Self::InternalInvariant => "INTERNAL_INVARIANT",
+            Self::GlyphsUnavailable => "GLYPHS_UNAVAILABLE",
+            Self::AmbiguousHeaderFooter => "AMBIGUOUS_HEADER_FOOTER",
+            Self::FontUnresolved => "FONT_UNRESOLVED",
+            Self::FontStyleUnavailable => "FONT_STYLE_UNAVAILABLE",
+            Self::ImageDataMissing => "IMAGE_DATA_MISSING",
+            Self::UnsupportedImageFormat => "UNSUPPORTED_IMAGE_FORMAT",
+            Self::ImageDecodeFailed => "IMAGE_DECODE_FAILED",
+            Self::InvalidImageGeometry => "INVALID_IMAGE_GEOMETRY",
+            Self::ImageAssetConflict => "IMAGE_ASSET_CONFLICT",
+            Self::FontAxisMismatch => "FONT_AXIS_MISMATCH",
+            Self::FontEmbedRestricted => "FONT_EMBED_RESTRICTED",
+            Self::FontFaceAmbiguous => "FONT_FACE_AMBIGUOUS",
+            Self::InvalidCache => "INVALID_CACHE",
+            Self::FontIo => "FONT_IO",
+            Self::StyleUnavailable => "STYLE_UNAVAILABLE",
+            Self::Backend => "BACKEND",
+        }
+    }
+}
+
+impl PdfError {
+    /// 이 실패의 안정 분류를 반환한다.
+    ///
+    /// 크레이트 내부 매치라 와일드카드가 없다 — 새 [`PdfError`] variant 는
+    /// 조용히 기존 코드로 뭉개지는 대신 컴파일 오류가 된다.
+    pub fn code(&self) -> PdfErrorCode {
+        match self {
+            Self::NoRenderableCache { .. } => PdfErrorCode::NoRenderableCache,
+            Self::MissingLayoutCache { .. } => PdfErrorCode::MissingLayoutCache,
+            Self::UnsupportedContent { .. } => PdfErrorCode::UnsupportedContent,
+            Self::InternalInvariant { .. } => PdfErrorCode::InternalInvariant,
+            Self::GlyphsUnavailable { .. } => PdfErrorCode::GlyphsUnavailable,
+            Self::AmbiguousHeaderFooter { .. } => PdfErrorCode::AmbiguousHeaderFooter,
+            Self::FontUnresolved { .. } => PdfErrorCode::FontUnresolved,
+            Self::FontStyleUnavailable { .. } => PdfErrorCode::FontStyleUnavailable,
+            Self::ImageDataMissing { .. } => PdfErrorCode::ImageDataMissing,
+            Self::UnsupportedImageFormat { .. } => PdfErrorCode::UnsupportedImageFormat,
+            Self::ImageDecodeFailed { .. } => PdfErrorCode::ImageDecodeFailed,
+            Self::InvalidImageGeometry { .. } => PdfErrorCode::InvalidImageGeometry,
+            Self::ImageAssetConflict { .. } => PdfErrorCode::ImageAssetConflict,
+            Self::FontAxisMismatch { .. } => PdfErrorCode::FontAxisMismatch,
+            Self::FontEmbedRestricted { .. } => PdfErrorCode::FontEmbedRestricted,
+            Self::FontFaceAmbiguous { .. } => PdfErrorCode::FontFaceAmbiguous,
+            Self::InvalidCache { .. } => PdfErrorCode::InvalidCache,
+            Self::FontIo(_) => PdfErrorCode::FontIo,
+            Self::StyleUnavailable { .. } => PdfErrorCode::StyleUnavailable,
+            Self::Backend(_) => PdfErrorCode::Backend,
+        }
+    }
+}
+
 /// 이 크레이트의 `Result`.
 pub type PdfResult<T> = Result<T, PdfError>;
 
@@ -507,5 +628,139 @@ mod tests {
         // 에픽 §4 표: fill/set-cell 편집본 = "지원(경고)" — 옵션 뒤에 숨기지 않는다.
         assert_eq!(PartialCachePolicy::default(), PartialCachePolicy::WarnAndSkip);
         assert_eq!(PdfOptions::default().partial_cache, PartialCachePolicy::WarnAndSkip);
+    }
+
+    /// 선언 순서 그대로의 전 코드 목록 — 스냅샷 테스트의 입력.
+    ///
+    /// 갱신 강제는 **배열이 아니라 매치**가 한다: 새 variant 가 늘면
+    /// [`snapshot_of`] 와 [`index_of`] 의 와일드카드 없는 매치가 팔 누락으로
+    /// 컴파일 실패하고, [`index_of`] 에 다음 인덱스를 적는 순간 이 배열이
+    /// 그만큼 길어야 한다는 것이 [`index_of`] 대조 테스트로 드러난다.
+    /// 배열 리터럴 자체는 길이가 늘지 않아도 컴파일된다.
+    const ALL_CODES: [PdfErrorCode; 20] = [
+        PdfErrorCode::NoRenderableCache,
+        PdfErrorCode::MissingLayoutCache,
+        PdfErrorCode::UnsupportedContent,
+        PdfErrorCode::InternalInvariant,
+        PdfErrorCode::GlyphsUnavailable,
+        PdfErrorCode::AmbiguousHeaderFooter,
+        PdfErrorCode::FontUnresolved,
+        PdfErrorCode::FontStyleUnavailable,
+        PdfErrorCode::ImageDataMissing,
+        PdfErrorCode::UnsupportedImageFormat,
+        PdfErrorCode::ImageDecodeFailed,
+        PdfErrorCode::InvalidImageGeometry,
+        PdfErrorCode::ImageAssetConflict,
+        PdfErrorCode::FontAxisMismatch,
+        PdfErrorCode::FontEmbedRestricted,
+        PdfErrorCode::FontFaceAmbiguous,
+        PdfErrorCode::InvalidCache,
+        PdfErrorCode::FontIo,
+        PdfErrorCode::StyleUnavailable,
+        PdfErrorCode::Backend,
+    ];
+
+    /// `as_str` 과 **독립된** 기대값 — 구현 리팩터가 문자열을 바꾸면
+    /// 여기서 잡힌다. 와일드카드 금지: 새 코드는 컴파일 실패로 드러난다.
+    fn snapshot_of(code: PdfErrorCode) -> &'static str {
+        match code {
+            PdfErrorCode::NoRenderableCache => "NO_RENDERABLE_CACHE",
+            PdfErrorCode::MissingLayoutCache => "MISSING_LAYOUT_CACHE",
+            PdfErrorCode::UnsupportedContent => "UNSUPPORTED_CONTENT",
+            PdfErrorCode::InternalInvariant => "INTERNAL_INVARIANT",
+            PdfErrorCode::GlyphsUnavailable => "GLYPHS_UNAVAILABLE",
+            PdfErrorCode::AmbiguousHeaderFooter => "AMBIGUOUS_HEADER_FOOTER",
+            PdfErrorCode::FontUnresolved => "FONT_UNRESOLVED",
+            PdfErrorCode::FontStyleUnavailable => "FONT_STYLE_UNAVAILABLE",
+            PdfErrorCode::ImageDataMissing => "IMAGE_DATA_MISSING",
+            PdfErrorCode::UnsupportedImageFormat => "UNSUPPORTED_IMAGE_FORMAT",
+            PdfErrorCode::ImageDecodeFailed => "IMAGE_DECODE_FAILED",
+            PdfErrorCode::InvalidImageGeometry => "INVALID_IMAGE_GEOMETRY",
+            PdfErrorCode::ImageAssetConflict => "IMAGE_ASSET_CONFLICT",
+            PdfErrorCode::FontAxisMismatch => "FONT_AXIS_MISMATCH",
+            PdfErrorCode::FontEmbedRestricted => "FONT_EMBED_RESTRICTED",
+            PdfErrorCode::FontFaceAmbiguous => "FONT_FACE_AMBIGUOUS",
+            PdfErrorCode::InvalidCache => "INVALID_CACHE",
+            PdfErrorCode::FontIo => "FONT_IO",
+            PdfErrorCode::StyleUnavailable => "STYLE_UNAVAILABLE",
+            PdfErrorCode::Backend => "BACKEND",
+        }
+    }
+
+    /// 선언 순서상의 자리 — [`ALL_CODES`] 가 완전하고 순서가 맞는지 대조한다.
+    ///
+    /// 와일드카드 금지: 새 코드는 팔 누락으로 컴파일 실패하고, 그 팔에 적을
+    /// 수 있는 유일한 값(`20`)은 [`ALL_CODES`] 를 늘리지 않으면 범위 밖이다.
+    fn index_of(code: PdfErrorCode) -> usize {
+        match code {
+            PdfErrorCode::NoRenderableCache => 0,
+            PdfErrorCode::MissingLayoutCache => 1,
+            PdfErrorCode::UnsupportedContent => 2,
+            PdfErrorCode::InternalInvariant => 3,
+            PdfErrorCode::GlyphsUnavailable => 4,
+            PdfErrorCode::AmbiguousHeaderFooter => 5,
+            PdfErrorCode::FontUnresolved => 6,
+            PdfErrorCode::FontStyleUnavailable => 7,
+            PdfErrorCode::ImageDataMissing => 8,
+            PdfErrorCode::UnsupportedImageFormat => 9,
+            PdfErrorCode::ImageDecodeFailed => 10,
+            PdfErrorCode::InvalidImageGeometry => 11,
+            PdfErrorCode::ImageAssetConflict => 12,
+            PdfErrorCode::FontAxisMismatch => 13,
+            PdfErrorCode::FontEmbedRestricted => 14,
+            PdfErrorCode::FontFaceAmbiguous => 15,
+            PdfErrorCode::InvalidCache => 16,
+            PdfErrorCode::FontIo => 17,
+            PdfErrorCode::StyleUnavailable => 18,
+            PdfErrorCode::Backend => 19,
+        }
+    }
+
+    #[test]
+    fn all_codes_matches_declaration_order_without_gaps() {
+        for (i, code) in ALL_CODES.iter().enumerate() {
+            assert_eq!(index_of(*code), i, "ALL_CODES 순서가 index_of 와 어긋남: {code:?}");
+        }
+        // index_of 가 부여한 마지막 자리 = 배열 길이 - 1 (누락·중복 없음).
+        let max = ALL_CODES.iter().map(|c| index_of(*c)).max().expect("비지 않음");
+        assert_eq!(max + 1, ALL_CODES.len(), "index_of 자리와 배열 길이 불일치");
+    }
+
+    #[test]
+    fn error_code_as_str_snapshot_covers_every_variant() {
+        for code in ALL_CODES {
+            assert_eq!(code.as_str(), snapshot_of(code), "{code:?}");
+        }
+        // 문자열은 CLI `to-pdf --json` 의 `cause.code` 계약 — 충돌하면
+        // 두 코드가 한 덩어리로 집계된다.
+        let mut seen: Vec<&str> = ALL_CODES.iter().map(|c| c.as_str()).collect();
+        seen.sort_unstable();
+        let count = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "중복 코드 문자열");
+    }
+
+    #[test]
+    fn error_code_maps_representative_variants() {
+        let cases: Vec<(PdfError, PdfErrorCode)> = vec![
+            (PdfError::NoRenderableCache { section: 2 }, PdfErrorCode::NoRenderableCache),
+            (
+                PdfError::MissingLayoutCache { count: 3, first: "s0/p7".into() },
+                PdfErrorCode::MissingLayoutCache,
+            ),
+            (
+                PdfError::StyleUnavailable { what: "font name", location: "s0/p1".into() },
+                PdfErrorCode::StyleUnavailable,
+            ),
+            (
+                PdfError::FontIo(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),
+                PdfErrorCode::FontIo,
+            ),
+            (PdfError::Backend("krilla".into()), PdfErrorCode::Backend),
+        ];
+        for (err, code) in &cases {
+            assert_eq!(err.code(), *code, "{err:?}");
+            assert_eq!(err.code().as_str(), snapshot_of(*code), "{err:?}");
+        }
     }
 }

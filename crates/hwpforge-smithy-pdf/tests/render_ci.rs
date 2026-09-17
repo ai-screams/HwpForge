@@ -117,6 +117,10 @@ fn renders_synthetic_two_page_document() {
     let output = render_document(&input, &options()).expect("render");
     assert!(output.bytes.starts_with(b"%PDF-"), "PDF 헤더");
     assert_eq!(page_count(&output.bytes), 2, "v 리셋 = 새 쪽");
+    // 렌더러 집계(`pages`)는 실제 방출된 /Type/Page 수와 일치해야 한다 —
+    // 바이트 재파싱 없이 쓰려면 이 등식이 계약이다.
+    assert_eq!(output.pages, 2, "다쪽 문서는 2 를 보고한다");
+    assert_eq!(output.pages, page_count(&output.bytes), "집계 vs 실제 방출");
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
 
@@ -147,6 +151,9 @@ fn missing_cache_paragraph_warns_and_still_renders() {
     let input = PdfInput { document: &doc, styles: &styles };
     let output = render_document(&input, &options()).expect("render");
     assert!(output.bytes.starts_with(b"%PDF-"));
+    // 단쪽 경로: 스킵 문단이 있어도 `pages` 는 **방출된** 쪽만 센다.
+    assert_eq!(output.pages, 1, "한 쪽만 방출");
+    assert_eq!(output.pages, page_count(&output.bytes), "집계 vs 실제 방출");
     assert_eq!(
         output.warnings.iter().filter(|w| matches!(w, PdfWarning::ParagraphSkipped { .. })).count(),
         1

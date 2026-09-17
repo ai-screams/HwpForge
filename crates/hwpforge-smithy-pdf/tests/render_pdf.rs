@@ -52,6 +52,7 @@ fn rules_headerfooter_renders_two_pages() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 2, "W0 실측 42+18줄 = 2쪽");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
 }
 
 // ── W5-a/b 게이트 — 머리말/꼬리말 오버레이 + 쪽번호 합성 ──────
@@ -62,6 +63,7 @@ fn rules_pagenum_renders_three_pages_with_dedicated_style() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 3, "재저장 실측 3쪽");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
     // 본문 = charPr(0) 16pt bold 변조 · 쪽번호 = 전용 "쪽 번호" 스타일(10pt
     // regular) — bold 외에 regular HCRBatang 서브셋이 별도로 임베드돼야
     // 한다 (§8c 한컴 PDF 와 동일한 분리). bare 이름 등장 횟수로 확인.
@@ -86,6 +88,7 @@ fn rules_header_multi_renders_clean() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 2, "재저장 실측 2쪽");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
 
@@ -96,6 +99,7 @@ fn rules_header_overflow_renders_unclipped_with_warning() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 2, "재저장 실측 2쪽");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
     assert!(
         output.warnings.iter().any(|w| matches!(
             w,
@@ -120,6 +124,7 @@ fn sample_odd_even_headers_render_three_pages() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 3, "한컴 PDF 실측 3쪽 (홀/짝/홀)");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
 
@@ -251,7 +256,7 @@ fn probe_blank_hpc_full_render_degraded() {
             }
             let hay = String::from_utf8_lossy(&out.bytes);
             let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
-            eprintln!("PAGES = {pages} (한컴 실측 9)");
+            eprintln!("PAGES = {pages} (렌더러 집계 {}, 한컴 실측 9)", out.pages);
             eprintln!("warnings = {kinds:?}");
         }
         Err(e) => eprintln!("REJECTED: {e}"),
@@ -270,6 +275,7 @@ fn rules_bold_renders_with_real_bold_face() {
     let hay = String::from_utf8_lossy(&output.bytes);
     let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
     assert_eq!(pages, 1, "재저장 실측 1쪽");
+    assert_eq!(output.pages, pages, "렌더러 집계 vs 실제 방출 /Type/Page");
     assert!(hay.contains("HCRBatang-Bold"), "Bold face 임베드 없음 — regular 강등 의심");
 }
 
