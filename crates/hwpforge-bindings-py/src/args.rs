@@ -17,7 +17,7 @@ use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_smithy_pdf::font::FontDiscovery;
 use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
+use pyo3::types::{PyByteArray, PyBytes, PyMemoryView, PySequence, PyString};
 use pythonize::depythonize;
 use serde::de::DeserializeOwned;
 
@@ -52,47 +52,62 @@ pub(crate) fn discovery(name: &str) -> Result<FontDiscovery, ConvertOpsError> {
 /// element. Both are accepted because the difference is invisible in Python:
 /// a `str` *is* a sequence of one-character strings, so a caller that passes
 /// prose where a list belongs would otherwise get one paragraph per character.
-/// PyO3 refuses that shape on its own (`Vec<T>` rejects `PyString` before it
-/// tries the sequence protocol), but refusing is not the useful answer when
-/// the intent is unambiguous: a single string is a single paragraph.
 ///
-/// `bytes` is rejected rather than decoded. It is a sequence too, and
-/// `b"ab"` iterates into integers, so accepting it would mean guessing an
-/// encoding for something the caller never said was text.
+/// Everything else is refused, because "iterable" is a much weaker promise
+/// than "sequence" and the difference decides what a caller gets:
+///
+/// - a **mapping** would insert its keys, which is never what the caller meant;
+/// - a **set** has no order, so the paragraphs would land in a different order
+///   on a different run;
+/// - a **generator** has no length and is consumed by reading it, so a retry
+///   after any later failure would insert nothing;
+/// - **`bytes`**, **`bytearray`** and **`memoryview`** are sequences of
+///   integers, and turning them into text means guessing an encoding the
+///   caller never gave.
+///
+/// So the check is `collections.abc.Sequence` (which `list`, `tuple` and a
+/// registered custom sequence satisfy, and a `dict`, `set` or generator does
+/// not), minus the binary sequences, and the elements are read by index.
+///
+/// An empty sequence is passed through: refusing it here would take the
+/// decision away from the operation, which reports `INSERT_TEXT_REQUIRED`.
 ///
 /// # Errors
 ///
-/// `TypeError` naming the argument when the value is `bytes`, is not
-/// iterable, or holds an element that is not a string.
+/// `TypeError` naming the argument when the value is not a string or a
+/// sequence of strings, and naming the index when one element is not a string.
 pub(crate) fn paragraph_texts(name: &str, value: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     if let Ok(single) = value.cast::<PyString>() {
         return Ok(vec![single.extract::<String>()?]);
     }
-    if value.is_instance_of::<PyBytes>() {
-        return Err(PyTypeError::new_err(format!(
-            "{name}: expected a str or a sequence of str, got bytes"
-        )));
+    if value.is_instance_of::<PyBytes>()
+        || value.is_instance_of::<PyByteArray>()
+        || value.is_instance_of::<PyMemoryView>()
+    {
+        return Err(not_paragraphs(name, value));
     }
-    let items = value.try_iter().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{name}: expected a str or a sequence of str, got {}",
-            type_name(value)
-        ))
-    })?;
-    items
-        .enumerate()
-        .map(|(index, item)| {
-            let item = item?;
-            item.cast::<PyString>()
-                .map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "{name}[{index}]: expected str, got {}",
-                        type_name(&item)
-                    ))
-                })?
-                .extract()
-        })
-        .collect()
+    let Ok(sequence) = value.cast::<PySequence>() else {
+        return Err(not_paragraphs(name, value));
+    };
+
+    let length = sequence.len()?;
+    let mut texts = Vec::with_capacity(length);
+    for index in 0..length {
+        let item = sequence.get_item(index)?;
+        let text = item.cast::<PyString>().map_err(|_| {
+            PyTypeError::new_err(format!("{name}[{index}]: expected str, got {}", type_name(&item)))
+        })?;
+        texts.push(text.extract::<String>()?);
+    }
+    Ok(texts)
+}
+
+/// The refusal both non-sequence rejections share.
+fn not_paragraphs(name: &str, value: &Bound<'_, PyAny>) -> PyErr {
+    PyTypeError::new_err(format!(
+        "{name}: expected a str or a sequence of str, got {}",
+        type_name(value)
+    ))
 }
 
 /// The Python type name of a value, for a message a caller can act on.
@@ -166,6 +181,20 @@ mod tests {
     mod paragraphs {
         use super::*;
 
+        /// `Result::unwrap_err`, but reporting the success value's contents.
+        trait UnwrapErrOr {
+            fn unwrap_err_or_else(self, message: impl FnOnce(&Vec<String>) -> String) -> String;
+        }
+
+        impl UnwrapErrOr for PyResult<Vec<String>> {
+            fn unwrap_err_or_else(self, message: impl FnOnce(&Vec<String>) -> String) -> String {
+                match self {
+                    Ok(texts) => panic!("{}", message(&texts)),
+                    Err(error) => error.to_string(),
+                }
+            }
+        }
+
         fn texts(source: &str) -> PyResult<Vec<String>> {
             // The test binary embeds an interpreter rather than being loaded
             // by one, so it has to start before any Python API is touched.
@@ -212,6 +241,71 @@ mod tests {
             let error = texts("7").expect_err("an int is not paragraphs");
 
             assert!(error.to_string().contains("text"), "{error}");
+        }
+
+        /// Iterating anything iterable would take a mapping's keys, a set's
+        /// arbitrary order, and a generator that a retry cannot read twice.
+        #[test]
+        fn an_iterable_that_is_not_a_sequence_is_refused() {
+            for (source, named) in [
+                ("{'first': 1, 'second': 2}", "dict"),
+                ("{'가', '나'}", "set"),
+                ("(c for c in ['가', '나'])", "generator"),
+                ("iter(['가'])", "list_iterator"),
+            ] {
+                let error = texts(source)
+                    .unwrap_err_or_else(|texts| format!("{source} was accepted as {texts:?}"));
+
+                assert!(error.contains("expected a str or a sequence of str"), "{source}: {error}");
+                assert!(error.contains(named), "{source}: {error}");
+            }
+        }
+
+        #[test]
+        fn a_binary_sequence_is_refused_even_though_it_is_a_sequence() {
+            for source in ["b'ab'", "bytearray(b'ab')", "bytearray()", "memoryview(b'ab')"] {
+                let error = texts(source).expect_err("binary is not text");
+
+                assert!(
+                    error.to_string().contains("text: expected a str or a sequence of str"),
+                    "{source}: {error}"
+                );
+            }
+        }
+
+        /// The empty list is the operation's call, not this helper's: it
+        /// reports `INSERT_TEXT_REQUIRED`.
+        #[test]
+        fn an_empty_sequence_is_passed_through_but_an_empty_bytearray_is_not() {
+            assert!(texts("[]").expect("an empty list is a valid argument").is_empty());
+            assert!(texts("()").expect("an empty tuple is a valid argument").is_empty());
+            texts("bytearray()").expect_err("an empty bytearray is still binary");
+        }
+
+        /// A `str` subclass is still one paragraph, and a registered custom
+        /// sequence is still a sequence.
+        #[test]
+        fn subclasses_and_registered_sequences_are_honoured() {
+            assert_eq!(
+                texts("type('S', (str,), {})('가나')").expect("a str subclass is a str"),
+                vec!["가나".to_owned()]
+            );
+            assert_eq!(
+                texts("__import__('collections').UserList(['가', '나'])").expect("a sequence"),
+                vec!["가".to_owned(), "나".to_owned()]
+            );
+        }
+
+        /// `UserString` wraps a string rather than subclassing one, so it is
+        /// not a `str`, and as a registered sequence its elements are more
+        /// `UserString`s. Reading it as paragraphs would be the per-character
+        /// explosion again, so it is refused and the caller converts it.
+        #[test]
+        fn a_string_like_wrapper_is_refused_rather_than_read_as_characters() {
+            let error = texts("__import__('collections').UserString('가나')")
+                .expect_err("not a str and not a sequence of str");
+
+            assert!(error.to_string().contains("expected str, got UserString"), "{error}");
         }
     }
 

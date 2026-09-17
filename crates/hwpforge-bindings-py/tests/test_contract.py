@@ -382,3 +382,68 @@ def test_a_string_is_never_taken_as_a_sequence_of_characters(call, generated_byt
     """
     with pytest.raises(TypeError):
         call(generated_bytes)
+
+
+ACCEPTED_TEXT = [
+    pytest.param(lambda: "가", 1, id="str"),
+    pytest.param(lambda: ["가", "나"], 2, id="list"),
+    pytest.param(lambda: ("가", "나"), 2, id="tuple"),
+]
+
+REFUSED_TEXT = [
+    pytest.param(lambda: {"a": 1}, id="dict"),
+    pytest.param(lambda: {"가"}, id="set"),
+    pytest.param(lambda: (character for character in "가나"), id="generator"),
+    pytest.param(lambda: bytearray(), id="bytearray"),
+    pytest.param(lambda: b"x", id="bytes"),
+    pytest.param(lambda: memoryview(b"x"), id="memoryview"),
+    pytest.param(lambda: 3, id="int"),
+    pytest.param(lambda: None, id="none"),
+]
+
+
+@pytest.mark.parametrize(("make", "expected"), ACCEPTED_TEXT)
+def test_insert_para_accepts_a_string_or_a_real_sequence(
+    make, expected: int, generated_bytes: bytes
+) -> None:
+    """One paragraph for a string, one per element for a list or a tuple."""
+    _data, report = _hwpforge.insert_para(generated_bytes, section=0, anchor=0, text=make())
+
+    assert report["inserted"] == expected
+
+
+@pytest.mark.parametrize("make", REFUSED_TEXT)
+def test_insert_para_refuses_anything_else_iterable(make, generated_bytes: bytes) -> None:
+    """Being iterable is not enough to be a list of paragraphs.
+
+    A mapping would insert its keys, a set would insert in an order nobody
+    chose, a generator would be consumed by the call and leave the caller with
+    an empty one, and the buffer types iterate into integers. Each is a
+    mistake worth a `TypeError` rather than a document the caller did not ask
+    for.
+    """
+    with pytest.raises(TypeError):
+        _hwpforge.insert_para(generated_bytes, section=0, anchor=0, text=make())
+
+
+def test_insert_para_names_the_element_that_was_not_a_string(generated_bytes: bytes) -> None:
+    """The message points at the offending index, not just at the argument."""
+    with pytest.raises(TypeError, match=r"text\[1\]"):
+        # ty: ignore[invalid-argument-type] - the wrong element type is the point
+        _hwpforge.insert_para(generated_bytes, section=0, anchor=0, text=["가", 1])
+
+
+def test_insert_para_names_the_type_it_would_not_take(generated_bytes: bytes) -> None:
+    with pytest.raises(TypeError, match="got generator"):
+        # ty: ignore[invalid-argument-type] - a generator is not a sequence, which is the point
+        _hwpforge.insert_para(
+            generated_bytes, section=0, anchor=0, text=(character for character in "가나")
+        )
+
+
+def test_insert_para_with_an_empty_sequence_is_an_operation_error(generated_bytes: bytes) -> None:
+    """Empty is well-typed but meaningless, so the operation refuses it, not the converter."""
+    with pytest.raises(HwpForgeError) as caught:
+        _hwpforge.insert_para(generated_bytes, section=0, anchor=0, text=[])
+
+    assert caught.value.code == "INSERT_TEXT_REQUIRED"

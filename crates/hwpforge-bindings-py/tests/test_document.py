@@ -463,7 +463,11 @@ def test_an_inserted_paragraph_is_still_there_after_saving_and_reopening(
     path = tmp_path / "inserted.hwpx"
     inserted.document.save(path)
 
-    assert "저장 뒤에도 남는 문단" in _texts(Document.open(path))
+    reopened = _texts(Document.open(path))
+    assert "저장 뒤에도 남는 문단" in reopened
+    assert len(reopened) == len(_texts(Document.from_bytes(generated_bytes))) + 1, (
+        f"exactly one paragraph should have survived the round trip, got {reopened}"
+    )
 
 
 @pytest.mark.parametrize(
