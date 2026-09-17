@@ -11,7 +11,37 @@ license.workspace = true
 publish = false
 readme.workspace = true
 repository.workspace = true
-rust-version.workspace = true
-description = "Tongs — Python bindings for HwpForge via PyO3 (not yet implemented)"
+# `to_pdf` reaches smithy-pdf through hwpforge-convert, whose krilla 0.8
+# dependency requires 1.92 — the same MSRV exception smithy-pdf, convert and
+# bindings-cli already take. publish = false, so there is no MSRV consumer
+# contract; CI's 1.88 lane excludes this crate and the 1.92 step checks it.
+rust-version = "1.92"
+description = "Tongs — Python bindings for HwpForge via PyO3"
+
+[lib]
+name = "_hwpforge"
+crate-type = ["cdylib"]
+
+[features]
+## Enabled by maturin only (`[tool.maturin] features`). It leaves the libpython
+## symbols undefined so that the shared object loads inside any CPython >= 3.9
+## (abi3). Never on by default: a test binary built with it cannot link.
+extension-module = ["pyo3/extension-module"]
 
 [dependencies]
+# publish = false: path-only deps (no version pin), the bindings-cli / convert
+# convention — release-plz can bump the workspace version without a `^x`
+# requirement failing against an already-bumped publish = false sibling.
+#
+# `schemars` is the umbrella's forwarding feature; `ops::schema` is gated on it.
+hwpforge = { path = "../hwpforge", features = ["ops", "schemars"] }
+hwpforge-convert = { path = "../hwpforge-convert" }
+hwpforge-foundation = { path = "../hwpforge-foundation" }
+# `ToPdfOptions::discovery` is a public field typed `FontDiscovery`, which
+# convert does not re-export, so naming it needs the renderer crate — the same
+# direct dependency bindings-cli takes for `to-pdf`.
+hwpforge-smithy-pdf = { path = "../hwpforge-smithy-pdf" }
+pyo3 = { workspace = true }
+pythonize = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
