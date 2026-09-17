@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/v0.16.4...v0.16.5) - 2026-09-17
+
+### Added
+
+- *(smithy-hwpx)* fill·insert·delete 진단 쌍둥이, stamp 의 코덱 양방향 경고, umbrella 배선
+
+- *(hwpforge)* ops 스타일·마크다운·스키마 작업 — templates·restyle·validate·to_md·convert_md·decode_md·schema
+
+- *(hwpforge)* ops 편집·스탬프 작업 — fill·set_cell·insert_para·delete_para·stamp_plan·stamp
+
+- *(hwpforge)* ops 조회·교환 작업 — outline·read·fields·to_json·export_section·from_json·patch·diff·InspectMeta
+
+- *(hwpforge)* ops 오류 모델을 단계 구분으로 — Decode/Encode·MdDecode/MdEncode, 의미 손상 봉투, 인자 거부 코드
+
+- *(hwpforge)* ops 층 골격 — 오류·경고 모델, feature, 파일 해석 헬퍼, inspect, 인벤토리 테스트
+
+
+### Documentation
+
+- 브랜치 전체 리뷰 반영 — 릴리스 이력 포인터·architecture mermaid·MSRV 예외 정정
+
+- 공개 문서를 0.16.4 실측에 맞게 정정 — CLI 22·MCP 19·smithy-pdf·설치 명령·정책 문서
+
+
+### Fixed
+
+- *(hwpforge)* `fields` 의 wire 응답에 admission 디코더 경고를 싣는다
+
+- *(hwpforge)* ops 가 성공 경로의 경고를 버리지 않도록 진단 보존 API 에 배선, Meta non_exhaustive, 인벤토리 정밀화
+
+
 ## [0.5.0](https://github.com/ai-screams/HwpForge/compare/v0.4.0...v0.5.0) - 2026-03-22
 
 ### Added

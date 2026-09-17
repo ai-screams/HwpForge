@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.4...hwpforge-core-v0.16.5) - 2026-09-17
+
+### Added
+
+- *(core)* 불변 문단 순회기 for_each_paragraph 추가
+
+
+### Documentation
+
+- *(core)* 문단 순회기의 정확한 재귀 집합과 이미지 캡션 갭을 명시
+
+
 ## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.3...hwpforge-core-v0.16.4) - 2026-08-28
 
 ### Fixed

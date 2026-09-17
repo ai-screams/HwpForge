@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.4...hwpforge-smithy-md-v0.16.5) - 2026-09-17
+
+### Added
+
+- *(smithy-md)* AssetOutcome 을 kind 내부 태그 snake_case 로 직렬화
+
+- *(smithy-md)* 이미지 자산 해석을 계획·파일 읽기·임베드 3단계 assets 계약으로 분리
+
+
+### Documentation
+
+- 브랜치 전체 리뷰 반영 — 릴리스 이력 포인터·architecture mermaid·MSRV 예외 정정
+
+- 공개 문서를 0.16.4 실측에 맞게 정정 — CLI 22·MCP 19·smithy-pdf·설치 명령·정책 문서
+
+
+### Fixed
+
+- *(smithy-md)* finish_assets 가 호출자의 계획과 재수집 계획을 전건 대조
+
+
 ## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.3...hwpforge-smithy-md-v0.16.4) - 2026-08-28
 
 ### Added
