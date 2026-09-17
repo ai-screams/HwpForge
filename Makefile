@@ -1,4 +1,4 @@
-.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
+.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv msrv-pdf ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
 
 AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
 AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
@@ -40,6 +40,7 @@ help:
 	@echo "  make deny             Dependency license/advisory check"
 	@echo "  make machete          Find unused dependencies"
 	@echo "  make msrv             MSRV compatibility check (Rust 1.88)"
+	@echo "  make msrv-pdf         MSRV check for the 1.92 crates + fuzz smoke"
 	@echo ""
 	@echo "CI:"
 	@echo "  make ci-fast          Fast CI checks (fmt/clippy/test/deny/lint-md)"
@@ -136,13 +137,30 @@ deny:
 machete:
 	cargo machete
 
+# ci.yml `Verify › MSRV (1.88)` 와 같은 제외 목록 — 1.92 를 선언한 네 크레이트는
+# 전부 publish=false 라 MSRV 소비자 계약이 없다. 목록이 어긋나면 로컬만 통과하고
+# 큐에서 깨지므로 두 곳을 함께 고친다.
 msrv:
-	cargo +1.88 check --workspace --all-features
+	cargo +1.88 check --workspace --all-features \
+	  --exclude hwpforge-smithy-pdf \
+	  --exclude hwpforge-bindings-cli \
+	  --exclude hwpforge-convert \
+	  --exclude hwpforge-bindings-py
+
+# 위에서 제외한 넷의 실질 MSRV 레인 + fuzz 스모크 (fuzz 는 별도 워크스페이스라
+# --workspace 가 닿지 않는데 convert 를 path 로 의존한다).
+msrv-pdf:
+	cargo +1.92 check --all-features \
+	  -p hwpforge-smithy-pdf \
+	  -p hwpforge-bindings-cli \
+	  -p hwpforge-convert \
+	  -p hwpforge-bindings-py
+	cargo +1.92 check --manifest-path fuzz/Cargo.toml
 
 ci-fast: fmt clippy test deny lint-md
 	@echo "✅ Fast CI checks passed!"
 
-ci-full: ci-fast cov msrv
+ci-full: ci-fast cov msrv msrv-pdf
 	@echo "✅ Full CI checks passed!"
 
 ci: ci-fast
