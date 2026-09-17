@@ -516,6 +516,41 @@ pub enum EncodeWarning {
     },
 }
 
+impl EncodeWarning {
+    /// 이 경고가 **의미 손상**인지 — 즉 산출 바이트가 입력의 의미를 잃었는지.
+    ///
+    /// # 계약
+    ///
+    /// 재인코드 편집기([`crate::stamp`] 스탬퍼, [`crate::cell_edit`] 셀 편집,
+    /// 그리고 앞으로 추가될 restyle 연산)는 preserve-first 다 — 인코드가
+    /// 의미 손상 경고를 내면 **바이트를 방출하지 않고 거부**해야 한다
+    /// (fail-closed). admission 게이트는 Core 비교라 wire 단계에서 일어난
+    /// 손상을 보지 못하므로, 이 경고가 유일한 신호다.
+    ///
+    /// **이 메서드가 그 집합의 유일한 정의다.** 편집기마다 손으로 적은
+    /// 변형 목록을 두지 말고 여기를 호출한다. 내부 `match` 는 와일드카드
+    /// 없이 전 변형을 나열하므로, 새 변형이 추가되면 컴파일러가 분류를
+    /// 강제한다 (같은 크레이트라 `#[non_exhaustive]` 가 막지 않는다).
+    ///
+    /// # 현재 분류
+    ///
+    /// | 변형 | 의미 손상 | 사유 |
+    /// | -- | -- | -- |
+    /// | [`Self::NoteHeadSkipped`] | 예 | 각주/미주 가시 번호가 산출물에서 사라진다 |
+    /// | [`Self::TitleMarkSkipped`] | 예 | TOC 제목 표식이 붙지 않아 목차가 어긋난다 |
+    /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
+    /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 렌더러가 재생성한다 |
+    #[must_use]
+    pub fn is_semantic_loss(&self) -> bool {
+        match self {
+            Self::NoteHeadSkipped { .. }
+            | Self::TitleMarkSkipped { .. }
+            | Self::NoteRestartIgnored { .. } => true,
+            Self::LayoutCacheDropped { .. } => false,
+        }
+    }
+}
+
 impl std::fmt::Display for EncodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -532,6 +567,37 @@ impl std::fmt::Display for EncodeWarning {
                 write!(f, "note restart ignored at {path}: {reason}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod is_semantic_loss_tests {
+    use super::EncodeWarning;
+    use crate::decoder::{ParagraphPath, PathSeg};
+
+    fn path() -> ParagraphPath {
+        ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(3)])
+    }
+
+    #[test]
+    fn note_and_title_mark_warnings_are_semantic_loss() {
+        for warning in [
+            EncodeWarning::NoteHeadSkipped { path: path(), reason: "titleMark first run".into() },
+            EncodeWarning::TitleMarkSkipped {
+                path: path(),
+                reason: "placeholder first run".into(),
+            },
+            EncodeWarning::NoteRestartIgnored { path: path(), reason: "ON_SECTION".into() },
+        ] {
+            assert!(warning.is_semantic_loss(), "expected semantic loss: {warning:?}");
+        }
+    }
+
+    #[test]
+    fn layout_cache_dropped_is_not_semantic_loss() {
+        let warning =
+            EncodeWarning::LayoutCacheDropped { path: path(), reason: "ledger failed".into() };
+        assert!(!warning.is_semantic_loss(), "layout cache is regenerable: {warning:?}");
     }
 }
 
