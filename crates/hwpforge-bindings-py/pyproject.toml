@@ -1,0 +1,93 @@
+[build-system]
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
+
+[project]
+name = "hwpforge"
+dynamic = ["version"]
+description = "Read, edit and generate Korean HWP/HWPX documents from Python"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Pignuante", email = "hanyul.ryu@hanyul.xyz" }]
+keywords = ["hwp", "hwpx", "hancom", "hangul", "korean"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://ai-screams.github.io/HwpForge/"
+Repository = "https://github.com/ai-screams/HwpForge"
+Changelog = "https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["maturin>=1.15,<2", "pytest>=8", "coverage>=7", "ruff>=0.16", "ty>=0.0.81"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "hwpforge._hwpforge"
+features = ["extension-module"]
+# Keep the build tree's bytecode out of the wheel: an abi3 wheel serves every
+# CPython from 3.9 up, and a .pyc compiled by one of them is useless to the rest.
+exclude = ["**/__pycache__/**", "**/*.pyc"]
+# Design section 2.4. `pypi` keeps the platform tag to one PyPI will accept, on
+# every platform; `repair` bundles the external libraries a manylinux wheel may
+# not assume. Both are values `maturin 1.15 build` accepts (verified against
+# `maturin build --help`); they are ignored off Linux.
+compatibility = "pypi"
+auditwheel = "repair"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "D", "PYI", "PT"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hwpforge"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ty.environment]
+python-version = "3.9"
+
+[tool.ty.src]
+include = ["python", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -W error"
+xfail_strict = true
+
+[tool.coverage.run]
+source = ["hwpforge"]
+branch = true
+
+[tool.coverage.paths]
+package = ["python/hwpforge", "*/site-packages/hwpforge"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
