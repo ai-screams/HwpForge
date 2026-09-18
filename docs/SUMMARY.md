@@ -12,6 +12,7 @@
 
 # 사용 가이드
 
+- [Python](guide/python.md)
 - [HWPX 인코딩/디코딩](guide/hwpx-codec.md)
 - [메타데이터 (Metadata)](guide/metadata.md)
 - [Markdown에서 HWPX로](guide/markdown-bridge.md)
