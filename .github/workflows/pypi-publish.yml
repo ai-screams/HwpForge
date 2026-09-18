@@ -424,39 +424,3 @@ jobs:
           PUBLISH_URL: https://upload.pypi.org/legacy/
           CHECK_URL: https://pypi.org/simple/
         run: bash .github/scripts/publish_dist.sh
-
-  attach-to-release:
-    name: "Attach › GitHub Release"
-    needs: [resolve, publish-pypi]
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # 신뢰 ref — 이 잡이 실행하는 것은 `.github/scripts/*` 뿐이다.
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Assert the tag still points at the commit we built
-        env:
-          TAG: ${{ needs.resolve.outputs.tag }}
-          EXPECTED_SHA: ${{ github.sha }}
-        run: bash .github/scripts/assert_tag_sha.sh
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          pattern: dist-${{ needs.resolve.outputs.tag }}-*
-          merge-multiple: true
-          path: dist
-      - name: Upload the artifacts to the release
-        # 설계 §2.4 "상대 전달": 상대는 Release 에서 manylinux_2_28 wheel 을 받는다.
-        # `release` 이벤트에서만 도는 잡이므로 워크스페이스 릴리스에만 붙는다 —
-        # `py-v*` 는 PyPI 로만 나간다 (README 가 그렇게 적혀 있다).
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.resolve.outputs.tag }}
-        run: |
-          set -euo pipefail
-          find dist -maxdepth 1 -type f -print
-          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
