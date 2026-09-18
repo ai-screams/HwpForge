@@ -9,6 +9,7 @@ its result is matched against `_hwpforge.pyi`.
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
@@ -27,7 +28,7 @@ from conftest import FONT_UNRESOLVED, INVALID_CACHE, all_paragraphs
 from hwpforge import HwpForgeError, _hwpforge
 
 if TYPE_CHECKING:
-    from hwpforge._hwpforge import StampRequestV2
+    from hwpforge._hwpforge import StampAction, StampCandidate, StampRequestV2, StampSpec
 
 
 def _always_reports_warnings(name: str) -> bool:
@@ -329,11 +330,15 @@ def test_inspect_includes_the_style_summary_only_when_asked(table_bytes: bytes) 
 def test_stamp_includes_the_manifest_only_when_asked(
     generated_bytes: bytes, stamp_request: StampRequestV2
 ) -> None:
+    """`manifest` is the only key that comes and goes; the apply-phase outcome
+    (`stamped`, `stamped_cells`, `ignored`, `skipped_guarded`) is always there,
+    manifest or not."""
     _bytes, without = _hwpforge.stamp(generated_bytes, request=stamp_request, manifest=False)
     _again, with_manifest = _hwpforge.stamp(generated_bytes, request=stamp_request, manifest=True)
 
-    assert set(without) == {"warnings"}
-    assert set(with_manifest) == {"manifest", "warnings"}
+    apply_phase = {"stamped", "stamped_cells", "ignored", "skipped_guarded", "warnings"}
+    assert set(without) == apply_phase
+    assert set(with_manifest) == apply_phase | {"manifest"}
     _keys_match_stub(with_manifest["manifest"], "StampManifest")
 
 
@@ -447,3 +452,117 @@ def test_insert_para_with_an_empty_sequence_is_an_operation_error(generated_byte
         _hwpforge.insert_para(generated_bytes, section=0, anchor=0, text=[])
 
     assert caught.value.code == "INSERT_TEXT_REQUIRED"
+
+
+# ── inspect: shallow vs. deep counts ───────────────────────────
+
+
+def test_inspect_reports_shallow_and_deep_table_counts_separately(
+    nested_table_bytes: bytes,
+) -> None:
+    """A table nested inside another table's cell is deep-only for the outer count."""
+    report = _hwpforge.inspect(nested_table_bytes)
+
+    section = report["section_details"][0]
+    assert section["top_level_tables"] == 1, "only the outer table is a top-level run"
+    assert section["tables"] == 2, "the nested table is counted deeply"
+    assert section["top_level_tables"] != section["tables"]
+    assert section["top_level_images"] == 0
+    assert section["top_level_charts"] == 0
+
+
+# ── from_json ───────────────────────────────────────────────────
+
+
+def test_from_json_reports_the_generated_paragraph_count(table_bytes: bytes) -> None:
+    """`paragraphs` counts top-level (body-flow) paragraphs only, the same
+    definition `InspectSection.top_level_paragraphs` uses — not the deep count
+    that also walks into table cells."""
+    exported = _hwpforge.to_json(table_bytes)
+    section_details = _hwpforge.inspect(table_bytes)["section_details"]
+    expected = sum(section["top_level_paragraphs"] for section in section_details)
+
+    _data, report = _hwpforge.from_json(json.dumps(exported["document"]))
+
+    assert report["paragraphs"] == expected
+
+
+def test_from_json_without_styles_falls_back_to_the_full_default_registry(
+    table_bytes: bytes,
+) -> None:
+    """No `styles` in the JSON and no `base` still yields a document with real
+    char/paragraph shapes, not a bare font-only stand-in."""
+    exported = _hwpforge.to_json(table_bytes, styles=False)
+    assert "styles" not in exported["document"]
+
+    data, _report = _hwpforge.from_json(json.dumps(exported["document"]))
+
+    insp = _hwpforge.inspect(data)
+    assert insp["sections"] >= 1
+    view = _hwpforge.read(data, section=0, paras="0")
+    assert view["paragraphs"] is not None
+
+    with_styles = _hwpforge.to_json(data, styles=True)["document"]["styles"]
+    assert with_styles["fonts"], "the default preset registry defines fonts"
+    assert with_styles["char_shapes"], "the default preset registry defines char shapes"
+    assert with_styles["para_shapes"], "the default preset registry defines para shapes"
+
+
+# ── stamp: apply-phase counters ────────────────────────────────
+
+
+def test_stamp_reports_the_apply_phase_outcome(stamp_placeholder_bytes: bytes) -> None:
+    """One candidate named, one explicitly ignored, one left because it is guarded."""
+    plan = _hwpforge.stamp_plan(stamp_placeholder_bytes)
+    unguarded = [c for c in plan["text"] if c["guard"] is None]
+    assert len(unguarded) >= 2, "the fixture must offer at least two unguarded candidates"
+
+    def spec(candidate: StampCandidate, action: StampAction) -> StampSpec:
+        return {
+            "section": candidate["section"],
+            "path": candidate["path"],
+            "span": candidate["span"],
+            "marker": candidate["marker"],
+            "action": action,
+        }
+
+    text: list[StampSpec] = [
+        spec(unguarded[0], {"field": {"name": "게이트필드1", "hint": None}}),
+        spec(unguarded[1], "ignore"),
+    ]
+    request: StampRequestV2 = {
+        "schema_version": plan["schema_version"],
+        "source_sha256": plan["source_sha256"],
+        "text": text,
+        "cells": [],
+    }
+
+    _data, report = _hwpforge.stamp(stamp_placeholder_bytes, request=request, manifest=True)
+
+    assert len(report["stamped"]) == 1
+    assert report["stamped"][0]["name"] == "게이트필드1"
+    assert report["stamped_cells"] == []
+    assert report["ignored"] == 1
+    assert report["skipped_guarded"] >= 1, "the ※ instruction-context checkbox is guarded"
+    for field in report["stamped"]:
+        _keys_match_stub(field, "StampedField")
+
+
+# ── convert_md: every built-in preset ──────────────────────────
+
+
+def test_convert_md_accepts_every_builtin_preset() -> None:
+    presets = [p["name"] for p in _hwpforge.templates()["presets"]]
+    assert presets, "the preset table must not be empty"
+
+    for name in presets:
+        data, report = _hwpforge.convert_md("# 제목\n\n본문입니다.\n", preset=name)
+        assert data, f"preset {name!r} produced no bytes"
+        assert report["sections"] == 1
+
+
+def test_convert_md_rejects_an_unknown_preset() -> None:
+    with pytest.raises(HwpForgeError) as caught:
+        _hwpforge.convert_md("# 제목\n\n본문입니다.\n", preset="no-such-preset")
+
+    assert caught.value.code == "PRESET_NOT_FOUND"
