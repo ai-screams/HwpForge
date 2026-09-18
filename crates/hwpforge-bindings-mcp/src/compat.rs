@@ -182,8 +182,14 @@ const TABLE: &[Row] = &[
     row!(ToJson, JsonSerializeFailed, "SERIALIZE_ERROR", "This may be a bug."),
     row!(ToJson, GridAddrProjectionFailed, "GRID_ADDR_PROJECTION_FAILED", "This may be a bug."),
     row!(ToJson, PatchFailed, "PATCH_ERROR", "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow."),
-    row!(ToJson, SectionWorkflowFailed, "SECTION_WORKFLOW_ERROR", "Update hwpforge so this MCP binding understands the newer section workflow error."),
     // SectionOutOfRange / SectionIndexMismatch: dynamic hint, see tool_error.
+    // The legacy `_ => SECTION_WORKFLOW_ERROR` catch-all: no row here, see
+    // tool_error's `OpsError::SectionWorkflow(_)` fallback arm — `ops`'s own
+    // `section_workflow_code()` classifies every unlisted `SectionWorkflowError`
+    // variant as `UPSTREAM_UNMAPPED`, never `OpsCode::SectionWorkflowFailed`
+    // (that code is declared in the table but unreachable from any
+    // `hwpforge` function; grep confirms it), so a `TABLE` row keyed on
+    // `SectionWorkflowFailed` would never fire.
 
     // ── FromJson ───────────────────────────────────────────────────
     row!(FromJson, JsonParseFailed, "JSON_PARSE_ERROR", "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output."),
@@ -202,8 +208,10 @@ const TABLE: &[Row] = &[
     row!(Patch, GridAddrInvalid, "GRID_ADDR_INVALID", "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry."),
     row!(Patch, DecodeFailed, "DECODE_ERROR", "Check that the base file is valid HWPX."),
     row!(Patch, PatchFailed, "PATCH_ERROR", "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow."),
-    row!(Patch, SectionWorkflowFailed, "SECTION_WORKFLOW_ERROR", "Update hwpforge so this MCP binding understands the newer section workflow error."),
     // SectionOutOfRange / SectionIndexMismatch: dynamic hint, see tool_error.
+    // SectionWorkflowFailed: unreachable, see the ToJson block's note above
+    // — the legacy `SECTION_WORKFLOW_ERROR` catch-all is the
+    // `OpsError::SectionWorkflow(_)` fallback arm in tool_error.
 
     // ── Diff ───────────────────────────────────────────────────────
     row!(Diff, DecodeFailed, "DECODE_ERROR", "Both inputs must be valid HWPX. For .hwp files, convert with hwpforge_convert first."),
@@ -224,7 +232,7 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellLabelAmbiguous, "CELL_LABEL_AMBIGUOUS", "라벨이 여러 셀과 일치합니다 — at 좌표로 직접 지정하세요."),
     row!(SetCell, CellHasNonTextContent, "CELL_HAS_NON_TEXT_CONTENT", "표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다."),
     row!(SetCell, CellTargetDuplicate, "CELL_TARGET_DUPLICATE", "두 편집이 같은 앵커 셀로 resolve 됐습니다."),
-    row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", "바까생 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다."),
+    row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다."),
     row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)."),
     row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed)."),
     row!(SetCell, SetCellCodecFailed, "SET_CELL_CODEC_FAILED", "Report this as a bug."),
@@ -250,17 +258,27 @@ const TABLE: &[Row] = &[
     row!(DeletePara, SelfVerifyFailed, "SELF_VERIFY_FAILED", "The edit did not verify; no output was written."),
     row!(InsertPara, StructuralCodec, "STRUCTURAL_CODEC", "Check that the file is valid HWPX."),
     row!(DeletePara, StructuralCodec, "STRUCTURAL_CODEC", "Check that the file is valid HWPX."),
-    // Two `ops` codes the legacy catch-all (`_ => STRUCTURAL_EDIT_FAILED`)
-    // never named because the old `map_error` predates them: `ops`
-    // classifies `SpanCountMismatch`/`InsertBeforeSectionProperties` under
-    // their own codes, but no MCP tool file has ever emitted those two
-    // strings. These two rows freeze the *old* behaviour (report as
-    // "the structural edit was refused" like every other unlisted variant
-    // did); dropping them would silently widen the contract. Flagged in
-    // the W2 report for the lead to confirm.
+    // R1 fix (review of the first W2 compat pass): the pre-migration
+    // `map_error` had an explicit OR-pattern arm —
+    // `SectionPropertiesParagraph { .. } | InsertBeforeSectionProperties { .. }`
+    // — both reporting `SECTION_PROPERTIES_PARAGRAPH`
+    // (`git show 350851f:crates/hwpforge-bindings-mcp/src/tools/structural.rs`).
+    // `InsertBeforeSectionProperties` was never part of the wildcard; only
+    // `SpanCountMismatch` genuinely was (no arm names it at all).
+    row!(InsertPara, InsertBeforeSectionProperties, "SECTION_PROPERTIES_PARAGRAPH", "The section's first paragraph holds page setup; it cannot be deleted or displaced."),
+    // `SpanCountMismatch` is the one `ops` code the legacy catch-all
+    // (`_ => STRUCTURAL_EDIT_FAILED`) genuinely swallowed (no explicit arm
+    // named it) — this row freezes that old behaviour. Flagged in the W2
+    // report for the lead to confirm the more precise code isn't preferred.
     row!(InsertPara, SpanCountMismatch, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
     row!(DeletePara, SpanCountMismatch, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
-    row!(InsertPara, InsertBeforeSectionProperties, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
+    // R1 fix: `UncarriedZipEntries` (the admission gate's ZIP closed-world
+    // refusal) has its own `ops` code, `INPUT_ENTRIES_NOT_CARRIED`, but the
+    // legacy `map_error` had no arm for it either — it also fell to the
+    // wildcard. Without these two rows it would pass through as the *new*
+    // code instead of staying `STRUCTURAL_EDIT_FAILED`.
+    row!(InsertPara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
+    row!(DeletePara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
     row!(InsertPara, UpstreamUnmapped, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
     row!(DeletePara, UpstreamUnmapped, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
 
@@ -361,6 +379,26 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
                 format!(
                     "Use section: {actual} to match the JSON, or re-export section {requested} with hwpforge_to_json."
                 ),
+            );
+        }
+        // `Decode`/`PreservingPatch` fall through on purpose: the flat
+        // TABLE has DecodeFailed/PatchFailed rows for both Patch and
+        // ToJson that already carry their legacy code and hint.
+        OpsError::SectionWorkflow(SectionWorkflowError::Decode { .. })
+        | OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(_)) => {}
+        // The legacy `_ => SECTION_WORKFLOW_ERROR` catch-all (R1 fix).
+        // `section_workflow_code()` in `ops/mod.rs` classifies every
+        // `SectionWorkflowError` variant not named above — including any
+        // future addition, since the type is `#[non_exhaustive]` — as
+        // `UPSTREAM_UNMAPPED`, never `OpsCode::SectionWorkflowFailed` (that
+        // code is declared but unreachable from any `hwpforge` function).
+        // Without this arm such a variant would pass through as
+        // `UPSTREAM_UNMAPPED` instead of keeping the frozen legacy string.
+        OpsError::SectionWorkflow(_) => {
+            return ToolErrorInfo::new(
+                "SECTION_WORKFLOW_ERROR",
+                err.to_string(),
+                "Update hwpforge so this MCP binding understands the newer section workflow error.",
             );
         }
         OpsError::Stamper(StamperError::CellStamp(CellStampError::NotAnAnchor {
@@ -638,6 +676,8 @@ mod tests {
         ("restyle", "ENCODE_SEMANTIC_LOSS"),
         ("read", "READ_TARGET_REQUIRED"),
         ("read", "READ_PARAS_WITHOUT_SECTION"),
+        ("to_json", "SECTION_WORKFLOW_ERROR"),
+        ("patch", "SECTION_WORKFLOW_ERROR"),
     ];
 
     /// (b) MCP-local codes never routed through `tool_error`/`TABLE` — the
@@ -748,7 +788,7 @@ mod tests {
                 SectionOutOfRange,
                 SectionIndexMismatch,
                 PatchFailed,
-                SectionWorkflowFailed,
+                UpstreamUnmapped,
             ],
             Tool::FromJson => &[JsonParseFailed, GridAddrInvalid, ValidationFailed, EncodeFailed],
             Tool::Patch => &[
@@ -758,7 +798,7 @@ mod tests {
                 SectionOutOfRange,
                 SectionIndexMismatch,
                 PatchFailed,
-                SectionWorkflowFailed,
+                UpstreamUnmapped,
             ],
             Tool::Diff => &[DecodeFailed],
             Tool::Fill => &[
@@ -787,6 +827,7 @@ mod tests {
             Tool::InsertPara => &[
                 InsertTextRequired,
                 InputNotRoundtripSafe,
+                InputEntriesNotCarried,
                 SectionPropertiesParagraph,
                 MultiParagraphText,
                 ParagraphOutOfRange,
@@ -800,6 +841,7 @@ mod tests {
             Tool::DeletePara => &[
                 DeleteNoTarget,
                 InputNotRoundtripSafe,
+                InputEntriesNotCarried,
                 ReferenceStranded,
                 HardBreakLoss,
                 SectionPropertiesParagraph,
@@ -873,6 +915,11 @@ mod tests {
             (Tool::SetCell, OpsCode::EncodeSemanticLoss),
             (Tool::Stamp, OpsCode::EncodeSemanticLoss),
             (Tool::Restyle, OpsCode::EncodeSemanticLoss),
+            // `OpsError::SectionWorkflow(_)` catch-all (R1 fix): ops never
+            // actually classifies a SectionWorkflowError as
+            // OpsCode::SectionWorkflowFailed, only UPSTREAM_UNMAPPED.
+            (Tool::ToJson, OpsCode::UpstreamUnmapped),
+            (Tool::Patch, OpsCode::UpstreamUnmapped),
         ];
 
         for &tool in &[
@@ -1003,6 +1050,43 @@ mod tests {
                 )),
                 "PATCH_ERROR",
             );
+
+            // Regression guard for the R1 fix: `Decode` must still fall
+            // through to the flat TABLE's DecodeFailed row, not get
+            // swallowed by the new `OpsError::SectionWorkflow(_)` catch-all
+            // arm added right after the SectionIndexMismatch arm.
+            assert_code(
+                tool,
+                OpsError::SectionWorkflow(SectionWorkflowError::Decode { detail: "x".into() }),
+                "DECODE_ERROR",
+            );
+        }
+
+        // The legacy `_ => SECTION_WORKFLOW_ERROR` catch-all itself: ops's
+        // `section_workflow_code()` maps every *unlisted* `SectionWorkflowError`
+        // variant to `UPSTREAM_UNMAPPED`, and since the type is
+        // `#[non_exhaustive]` from this crate a fifth variant cannot be
+        // constructed here to drive that path end to end. Exercised
+        // directly against the classifier instead: `err.code()` for any of
+        // the four known variants is never `UpstreamUnmapped`, so the
+        // dynamic arm's `OpsError::SectionWorkflow(_)` branch is reachable
+        // only by whatever `section_workflow_code()` cannot name — which is
+        // exactly its own `_ => UpstreamUnmapped` contract.
+        for err in [
+            OpsError::SectionWorkflow(SectionWorkflowError::Decode { detail: "x".into() }),
+            OpsError::SectionWorkflow(SectionWorkflowError::SectionOutOfRange {
+                requested: 1,
+                sections: 1,
+            }),
+            OpsError::SectionWorkflow(SectionWorkflowError::SectionIndexMismatch {
+                requested: 0,
+                actual: 1,
+            }),
+            OpsError::SectionWorkflow(SectionWorkflowError::PreservingPatch(
+                HwpxError::InvalidStructure { detail: "x".into() },
+            )),
+        ] {
+            assert_ne!(err.code(), OpsCode::UpstreamUnmapped, "{err}");
         }
     }
 
@@ -1042,34 +1126,150 @@ mod tests {
         );
     }
 
+    /// R1 fix regression: the pre-migration `map_error` had an explicit
+    /// `SectionPropertiesParagraph { .. } | InsertBeforeSectionProperties { .. }`
+    /// OR-pattern arm, both reporting `SECTION_PROPERTIES_PARAGRAPH` with the
+    /// same hint (`git show 350851f:crates/hwpforge-bindings-mcp/src/tools/structural.rs`).
+    /// A first W2 pass mis-classified `InsertBeforeSectionProperties` as
+    /// part of the wildcard (`STRUCTURAL_EDIT_FAILED`) instead.
+    #[test]
+    fn insert_before_section_properties_matches_the_legacy_combined_arm() {
+        let info = tool_error(
+            Tool::InsertPara,
+            OpsError::StructuralEdit(StructuralEditError::InsertBeforeSectionProperties {
+                section: 0,
+                index: 0,
+            }),
+        );
+        assert_eq!(info.code, "SECTION_PROPERTIES_PARAGRAPH");
+        assert_eq!(
+            info.hint,
+            "The section's first paragraph holds page setup; it cannot be deleted or displaced."
+        );
+    }
+
+    /// R1 fix regression: `UncarriedZipEntries` (the structural admission
+    /// gate's ZIP closed-world refusal) has its own `ops` code
+    /// (`INPUT_ENTRIES_NOT_CARRIED`), but the legacy `map_error` had no arm
+    /// for it — it fell to `_ => STRUCTURAL_EDIT_FAILED` like every other
+    /// unlisted variant. Both `insert_para` and `delete_para` share the
+    /// admission gate, so both need the row.
+    #[test]
+    fn structural_uncarried_zip_entries_keeps_the_legacy_wildcard_code() {
+        for tool in [Tool::InsertPara, Tool::DeletePara] {
+            let info = tool_error(
+                tool,
+                OpsError::StructuralEdit(StructuralEditError::UncarriedZipEntries {
+                    entries: vec!["Contents/section0.xml".into()],
+                }),
+            );
+            assert_eq!(info.code, "STRUCTURAL_EDIT_FAILED", "{tool:?}");
+            assert_eq!(info.hint, "The structural edit was refused.", "{tool:?}");
+        }
+    }
+
     #[test]
     fn set_cell_and_stamp_semantic_loss_reproduce_the_legacy_codec_message() {
         use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
 
-        let warning = EncodeWarning::NoteHeadSkipped {
+        // `ParagraphPath([Section(0), BodyParagraph(1)]).to_string()` is
+        // `"section[0].para[1]"` (decoder/mod.rs's `Display` impl), so
+        // `NoteHeadSkipped`'s own Display is exactly the string the R1 F4
+        // regression tests in `smithy-hwpx` pin byte-for-byte.
+        let note_head = EncodeWarning::NoteHeadSkipped {
             path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
             reason: "titleMark first run".into(),
         };
-        let err = OpsError::semantic_loss(vec![warning], vec![]);
+        let title_mark = EncodeWarning::TitleMarkSkipped {
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
+            reason: "second reason".into(),
+        };
+        let cache_dropped = EncodeWarning::LayoutCacheDropped {
+            path: ParagraphPath(vec![PathSeg::Section(0)]),
+            reason: "ledger".into(),
+        };
 
-        let set_cell = tool_error(Tool::SetCell, {
-            let OpsError::EncodeSemanticLoss { warnings, others } = &err else { unreachable!() };
+        // Build all four cases from `semantic_loss` exactly as `set_cell`/
+        // `stamp` construct them (`warnings` = semantic losses only,
+        // `others` = the remaining non-semantic warnings of the same
+        // encode — carried, never referenced by the message).
+        let clone_err = |e: &OpsError| {
+            let OpsError::EncodeSemanticLoss { warnings, others } = e else { unreachable!() };
             OpsError::EncodeSemanticLoss { warnings: warnings.clone(), others: others.clone() }
-        });
-        assert_eq!(set_cell.code, "SET_CELL_CODEC_FAILED");
-        assert!(set_cell.message.starts_with("codec failure: "), "{set_cell:?}");
-        assert!(set_cell.message.contains("note number head skipped"), "{}", set_cell.message);
+        };
 
-        let stamp = tool_error(Tool::Stamp, {
-            let OpsError::EncodeSemanticLoss { warnings, others } = &err else { unreachable!() };
-            OpsError::EncodeSemanticLoss { warnings: warnings.clone(), others: others.clone() }
-        });
-        assert_eq!(stamp.code, "STAMP_CODEC_FAILED");
-        assert!(!stamp.message.starts_with("codec failure: "), "{stamp:?}");
+        struct Case {
+            name: &'static str,
+            warnings: Vec<EncodeWarning>,
+            others: Vec<EncodeWarning>,
+            set_cell: &'static str,
+            stamp: &'static str,
+            restyle: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "empty warnings",
+                warnings: vec![],
+                others: vec![],
+                set_cell: "codec failure: encode produced a semantic-loss warning (fail-closed)",
+                stamp: "encode produced a semantic-loss warning (fail-closed)",
+                restyle: "",
+            },
+            Case {
+                name: "single warning",
+                warnings: vec![note_head.clone()],
+                others: vec![],
+                set_cell: "codec failure: encode produced a semantic-loss warning (fail-closed): \
+                            note number head skipped at section[0].para[1]: titleMark first run",
+                stamp: "encode produced a semantic-loss warning (fail-closed): note number head \
+                        skipped at section[0].para[1]: titleMark first run",
+                restyle: "note number head skipped at section[0].para[1]: titleMark first run",
+            },
+            Case {
+                // set_cell/stamp use only `warnings.first()` — the second
+                // warning must not appear in their message. restyle joins
+                // every semantic warning with "; ", in order.
+                name: "multiple warnings — set_cell/stamp use only the first",
+                warnings: vec![note_head.clone(), title_mark.clone()],
+                others: vec![],
+                set_cell: "codec failure: encode produced a semantic-loss warning (fail-closed): \
+                            note number head skipped at section[0].para[1]: titleMark first run",
+                stamp: "encode produced a semantic-loss warning (fail-closed): note number head \
+                        skipped at section[0].para[1]: titleMark first run",
+                restyle: "note number head skipped at section[0].para[1]: titleMark first run; \
+                          titleMark skipped at section[0].para[1]: second reason",
+            },
+            Case {
+                // A non-empty `others` list must never leak into the
+                // message — none of the three tools' formulas read it.
+                name: "non-empty others is ignored",
+                warnings: vec![note_head.clone()],
+                others: vec![cache_dropped.clone()],
+                set_cell: "codec failure: encode produced a semantic-loss warning (fail-closed): \
+                            note number head skipped at section[0].para[1]: titleMark first run",
+                stamp: "encode produced a semantic-loss warning (fail-closed): note number head \
+                        skipped at section[0].para[1]: titleMark first run",
+                restyle: "note number head skipped at section[0].para[1]: titleMark first run",
+            },
+        ];
 
-        let restyle = tool_error(Tool::Restyle, err);
-        assert_eq!(restyle.code, "ENCODE_SEMANTIC_LOSS");
-        assert!(restyle.message.contains("note number head skipped"), "{}", restyle.message);
+        for case in cases {
+            let err = OpsError::semantic_loss(case.warnings, case.others);
+
+            let set_cell = tool_error(Tool::SetCell, clone_err(&err));
+            assert_eq!(set_cell.code, "SET_CELL_CODEC_FAILED", "{}", case.name);
+            assert_eq!(set_cell.message, case.set_cell, "{}", case.name);
+            assert_eq!(set_cell.hint, "Report this as a bug.", "{}", case.name);
+
+            let stamp = tool_error(Tool::Stamp, clone_err(&err));
+            assert_eq!(stamp.code, "STAMP_CODEC_FAILED", "{}", case.name);
+            assert_eq!(stamp.message, case.stamp, "{}", case.name);
+            assert_eq!(stamp.hint, "Check that the file is valid HWPX.", "{}", case.name);
+
+            let restyle = tool_error(Tool::Restyle, err);
+            assert_eq!(restyle.code, "ENCODE_SEMANTIC_LOSS", "{}", case.name);
+            assert_eq!(restyle.message, case.restyle, "{}", case.name);
+        }
     }
 
     #[test]

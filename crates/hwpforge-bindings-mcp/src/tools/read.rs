@@ -2,7 +2,8 @@
 
 use serde::Serialize;
 
-use hwpforge::ops::{self, ReadOptions};
+use hwpforge::ops::{self, OpsError, ReadOptions};
+use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_smithy_hwpx::{FieldInfo, ParagraphsView, TableView};
 
 use crate::compat::{self, Tool};
@@ -58,6 +59,15 @@ impl ReadData {
 /// legacy `(code, hint)` spelling comes from `compat::tool_error`. Decoder
 /// warnings (`ops::ReadOutput::warnings`) are not surfaced: `ReadData` has no
 /// field for them (schema freeze) — see the W2 report.
+///
+/// The two argument-shape rejections are re-run here, before the file is
+/// read: `ops::read` performs the same checks, but only after the caller has
+/// already decoded the bytes, and the legacy tool's precedence was argument
+/// validation before file I/O — a nonexistent path with a bad argument shape
+/// must still report `READ_TARGET_REQUIRED`/`READ_PARAS_WITHOUT_SECTION`,
+/// not `FILE_NOT_FOUND`. These are the exact rejections `ops::read` would
+/// raise for the same inputs (see its module docs), routed through the same
+/// `compat::tool_error` so the `(code, hint)` cannot drift from the table.
 pub fn run_read(
     file_path: &str,
     section: Option<usize>,
@@ -65,6 +75,28 @@ pub fn run_read(
     table: Option<usize>,
     field: Option<&str>,
 ) -> Result<ReadData, ToolErrorInfo> {
+    let targets = usize::from(section.is_some())
+        + usize::from(table.is_some())
+        + usize::from(field.is_some());
+    if targets != 1 {
+        return Err(compat::tool_error(
+            Tool::Read,
+            OpsError::Rejected {
+                code: OpsCode::ReadTargetRequired,
+                reason: "Pass exactly one of --section, --table, --field".into(),
+            },
+        ));
+    }
+    if paras.is_some() && section.is_none() {
+        return Err(compat::tool_error(
+            Tool::Read,
+            OpsError::Rejected {
+                code: OpsCode::ReadParasWithoutSection,
+                reason: "--paras requires --section".into(),
+            },
+        ));
+    }
+
     let bytes = read_file_bytes(file_path)?;
 
     let mut opts = ReadOptions::default();
@@ -132,6 +164,19 @@ mod tests {
         assert_eq!(err.code, "READ_TARGET_REQUIRED");
         let err = run_read(&path, Some(0), None, Some(0), None).unwrap_err();
         assert_eq!(err.code, "READ_TARGET_REQUIRED");
+    }
+
+    #[test]
+    fn argument_guards_run_before_file_access() {
+        // Legacy precedence: a bad argument shape is reported even when the
+        // path does not exist, because both guards run before `read_file_bytes`.
+        let missing = "/nonexistent/e5-read-guard-probe.hwpx";
+
+        let err = run_read(missing, None, None, None, None).unwrap_err();
+        assert_eq!(err.code, "READ_TARGET_REQUIRED");
+
+        let err = run_read(missing, None, Some("0..1"), Some(0), None).unwrap_err();
+        assert_eq!(err.code, "READ_PARAS_WITHOUT_SECTION");
     }
 
     #[test]
