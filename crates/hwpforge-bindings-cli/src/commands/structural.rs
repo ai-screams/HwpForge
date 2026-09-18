@@ -2,11 +2,13 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{
-    scan_delete_warnings, HwpxStructuralEditor, InsertPosition, ParagraphLocator,
-    StructuralEditError,
+use hwpforge::ops::edit::{
+    delete_para as ops_delete_para, insert_para as ops_insert_para, DeleteParaOptions,
+    InsertParaOptions,
 };
+use hwpforge::ops::{OpsError, OpsWarning};
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run `delete-para`.
@@ -21,20 +23,27 @@ pub fn run_delete(
         CliError::new("DELETE_NO_TARGET", "Pass at least one --index").exit(json_mode, 1);
     }
     let bytes = read_input(file, json_mode);
-    let targets: Vec<ParagraphLocator> =
-        indices.iter().map(|&index| ParagraphLocator { section, index }).collect();
-    // Advisory scan (shared library messages — never a refusal): surfaced
-    // only alongside a successful edit.
-    let warnings: Vec<String> =
-        scan_delete_warnings(&bytes, &targets).iter().map(ToString::to_string).collect();
-    match HwpxStructuralEditor::delete_paragraphs(&bytes, &targets) {
+    let opts = DeleteParaOptions::default().with_section(section).with_indexes(indices.to_vec());
+    match ops_delete_para(&bytes, &opts) {
         Ok(out) => {
+            // Only the advisory scan's own warnings were ever printed here —
+            // the decode warnings `ops::edit::delete_para` now also carries
+            // stay unsurfaced (not a change: the legacy command never
+            // reported decode warnings either; see the W3 report).
+            let warnings: Vec<String> = out
+                .warnings
+                .iter()
+                .filter_map(|w| match w {
+                    OpsWarning::Structural(sw) => Some(sw.to_string()),
+                    _ => None,
+                })
+                .collect();
             if !json_mode {
                 for warning in &warnings {
                     eprintln!("warning: {warning}");
                 }
             }
-            write_output(&out, output, json_mode, |v| {
+            write_output(&out.bytes, output, json_mode, |v| {
                 *v = serde_json::json!({
                     "status": "ok",
                     "deleted": indices.len(),
@@ -45,7 +54,7 @@ pub fn run_delete(
                 });
             });
         }
-        Err(e) => exit_structural_error(e, json_mode),
+        Err(e) => exit_ops_error(Command::DeletePara, e, json_mode),
     }
 }
 
@@ -61,10 +70,13 @@ pub fn run_insert(
     json_mode: bool,
 ) {
     let bytes = read_input(file, json_mode);
-    let position = if before { InsertPosition::Before } else { InsertPosition::After };
-    let anchor_loc = ParagraphLocator { section, index: anchor };
-    match HwpxStructuralEditor::insert_paragraphs(&bytes, anchor_loc, position, texts) {
-        Ok(out) => write_output(&out, output, json_mode, |v| {
+    let opts = InsertParaOptions::default()
+        .with_section(section)
+        .with_anchor(anchor)
+        .with_text(texts.to_vec())
+        .with_before(before);
+    match ops_insert_para(&bytes, &opts) {
+        Ok(out) => write_output(&out.bytes, output, json_mode, |v| {
             *v = serde_json::json!({
                 "status": "ok",
                 "inserted": texts.len(),
@@ -74,7 +86,7 @@ pub fn run_insert(
                 "output": output.display().to_string(),
             });
         }),
-        Err(e) => exit_structural_error(e, json_mode),
+        Err(e) => exit_ops_error(Command::InsertPara, e, json_mode),
     }
 }
 
@@ -108,26 +120,13 @@ fn write_output(
     }
 }
 
-fn exit_structural_error(err: StructuralEditError, json_mode: bool) -> ! {
-    let code = match &err {
-        StructuralEditError::Codec(_) => "STRUCTURAL_CODEC",
-        StructuralEditError::NotRoundTripSafe { .. } => "INPUT_NOT_ROUNDTRIP_SAFE",
-        StructuralEditError::UncarriedZipEntries { .. } => "UNCARRIED_ZIP_ENTRIES",
-        StructuralEditError::SectionOutOfRange { .. } => "SECTION_OUT_OF_RANGE",
-        StructuralEditError::ParagraphOutOfRange { .. } => "PARAGRAPH_OUT_OF_RANGE",
-        StructuralEditError::DuplicateTarget { .. } => "DUPLICATE_TARGET",
-        StructuralEditError::ReferenceStranded { .. } => "REFERENCE_STRANDED",
-        StructuralEditError::HardBreakLoss { .. } => "HARD_BREAK_LOSS",
-        StructuralEditError::EmptySection { .. } => "EMPTY_SECTION",
-        StructuralEditError::SectionPropertiesParagraph { .. } => "SECTION_PROPERTIES_PARAGRAPH",
-        StructuralEditError::SpanCountMismatch { .. } => "SPAN_COUNT_MISMATCH",
-        StructuralEditError::DeltaMismatch { .. } => "SELF_VERIFY_FAILED",
-        StructuralEditError::MultiParagraphText => "MULTI_PARAGRAPH_TEXT",
-        StructuralEditError::InsertBeforeSectionProperties { .. } => {
-            "INSERT_BEFORE_SECTION_PROPERTIES"
-        }
-        _ => "STRUCTURAL_EDIT_FAILED",
-    };
-    let exit = if matches!(err, StructuralEditError::Codec(_)) { 2 } else { 1 };
-    CliError::new(code, err.to_string()).exit(json_mode, exit);
+/// Maps an `ops::edit::{delete_para,insert_para}` failure onto the frozen
+/// contract and exits. No dynamic/dual-source gap applies here: every
+/// `StructuralEditError` variant these two operations can reach has a static
+/// `TABLE` row for both commands (`compat.rs`), so the generic lookup is
+/// correct as-is.
+fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = compat::cli_error(cmd, err);
+    let exit = compat::exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }

@@ -9,10 +9,11 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{CellEditError, CellSpec, CellTarget, HwpxCellEditor};
+use hwpforge::ops::edit::{set_cell as ops_set_cell, SetCellOptions};
+use hwpforge::ops::OpsError;
+use hwpforge_smithy_hwpx::{CellResolution, CellSpec};
 
-use hwpforge_core::table::grid::GridCoord;
-
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Flag bundle for a single-target invocation.
@@ -46,11 +47,11 @@ pub fn run(
         }
     };
 
-    let specs = build_specs(single, map, json_mode);
+    let opts = build_options(single, map, json_mode);
 
-    let result = match HwpxCellEditor::set_cells(&bytes, &specs) {
+    let result = match ops_set_cell(&bytes, &opts) {
         Ok(r) => r,
-        Err(e) => exit_cell_edit_error(e, json_mode),
+        Err(e) => exit_ops_error(Command::SetCell, e, json_mode),
     };
 
     if let Err(e) = std::fs::write(output, &result.bytes) {
@@ -62,16 +63,16 @@ pub fn run(
         let out = serde_json::json!({
             "status": "ok",
             "output": output.display().to_string(),
-            "cells": result.outcome.cells,
+            "cells": result.results,
             "size_bytes": result.bytes.len(),
         });
         println!("{}", serde_json::to_string(&out).unwrap());
     } else {
-        println!("Set {} cell(s) -> {}", result.outcome.cells.len(), output.display());
-        for c in &result.outcome.cells {
+        println!("Set {} cell(s) -> {}", result.results.len(), output.display());
+        for c in &result.results {
             let resolved = match c.resolution {
-                hwpforge_smithy_hwpx::CellResolution::Exact => String::new(),
-                hwpforge_smithy_hwpx::CellResolution::CoveredToAnchor => {
+                CellResolution::Exact => String::new(),
+                CellResolution::CoveredToAnchor => {
                     format!(" (covered -> anchor ({}, {}))", c.anchor.row, c.anchor.col)
                 }
             };
@@ -87,21 +88,34 @@ pub fn run(
     }
 }
 
-fn build_specs(single: SingleTarget<'_>, map: Option<&PathBuf>, json_mode: bool) -> Vec<CellSpec> {
-    let has_single_flags = single.table.is_some()
-        || single.at.is_some()
-        || single.right_of.is_some()
-        || single.below.is_some()
-        || single.text.is_some();
-
+/// Builds the options `ops::edit::set_cell` itself validates and interprets:
+/// the mutual-exclusion check between `--map` and the single-target flags,
+/// "table/text required" and "exactly one direction", and the `--map` batch's
+/// own empty-list rejection all now live in `SetCellOptions`'s consumer (see
+/// the W3 report) — this only reads the raw flags off `single`/`map` into the
+/// options struct and parses the `--map` file's JSON.
+fn build_options(
+    single: SingleTarget<'_>,
+    map: Option<&PathBuf>,
+    json_mode: bool,
+) -> SetCellOptions {
+    let mut opts = SetCellOptions::default();
+    if let Some(table) = single.table {
+        opts = opts.with_table(table);
+    }
+    if let Some(at) = single.at {
+        opts = opts.with_at(at);
+    }
+    if let Some(right_of) = single.right_of {
+        opts = opts.with_right_of(right_of);
+    }
+    if let Some(below) = single.below {
+        opts = opts.with_below(below);
+    }
+    if let Some(text) = single.text {
+        opts = opts.with_text(text);
+    }
     if let Some(map_path) = map {
-        if has_single_flags {
-            CliError::new(
-                "INVALID_SET_CELL_ARGS",
-                "--map cannot be combined with --table/--at/--right-of/--below/--text",
-            )
-            .exit(json_mode, 1);
-        }
         let map_text = match std::fs::read_to_string(map_path) {
             Ok(t) => t,
             Err(e) => {
@@ -112,11 +126,8 @@ fn build_specs(single: SingleTarget<'_>, map: Option<&PathBuf>, json_mode: bool)
                 .exit(json_mode, 1);
             }
         };
-        match serde_json::from_str::<Vec<CellSpec>>(&map_text) {
-            Ok(specs) if !specs.is_empty() => specs,
-            Ok(_) => {
-                CliError::new("INVALID_SET_CELL_MAP", "spec map is empty").exit(json_mode, 1);
-            }
+        let specs: Vec<CellSpec> = match serde_json::from_str(&map_text) {
+            Ok(specs) => specs,
             Err(e) => {
                 CliError::new("INVALID_SET_CELL_MAP", format!("'{}': {e}", map_path.display()))
                     .with_hint(
@@ -125,85 +136,18 @@ fn build_specs(single: SingleTarget<'_>, map: Option<&PathBuf>, json_mode: bool)
                     )
                     .exit(json_mode, 1);
             }
-        }
-    } else {
-        let Some(table) = single.table else {
-            CliError::new("INVALID_SET_CELL_ARGS", "--table is required (or use --map)")
-                .exit(json_mode, 1);
         };
-        let Some(text) = single.text else {
-            CliError::new("INVALID_SET_CELL_ARGS", "--text is required (empty string clears)")
-                .exit(json_mode, 1);
-        };
-        let target = match (single.at, single.right_of, single.below) {
-            (Some(at), None, None) => CellTarget::At(parse_coord(at, json_mode)),
-            (None, Some(label), None) => CellTarget::RightOf(label.to_string()),
-            (None, None, Some(label)) => CellTarget::Below(label.to_string()),
-            _ => {
-                CliError::new(
-                    "INVALID_SET_CELL_ARGS",
-                    "exactly one of --at / --right-of / --below is required",
-                )
-                .exit(json_mode, 1);
-            }
-        };
-        vec![CellSpec { table, target, text: text.to_string() }]
+        opts = opts.with_specs(specs);
     }
+    opts
 }
 
-fn parse_coord(at: &str, json_mode: bool) -> GridCoord {
-    let parts: Vec<&str> = at.split(',').map(str::trim).collect();
-    if parts.len() == 2 {
-        if let (Ok(row), Ok(col)) = (parts[0].parse(), parts[1].parse()) {
-            return GridCoord::new(row, col);
-        }
-    }
-    CliError::new("INVALID_SET_CELL_ARGS", format!("--at expects \"row,col\", got '{at}'"))
-        .exit(json_mode, 1);
-}
-
-fn exit_cell_edit_error(error: CellEditError, json_mode: bool) -> ! {
-    let (code, hint): (&str, Option<String>) = match &error {
-        CellEditError::TableNotFound { tables, .. } => (
-            "TABLE_NOT_FOUND",
-            Some(format!("문서에 표가 {tables}개 있습니다 (to-json export 순서 기준 0-base)")),
-        ),
-        CellEditError::TableGridInvalid { .. } => (
-            "TABLE_GRID_INVALID",
-            Some("이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다".into()),
-        ),
-        CellEditError::CellNotFound { .. } => ("CELL_NOT_FOUND", None),
-        CellEditError::LabelAmbiguous { .. } => (
-            "CELL_LABEL_AMBIGUOUS",
-            Some("라벨이 여러 셀과 일치합니다 — --at 좌표로 직접 지정하세요".into()),
-        ),
-        CellEditError::NonTextContent { .. } => (
-            "CELL_HAS_NON_TEXT_CONTENT",
-            Some("표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다".into()),
-        ),
-        CellEditError::TargetDuplicate { .. } => ("CELL_TARGET_DUPLICATE", None),
-        CellEditError::TargetConflict { .. } => (
-            "CELL_TARGET_CONFLICT",
-            Some("바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다".into()),
-        ),
-        CellEditError::NotRoundTripSafe { .. } => (
-            "INPUT_NOT_ROUNDTRIP_SAFE",
-            Some(
-                "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)".into(),
-            ),
-        ),
-        CellEditError::UncarriedZipEntries { .. } => ("INPUT_ENTRIES_NOT_CARRIED", None),
-        CellEditError::Codec(_) => ("SET_CELL_CODEC_FAILED", None),
-        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
-        // (코드·메시지 불변). 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3 compat
-        // 테이블의 몫이다. 이 arm 이 없으면 아래 `_` 로 떨어져 코드가
-        // SET_CELL_CODEC_FAILED → SET_CELL_FAILED 로 바뀐다.
-        CellEditError::SemanticLoss { .. } => ("SET_CELL_CODEC_FAILED", None),
-        _ => ("SET_CELL_FAILED", None),
-    };
-    let mut err = CliError::new(code, error.to_string());
-    if let Some(hint) = hint {
-        err = err.with_hint(hint);
-    }
-    err.exit(json_mode, 1);
+/// Maps an `ops::edit::set_cell` failure onto the frozen contract and exits.
+fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = compat::cli_error(cmd, err);
+    // set-cell's legacy exit is 1 for every code it emits (compat.rs module
+    // docs); `TABLE` and `DYNAMIC_EXIT` both record it that way, so the
+    // shared lookup reproduces it without a local constant.
+    let exit = compat::exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }
