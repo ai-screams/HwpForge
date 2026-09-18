@@ -79,7 +79,8 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     // it counts every `<hp:tbl>`/`<hp:pic>`/`<hp:chart>` element in the
     // section regardless of nesting. So these four fields keep reading from
     // the local scanner (`deep`), matching the pre-migration byte-for-byte;
-    // see `inspect_deep_counts_table_and_image_nested_in_image_caption` for
+    // see `inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page`
+    // for
     // the regression lock. `top_level_paragraphs`/`tables`/`images`/`charts`
     // (undercounts — see `img_05_image_in_table_cell.hwpx`'s
     // `inspect_deep_counts_image_in_table_cell` test) stay unused for the
