@@ -61,21 +61,34 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         }
     };
 
-    // `ops::inspect` is the canonical report: metadata (title/author),
-    // per-section paragraph/table/image/chart counts and (with `--styles`)
-    // the style summary all come from here — its shared paragraph traversal
-    // visits table cells, text boxes, notes, memos, headers, footers and
-    // master pages (`hwpforge::ops::inspect` module docs), the same scope
-    // this command's pre-migration XML `count_occurrences` scan covered, so
-    // the deep `tables`/`images`/`charts`/`paragraphs` fields below read
-    // from `InspectSection`'s deep counters, not its `top_level_*` ones
-    // (those would undercount — see `img_05_image_in_table_cell.hwpx`'s
-    // `inspect_deep_counts_image_in_table_cell` test).
+    // `ops::inspect` is the canonical report: metadata (title/author) and
+    // (with `--styles`) the style summary come from here, plus the
+    // top-level paragraph count and the header/footer/page-number flags,
+    // which the two decoders compute identically (see `SectionInfo::merge`
+    // doc comment).
+    //
+    // The `tables`/`images`/`charts`/`deep_paragraphs` fields do NOT come
+    // from `ops::inspect`, even though it has same-named deep counters.
+    // `ops::inspect`'s shared paragraph traversal (`Section::for_each_paragraph`)
+    // deliberately does not descend into **image** captions (Core's
+    // `image_caption_paragraphs_are_skipped_documents_known_gap` test) — a
+    // table, image or chart nested inside an image's caption is invisible
+    // to it. The pre-migration CLI's raw-XML `count_occurrences` scan (still
+    // run below via `summarize_hwpx_document`, kept for the fields
+    // `ops::InspectReport` has no equivalent for) has no such blind spot —
+    // it counts every `<hp:tbl>`/`<hp:pic>`/`<hp:chart>` element in the
+    // section regardless of nesting. So these four fields keep reading from
+    // the local scanner (`deep`), matching the pre-migration byte-for-byte;
+    // see `inspect_deep_counts_table_and_image_nested_in_image_caption` for
+    // the regression lock. `top_level_paragraphs`/`tables`/`images`/`charts`
+    // (undercounts — see `img_05_image_in_table_cell.hwpx`'s
+    // `inspect_deep_counts_image_in_table_cell` test) stay unused for the
+    // same reason the deep ones aren't sourced from `ops` either.
     //
     // `ops::InspectReport` has no field for `text_boxes`/`ole_objects`/
-    // `lines`/`rectangles`/`polygons`/`non_empty_paragraphs`/`deep_*` (ops
-    // gap, W3 remediation report) — the local `summarize_hwpx_document`
-    // scanner still supplies those, decoding the document a second time.
+    // `lines`/`rectangles`/`polygons`/`non_empty_paragraphs` (ops gap, W3
+    // remediation report) — the local `summarize_hwpx_document` scanner
+    // still supplies those, decoding the document a second time.
     let out = match ops::inspect(&bytes, &InspectOptions::default().with_styles(show_styles)) {
         Ok(o) => o,
         Err(e) => {
@@ -156,6 +169,27 @@ impl SectionInfo {
     /// Combines the canonical `ops::inspect` per-section counts with the
     /// CLI-only deep counts (`ops` gap — module comment on [`run`]) the
     /// local scanner still computes.
+    ///
+    /// `paragraphs` and the three `has_*` flags read from `ops_section`
+    /// because both decoders compute them identically: `top_level_paragraphs`
+    /// is `section.paragraphs.len()`, exactly what `deep.paragraphs` is too
+    /// (`summarize_hwpx_section` in `analysis/deep_counts.rs`), and
+    /// `has_header`/`has_footer`/`has_page_number` are the same
+    /// `!section.headers.is_empty()`/etc. check in both places.
+    ///
+    /// `deep_paragraphs` reads from `deep`, NOT from `ops_section.paragraphs`
+    /// (also a deep count, confusingly under the same field name) — the two
+    /// are not interchangeable. `ops_section.paragraphs` comes from
+    /// `Section::for_each_paragraph`, whose recursion visits master-page
+    /// paragraphs (`crates/hwpforge-core/src/section.rs`'s
+    /// `walk_paragraphs`/`walk_paragraphs_mut`, and the
+    /// `document_with_all_containers` test fixture that locks it). The
+    /// legacy local scanner's `deep.deep_paragraphs`
+    /// (`count_paragraphs_recursive` over `section.paragraphs` plus headers
+    /// and footers only, `analysis/deep_counts.rs`) never visits master
+    /// pages — no `master_page`/`masterPage` reference exists in that file.
+    /// Any section with paragraphs in a master page would see the two
+    /// diverge, so `deep_paragraphs` keeps its pre-migration source.
     fn merge(ops_section: &InspectSection, deep: &DeepSectionSummary) -> Self {
         Self {
             index: ops_section.index,
@@ -163,9 +197,9 @@ impl SectionInfo {
             deep_paragraphs: deep.deep_paragraphs,
             non_empty_paragraphs: deep.non_empty_paragraphs,
             deep_non_empty_paragraphs: deep.deep_non_empty_paragraphs,
-            tables: ops_section.tables,
-            images: ops_section.images,
-            charts: ops_section.charts,
+            tables: deep.tables,
+            images: deep.images,
+            charts: deep.charts,
             ole_objects: deep.ole_objects,
             text_boxes: deep.text_boxes,
             lines: deep.lines,

@@ -67,17 +67,22 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         cli_err.exit(json_mode, exit)
     });
 
-    // Legacy wrote the output *inside* `hwp5_to_hwpx_with_options` itself,
-    // so a write failure there (missing parent dir, permission denial) was
-    // just another failure of that one call — `HWP5_CONVERT_FAILED`, exit
-    // 2, with the convert hint, message keyed on the *input* path (W3
-    // remediation finding 8). `convert_hwp5()` now returns bytes and this
-    // command does the write itself, but the failure envelope must stay
-    // the one that call site produced.
+    // Legacy wrote the output *inside* `hwp5_to_hwpx_with_options` itself
+    // (`std::fs::write(...).map_err(Hwp5Error::Io)?`,
+    // `crates/hwpforge-convert/src/lib.rs`), so a write failure there
+    // (missing parent dir, permission denial) surfaced as a `Hwp5Error::Io`
+    // and failed as `HWP5_CONVERT_FAILED`, exit 2, with the convert hint,
+    // message keyed on the *input* path (W3 remediation finding 8).
+    // `convert_hwp5()` now returns bytes and this command does the write
+    // itself, but the failure envelope must stay the one that call site
+    // produced — including `Hwp5Error::Io`'s `"I/O error: {0}"` Display
+    // wrapping the raw `io::Error`, not the raw error alone (independent
+    // review round 2, finding B).
     if let Err(e) = std::fs::write(output, &converted.bytes) {
+        let wrapped = hwpforge_smithy_hwp5::Hwp5Error::Io(e);
         CliError::new(
             "HWP5_CONVERT_FAILED",
-            format!("Cannot convert '{}' to HWPX: {e}", input.display()),
+            format!("Cannot convert '{}' to HWPX: {wrapped}", input.display()),
         )
         .with_hint(
             "Check that the source is a supported HWP5 document and the output path is writable",
