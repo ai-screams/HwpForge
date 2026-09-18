@@ -4,9 +4,11 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_convert::{hwp5_to_hwpx_with_options, ConvertOptions};
+use hwpforge_convert::ops::{convert_hwp5, ConvertHwp5Options, ConvertOpsWarning};
+use hwpforge_convert::ConvertWarning;
 use hwpforge_smithy_hwp5::inspect_hwp5_file;
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// JSON 모드에 싣는 경고 상세 상한 (집계 경고라 문서당 소수 — 폭주 방지 겸).
@@ -31,14 +33,23 @@ struct ConvertHwp5Result {
 pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: bool) {
     check_file_size(input, json_mode);
 
+    // `hwpforge_convert::ops::convert_hwp5` takes bytes and reports no
+    // document summary (version/sections/paragraphs) — `inspect_hwp5_file`
+    // stays for that, unchanged, which also keeps the legacy
+    // `HWP5_DECODE_FAILED` message/hint byte-identical for the most-hit
+    // failure (unreadable/corrupt file).
     let summary = inspect_hwp5_file(input).unwrap_or_else(|err| {
         CliError::new("HWP5_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
             .with_hint("Check that the file is a valid HWP5 document")
             .exit(json_mode, 2)
     });
 
-    let options = ConvertOptions::default().with_carry_layout_cache(carry_layout_cache);
-    let warnings = hwp5_to_hwpx_with_options(input, output, options).unwrap_or_else(|err| {
+    // Re-reads the file `inspect_hwp5_file` already read once — the same
+    // double-read the pre-migration code already did (once inside
+    // `inspect_hwp5_file`, once inside `hwp5_to_hwpx_with_options`), not a
+    // new cost. A failure here (the file vanishing between the two reads)
+    // is mapped like the legacy second-read failure was: `HWP5_CONVERT_FAILED`.
+    let bytes = std::fs::read(input).unwrap_or_else(|err| {
         CliError::new(
             "HWP5_CONVERT_FAILED",
             format!("Cannot convert '{}' to HWPX: {err}", input.display()),
@@ -49,17 +60,38 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         .exit(json_mode, 2)
     });
 
-    let size_bytes = std::fs::metadata(output).map(|meta| meta.len()).unwrap_or_else(|err| {
-        CliError::new(
-            "FILE_WRITE_FAILED",
-            format!("Converted output '{}' is not readable: {err}", output.display()),
-        )
-        .exit(json_mode, 1)
+    let opts = ConvertHwp5Options::default().with_carry_layout_cache(carry_layout_cache);
+    let converted = convert_hwp5(&bytes, &opts).unwrap_or_else(|err| {
+        let cli_err = compat::convert_error(Command::ConvertHwp5, err);
+        let exit = compat::exit_code(Command::ConvertHwp5, &cli_err);
+        cli_err.exit(json_mode, exit)
     });
+
+    if let Err(e) = std::fs::write(output, &converted.bytes) {
+        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
+            .exit(json_mode, 1);
+    }
+    // Known from the bytes already in hand — no need to re-`stat` the file
+    // we just wrote (the legacy `FILE_WRITE_FAILED` "output is not
+    // readable" re-read failure mode no longer exists, a strict fidelity
+    // improvement: the write already proved the bytes are on disk).
+    let size_bytes = converted.bytes.len() as u64;
+
+    // `convert_hwp5` only ever emits `ConvertOpsWarning::Convert` (it never
+    // decodes HWPX or renders); the `_` arm exists only because the enum is
+    // `#[non_exhaustive]`.
+    let inner_warnings: Vec<&ConvertWarning> = converted
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            ConvertOpsWarning::Convert(inner) => Some(inner),
+            _ => None,
+        })
+        .collect();
 
     // 집계 드롭 경고(unknown_control)를 우선 배치 — 선행 decode 경고가
     // 상한을 다 먹어 집계가 가려지는 일 방지 (독립 리뷰 Medium #6).
-    let is_aggregate = |w: &&hwpforge_convert::ConvertWarning| {
+    let is_aggregate = |w: &&ConvertWarning| {
         matches!(
             w.as_hwp5(),
             Some(hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl {
@@ -68,10 +100,11 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
             })
         )
     };
-    let warning_details: Vec<String> = warnings
+    let warning_details: Vec<String> = inner_warnings
         .iter()
+        .copied()
         .filter(is_aggregate)
-        .chain(warnings.iter().filter(|w| !is_aggregate(w)))
+        .chain(inner_warnings.iter().copied().filter(|w| !is_aggregate(w)))
         .take(MAX_WARNING_DETAILS)
         .map(|w| format!("{w:?}"))
         .collect();
@@ -82,7 +115,7 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         version: summary.version,
         sections: summary.totals.sections,
         paragraphs: summary.totals.paragraphs,
-        warnings: warnings.len(),
+        warnings: converted.warnings.len(),
         warning_details,
         size_bytes,
     };
