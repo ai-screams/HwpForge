@@ -56,7 +56,14 @@ pub struct InspectOutput {
 /// pages, and therefore counts content nested inside a table cell too. The
 /// traversal deliberately does not descend into image captions. Per-section
 /// `top_level_paragraphs` is the body-flow paragraph count of that section,
-/// which is what the CLI and the MCP server report as `paragraphs` today.
+/// which is what the CLI and the MCP server report as `paragraphs` today;
+/// [`InspectSection::top_level_tables`], `top_level_images` and
+/// `top_level_charts` are the same top-level rule applied to tables,
+/// images and charts — `Section::content_counts()`, matching what the CLI
+/// and the pre-migration MCP server report as `tables`/`images`/`charts`
+/// today. A table containing an image, or a footnote containing a table,
+/// is where the two disagree: the deep fields see it, the top-level ones
+/// do not.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -115,6 +122,19 @@ pub struct InspectSection {
     pub index: usize,
     /// Body-flow paragraphs of this section.
     pub top_level_paragraphs: usize,
+    /// Top-level tables in this section — `Section::content_counts()`,
+    /// matching the CLI/MCP `inspect` contract (a table nested inside a
+    /// table cell, note, header/footer or master page is not counted).
+    /// Deep counts, nested ones included, are [`Self::tables`].
+    pub top_level_tables: usize,
+    /// Top-level images in this section — top-level only, the same rule
+    /// [`Self::top_level_tables`] documents. Deep counts are
+    /// [`Self::images`].
+    pub top_level_images: usize,
+    /// Top-level charts in this section — top-level only, the same rule
+    /// [`Self::top_level_tables`] documents. Deep counts are
+    /// [`Self::charts`].
+    pub top_level_charts: usize,
     /// Paragraphs the shared traversal visits inside this section.
     pub paragraphs: usize,
     /// Tables in this section, nested ones included.
@@ -220,9 +240,13 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
     for (index, section) in document.sections().iter().enumerate() {
         let mut counts = Counts::default();
         section.for_each_paragraph(|paragraph| counts.visit(paragraph, &mut fields));
+        let top_level = section.content_counts();
         section_details.push(InspectSection {
             index,
             top_level_paragraphs: section.paragraphs.len(),
+            top_level_tables: top_level.tables,
+            top_level_images: top_level.images,
+            top_level_charts: top_level.charts,
             paragraphs: counts.paragraphs,
             tables: counts.tables,
             images: counts.images,

@@ -22,6 +22,73 @@ fn reports_structure_of_a_table_fixture() {
     assert_eq!(out.report.section_details[0].tables, 1);
     assert!(out.report.paragraphs >= out.report.section_details[0].top_level_paragraphs);
     assert!(out.report.styles.is_none(), "styles are opt-in");
+
+    // The fixture's one table is a top-level run (not nested inside
+    // another table cell or a note), so the shallow and deep counts must
+    // agree here — the divergence case lives in
+    // `a_table_nested_in_a_footnote_is_deep_only`.
+    let decoded = hwpforge::hwpx::HwpxDecoder::decode(&bytes).expect("decode for cross-check");
+    let want = decoded.document.sections()[0].content_counts();
+    assert_eq!(out.report.section_details[0].top_level_tables, want.tables);
+    assert_eq!(out.report.section_details[0].top_level_images, want.images);
+    assert_eq!(out.report.section_details[0].top_level_charts, want.charts);
+    assert_eq!(
+        out.report.section_details[0].top_level_tables,
+        out.report.section_details[0].tables
+    );
+}
+
+#[test]
+fn a_table_nested_in_a_footnote_is_deep_only() {
+    // Built rather than loaded: no fixture has a table that only a note
+    // carries. A footnote body is exactly the case the deep traversal
+    // descends into (`Section::for_each_paragraph`'s docs list notes among
+    // its recursion targets) but `Section::content_counts()` — the
+    // shallow, top-level rule the CLI/MCP `inspect` contract uses — does
+    // not: it only inspects `Section::paragraphs`' own runs.
+    use hwpforge::core::control::Control;
+    use hwpforge::core::image::ImageStore;
+    use hwpforge::core::{
+        Document, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+
+    let cell = TableCell::new(
+        vec![Paragraph::with_runs(
+            vec![Run::text("셀", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::from_mm(50.0).unwrap(),
+    );
+    let table = Table::new(vec![TableRow::new(vec![cell])]);
+    let note_body = vec![Paragraph::with_runs(
+        vec![Run::table(table, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )];
+    let top = Paragraph::with_runs(
+        vec![Run::control(Control::footnote(note_body), CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![top], PageSettings::a4()));
+    let validated = document.validate().expect("validate");
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let bytes = hwpforge::hwpx::HwpxEncoder::encode(&validated, &styles, &ImageStore::default())
+        .expect("encode");
+
+    let out = inspect(&bytes, &InspectOptions::default()).expect("inspect");
+    let section = &out.report.section_details[0];
+
+    assert_eq!(section.tables, 1, "the deep traversal must see the footnote's table");
+    assert_eq!(section.top_level_tables, 0, "content_counts() never opens a note body");
+
+    let decoded = hwpforge::hwpx::HwpxDecoder::decode(&bytes).expect("decode for cross-check");
+    let want = decoded.document.sections()[0].content_counts();
+    assert_eq!(
+        section.top_level_tables, want.tables,
+        "must match Section::content_counts() exactly"
+    );
 }
 
 #[test]
