@@ -101,7 +101,7 @@ What does the user want?
 Run `hwpforge <command> --help` for exact flags. Key forms:
 
 ```bash
-# Create  (convert --preset currently accepts only `default`; see Presets)
+# Create  (convert --preset accepts default/modern/classic/latest; see Presets)
 hwpforge convert input.md -o out.hwpx [--preset default]
 echo "# 제목" | hwpforge convert - -o out.hwpx          # stdin via "-"
 
@@ -198,11 +198,10 @@ Diagnostic (parity/QA, not for normal authoring): `audit-hwp5`, `census-hwp5`.
 
 ## Presets
 
-`templates list` catalogs four: `default` (함초롬돋움 10pt), `modern` (맑은 고딕),
-`classic` (바탕), `latest` (함초롬바탕) — all A4. **However, `convert --preset` currently
-resolves only `default`** (others return `UNKNOWN_PRESET`). Use `default` for `convert`; the
-catalog entries are inspectable via `hwpforge templates show <name>`. See
-[templates.md](references/templates.md).
+`templates list` catalogs four, and `convert --preset` accepts all four, each applying its
+declared font: `default` (함초롬돋움 10pt), `modern` (맑은 고딕), `classic` (바탕), `latest`
+(함초롬바탕) — all A4. A name outside this catalog returns `UNKNOWN_PRESET`. Catalog entries are
+inspectable via `hwpforge templates show <name>`. See [templates.md](references/templates.md).
 
 ## Editing an existing document (JSON round-trip)
 

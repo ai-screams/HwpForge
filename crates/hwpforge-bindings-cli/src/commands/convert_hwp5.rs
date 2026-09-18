@@ -67,15 +67,33 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         cli_err.exit(json_mode, exit)
     });
 
+    // Legacy wrote the output *inside* `hwp5_to_hwpx_with_options` itself,
+    // so a write failure there (missing parent dir, permission denial) was
+    // just another failure of that one call — `HWP5_CONVERT_FAILED`, exit
+    // 2, with the convert hint, message keyed on the *input* path (W3
+    // remediation finding 8). `convert_hwp5()` now returns bytes and this
+    // command does the write itself, but the failure envelope must stay
+    // the one that call site produced.
     if let Err(e) = std::fs::write(output, &converted.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
+        CliError::new(
+            "HWP5_CONVERT_FAILED",
+            format!("Cannot convert '{}' to HWPX: {e}", input.display()),
+        )
+        .with_hint(
+            "Check that the source is a supported HWP5 document and the output path is writable",
+        )
+        .exit(json_mode, 2);
     }
-    // Known from the bytes already in hand — no need to re-`stat` the file
-    // we just wrote (the legacy `FILE_WRITE_FAILED` "output is not
-    // readable" re-read failure mode no longer exists, a strict fidelity
-    // improvement: the write already proved the bytes are on disk).
-    let size_bytes = converted.bytes.len() as u64;
+    // Legacy re-`stat`'d the file it just wrote for `size_bytes` — a
+    // failure there (e.g. the output vanishing between write and stat) was
+    // `FILE_WRITE_FAILED`, exit 1, no hint (W3 remediation finding 9).
+    let size_bytes = std::fs::metadata(output).map(|meta| meta.len()).unwrap_or_else(|e| {
+        CliError::new(
+            "FILE_WRITE_FAILED",
+            format!("Converted output '{}' is not readable: {e}", output.display()),
+        )
+        .exit(json_mode, 1)
+    });
 
     // `convert_hwp5` only ever emits `ConvertOpsWarning::Convert` (it never
     // decodes HWPX or renders); the `_` arm exists only because the enum is

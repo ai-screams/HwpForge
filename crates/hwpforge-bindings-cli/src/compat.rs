@@ -65,17 +65,24 @@
 //! [`ConvertOpsError::Decode`] is `DECODE_FAILED` (`ops`'s own code) for
 //! `to-pdf`'s own decode of an HWPX package, but the legacy CLI called it
 //! `HWPX_DECODE_FAILED` there — a code `convert-hwp5` cannot even
-//! reach (it never decodes HWPX). Their `Hwp5ConvertFailed` hints differ
-//! too (`convert-hwp5`'s legacy hint names the *output path*, `to-pdf`'s
-//! call site had no hint at all). `to-pdf` also **coarsens** the HWP5
-//! decode/convert split `convert-hwp5` exposes: the legacy `to-pdf` mapped
-//! every HWP5-conversion failure — decode-stage included — to one
-//! `HWP5_CONVERT_FAILED`, so both [`OpsCode::Hwp5DecodeFailed`] and
-//! [`OpsCode::Hwp5ConvertFailed`] collapse to that one string for
-//! [`Command::ToPdf`] (see the `TABLE` rows below). This module therefore
-//! takes `cmd: Command` on [`convert_error`], and the report for this lane
-//! calls the deviation out explicitly rather than silently keeping the
-//! brief's narrower signature and losing the per-command split.
+//! reach (it never decodes HWPX). Both commands **coarsen** the HWP5
+//! decode/convert split the underlying `ops` call can report: the legacy
+//! CLI's single `hwp5_to_hwpx_with_options` (`convert-hwp5`) /
+//! `hwp5_to_hwpx_bytes_with_options` (`to-pdf`) call site mapped every
+//! failure it returned — decode-stage included — to one code
+//! (`HWP5_CONVERT_FAILED`), so both [`OpsCode::Hwp5DecodeFailed`] and
+//! [`OpsCode::Hwp5ConvertFailed`] collapse to that one string for *both*
+//! [`Command::ConvertHwp5`] and [`Command::ToPdf`] (see the `TABLE` rows
+//! below; W3 remediation finding 7 — an earlier lane had kept `convert-hwp5`'s
+//! `Hwp5DecodeFailed` on its own `HWP5_DECODE_FAILED` code, which only the
+//! CLI-local `inspect_hwp5_file` pre-check ever legitimately returns —
+//! `commands/convert_hwp5.rs` constructs that one directly and never
+//! reaches this table). Their `Hwp5ConvertFailed` hints still differ
+//! though (`convert-hwp5`'s legacy hint names the *output path*, `to-pdf`'s
+//! call site had no hint at all). This module therefore takes `cmd:
+//! Command` on [`convert_error`], and the report for this lane calls the
+//! deviation out explicitly rather than silently keeping the brief's
+//! narrower signature and losing the per-command split.
 //!
 //! # Table vs. special cases
 //!
@@ -111,14 +118,19 @@
 //!   calling `summarize_hwpx_document` alongside `ops::inspect` for this one
 //!   failure mode, or accepts the behaviour loss — this module cannot
 //!   synthesize a code `ops` never returns.
-//! - **`from-json` `JSON_PARSE_FAILED` hint** — the legacy CLI had two call
-//!   sites sharing this code: a raw `serde_json::from_str` failure (no
-//!   hint) and a schema-mismatch `Deserialize` failure (hint: "Ensure the
-//!   JSON matches the HwpForge document schema…"). `ops::from_json` wraps
-//!   both in the same [`OpsError::Json`] variant (`serde_json::Error`),
-//!   with no way to tell them apart. `TABLE` keeps the no-hint shape (the
-//!   more common site); the schema-mismatch hint is lost pending an `ops`
-//!   enhancement that distinguishes the two failure kinds.
+//! - **`from-json` `JSON_PARSE_FAILED` hint — resolved at the call site, not
+//!   here.** The legacy CLI had two call sites sharing this code: a raw
+//!   `serde_json::from_str` failure (no hint) and a schema-mismatch
+//!   `Deserialize` failure (hint: "Ensure the JSON matches the HwpForge
+//!   document schema…"). `ops::from_json` wraps both in the same
+//!   [`OpsError::Json`] variant (`serde_json::Error`), with no way to tell
+//!   them apart from inside `ops` or from this table alone. `TABLE` keeps
+//!   the no-hint shape; `from_json.rs` restores the classification instead
+//!   by pre-checking the raw JSON syntax before calling `ops::from_json` —
+//!   a syntax failure exits right there (byte-identical), so any
+//!   `JSON_PARSE_FAILED` this module still returns for `Command::FromJson`
+//!   is necessarily the schema case, and `from_json.rs` attaches the legacy
+//!   hint to it before exiting.
 //! - **`to-json` `SECTION_INDEX_MISMATCH`/`PATCH_FAILED`/`SECTION_WORKFLOW_FAILED`
 //!   — not a gap, a finding.** The legacy `to_json.rs`'s
 //!   `exit_section_workflow_error` shares its match arms verbatim with
@@ -241,7 +253,15 @@ macro_rules! row {
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
     // ── ConvertHwp5 (hwpforge_convert::ops::convert_hwp5) ────────────
-    row!(ConvertHwp5, Hwp5DecodeFailed, "HWP5_DECODE_FAILED", 2, "Check that the file is a valid HWP5 document"),
+    // `Hwp5DecodeFailed` here is the `convert_hwp5()` ops call's own decode
+    // failure (e.g. a corrupt stream discovered mid-conversion), NOT the
+    // CLI-local `inspect_hwp5_file` pre-check in `commands/convert_hwp5.rs`
+    // (that one hardcodes `HWP5_DECODE_FAILED` directly and never reaches
+    // this table). Legacy's single `hwp5_to_hwpx_with_options` call site
+    // mapped every failure from it — decode-stage included — to
+    // `HWP5_CONVERT_FAILED` (W3 remediation finding 7), matching `to-pdf`'s
+    // own coarsening below.
+    row!(ConvertHwp5, Hwp5DecodeFailed, "HWP5_CONVERT_FAILED", 2, "Check that the source is a supported HWP5 document and the output path is writable"),
     row!(ConvertHwp5, Hwp5ConvertFailed, "HWP5_CONVERT_FAILED", 2, "Check that the source is a supported HWP5 document and the output path is writable"),
 
     // ── ToPdf (hwpforge_convert::ops::to_pdf) ─────────────────────────
@@ -386,7 +406,12 @@ const TABLE: &[Row] = &[
     row!(Stamp, StampCodecFailed, "STAMP_CODEC_FAILED", 2),
     row!(Stamp, StampSourceHashMismatch, "STAMP_SOURCE_HASH_MISMATCH", 1, "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요"),
     row!(Stamp, StampDeltaMismatch, "STAMP_DELTA_MISMATCH", 2, "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"),
-    row!(Stamp, StampFailed, "STAMP_FAILED", 2),
+    // `stamper_code`'s default arm folds every unrecognized `StamperError`
+    // variant into `OpsCode::UpstreamUnmapped` (module docs) — no
+    // classifier in `crates/hwpforge/src/ops/mod.rs` ever produces
+    // `OpsCode::StampFailed` (grepped: zero hits), so this row is keyed on
+    // `UpstreamUnmapped`, not `StampFailed` (W3 remediation fix).
+    row!(Stamp, UpstreamUnmapped, "STAMP_FAILED", 2),
     row!(Stamp, TableNotFound, "TABLE_NOT_FOUND", 1),
     row!(Stamp, TableGridInvalid, "TABLE_GRID_INVALID", 1),
     // StampCellNotAnchor: dynamic hint, see cli_error.
@@ -817,6 +842,13 @@ mod tests {
         ("census-hwp5", "FILE_READ_FAILED"), ("census-hwp5", "FILE_WRITE_FAILED"),
         ("census-hwp5", "HWP5_CENSUS_FAILED"), ("census-hwp5", "HWPX_CENSUS_FAILED"),
         ("convert-hwp5", "FILE_WRITE_FAILED"),
+        // The CLI-local `inspect_hwp5_file` pre-check in
+        // `commands/convert_hwp5.rs` — the `convert_hwp5()` ops call's own
+        // `Hwp5DecodeFailed` collapses into `HWP5_CONVERT_FAILED` in `TABLE`
+        // instead (W3 remediation finding 7 — legacy's single
+        // `hwp5_to_hwpx_with_options` call site never distinguished decode
+        // from convert stage).
+        ("convert-hwp5", "HWP5_DECODE_FAILED"),
         ("to-pdf", "FILE_READ_FAILED"), ("to-pdf", "FILE_WRITE_FAILED"),
         ("convert", "FILE_READ_FAILED"), ("convert", "FILE_WRITE_FAILED"),
         ("convert", "INPUT_TOO_LARGE"), ("convert", "STDIN_READ_FAILED"),
@@ -1050,6 +1082,23 @@ mod tests {
     }
 
     #[test]
+    fn stamp_upstream_unmapped_keeps_the_legacy_stamp_failed_spelling() {
+        // `stamper_code`'s default arm (`crates/hwpforge/src/ops/mod.rs`)
+        // folds an unrecognized `StamperError` variant into
+        // `OpsCode::UpstreamUnmapped` — no classifier ever produces
+        // `OpsCode::StampFailed` (W3 remediation finding). `Rejected` is
+        // `OpsError`'s public escape hatch for pinning an arbitrary code
+        // without needing a real unmatched upstream variant (same
+        // construction the crate's own `mod.rs` tests use for
+        // `OpsCode::NoValues`).
+        let err = OpsError::Rejected {
+            code: OpsCode::UpstreamUnmapped,
+            reason: "unrecognized upstream stamper variant".into(),
+        };
+        assert_code(Command::Stamp, err, "STAMP_FAILED", 2);
+    }
+
+    #[test]
     fn fill_field_not_found_carries_the_available_list_hint() {
         let err = OpsError::Fill(FillError::UnknownField {
             name: "x".into(),
@@ -1091,7 +1140,12 @@ mod tests {
     }
 
     #[test]
-    fn convert_hwp5_keeps_the_decode_convert_split_to_pdf_coarsens() {
+    fn convert_hwp5_also_coarsens_a_decode_failure_from_the_ops_call() {
+        // W3 remediation finding 7: legacy's single `hwp5_to_hwpx_with_options`
+        // call site mapped every failure — decode-stage included — to
+        // `HWP5_CONVERT_FAILED`. Only the CLI-local `inspect_hwp5_file`
+        // pre-check (`commands/convert_hwp5.rs`, never routed through this
+        // table) returns `HWP5_DECODE_FAILED`.
         use hwpforge_convert::ConvertError;
         use hwpforge_smithy_hwp5::Hwp5Error;
 
@@ -1099,8 +1153,12 @@ mod tests {
             detail: "x".into(),
         }));
         let got = convert_error(Command::ConvertHwp5, decode);
-        assert_eq!(got.code, "HWP5_DECODE_FAILED");
-        assert_eq!(got.hint.as_deref(), Some("Check that the file is a valid HWP5 document"));
+        assert_eq!(got.code, "HWP5_CONVERT_FAILED");
+        assert_eq!(
+            got.hint.as_deref(),
+            Some("Check that the source is a supported HWP5 document and the output path is writable")
+        );
+        assert_eq!(exit_code(Command::ConvertHwp5, &got), 2);
     }
 
     #[test]
