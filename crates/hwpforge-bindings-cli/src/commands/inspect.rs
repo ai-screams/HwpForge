@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use hwpforge::ops::OpsError;
+use hwpforge::ops::inspect::{InspectSection, InspectStyles};
+use hwpforge::ops::{self, InspectOptions, OpsError};
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
@@ -20,7 +21,7 @@ struct InspectResult {
     metadata: MetadataInfo,
     sections: Vec<SectionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    styles: Option<StylesInfo>,
+    styles: Option<InspectStyles>,
 }
 
 #[derive(Serialize)]
@@ -49,37 +50,6 @@ struct SectionInfo {
     has_page_number: bool,
 }
 
-#[derive(Serialize)]
-struct StylesInfo {
-    fonts: Vec<FontInfo>,
-    char_shapes: Vec<CharShapeInfo>,
-    para_shapes: Vec<ParaShapeInfo>,
-}
-
-#[derive(Serialize)]
-struct FontInfo {
-    id: usize,
-    face_name: String,
-    lang: String,
-}
-
-#[derive(Serialize)]
-struct CharShapeInfo {
-    id: usize,
-    font_id: usize,
-    size_pt: f64,
-    bold: bool,
-    italic: bool,
-    color: String,
-}
-
-#[derive(Serialize)]
-struct ParaShapeInfo {
-    id: usize,
-    alignment: String,
-    line_spacing: i32,
-}
-
 /// Run the inspect command.
 pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     check_file_size(file, json_mode);
@@ -91,26 +61,44 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         }
     };
 
+    // `ops::inspect` is the canonical report: metadata (title/author),
+    // per-section paragraph/table/image/chart counts and (with `--styles`)
+    // the style summary all come from here — its shared paragraph traversal
+    // visits table cells, text boxes, notes, memos, headers, footers and
+    // master pages (`hwpforge::ops::inspect` module docs), the same scope
+    // this command's pre-migration XML `count_occurrences` scan covered, so
+    // the deep `tables`/`images`/`charts`/`paragraphs` fields below read
+    // from `InspectSection`'s deep counters, not its `top_level_*` ones
+    // (those would undercount — see `img_05_image_in_table_cell.hwpx`'s
+    // `inspect_deep_counts_image_in_table_cell` test).
+    //
+    // `ops::InspectReport` has no field for `text_boxes`/`ole_objects`/
+    // `lines`/`rectangles`/`polygons`/`non_empty_paragraphs`/`deep_*` (ops
+    // gap, W3 remediation report) — the local `summarize_hwpx_document`
+    // scanner still supplies those, decoding the document a second time.
+    let out = match ops::inspect(&bytes, &InspectOptions::default().with_styles(show_styles)) {
+        Ok(o) => o,
+        Err(e) => {
+            let err = compat::cli_error(Command::Inspect, e);
+            let exit = compat::exit_code(Command::Inspect, &err);
+            err.exit(json_mode, exit);
+        }
+    };
+    let report = out.report;
+
+    // Second decode, only for the deep-count scanner (see module comment
+    // above). `ops::inspect` already proved these bytes decode; this branch
+    // is therefore not expected to trigger in practice, but stays
+    // symmetrical with the shared `compat::cli_error` path rather than
+    // `.expect`-ing determinism.
     let hwpx_doc = match HwpxDecoder::decode(&bytes) {
         Ok(d) => d,
-        // `ops::inspect`'s own `InspectReport` has no field for the deep
-        // per-section counts this command reports (text_boxes, ole_objects,
-        // rectangles, polygons, non_empty_paragraphs — see
-        // `crate::analysis::deep_counts`), so the JSON schema keeps the
-        // local decode + `summarize_hwpx_document` path (W3 report: ops
-        // gap). Only the `DECODE_FAILED` error is routed through the
-        // shared `hwpforge::ops` code/hint/exit table, via `OpsError::decode`
-        // — the same classification `ops::inspect` itself would produce.
         Err(e) => {
             let err = compat::cli_error(Command::Inspect, OpsError::decode(e));
             let exit = compat::exit_code(Command::Inspect, &err);
             err.exit(json_mode, exit);
         }
     };
-
-    let doc = &hwpx_doc.document;
-    let store = &hwpx_doc.style_store;
-    let meta = doc.metadata();
     let deep_summary = match summarize_hwpx_document(&bytes, &hwpx_doc) {
         Ok(summary) => summary,
         Err(err) => {
@@ -119,66 +107,18 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         }
     };
 
-    let sections: Vec<SectionInfo> = deep_summary.sections.iter().map(SectionInfo::from).collect();
-
-    let styles = if show_styles {
-        let mut seen_fonts = std::collections::HashSet::new();
-        let mut fonts = Vec::new();
-        for i in 0..store.font_count() {
-            if let Ok(f) = store.font(hwpforge_foundation::FontIndex::new(i)) {
-                if seen_fonts.insert((f.face_name.clone(), f.lang.clone())) {
-                    fonts.push(FontInfo {
-                        id: i,
-                        face_name: f.face_name.clone(),
-                        lang: f.lang.clone(),
-                    });
-                }
-            }
-        }
-
-        let char_shapes: Vec<CharShapeInfo> = (0..store.char_shape_count())
-            .filter_map(|i| {
-                store.char_shape(hwpforge_foundation::CharShapeIndex::new(i)).ok().map(|cs| {
-                    CharShapeInfo {
-                        id: i,
-                        font_id: cs.font_ref.hangul.get(),
-                        size_pt: cs.height.as_i32() as f64 / 100.0,
-                        bold: cs.bold,
-                        italic: cs.italic,
-                        color: cs.text_color.to_hex_rgb(),
-                    }
-                })
-            })
-            .collect();
-
-        let para_shapes: Vec<ParaShapeInfo> = (0..store.para_shape_count())
-            .filter_map(|i| {
-                store.para_shape(hwpforge_foundation::ParaShapeIndex::new(i)).ok().map(|ps| {
-                    ParaShapeInfo {
-                        id: i,
-                        alignment: serde_json::to_value(ps.alignment)
-                            .ok()
-                            .and_then(|v| v.as_str().map(String::from))
-                            .unwrap_or_else(|| format!("{:?}", ps.alignment)),
-                        line_spacing: ps.line_spacing,
-                    }
-                })
-            })
-            .collect();
-
-        Some(StylesInfo { fonts, char_shapes, para_shapes })
-    } else {
-        None
-    };
+    let sections: Vec<SectionInfo> = report
+        .section_details
+        .iter()
+        .zip(deep_summary.sections.iter())
+        .map(|(ops_section, deep)| SectionInfo::merge(ops_section, deep))
+        .collect();
 
     let result = InspectResult {
         status: "ok",
-        metadata: MetadataInfo {
-            title: meta.title.clone().unwrap_or_default(),
-            author: meta.author.clone().unwrap_or_default(),
-        },
+        metadata: MetadataInfo { title: report.metadata.title, author: report.metadata.author },
         sections,
-        styles,
+        styles: report.styles,
     };
 
     if json_mode {
@@ -212,25 +152,28 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     }
 }
 
-impl From<&DeepSectionSummary> for SectionInfo {
-    fn from(summary: &DeepSectionSummary) -> Self {
+impl SectionInfo {
+    /// Combines the canonical `ops::inspect` per-section counts with the
+    /// CLI-only deep counts (`ops` gap — module comment on [`run`]) the
+    /// local scanner still computes.
+    fn merge(ops_section: &InspectSection, deep: &DeepSectionSummary) -> Self {
         Self {
-            index: summary.index,
-            paragraphs: summary.paragraphs,
-            deep_paragraphs: summary.deep_paragraphs,
-            non_empty_paragraphs: summary.non_empty_paragraphs,
-            deep_non_empty_paragraphs: summary.deep_non_empty_paragraphs,
-            tables: summary.tables,
-            images: summary.images,
-            charts: summary.charts,
-            ole_objects: summary.ole_objects,
-            text_boxes: summary.text_boxes,
-            lines: summary.lines,
-            rectangles: summary.rectangles,
-            polygons: summary.polygons,
-            has_header: summary.has_header,
-            has_footer: summary.has_footer,
-            has_page_number: summary.has_page_number,
+            index: ops_section.index,
+            paragraphs: ops_section.top_level_paragraphs,
+            deep_paragraphs: deep.deep_paragraphs,
+            non_empty_paragraphs: deep.non_empty_paragraphs,
+            deep_non_empty_paragraphs: deep.deep_non_empty_paragraphs,
+            tables: ops_section.tables,
+            images: ops_section.images,
+            charts: ops_section.charts,
+            ole_objects: deep.ole_objects,
+            text_boxes: deep.text_boxes,
+            lines: deep.lines,
+            rectangles: deep.rectangles,
+            polygons: deep.polygons,
+            has_header: ops_section.has_header,
+            has_footer: ops_section.has_footer,
+            has_page_number: ops_section.has_page_number,
         }
     }
 }

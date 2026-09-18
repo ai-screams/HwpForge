@@ -89,16 +89,34 @@ pub fn run(
 }
 
 /// Builds the options `ops::edit::set_cell` itself validates and interprets:
-/// the mutual-exclusion check between `--map` and the single-target flags,
-/// "table/text required" and "exactly one direction", and the `--map` batch's
-/// own empty-list rejection all now live in `SetCellOptions`'s consumer (see
-/// the W3 report) — this only reads the raw flags off `single`/`map` into the
-/// options struct and parses the `--map` file's JSON.
+/// "table/text required" and "exactly one direction", and the `--map`
+/// batch's own empty-list rejection, now live in `SetCellOptions`'s
+/// consumer (see the W3 report). The `--map`/single-target mutual-exclusion
+/// guard is restored here instead (W3 remediation) — legacy checked it
+/// before ever reading the `--map` file, and `ops::edit::set_cell` cannot
+/// reproduce that ordering since it only sees the already-built options,
+/// not the raw flags.
 fn build_options(
     single: SingleTarget<'_>,
     map: Option<&PathBuf>,
     json_mode: bool,
 ) -> SetCellOptions {
+    // Legacy guard (5ff81af `build_specs`): checked before the `--map` file
+    // is even read, so a combined-flags misuse fails fast without touching
+    // a map path that might not exist.
+    let has_single_flags = single.table.is_some()
+        || single.at.is_some()
+        || single.right_of.is_some()
+        || single.below.is_some()
+        || single.text.is_some();
+    if map.is_some() && has_single_flags {
+        CliError::new(
+            "INVALID_SET_CELL_ARGS",
+            "--map cannot be combined with --table/--at/--right-of/--below/--text",
+        )
+        .exit(json_mode, 1);
+    }
+
     let mut opts = SetCellOptions::default();
     if let Some(table) = single.table {
         opts = opts.with_table(table);

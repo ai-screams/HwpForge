@@ -23,7 +23,7 @@ date: "2026-03-09"
 | `date`     | 작성일                                                       | `"2026-03-09"`                               |
 | `metadata` | 문서 속성 — 중첩 키 `subject`/`keywords`/`modified`만 인식됨 | `metadata: {subject: "…", keywords: [a, b]}` |
 
-`template` 키는 파싱되어 저장·왕복되지만 스타일 선택에는 영향이 없습니다(현재 inert, 항상 기본 스타일 사용). 위 표에 없는 키(`template` 제외 — 예: `preset`, `organization`)는 최상위든 `metadata:` 아래든 파싱 후 조용히 무시됩니다 — 에러는 나지 않지만 아무 효과도 없습니다. 스타일은 프론트매터가 아니라 `convert --preset` 플래그로 지정합니다(CLI는 현재 `default`만 허용). 프론트매터가 없으면 `default` 프리셋이 적용됩니다.
+`template` 키는 파싱되어 저장·왕복되지만 스타일 선택에는 영향이 없습니다(현재 inert, 항상 기본 스타일 사용). 위 표에 없는 키(`template` 제외 — 예: `preset`, `organization`)는 최상위든 `metadata:` 아래든 파싱 후 조용히 무시됩니다 — 에러는 나지 않지만 아무 효과도 없습니다. 스타일은 프론트매터가 아니라 `convert --preset` 플래그로 지정합니다(CLI는 `default`/`modern`/`classic`/`latest` 네 프리셋을 모두 받아들입니다). 프론트매터가 없으면 `default` 프리셋이 적용됩니다.
 
 ## 제목 계층 구조
 

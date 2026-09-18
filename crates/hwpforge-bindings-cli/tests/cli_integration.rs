@@ -566,6 +566,39 @@ fn convert_unknown_preset() {
 }
 
 #[test]
+fn convert_unknown_preset_rejected_before_missing_input_is_read() {
+    // W3 remediation finding 6: legacy validated `--preset` before any
+    // input I/O — a bogus preset must still report UNKNOWN_PRESET even
+    // against a nonexistent input file, not FILE_READ_FAILED.
+    let tmp = test_tmp();
+    let out = tmp.join("output.hwpx");
+    let (err, _, code) = run_json(&[
+        "convert",
+        "/nonexistent/input.md",
+        "-o",
+        out.to_str().unwrap(),
+        "--preset",
+        "bogus",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "UNKNOWN_PRESET");
+    assert_eq!(err["hint"], "Available presets: default");
+}
+
+#[test]
+fn convert_unknown_preset_rejected_before_stdin_is_read() {
+    // Same guard, `-` (stdin) input this time — an empty stdin would
+    // otherwise either block or surface as a different failure; the
+    // preset check must fire first and never touch stdin.
+    let (_, stderr, code) =
+        run_with_stdin(&["--json", "convert", "-", "-o", "/dev/null", "--preset", "bogus"], "");
+    assert_eq!(code, 1);
+    let err: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|e| panic!("invalid JSON stderr: {e}\n{stderr}"));
+    assert_eq!(err["code"], "UNKNOWN_PRESET");
+}
+
+#[test]
 fn convert_stdin() {
     let tmp = test_tmp();
     let out = tmp.join("output.hwpx");
@@ -806,6 +839,41 @@ fn inspect_deep_counts_polygon_fixture() {
     assert_eq!(code, 0);
     assert_eq!(val["sections"][0]["polygons"], 1);
     assert_eq!(val["sections"][0]["lines"], 0);
+}
+
+#[test]
+fn inspect_section_object_key_set_is_unchanged() {
+    // W3 remediation: `inspect.rs` now sources paragraph/table/image/chart
+    // counts and has_header/has_footer/has_page_number from `ops::inspect`
+    // instead of decoding by hand — the `--json` schema (key set) must stay
+    // byte-identical regardless of source.
+    let f = fixture("rect.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let sec0 = val["sections"][0].as_object().expect("sections[0] is an object");
+    let mut keys: Vec<&str> = sec0.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "charts",
+            "deep_non_empty_paragraphs",
+            "deep_paragraphs",
+            "has_footer",
+            "has_header",
+            "has_page_number",
+            "images",
+            "index",
+            "lines",
+            "non_empty_paragraphs",
+            "ole_objects",
+            "paragraphs",
+            "polygons",
+            "rectangles",
+            "tables",
+            "text_boxes",
+        ]
+    );
 }
 
 #[test]
@@ -1788,6 +1856,25 @@ fn convert_hwp5_nonexistent_file() {
 }
 
 #[test]
+fn convert_hwp5_output_write_failure_reports_hwp5_convert_failed() {
+    // W3 remediation finding 8: legacy wrote the output *inside*
+    // `hwp5_to_hwpx_with_options`, so a write failure there (missing
+    // parent directory) failed as HWP5_CONVERT_FAILED, exit 2, with the
+    // convert hint — not a generic FILE_WRITE_FAILED.
+    let source = fixture("hwp5_02.hwp");
+    let out = std::path::Path::new("/nonexistent-dir-convert-hwp5/out.hwpx");
+
+    let (err, _, code) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "HWP5_CONVERT_FAILED");
+    assert_eq!(
+        err["hint"],
+        "Check that the source is a supported HWP5 document and the output path is writable"
+    );
+}
+
+#[test]
 fn census_hwp5_json_with_companion() {
     let source = fixture("mixed_02b_textbox_with_image_real.hwp");
     let companion = fixture("mixed_02b_textbox_with_image_real.hwpx");
@@ -2290,6 +2377,40 @@ fn from_json_invalid_json() {
     let out = tmp.join("out.hwpx");
     let (_, _, code) = run(&["from-json", bad_json.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 2);
+}
+
+#[test]
+fn from_json_syntax_error_reports_no_hint() {
+    // W3 remediation: the pre-`ops` classification of JSON_PARSE_FAILED —
+    // a raw syntax error never carried a hint, only the schema-mismatch
+    // case did (`from_json_schema_mismatch_reports_the_legacy_hint`).
+    let tmp = test_tmp();
+    let bad_json = tmp.join("bad.json");
+    std::fs::write(&bad_json, "not valid json").unwrap();
+    let out = tmp.join("out.hwpx");
+    let (err, _, code) =
+        run_json(&["from-json", bad_json.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "JSON_PARSE_FAILED");
+    assert!(err.get("hint").is_none(), "syntax errors carry no hint: {err:?}");
+}
+
+#[test]
+fn from_json_schema_mismatch_reports_the_legacy_hint() {
+    // Valid JSON, but not an ExportedDocument — the schema-mismatch call
+    // site, distinct from the raw-syntax one above.
+    let tmp = test_tmp();
+    let wrong_shape = tmp.join("wrong_shape.json");
+    std::fs::write(&wrong_shape, r#"{"foo": 1}"#).unwrap();
+    let out = tmp.join("out.hwpx");
+    let (err, _, code) =
+        run_json(&["from-json", wrong_shape.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "JSON_PARSE_FAILED");
+    assert_eq!(
+        err["hint"],
+        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"
+    );
 }
 
 #[test]
@@ -3310,6 +3431,24 @@ fn read_rejects_conflicting_targets() {
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--field", "x"]);
     assert_eq!(code, 1);
     assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+}
+
+#[test]
+fn read_arg_guards_run_before_the_file_is_read() {
+    // W3 remediation: legacy checked target-count/paras-without-section
+    // before `check_file_size`/`fs::read`, so these reject even against a
+    // file that does not exist — FILE_READ_FAILED must not shadow them.
+    let (err, _, code) = run_json(&["read", "/nonexistent/file.hwpx"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+
+    // `--table` supplies the single required target so this isolates the
+    // paras-without-section guard, same as `read_error_paths_report_stable_
+    // codes`'s `--table 0 --paras 0` case.
+    let (err, _, code) =
+        run_json(&["read", "/nonexistent/file.hwpx", "--table", "0", "--paras", "0..1"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_WITHOUT_SECTION");
 }
 
 #[test]
@@ -4568,6 +4707,35 @@ fn set_cell_map_arg_conflicts_rejected() {
         "0,0",
         "--right-of",
         "성명",
+        "--text",
+        "x",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+    assert!(!out.exists());
+}
+
+#[test]
+fn set_cell_map_arg_conflict_rejected_before_map_file_is_read() {
+    // W3 remediation: the --map/single-target mutual-exclusion guard must
+    // run before the (possibly nonexistent) --map file is read — a
+    // combined-flags misuse should never surface as FILE_READ_FAILED just
+    // because the map path happens not to exist.
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never3.hwpx");
+
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        "/nonexistent/missing.json",
+        "--table",
+        "0",
+        "--at",
+        "0,0",
         "--text",
         "x",
         "-o",

@@ -18,6 +18,23 @@ pub fn run(
     field: Option<&str>,
     json_mode: bool,
 ) {
+    // Legacy guards (5ff81af `run`): checked before the file is even read,
+    // so a bad target/`--paras` combination fails fast without touching the
+    // filesystem. `ops::read` keeps its own copies of both rules for the
+    // in-document path (module docs, `hwpforge/src/ops/read.rs`) — these
+    // reproduce the identical code/message/exit for the pre-read path.
+    let targets = usize::from(section.is_some())
+        + usize::from(table.is_some())
+        + usize::from(field.is_some());
+    if targets != 1 {
+        CliError::new("READ_TARGET_REQUIRED", "Pass exactly one of --section, --table, --field")
+            .exit(json_mode, 1);
+    }
+    if paras.is_some() && section.is_none() {
+        CliError::new("READ_PARAS_WITHOUT_SECTION", "--paras requires --section")
+            .exit(json_mode, 1);
+    }
+
     check_file_size(file, json_mode);
     let bytes = match std::fs::read(file) {
         Ok(b) => b,
@@ -41,11 +58,13 @@ pub fn run(
         opts = opts.with_field(field);
     }
 
-    // Target-count / paras-without-section / paras-parse rejections all
-    // come from `ops::read` itself now (its rules and messages are the
-    // CLI's own, reproduced verbatim — `hwpforge/src/ops/read.rs` module
-    // docs), rather than being pre-checked locally as before. Decoder
-    // warnings (`ReadOutput::warnings`) are not surfaced (W3 report).
+    // Target-count / paras-without-section are pre-checked above, matching
+    // the legacy pre-read guards byte-for-byte; a paras-parse rejection
+    // (`READ_PARAS_INVALID`/`READ_PARA_RANGE_INVALID`) still comes from
+    // `ops::read` itself (its rules and messages are the CLI's own,
+    // reproduced verbatim — `hwpforge/src/ops/read.rs` module docs).
+    // Decoder warnings (`ReadOutput::warnings`) are not surfaced (W3
+    // report).
     let out = match ops::read(&bytes, &opts) {
         Ok(o) => o,
         Err(e) => {

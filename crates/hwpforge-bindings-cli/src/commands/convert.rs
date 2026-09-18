@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use hwpforge::ops::{convert_md, ConvertMdOptions, OpsWarning};
-use hwpforge_smithy_hwpx::EncodeWarning;
+use hwpforge::ops::{convert_md, ConvertMdOptions, OpsError, OpsWarning};
+use hwpforge_smithy_hwpx::{builtin_presets, EncodeWarning};
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError, MAX_STDIN_SIZE};
@@ -44,6 +44,20 @@ struct ConvertResult {
 /// default`/`ops::convert_md` advertise, so this makes `convert`'s output
 /// agree with the preset table it already publishes.
 pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
+    // Legacy validated `--preset` before any input I/O (5ff81af `run`'s
+    // `if preset != "default"` guard ran first thing) — a bad preset name
+    // must fail the same way whether the input file is missing or stdin is
+    // still open, not surface as `FILE_READ_FAILED`/a stdin block (W3
+    // remediation finding 6). `convert_md`'s own `check_preset` validates
+    // against this same `builtin_presets()` table (`ops/convert.rs`), so
+    // this preflight and the one inside `convert_md` can never disagree.
+    if !builtin_presets().iter().any(|p| p.name == preset) {
+        let cli_err =
+            compat::cli_error(Command::Convert, OpsError::PresetNotFound { name: preset.into() });
+        let exit = compat::exit_code(Command::Convert, &cli_err);
+        cli_err.exit(json_mode, exit);
+    }
+
     // Read input (file or stdin)
     let markdown = if input == "-" {
         let mut buf = String::new();
