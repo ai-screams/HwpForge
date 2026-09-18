@@ -2,6 +2,11 @@
 
 mod analysis;
 mod commands;
+// Unused until the other W3 lanes wire `commands/*.rs` to call
+// `compat::cli_error`/`compat::convert_error` — see `compat.rs`'s module
+// docs. Remove this `allow` once that wiring lands.
+#[allow(dead_code, reason = "wired by the other W3 command lanes in a later commit")]
+mod compat;
 mod error;
 
 use std::path::PathBuf;
