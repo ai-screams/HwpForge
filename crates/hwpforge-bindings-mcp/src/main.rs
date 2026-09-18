@@ -4,6 +4,7 @@
 
 #![deny(missing_docs)]
 
+mod compat;
 mod output;
 mod prompts;
 mod resources;

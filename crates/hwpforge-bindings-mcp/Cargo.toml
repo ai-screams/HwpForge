@@ -18,6 +18,7 @@ name = "hwpforge-mcp"
 path = "src/main.rs"
 
 [dependencies]
+hwpforge = { path = "../hwpforge", version = "0", features = ["ops"] }
 hwpforge-core = { path = "../hwpforge-core", version = "0" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", features = ["schemars"] }

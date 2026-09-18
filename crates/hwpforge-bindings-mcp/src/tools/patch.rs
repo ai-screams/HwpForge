@@ -2,10 +2,9 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{
-    ExportedSection, HwpxPatcher, SectionPatchOutcome, SectionWorkflowError,
-};
+use hwpforge::ops::{self, PatchOptions};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, read_file_string, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful patch operation.
@@ -39,84 +38,28 @@ pub fn run_patch(
     let base_bytes = read_file_bytes(base_path)?;
     let json_str = read_file_string(section_json_path)?;
 
-    // Parse the tree once; the typed section deserializes by reference.
-    let value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
-        ToolErrorInfo::new(
-            "JSON_PARSE_ERROR",
-            format!("Invalid section JSON: {e}"),
-            "Ensure the JSON matches the ExportedSection schema from hwpforge_to_json output.",
-        )
-    })?;
-    let exported: ExportedSection =
-        serde::Deserialize::deserialize(&value).map_err(|e: serde_json::Error| {
-            ToolErrorInfo::new(
-                "JSON_PARSE_ERROR",
-                format!("Invalid section JSON: {e}"),
-                "Ensure the JSON matches the ExportedSection schema from hwpforge_to_json output.",
-            )
-        })?;
+    // `ops::patch` owns the JSON parse, the grid-address verification and
+    // the preserving patch itself — the JSON-parse/grid-addr checks used to
+    // live here (before `HwpxPatcher::patch_exported_section` ran) and are
+    // now `ops`'s.
+    let opts = PatchOptions::default().with_section(section_idx).with_patch(json_str);
+    let outcome = ops::patch(&base_bytes, &opts).map_err(|e| compat::tool_error(Tool::Patch, e))?;
 
-    // Supplied cell grid addresses are validated, then discarded (see
-    // hwpforge_from_json): stale addresses after structural edits are rejected.
-    hwpforge_smithy_hwpx::grid_addr::verify_section_addresses(
-        &value,
-        &exported.section,
-        exported.section_index,
-    )
-    .map_err(|e| {
-        ToolErrorInfo::new(
-            "GRID_ADDR_INVALID",
-            format!("Cell grid address check failed: {e}"),
-            "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry.",
-        )
-    })?;
+    write_output_file(output_path, &outcome.bytes)?;
 
-    let outcome = HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported)
-        .map_err(map_section_workflow_error_for_patch)?;
-    let SectionPatchOutcome { bytes, patched_section, sections } = outcome;
-
-    write_output_file(output_path, &bytes)?;
-
-    let size_bytes = bytes.len() as u64;
-    Ok(PatchData { output_path: output_path.to_string(), patched_section, sections, size_bytes })
-}
-
-fn map_section_workflow_error_for_patch(error: SectionWorkflowError) -> ToolErrorInfo {
-    match error {
-        SectionWorkflowError::Decode { detail } => ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {detail}"),
-            "Check that the base file is valid HWPX.",
-        ),
-        SectionWorkflowError::SectionOutOfRange { requested, sections } => ToolErrorInfo::new(
-            "SECTION_OUT_OF_RANGE",
-            format!("Section {requested} does not exist (document has {sections} sections)"),
-            format!("Valid range: 0..={}", sections.saturating_sub(1)),
-        ),
-        SectionWorkflowError::SectionIndexMismatch { requested, actual } => ToolErrorInfo::new(
-            "SECTION_INDEX_MISMATCH",
-            format!("Requested section {requested} but JSON contains section {actual} data"),
-            format!(
-                "Use section: {actual} to match the JSON, or re-export section {requested} with hwpforge_to_json."
-            ),
-        ),
-        SectionWorkflowError::PreservingPatch(error) => ToolErrorInfo::new(
-            "PATCH_ERROR",
-            format!("Preserving patch failed: {error}"),
-            "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow.",
-        ),
-        _ => ToolErrorInfo::new(
-            "SECTION_WORKFLOW_ERROR",
-            error.to_string(),
-            "Update hwpforge so this MCP binding understands the newer section workflow error.",
-        ),
-    }
+    Ok(PatchData {
+        output_path: output_path.to_string(),
+        patched_section: outcome.section,
+        sections: outcome.sections,
+        size_bytes: outcome.bytes.len() as u64,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use hwpforge_core::run::RunContent;
+    use hwpforge_smithy_hwpx::ExportedSection;
 
     fn replace_first_text(exported: &mut ExportedSection, replacement: &str) {
         for paragraph in &mut exported.section.paragraphs {

@@ -5,15 +5,21 @@
 //! 로 분류한 spec 배열을 stamp 에 전달한다. stamp 는 fail-closed admission
 //! 게이트(무손실 왕복 + ZIP closed-world) 뒤에서 all-or-nothing 으로
 //! 적용하고 manifest 를 함께 기록한다.
+//!
+//! `stamp_plan` 과 `stamp` 모두 [`hwpforge::ops`] 로 온전히 이관됐다
+//! (`ops::stamp_plan`, `ops::stamp`) — apply-phase 결과
+//! (`stamped`/`stamped_cells`/`ignored`/`skipped_guarded`) 가 manifest 와
+//! 별개로 `ops::StampOutput` 에 실린 이후.
 
 use serde::Serialize;
 
+use hwpforge::ops;
 use hwpforge_smithy_hwpx::stamp::{
-    CellStampCandidate, CellStampError, CellStampSpec, CellStampedField, HwpxStamper, SkippedTable,
-    StampCandidate, StampError, StampRequestV2, StampSpec, StampedField, StamperError,
-    STAMP_MAP_VERSION,
+    CellStampCandidate, CellStampSpec, CellStampedField, SkippedTable, StampCandidate, StampMap,
+    StampRequestV2, StampSpec, StampedField, STAMP_MAP_VERSION,
 };
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful stamp-plan operation.
@@ -55,12 +61,12 @@ pub struct StampData {
 /// Discover both candidate classes (text markers + label-adjacent cells).
 pub fn run_stamp_plan(file_path: &str) -> Result<StampPlanData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
-    let plan = HwpxStamper::plan_bytes_v2(&bytes).map_err(map_stamper_error)?;
+    let out = ops::stamp_plan(&bytes).map_err(|e| compat::tool_error(Tool::StampPlan, e))?;
     Ok(StampPlanData {
-        source_sha256: plan.source_sha256,
-        candidates: plan.text,
-        cells: plan.cells,
-        skipped_tables: plan.skipped_tables,
+        source_sha256: out.plan.source_sha256,
+        candidates: out.plan.text,
+        cells: out.plan.cells,
+        skipped_tables: out.plan.skipped_tables,
     })
 }
 
@@ -86,53 +92,45 @@ pub fn run_stamp(
     }
 
     let bytes = read_file_bytes(file_path)?;
-    let serialize_err = |e: serde_json::Error| {
+
+    let request = if cells.is_empty() && source_sha256.is_none() {
+        StampMap::Legacy(specs.to_vec())
+    } else {
+        let Some(sha) = source_sha256 else {
+            return Err(ToolErrorInfo::new(
+                "MISSING_SOURCE_SHA256",
+                "cell specs require source_sha256 (drift pinning)",
+                "hwpforge_stamp_plan 의 source_sha256 을 그대로 전달하세요.",
+            ));
+        };
+        StampMap::V2(StampRequestV2 {
+            schema_version: STAMP_MAP_VERSION,
+            source_sha256: sha.to_string(),
+            text: specs.to_vec(),
+            cells: cells.to_vec(),
+        })
+    };
+
+    let out = ops::stamp(&bytes, &request, &ops::StampOptions::default())
+        .map_err(|e| compat::tool_error(Tool::Stamp, e))?;
+
+    // `StampOptions::default()` always asks for the manifest, so this is
+    // never `None` in practice; handled as an error rather than a panic
+    // because it crosses an API boundary this tool does not own.
+    let manifest = out.manifest.as_ref().ok_or_else(|| {
+        ToolErrorInfo::new(
+            "STAMP_MANIFEST_SERIALIZE",
+            "manifest missing from a default-options stamp result",
+            "Report this as a bug.",
+        )
+    })?;
+    let manifest_json = serde_json::to_string_pretty(manifest).map_err(|e| {
         ToolErrorInfo::new(
             "STAMP_MANIFEST_SERIALIZE",
             format!("manifest serialization failed: {e}"),
             "Report this as a bug.",
         )
-    };
-    let (out_bytes, manifest_json, stamped, stamped_cells, ignored, skipped_guarded) =
-        if cells.is_empty() && source_sha256.is_none() {
-            let result = HwpxStamper::stamp(&bytes, specs).map_err(map_stamper_error)?;
-            let manifest_json =
-                serde_json::to_string_pretty(&result.manifest).map_err(serialize_err)?;
-            (
-                result.bytes,
-                manifest_json,
-                result.outcome.stamped,
-                Vec::new(),
-                result.outcome.ignored,
-                result.outcome.skipped_guarded.len(),
-            )
-        } else {
-            let Some(sha) = source_sha256 else {
-                return Err(ToolErrorInfo::new(
-                    "MISSING_SOURCE_SHA256",
-                    "cell specs require source_sha256 (drift pinning)",
-                    "hwpforge_stamp_plan 의 source_sha256 을 그대로 전달하세요.",
-                ));
-            };
-            let request = StampRequestV2 {
-                schema_version: STAMP_MAP_VERSION,
-                source_sha256: sha.to_string(),
-                text: specs.to_vec(),
-                cells: cells.to_vec(),
-            };
-            let result = HwpxStamper::stamp_v2(&bytes, &request).map_err(map_stamper_error)?;
-            let manifest_json =
-                serde_json::to_string_pretty(&result.manifest).map_err(serialize_err)?;
-            (
-                result.bytes,
-                manifest_json,
-                result.outcome.text.stamped,
-                result.outcome.cells.stamped,
-                result.outcome.text.ignored + result.outcome.cells.ignored,
-                result.outcome.text.skipped_guarded.len()
-                    + result.outcome.cells.skipped_guarded.len(),
-            )
-        };
+    })?;
 
     // Review L1: serialize the manifest BEFORE writing anything, and remove
     // the .hwpx if the manifest write fails — a failed call must leave no
@@ -149,239 +147,22 @@ pub fn run_stamp(
             "manifest_path 는 output_path 와 달라야 합니다.",
         ));
     }
-    write_output_file(output_path, &out_bytes)?;
+    write_output_file(output_path, &out.bytes)?;
     if let Err(e) = write_output_file(&manifest_file, manifest_json.as_bytes()) {
         let _ = std::fs::remove_file(output_path);
         return Err(e);
     }
 
-    let size_bytes = out_bytes.len() as u64;
+    let size_bytes = out.bytes.len() as u64;
     Ok(StampData {
         output_path: output_path.to_string(),
         manifest_path: manifest_file,
-        stamped,
-        stamped_cells,
-        ignored,
-        skipped_guarded,
+        stamped: out.stamped,
+        stamped_cells: out.stamped_cells,
+        ignored: out.ignored,
+        skipped_guarded: out.skipped_guarded,
         size_bytes,
     })
-}
-
-fn map_stamper_error(error: StamperError) -> ToolErrorInfo {
-    match error {
-        StamperError::NotRoundTripSafe { component, diff_path } => ToolErrorInfo::new(
-            "INPUT_NOT_ROUNDTRIP_SAFE",
-            format!("input is not round-trip-safe: {component} differs at {diff_path}"),
-            "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가.",
-        ),
-        // R1: entry names are untrusted — {:?} escapes control chars even
-        // if a client prints the parsed JSON string raw.
-        StamperError::UncarriedZipEntries { entries } => ToolErrorInfo::new(
-            "INPUT_ENTRIES_NOT_CARRIED",
-            format!("encoder does not carry input entries: {entries:?}"),
-            "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed).",
-        ),
-        StamperError::Stamp(inner) => map_stamp_error(inner),
-        StamperError::ManifestInvariant { detail } => ToolErrorInfo::new(
-            "STAMP_MANIFEST_INVARIANT",
-            detail,
-            "Report this as a bug — the output inventory violated an invariant.",
-        ),
-        StamperError::Codec(msg) => ToolErrorInfo::new(
-            "STAMP_CODEC_FAILED",
-            msg,
-            "Check that the file is valid HWPX.",
-        ),
-        StamperError::SourceHashMismatch { expected, actual } => ToolErrorInfo::new(
-            "STAMP_SOURCE_HASH_MISMATCH",
-            format!("request is pinned to {expected}, input is {actual}"),
-            "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행해 source_sha256 을 갱신하세요.",
-        ),
-        StamperError::CellStamp(inner) => map_cell_stamp_error(inner),
-        StamperError::DeltaMismatch { stage, detail } => ToolErrorInfo::new(
-            "STAMP_DELTA_MISMATCH",
-            format!("post-encode verification failed at {stage}: {detail}"),
-            "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다.",
-        ),
-        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
-        // — 코드·hint 는 과거 `Codec` 과 같고, 메시지는 변형의 Display
-        // (접두사 없는 문장이라 과거 `Codec(msg)` 과 바이트 동일). 표준
-        // `ENCODE_SEMANTIC_LOSS` 매핑은 W3 compat 테이블의 몫이다. 이 arm 이
-        // 없으면 아래 `other` 로 떨어져 코드가 STAMP_FAILED 로 바뀐다.
-        ref e @ StamperError::SemanticLoss { .. } => ToolErrorInfo::new(
-            "STAMP_CODEC_FAILED",
-            e.to_string(),
-            "Check that the file is valid HWPX.",
-        ),
-        other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
-    }
-}
-
-#[cfg(test)]
-mod semantic_loss_contract_tests {
-    use super::*;
-    use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
-
-    fn warning(reason: &str) -> EncodeWarning {
-        EncodeWarning::NoteHeadSkipped {
-            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
-            reason: reason.into(),
-        }
-    }
-
-    /// R1 F4 회귀 잠금: `SemanticLoss` 는 typed 변형이 됐지만 MCP 가 내보내는
-    /// 코드·메시지·hint 는 과거 `Codec` 경로와 **바이트 동일**해야 한다.
-    /// (arm 이 빠지면 `other` 로 떨어져 STAMP_FAILED 가 된다.)
-    #[test]
-    fn semantic_loss_maps_to_the_codec_contract() {
-        let typed = map_stamper_error(StamperError::SemanticLoss {
-            warnings: vec![warning("titleMark first run")],
-            others: vec![],
-        });
-        let legacy = map_stamper_error(StamperError::Codec(
-            "encode produced a semantic-loss warning (fail-closed): note number head skipped at \
-             section[0].para[1]: titleMark first run"
-                .to_string(),
-        ));
-
-        assert_eq!(typed.code, "STAMP_CODEC_FAILED");
-        assert_eq!(typed.code, legacy.code);
-        assert_eq!(typed.message, legacy.message, "메시지가 드리프트했다");
-        assert_eq!(typed.hint, legacy.hint, "hint 가 드리프트했다");
-    }
-
-    /// 빈 `warnings` 로도 panic 하지 않아야 한다 (변형은 외부에서 구성 가능).
-    #[test]
-    fn empty_warnings_does_not_panic() {
-        let info =
-            map_stamper_error(StamperError::SemanticLoss { warnings: vec![], others: vec![] });
-        assert_eq!(info.code, "STAMP_CODEC_FAILED");
-        assert_eq!(info.message, "encode produced a semantic-loss warning (fail-closed)");
-    }
-}
-
-fn map_cell_stamp_error(error: CellStampError) -> ToolErrorInfo {
-    match error {
-        CellStampError::TableNotFound { table } => ToolErrorInfo::new(
-            "TABLE_NOT_FOUND",
-            format!("table ordinal {table} does not exist"),
-            "hwpforge_stamp_plan 의 cells[].table 서수를 사용하세요.",
-        ),
-        CellStampError::TableGridInvalid { table, detail } => ToolErrorInfo::new(
-            "TABLE_GRID_INVALID",
-            format!("table {table}: {detail}"),
-            "이 표는 논리 격자를 만들 수 없어 셀 스탬핑 대상이 아닙니다.",
-        ),
-        CellStampError::NotAnAnchor { table, requested, anchor } => ToolErrorInfo::new(
-            "STAMP_CELL_NOT_ANCHOR",
-            format!("table {table}: ({},{}) is not an anchor", requested.row, requested.col),
-            match anchor {
-                Some(a) => {
-                    format!("병합 피복 위치입니다 — anchor ({},{}) 를 지정하세요.", a.row, a.col)
-                }
-                None => "격자 범위 밖 좌표입니다.".to_string(),
-            },
-        ),
-        CellStampError::TargetNotStampable { table, at } => ToolErrorInfo::new(
-            "STAMP_CELL_NOT_EMPTY",
-            format!("table {table}: cell ({},{}) has authored content", at.row, at.col),
-            "클래스-B 대상은 whitespace-only 빈 셀이어야 합니다.",
-        ),
-        CellStampError::LabelDrift { table, at, claimed, found } => ToolErrorInfo::new(
-            "STAMP_LABEL_DRIFT",
-            format!(
-                "table {table} ({},{}): claimed label {claimed:?}, live {found:?}",
-                at.row, at.col
-            ),
-            "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행하세요.",
-        ),
-        CellStampError::UnknownCandidate { table, at } => ToolErrorInfo::new(
-            "STAMP_CELL_NOT_CANDIDATE",
-            format!("table {table}: ({},{}) is not a live candidate", at.row, at.col),
-            "ignore 는 live 후보에만 가능합니다.",
-        ),
-        CellStampError::DuplicateTarget { table, at } => ToolErrorInfo::new(
-            "STAMP_CELL_TARGET_DUPLICATE",
-            format!("table {table}: cell ({},{}) targeted twice", at.row, at.col),
-            "같은 셀을 두 번 분류했습니다.",
-        ),
-        CellStampError::EmptyName => ToolErrorInfo::new(
-            "STAMP_NAME_EMPTY",
-            "field name must not be empty",
-            "빈 이름은 허용되지 않습니다.",
-        ),
-        CellStampError::BlankHint { name } => ToolErrorInfo::new(
-            "STAMP_HINT_BLANK",
-            format!("cell spec {name:?}: hint must not be blank"),
-            "빈 셀엔 마커가 없어 hint 가 필수입니다 — plan 의 suggested_hint 를 참고하세요.",
-        ),
-        CellStampError::DuplicateName { name } => ToolErrorInfo::new(
-            "STAMP_NAME_DUPLICATE",
-            format!("duplicate field name {name:?}"),
-            "필드 이름은 text+cells 전체에서 유일해야 합니다.",
-        ),
-        CellStampError::NameCollision { name } => ToolErrorInfo::new(
-            "STAMP_NAME_COLLISION",
-            format!("field name {name:?} already exists in the document"),
-            "기존 누름틀과 이름이 겹칩니다 — hwpforge_fields 로 확인하세요.",
-        ),
-        CellStampError::UncoveredCandidate { table, at } => ToolErrorInfo::new(
-            "STAMP_CANDIDATE_UNCOVERED",
-            format!(
-                "unguarded cell candidate at table {table} ({},{}) has no spec",
-                at.row, at.col
-            ),
-            "모든 무가드 셀 후보는 이름 또는 ignore 로 분류해야 합니다.",
-        ),
-        other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
-    }
-}
-
-fn map_stamp_error(error: StampError) -> ToolErrorInfo {
-    match error {
-        StampError::UncoveredCandidate { section, path, span, marker } => ToolErrorInfo::new(
-            "STAMP_CANDIDATE_UNCOVERED",
-            format!(
-                "unguarded candidate {marker:?} (section {section}, {path} [{}..{}]) has no spec",
-                span.start, span.end
-            ),
-            "모든 무가드 후보는 이름 또는 ignore 로 분류해야 합니다 — hwpforge_stamp_plan 출력을 빠짐없이 사용하세요.",
-        ),
-        StampError::UnknownSpec { section, path, span } => ToolErrorInfo::new(
-            "STAMP_SPEC_STALE",
-            format!(
-                "spec matches no live candidate: section {section}, {path} [{}..{}]",
-                span.start, span.end
-            ),
-            "문서가 변경됐거나 span 이 어긋났습니다 — hwpforge_stamp_plan 을 다시 실행하세요.",
-        ),
-        StampError::MarkerMismatch { path, expected, found } => ToolErrorInfo::new(
-            "STAMP_MARKER_MISMATCH",
-            format!("marker mismatch at {path}: spec {expected:?}, document {found:?}"),
-            "spec 의 marker 는 문서의 현재 텍스트와 일치해야 합니다.",
-        ),
-        StampError::DuplicateSpec { path, span } => ToolErrorInfo::new(
-            "STAMP_SPEC_DUPLICATE",
-            format!("duplicate specs for {path} [{}..{}]", span.start, span.end),
-            "같은 후보를 두 번 분류했습니다.",
-        ),
-        StampError::DuplicateName { name } => ToolErrorInfo::new(
-            "STAMP_NAME_DUPLICATE",
-            format!("duplicate field name {name:?}"),
-            "필드 이름은 spec 전체에서 유일해야 합니다.",
-        ),
-        StampError::NameCollision { name } => ToolErrorInfo::new(
-            "STAMP_NAME_COLLISION",
-            format!("field name {name:?} already exists in the document"),
-            "기존 누름틀과 이름이 겹칩니다 — hwpforge_fields 로 기존 이름을 확인하세요.",
-        ),
-        StampError::EmptyName => ToolErrorInfo::new(
-            "STAMP_NAME_EMPTY",
-            "field name must not be empty",
-            "빈 이름은 허용되지 않습니다.",
-        ),
-        other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
-    }
 }
 
 #[cfg(test)]

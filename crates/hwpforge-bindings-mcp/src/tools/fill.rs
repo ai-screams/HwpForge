@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{FillError, FilledField, HwpxFiller};
+use hwpforge::ops;
+use hwpforge_smithy_hwpx::FilledField;
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful fill operation.
@@ -45,42 +47,15 @@ pub fn run_fill(
     }
 
     let bytes = read_file_bytes(file_path)?;
-    let outcome = HwpxFiller::fill(&bytes, values).map_err(map_fill_error)?;
+    // `values` is already a `BTreeMap`, so keys are unique by construction —
+    // `ops::fill`'s own "given more than once" rejection can never trigger
+    // through this call site.
+    let pairs: Vec<(String, String)> =
+        values.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
+    let outcome = ops::fill(&bytes, &pairs, &ops::FillOptions::default())
+        .map_err(|e| compat::tool_error(Tool::Fill, e))?;
     write_output_file(output_path, &outcome.bytes)?;
 
     let size_bytes = outcome.bytes.len() as u64;
     Ok(FillData { output_path: output_path.to_string(), filled: outcome.filled, size_bytes })
-}
-
-fn map_fill_error(error: FillError) -> ToolErrorInfo {
-    match error {
-        FillError::EmptyValue { name } => ToolErrorInfo::new(
-            "EMPTY_FIELD_VALUE",
-            format!("field '{name}': empty value is not fillable"),
-            "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요.",
-        ),
-        FillError::UnknownField { name, available } => ToolErrorInfo::new(
-            "FIELD_NOT_FOUND",
-            format!("field '{name}' not found in document"),
-            format!(
-                "Available fields: [{}]. Use hwpforge_fields to list them.",
-                available.join(", ")
-            ),
-        ),
-        FillError::DuplicateFieldName { name, count } => ToolErrorInfo::new(
-            "FIELD_NAME_AMBIGUOUS",
-            format!("field '{name}' appears {count} times"),
-            "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요.",
-        ),
-        FillError::UnfillableField { name, section } => ToolErrorInfo::new(
-            "FIELD_NOT_FILLABLE",
-            format!("field '{name}' in section {section} has no patchable body"),
-            "병합-run 모호 필드 또는 빈 본문 — 한컴 재저장 또는 from-json --base 재생성이 필요합니다.",
-        ),
-        FillError::Workflow(e) => ToolErrorInfo::new(
-            "FILL_ERROR",
-            format!("fill workflow error: {e}"),
-            "Check that the file is valid HWPX.",
-        ),
-    }
 }

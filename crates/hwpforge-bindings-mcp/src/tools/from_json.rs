@@ -2,10 +2,9 @@
 
 use serde::Serialize;
 
-use hwpforge_core::image::ImageStore;
-use hwpforge_smithy_hwpx::presets::style_store_for_preset;
-use hwpforge_smithy_hwpx::{ExportedDocument, HwpxEncoder};
+use hwpforge::ops;
 
+use crate::compat::{self, Tool};
 use crate::output::{write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful JSON → HWPX creation.
@@ -26,7 +25,9 @@ pub struct FromJsonData {
 
 /// Create an HWPX document from a JSON structure (ExportedDocument schema).
 pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData, ToolErrorInfo> {
-    // 1. Validate output extension
+    // Path/size checks stay MCP-local (`INVALID_EXTENSION`, `INPUT_TOO_LARGE`
+    // have no `ops` equivalent — `ops::from_json` works on an already-sized
+    // JSON string).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
             "INVALID_EXTENSION",
@@ -34,8 +35,6 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
             "Use a .hwpx extension for the output file.",
         ));
     }
-
-    // 2. Check inline size
     if structure.len() > MAX_INLINE_SIZE {
         return Err(ToolErrorInfo::new(
             "INPUT_TOO_LARGE",
@@ -48,88 +47,20 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
         ));
     }
 
-    // 3. Parse JSON — tree once, typed view by reference (no reparse).
-    let value: serde_json::Value = serde_json::from_str(structure).map_err(|e| {
-        ToolErrorInfo::new(
-            "JSON_PARSE_ERROR",
-            format!("Invalid JSON: {e}"),
-            "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output.",
-        )
-    })?;
-    let exported: ExportedDocument =
-        serde::Deserialize::deserialize(&value).map_err(|e: serde_json::Error| {
-            ToolErrorInfo::new(
-                "JSON_PARSE_ERROR",
-                format!("Invalid JSON: {e}"),
-                "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output.",
-            )
-        })?;
+    let outcome = ops::from_json(structure, &ops::FromJsonOptions::default())
+        .map_err(|e| compat::tool_error(Tool::FromJson, e))?;
 
-    // Supplied cell grid addresses are validated, then discarded: absence
-    // means no check, a mismatch means the caller acted on stale addresses.
-    hwpforge_smithy_hwpx::grid_addr::verify_document_addresses(&value, &exported.document)
-        .map_err(|e| {
-            ToolErrorInfo::new(
-                "GRID_ADDR_INVALID",
-                format!("Cell grid address check failed: {e}"),
-                "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry.",
-            )
-        })?;
+    write_output_file(output_path, &outcome.bytes)?;
 
-    // 4. Resolve styles (use embedded styles or default fallback)
-    let style_store = match exported.styles {
-        Some(s) => s,
-        None => style_store_for_preset("default").ok_or_else(|| {
-            ToolErrorInfo::new(
-                "INTERNAL_ERROR",
-                "Default preset not found",
-                "This is a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-            )
-        })?,
-    };
-
-    // 5. Count before validation
-    let sections = exported.document.sections().len();
-    let paragraphs: usize = exported.document.sections().iter().map(|s| s.paragraphs.len()).sum();
-
-    // 6. Validate
-    let validated = exported.document.validate().map_err(|e| {
-        ToolErrorInfo::new(
-            "VALIDATION_ERROR",
-            format!("Document validation failed: {e}"),
-            "Check document structure.",
-        )
-    })?;
-
-    // 7. Encode
-    let image_store = ImageStore::new();
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        &style_store,
-        &image_store,
-        hwpforge_smithy_hwpx::EncodeOptions::default(),
-    )
-    .map_err(|e| {
-        ToolErrorInfo::new(
-            "ENCODE_ERROR",
-            format!("HWPX encoding failed: {e}"),
-            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-        )
-    })?;
-    let hwpx_bytes = outcome.bytes;
+    let size_bytes = outcome.bytes.len() as u64;
     let warnings: Vec<String> =
-        outcome.warnings.iter().map(std::string::ToString::to_string).collect();
-
-    // 8. Write output file
-    write_output_file(output_path, &hwpx_bytes)?;
-
-    let size_bytes = hwpx_bytes.len() as u64;
+        outcome.warnings.iter().map(|w| compat::warning(w).message).collect();
 
     Ok(FromJsonData {
         output_path: output_path.to_string(),
         size_bytes,
-        sections,
-        paragraphs,
+        sections: outcome.sections,
+        paragraphs: outcome.paragraphs,
         warnings,
     })
 }
