@@ -150,7 +150,7 @@
 //!   old per-command default-arm string. `TABLE` still carries a
 //!   best-effort row per command for the day that matters.
 
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsError;
 use hwpforge_convert::ops::ConvertOpsError;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
 use hwpforge_smithy_hwpx::stamp::{CellStampError, StampError, StamperError};
@@ -200,7 +200,10 @@ pub enum Command {
     /// `templates show` (`templates list` never fails — `ops::templates` is
     /// infallible).
     Templates,
-    /// `schema`.
+    /// `schema`. Never constructed at runtime — the schema catalogue is a
+    /// CLI artefact that stays local (module docs) — but kept so the snapshot
+    /// inventory's `cmd_name` stays exhaustive over every subcommand.
+    #[allow(dead_code, reason = "schema stays CLI-local; variant keeps the inventory exhaustive")]
     Schema,
     /// `to-md`.
     ToMd,
@@ -608,27 +611,46 @@ pub fn convert_error(cmd: Command, err: ConvertOpsError) -> CliError {
     }
 }
 
+/// Exit codes for the `(command, legacy)` pairs [`cli_error`] resolves
+/// *before* consulting `TABLE` — the dynamic-hint and dual-source arms whose
+/// hint embeds per-call data (or differs by wrapped-error origin) and so has
+/// no flat `TABLE` row. `TABLE` carries the exit code together with the hint;
+/// these pairs carry theirs here, straight from the audited snapshot's exit
+/// column (`tests/data/legacy_codes.txt`). Without this table [`exit_code`]
+/// fell through to its fallback (2) for every one of them while the legacy
+/// exit was 1 (W3 lane finding — four commands had to override it locally).
+/// The inventory tests pin this table to the snapshot both ways: every
+/// `DYNAMIC`/`DUAL_SOURCE` pair has a row here, every row here is such a
+/// pair, and each exit matches the snapshot.
+const DYNAMIC_EXIT: &[(Command, &str, i32)] = &[
+    (Command::Fill, "FIELD_NOT_FOUND", 1),
+    (Command::ToJson, "SECTION_OUT_OF_RANGE", 1),
+    (Command::Patch, "SECTION_OUT_OF_RANGE", 1),
+    (Command::Patch, "SECTION_INDEX_MISMATCH", 2),
+    (Command::Stamp, "STAMP_CELL_NOT_ANCHOR", 1),
+    (Command::Stamp, "STAMP_NAME_DUPLICATE", 1),
+    (Command::Stamp, "STAMP_NAME_COLLISION", 1),
+    (Command::Stamp, "STAMP_CANDIDATE_UNCOVERED", 1),
+    (Command::SetCell, "TABLE_NOT_FOUND", 1),
+];
+
 /// The process exit code for `cmd`'s error `err` (its `code` field, as
 /// returned by [`cli_error`]/[`convert_error`]). Exit codes vary by command,
-/// not by code alone (module docs) — this is a `TABLE` lookup, not a
+/// not by code alone (module docs) — this is a `TABLE` lookup (then the
+/// [`DYNAMIC_EXIT`] lookup for the pairs `TABLE` cannot hold), not a
 /// heuristic. Falls back to 2 (the majority "codec/validation failure"
 /// class) for a code with no legacy row, matching the same "new code, no
 /// divergence to preserve" reasoning as [`cli_error`]'s fallback.
 #[must_use]
 pub fn exit_code(cmd: Command, err: &CliError) -> i32 {
-    TABLE.iter().find(|row| row.cmd == cmd && row.legacy == err.code).map_or(2, |row| row.exit)
-}
-
-/// Maps a slice of `hwpforge::ops` warnings onto the wire payload every
-/// command already knows how to print. This is a straight field copy
-/// ([`OpsWarning::info`] already produces the `{code, message, hint}`
-/// triple); per-command print formatting (JSON-gated vs. unconditional,
-/// `[convert]`/`[from-json]`-prefixed plain lines, structured
-/// `{"status":"warning",…}`, …) stays in the command files that call this —
-/// see the W3 report for the inventory of which shape each command used.
-#[must_use]
-pub fn warnings(ws: &[OpsWarning]) -> Vec<WarningInfo> {
-    ws.iter().map(OpsWarning::info).collect()
+    TABLE
+        .iter()
+        .find(|row| row.cmd == cmd && row.legacy == err.code)
+        .map(|row| row.exit)
+        .or_else(|| {
+            DYNAMIC_EXIT.iter().find(|(c, legacy, _)| *c == cmd && *legacy == err.code).map(|r| r.2)
+        })
+        .unwrap_or(2)
 }
 
 #[cfg(test)]
@@ -915,6 +937,31 @@ mod tests {
                 "TABLE row ({name}, {}, exit={}, hint={:?}) matches none of the snapshot's \
                  shapes for that (command, code): {candidates:?}",
                 row.legacy, row.exit, row.hint
+            );
+        }
+    }
+
+    /// (e) `DYNAMIC_EXIT` is exactly the `DYNAMIC` ∪ `DUAL_SOURCE` pairs, and
+    /// each exit matches at least one snapshot row for that pair (the same
+    /// "real call-site shape" rule (c) applies to `TABLE`). A pair in
+    /// `DYNAMIC`/`DUAL_SOURCE` without a row here would silently take
+    /// `exit_code`'s fallback (2) — the W3 lane finding this table closes.
+    #[test]
+    fn dynamic_exit_rows_cover_every_special_case_pair_with_the_snapshot_exit() {
+        let rows = snapshot_rows();
+        let special: BTreeSet<(&str, &str)> =
+            DYNAMIC.iter().chain(DUAL_SOURCE.iter()).copied().collect();
+        let table: BTreeSet<(&str, &str)> =
+            DYNAMIC_EXIT.iter().map(|(c, legacy, _)| (cmd_name(*c), *legacy)).collect();
+        assert_eq!(
+            table, special,
+            "DYNAMIC_EXIT must list exactly the DYNAMIC ∪ DUAL_SOURCE pairs"
+        );
+        for (cmd, legacy, exit) in DYNAMIC_EXIT {
+            let name = cmd_name(*cmd);
+            assert!(
+                rows.iter().any(|r| r.cmd == name && r.code == *legacy && r.exit == *exit),
+                "DYNAMIC_EXIT row ({name}, {legacy}, exit={exit}) matches no snapshot row"
             );
         }
     }
