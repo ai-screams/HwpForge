@@ -26,8 +26,22 @@ fn hwpforge_bin() -> PathBuf {
 
 /// Create a unique temp directory for each test.
 fn test_tmp() -> PathBuf {
+    // nextest runs every test in its own process, so `COUNTER` restarts at 0
+    // each time and the directory name used to be `hwpforge_test_0_<pid>`.
+    // Directories are never removed, and the OS recycles pids, so a later
+    // test process could inherit a directory that an earlier one had already
+    // populated (`patch_section_index_mismatch_fails_fast` saw a stale
+    // `patched.hwpx` and failed). Fold the wall clock in and start from an
+    // empty directory.
     let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("hwpforge_test_{id}_{}", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let dir =
+        std::env::temp_dir().join(format!("hwpforge_test_{id}_{}_{nanos}", std::process::id()));
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).expect("clear stale temp dir");
+    }
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
