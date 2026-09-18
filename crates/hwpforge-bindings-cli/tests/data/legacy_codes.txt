@@ -1,0 +1,307 @@
+# Frozen (command, code, exit, hint) contract, extracted by hand from every
+# `CliError::new("<CODE>", ...)` (+ `.with_hint("<literal>")`,
+# `.exit(json_mode, N)`) call site in `src/commands/*.rs` and `src/error.rs`
+# on the pre-W3-migration tree (branch `feat/cli-ops-migration`, base
+# `5ff81af`, which already contains W2/bindings-mcp's ops migration). One
+# `command<TAB>code<TAB>exit<TAB>hint` row per distinct call-site *shape* —
+# sorted by command, then code, then exit, then hint. `audit-hwp5` and
+# `census-hwp5` are analysis commands with no `ops` counterpart (common.md
+# W3 brief) and are audited here too because they still construct `CliError`
+# directly and this file's job is "every code in the source", not "every
+# code W3 touches". `shared` is `error.rs`'s `check_file_size` — called
+# directly from nearly every other command's `run()` (grep: every command
+# file except `templates.rs` and `schema.rs`), so `INPUT_TOO_LARGE` is not
+# attributed to one command.
+#
+# hint column (exact, not a category — `src/compat.rs`'s inventory test
+# compares `TABLE`'s hint field against this text byte-for-byte, per the W3
+# adversarial-review addendum: a prior lane's snapshot recorded only code
+# literals and shipped three wrong hints undetected):
+#   `-`              no `.with_hint(...)` at this call site.
+#   <literal text>    the exact `.with_hint("...")` argument, byte-for-byte
+#                      (format!() calls that only interpolate *static*
+#                      strings, e.g. `format!("Preset '{preset}' not found")`
+#                      for the *message* — not the hint — still count as
+#                      literal for the hint column when the hint itself has
+#                      no per-call substitution).
+#   dynamic:<what>     the hint text embeds a per-call value (an
+#                      available-fields list, a section count, a table's
+#                      cell count, a conditional anchor coordinate) that no
+#                      flat row can hold verbatim; `<what>` names what.
+#                      `src/compat.rs`'s `cli_error`/`convert_error` special-
+#                      case these on the *wrapped* library error before
+#                      consulting `TABLE`, and the `DYNAMIC` list in its test
+#                      module cross-checks against these rows.
+#
+# Two call sites can share `(command, code)` but differ in `exit` or `hint`
+# — both shapes get their own row. A hint that is *conditionally present*
+# depending on a field's value (`CellStampError::NotAnAnchor`'s `anchor:
+# Option<...>` — hinted when `Some`, hint-less when `None`) is recorded as
+# `dynamic:` once; the "sometimes no hint at all" branch is part of what
+# `<what>` documents and what `compat.rs`'s special-case arm must reproduce
+# (see `stamp STAMP_CELL_NOT_ANCHOR` below).
+#
+# Compound-condition arms (a legacy match on more than one field/predicate,
+# not a single enum variant) are marked `[compound: <condition>]` in a
+# trailing comment on their own line directly above the row, so a reviewer
+# does not mistake them for a value that fell through to a wildcard `_`/
+# `other` arm. Every such arm already has its own dedicated CLI code in the
+# source (never lumped under a catch-all), so no row's `hint`/`exit` reflects
+# more than one call site's actual behavior.
+#
+# `stamp-plan` is deliberately narrow (2 rows) even though the legacy
+# `exit_stamper_error`/`exit_cell_stamp_error`/`exit_stamp_error` helper
+# functions are *type*-reachable from `run_plan` (it also returns
+# `Result<_, StamperError>`): `hwpforge::ops::stamp::stamp_plan`'s own
+# `# Errors` doc (`crates/hwpforge/src/ops/stamp.rs`) states discovery never
+# runs the admission gate and can only fail with `STAMP_CODEC_FAILED` — type
+# signature overstates what the old `plan_bytes_v2` body actually produced.
+# `stamp` (the apply command) keeps the full set: applying genuinely
+# exercises admission, drift, coverage and naming checks.
+#
+# This file is the source of truth for "unchanged": regenerate only by
+# re-auditing `src/commands/*.rs` and `src/error.rs`, never by copying
+# `compat.rs`'s own table (that would make the check circular).
+#
+# ── Validation precedence (cheap argument guards vs. file I/O) ──────────
+# Where a command's legacy `run()` validated an argument *before* touching
+# the filesystem, a caller who passes both a bad argument and a missing/
+# unreadable file sees the argument error, not a file error — an order
+# `hwpforge::ops` cannot reproduce on its own (ops functions never touch the
+# filesystem; only the frontend decides read-then-call-ops vs.
+# validate-then-read-then-call-ops). Whichever lane wires a command below
+# must keep read.rs argument checks measured against here as authoritative
+# for the entry order, not a `cli_integration.rs` observation (a passing
+# combined-failure test is `cli_integration.rs`'s job later; this file
+# states what the pre-migration source proves it did).
+#   read         VALIDATE-FIRST — `targets != 1` (READ_TARGET_REQUIRED) then
+#                `paras.is_some() && section.is_none()` (READ_PARAS_WITHOUT_SECTION)
+#                both run before `check_file_size`/`std::fs::read`.
+#   fill         VALIDATE-FIRST — `parse_sets` (INVALID_SET/DUPLICATE_SET)
+#                and the empty-map NO_VALUES check both run before
+#                `check_file_size`/`std::fs::read`.
+#   delete-para  VALIDATE-FIRST — `indices.is_empty()` (DELETE_NO_TARGET)
+#                runs before `read_input` (`check_file_size`/`std::fs::read`).
+#   insert-para  N/A — clap's `#[arg(required = true)]` on `--text` already
+#                refuses an empty list before `run_insert` is ever called;
+#                the old source has no argument check ahead of `read_input`.
+#   convert (MD) VALIDATE-FIRST — `preset != "default"` (UNKNOWN_PRESET) is
+#                checked before reading stdin or the input file.
+#   to-pdf       VALIDATE-FIRST — `parse_discovery` (INVALID_DISCOVERY) runs
+#                before `check_file_size`/`std::fs::read` (source comment:
+#                "플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지)").
+#   to-json      VALIDATE-FIRST — the `.json` output-extension check
+#                (INVALID_EXTENSION) is the first statement in `run()`,
+#                before `check_file_size`/`std::fs::read`.
+#   set-cell     READ-FIRST (opposite order) — `check_file_size`/
+#                `std::fs::read` runs before `build_specs`'s argument
+#                validation (INVALID_SET_CELL_ARGS/INVALID_SET_CELL_MAP).
+#   stamp        READ-FIRST — both the target file and the `--map` file are
+#                read before `MANIFEST_PATH_CONFLICT` (`output == &manifest_file`)
+#                is checked, which runs last, after `parse_stamp_map`.
+#   (all others) N/A — no argument validation ahead of file I/O in the
+#                legacy source (diff, outline, fields, inspect, from-json,
+#                patch, convert-hwp5, stamp-plan, templates, schema).
+audit-hwp5	FILE_READ_FAILED	1	-
+audit-hwp5	HWP5_DECODE_FAILED	2	Check that the file is a valid HWP5 document
+audit-hwp5	HWP5_SEMANTIC_FAILED	2	Check that the file is a valid HWP5 document
+audit-hwp5	HWPX_ANALYSIS_FAILED	2	Check that the file is a valid HWPX document
+audit-hwp5	HWPX_DECODE_FAILED	2	Check that the file is a valid HWPX document
+census-hwp5	FILE_READ_FAILED	1	-
+census-hwp5	FILE_WRITE_FAILED	1	-
+census-hwp5	HWP5_CENSUS_FAILED	2	Check that the file is a valid HWP5 document
+census-hwp5	HWPX_CENSUS_FAILED	2	-
+census-hwp5	HWPX_CENSUS_FAILED	2	Check that the companion file is a valid HWPX document
+convert	ENCODE_FAILED	2	-
+convert	FILE_READ_FAILED	1	Check that the file exists and is valid UTF-8
+convert	FILE_WRITE_FAILED	1	-
+convert	INPUT_TOO_LARGE	1	-
+convert	MD_DECODE_FAILED	2	-
+convert	STDIN_READ_FAILED	1	-
+convert	STYLE_REBIND_FAILED	2	-
+convert	STYLE_STORE_FAILED	2	-
+# [compound: preset != "default"; checked before any input is read]
+convert	UNKNOWN_PRESET	1	Available presets: default
+convert	VALIDATION_FAILED	2	-
+convert-hwp5	FILE_WRITE_FAILED	1	-
+convert-hwp5	HWP5_CONVERT_FAILED	2	Check that the source is a supported HWP5 document and the output path is writable
+convert-hwp5	HWP5_DECODE_FAILED	2	Check that the file is a valid HWP5 document
+# [compound: indices.is_empty(); checked before read_input]
+delete-para	DELETE_NO_TARGET	1	-
+delete-para	DUPLICATE_TARGET	1	-
+delete-para	EMPTY_SECTION	1	-
+delete-para	FILE_READ_FAILED	1	-
+delete-para	FILE_WRITE_FAILED	2	-
+delete-para	HARD_BREAK_LOSS	1	-
+delete-para	INPUT_NOT_ROUNDTRIP_SAFE	1	-
+delete-para	PARAGRAPH_OUT_OF_RANGE	1	-
+delete-para	REFERENCE_STRANDED	1	-
+delete-para	SECTION_OUT_OF_RANGE	1	-
+delete-para	SECTION_PROPERTIES_PARAGRAPH	1	-
+delete-para	SELF_VERIFY_FAILED	1	-
+delete-para	SPAN_COUNT_MISMATCH	1	-
+delete-para	STRUCTURAL_CODEC	2	-
+# [wildcard: exit_structural_error's `_` arm — any StructuralEditError variant
+# not explicitly matched above; #[non_exhaustive] forward-compat arm, not a
+# disguised compound condition]
+delete-para	STRUCTURAL_EDIT_FAILED	1	-
+delete-para	UNCARRIED_ZIP_ENTRIES	1	-
+diff	DECODE_FAILED	2	-
+diff	FILE_READ_FAILED	1	-
+diff	FILE_WRITE_FAILED	1	-
+fields	DECODE_FAILED	2	-
+fields	FILE_READ_FAILED	1	-
+fill	DUPLICATE_SET	1	-
+fill	EMPTY_FIELD_VALUE	1	빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요
+fill	FIELD_NAME_AMBIGUOUS	1	같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요
+fill	FIELD_NOT_FILLABLE	1	병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요
+fill	FIELD_NOT_FOUND	1	dynamic:available field names, joined ", "
+fill	FILE_READ_FAILED	1	-
+fill	FILE_WRITE_FAILED	1	-
+fill	FILL_FAILED	2	-
+fill	INVALID_SET	1	--set 이름=값 형식으로 지정하세요 (값에 공백이 있으면 따옴표)
+# [compound: values.is_empty() after parse_sets; checked before check_file_size/read]
+fill	NO_VALUES	1	예: hwpforge fill doc.hwpx --set 과제명="AI 문서 자동화" -o out.hwpx
+from-json	DECODE_FAILED	2	-
+from-json	ENCODE_FAILED	2	-
+from-json	FILE_READ_FAILED	1	-
+from-json	FILE_WRITE_FAILED	1	-
+from-json	GRID_ADDR_INVALID	2	Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry
+from-json	JSON_PARSE_FAILED	2	-
+from-json	JSON_PARSE_FAILED	2	Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')
+from-json	VALIDATION_FAILED	2	-
+inspect	ANALYSIS_FAILED	2	-
+inspect	DECODE_FAILED	2	Check that the file is a valid HWPX document
+inspect	FILE_READ_FAILED	1	-
+insert-para	FILE_READ_FAILED	1	-
+insert-para	FILE_WRITE_FAILED	2	-
+insert-para	INPUT_NOT_ROUNDTRIP_SAFE	1	-
+insert-para	INSERT_BEFORE_SECTION_PROPERTIES	1	-
+insert-para	MULTI_PARAGRAPH_TEXT	1	-
+insert-para	PARAGRAPH_OUT_OF_RANGE	1	-
+insert-para	SECTION_OUT_OF_RANGE	1	-
+insert-para	SECTION_PROPERTIES_PARAGRAPH	1	-
+insert-para	SELF_VERIFY_FAILED	1	-
+insert-para	SPAN_COUNT_MISMATCH	1	-
+insert-para	STRUCTURAL_CODEC	2	-
+# [wildcard: exit_structural_error's `_` arm — see delete-para's row above]
+insert-para	STRUCTURAL_EDIT_FAILED	1	-
+insert-para	UNCARRIED_ZIP_ENTRIES	1	-
+outline	DECODE_FAILED	2	-
+outline	FILE_READ_FAILED	1	-
+patch	DECODE_FAILED	2	-
+patch	FILE_READ_FAILED	1	-
+patch	FILE_WRITE_FAILED	1	-
+patch	GRID_ADDR_INVALID	2	Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry
+patch	JSON_PARSE_FAILED	2	-
+patch	PATCH_FAILED	2	Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow.
+patch	SECTION_INDEX_MISMATCH	2	dynamic:requested/actual section numbers ("Use --section {actual} to match the JSON, or re-export section {requested} with this version of hwpforge.")
+patch	SECTION_OUT_OF_RANGE	1	dynamic:"Valid range: 0..{sections-1}"
+# [wildcard: exit_section_workflow_error's `_` arm — any SectionWorkflowError
+# variant not explicitly matched above; #[non_exhaustive] forward-compat arm]
+patch	SECTION_WORKFLOW_FAILED	2	Update hwpforge so the CLI understands the newer section workflow error.
+read	DECODE_FAILED	2	-
+read	FILE_READ_FAILED	1	-
+read	READ_FIELD_NOT_FOUND	1	-
+read	READ_PARAS_INVALID	1	-
+# [compound: paras.is_some() && section.is_none(); checked before check_file_size/read]
+read	READ_PARAS_WITHOUT_SECTION	1	-
+read	READ_PARA_RANGE_INVALID	1	-
+read	READ_SECTION_OUT_OF_RANGE	1	-
+read	READ_TABLE_OUT_OF_RANGE	1	-
+# [compound: (section.is_some() as usize + table.is_some() as usize + field.is_some() as usize) != 1; checked before check_file_size/read]
+read	READ_TARGET_REQUIRED	1	-
+read	TABLE_GRID_INVALID	1	-
+schema	UNKNOWN_SCHEMA_TYPE	1	Available types: document, exported-document, exported-section
+set-cell	CELL_HAS_NON_TEXT_CONTENT	1	표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다
+set-cell	CELL_LABEL_AMBIGUOUS	1	라벨이 여러 셀과 일치합니다 — --at 좌표로 직접 지정하세요
+set-cell	CELL_NOT_FOUND	1	-
+set-cell	CELL_TARGET_CONFLICT	1	바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다
+set-cell	CELL_TARGET_DUPLICATE	1	-
+set-cell	FILE_READ_FAILED	1	-
+set-cell	FILE_WRITE_FAILED	1	-
+set-cell	INPUT_ENTRIES_NOT_CARRIED	1	-
+set-cell	INPUT_NOT_ROUNDTRIP_SAFE	1	이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)
+# [compound: 5 call sites in build_specs/parse_coord, each its own predicate
+# (map+flags combined, empty map, missing --table, missing --text, not
+# exactly one of --at/--right-of/--below, malformed --at) — all no-hint;
+# checked AFTER check_file_size/read (see precedence note above)]
+set-cell	INVALID_SET_CELL_ARGS	1	-
+set-cell	INVALID_SET_CELL_MAP	1	-
+set-cell	INVALID_SET_CELL_MAP	1	맵은 CellSpec JSON 배열: [{"table":0,"at":{"row":1,"col":2},"text":"값"}] 또는 {"right_of":"성명"} / {"below":"항목"}
+set-cell	SET_CELL_CODEC_FAILED	1	-
+# [wildcard: exit_cell_edit_error's `_` arm — any CellEditError variant not
+# explicitly matched above; #[non_exhaustive] forward-compat arm. Also: this
+# command hard-codes exit 1 for every code below, including this codec
+# failure — the only command whose exit does not follow the usual
+# codec-class-is-2 pattern]
+set-cell	SET_CELL_FAILED	1	-
+set-cell	TABLE_GRID_INVALID	1	이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다
+set-cell	TABLE_NOT_FOUND	1	dynamic:table count ("문서에 표가 {tables}개 있습니다 (to-json export 순서 기준 0-base)")
+shared	INPUT_TOO_LARGE	1	-
+stamp	FILE_READ_FAILED	1	-
+stamp	FILE_WRITE_FAILED	1	-
+stamp	FILE_WRITE_FAILED	1	manifest 기록 실패로 산출물을 남기지 않았습니다 (fail-closed)
+stamp	INPUT_ENTRIES_NOT_CARRIED	1	재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)
+stamp	INPUT_NOT_ROUNDTRIP_SAFE	1	이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다
+stamp	INVALID_STAMP_MAP	1	맵은 StampSpec JSON 배열(legacy) 또는 {schema_version:2, source_sha256, text[], cells[]} 객체(v2) — `stamp-plan --json` 출력을 기반으로 작성
+# [compound: output == &manifest_file; checked last, after both file reads
+# and parse_stamp_map — see precedence note above]
+stamp	MANIFEST_PATH_CONFLICT	1	--manifest 경로는 -o 경로와 달라야 합니다
+# dual-source: text-spec origin (StamperError::Stamp) — see the cell-spec
+# origin's row below for the other wording (StamperError::CellStamp).
+stamp	STAMP_CANDIDATE_UNCOVERED	1	모든 무가드 후보는 이름을 붙이거나 ignore 로 명시해야 합니다 — `stamp-plan` 출력을 빠짐없이 분류하세요
+# dual-source: cell-spec origin (StamperError::CellStamp).
+stamp	STAMP_CANDIDATE_UNCOVERED	1	모든 무가드 셀 후보는 이름을 붙이거나 ignore 로 명시해야 합니다
+stamp	STAMP_CELL_NOT_ANCHOR	1	dynamic:conditional — hinted "이 좌표는 병합 피복 위치입니다 — anchor ({row},{col}) 를 지정하세요" when anchor is Some, NO hint at all when anchor is None
+stamp	STAMP_CELL_NOT_CANDIDATE	1	-
+stamp	STAMP_CELL_NOT_EMPTY	1	클래스-B 대상은 whitespace-only 빈 셀이어야 합니다
+stamp	STAMP_CELL_TARGET_DUPLICATE	1	-
+stamp	STAMP_CODEC_FAILED	2	-
+stamp	STAMP_DELTA_MISMATCH	2	산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다
+# [wildcard: exit_stamper_error's `other` arm — any StamperError variant not
+# explicitly matched above; #[non_exhaustive] forward-compat arm]
+stamp	STAMP_FAILED	2	-
+stamp	STAMP_HINT_BLANK	1	빈 셀엔 마커가 없어 hint 가 필수입니다 (plan 의 suggested_hint 참고)
+stamp	STAMP_LABEL_DRIFT	1	문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요
+stamp	STAMP_MANIFEST_INVARIANT	2	-
+stamp	STAMP_MARKER_MISMATCH	1	-
+stamp	STAMP_NAME_COLLISION	1	-
+stamp	STAMP_NAME_COLLISION	1	기존 누름틀과 이름이 겹칩니다 — `fields` 로 기존 이름을 확인하세요
+stamp	STAMP_NAME_DUPLICATE	1	-
+stamp	STAMP_NAME_EMPTY	1	-
+stamp	STAMP_SOURCE_HASH_MISMATCH	1	문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요
+stamp	STAMP_SPEC_DUPLICATE	1	-
+stamp	STAMP_SPEC_STALE	1	문서가 변경됐거나 span 이 어긋났습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요
+stamp	TABLE_GRID_INVALID	1	-
+stamp	TABLE_NOT_FOUND	1	-
+stamp-plan	FILE_READ_FAILED	1	-
+stamp-plan	STAMP_CODEC_FAILED	2	-
+templates	PRESET_NOT_FOUND	1	Run 'hwpforge templates list' to see available presets
+to-json	DECODE_FAILED	2	-
+to-json	FILE_READ_FAILED	1	-
+to-json	FILE_WRITE_FAILED	1	-
+to-json	GRID_ADDR_PROJECTION_FAILED	2	-
+# [compound: output.extension() != Some("json"); checked before check_file_size/read]
+to-json	INVALID_EXTENSION	1	-
+to-json	JSON_SERIALIZE_FAILED	2	-
+to-json	JSON_SERIALIZE_FAILED	2	Check for NaN/Infinity values in chart data
+to-json	PATCH_FAILED	2	Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow.
+to-json	SECTION_INDEX_MISMATCH	2	-
+to-json	SECTION_OUT_OF_RANGE	1	dynamic:"Valid range: 0..{sections-1}"
+# [wildcard: exit_section_workflow_error's `_` arm — see patch's row above]
+to-json	SECTION_WORKFLOW_FAILED	2	Update hwpforge so the CLI understands the newer section workflow error.
+to-md	DECODE_FAILED	2	-
+to-md	DIR_CREATE_FAILED	1	-
+to-md	ENCODE_FAILED	2	-
+to-md	FILE_WRITE_FAILED	1	-
+to-md	VALIDATE_FAILED	2	-
+to-pdf	FILE_READ_FAILED	1	-
+to-pdf	FILE_WRITE_FAILED	1	-
+to-pdf	HWP5_CONVERT_FAILED	2	-
+to-pdf	HWPX_DECODE_FAILED	2	-
+# [compound: other => unknown discovery mode; checked before check_file_size/read]
+to-pdf	INVALID_DISCOVERY	2	-
+to-pdf	PDF_RENDER_FAILED	2	cacheless documents need a Hancom re-save; font errors may need --font-dir/--discovery or --degraded
+to-pdf	UNRECOGNIZED_FORMAT	2	to-pdf detects the format by content — the extension is only a hint
+to-pdf	VALIDATION_FAILED	2	-
