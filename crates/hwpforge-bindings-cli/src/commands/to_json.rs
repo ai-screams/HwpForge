@@ -2,44 +2,42 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::grid_addr::{GridAddrError, GridAddrWarning};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxPatcher, SectionWorkflowError};
+use hwpforge::ops::{self, ExportSectionOptions, OpsWarning, ToJsonOptions};
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 // Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
 pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
 
-/// Surfaces grid-address projection warnings (tables left unannotated) and
-/// exits on projection failure.
-fn finish_annotation(result: Result<Vec<GridAddrWarning>, GridAddrError>, json_mode: bool) {
-    match result {
-        Ok(warnings) => {
-            for warning in warnings {
-                let message = format!(
-                    "table #{} in section {} exported without grid addresses: {}",
-                    warning.table_ordinal, warning.section, warning.reason
-                );
-                if json_mode {
-                    let warn = serde_json::json!({
-                        "status": "warning",
-                        "code": "TABLE_GRID_UNADDRESSABLE",
-                        "message": message,
-                    });
-                    eprintln!("{}", serde_json::to_string(&warn).unwrap());
-                } else {
-                    eprintln!("Warning: {message}");
-                }
-            }
-        }
-        Err(e) => {
-            CliError::new(
-                "GRID_ADDR_PROJECTION_FAILED",
-                format!("Grid address projection failed: {e}"),
-            )
-            .exit(json_mode, 2);
-        }
+/// Prints one export warning in this command's shape, skipping decoder
+/// warnings (`OpsWarning::Decode`) — not surfaced pre-migration either (W3
+/// report). `OpsWarning::info()` reproduces the exact legacy wording for
+/// both remaining kinds this command can see: `GridAddr`
+/// (`TABLE_GRID_UNADDRESSABLE`, same `format!` as the old `finish_annotation`)
+/// and `SectionWorkflow` (`warning.code()`/`warning.message()`, same as the
+/// old inline `outcome.warning` print).
+fn print_warning(warning: &OpsWarning, json_mode: bool) {
+    if matches!(warning, OpsWarning::Decode(_)) {
+        return;
     }
+    let info = warning.info();
+    if json_mode {
+        let warn = serde_json::json!({
+            "status": "warning",
+            "code": info.code,
+            "message": info.message,
+        });
+        eprintln!("{}", serde_json::to_string(&warn).unwrap());
+    } else {
+        eprintln!("Warning: {}", info.message);
+    }
+}
+
+fn exit_ops_error(err: ops::OpsError, json_mode: bool) -> ! {
+    let cli_err = compat::cli_error(Command::ToJson, err);
+    let exit = compat::exit_code(Command::ToJson, &cli_err);
+    cli_err.exit(json_mode, exit);
 }
 
 /// Pretty-prints the annotated export value.
@@ -80,65 +78,25 @@ pub fn run(
     };
 
     let json_string = if let Some(idx) = section_idx {
-        let outcome = match HwpxPatcher::export_section_for_edit(&bytes, idx, !no_styles) {
-            Ok(outcome) => outcome,
-            Err(error) => exit_section_workflow_error(error, json_mode),
+        let opts = ExportSectionOptions::default().with_section(idx).with_styles(!no_styles);
+        let out = match ops::export_section(&bytes, &opts) {
+            Ok(o) => o,
+            Err(e) => exit_ops_error(e, json_mode),
         };
-        if let Some(warning) = outcome.warning {
-            if json_mode {
-                let warn = serde_json::json!({
-                    "status": "warning",
-                    "code": warning.code(),
-                    "message": warning.message(),
-                });
-                eprintln!("{}", serde_json::to_string(&warn).unwrap());
-            } else {
-                eprintln!("Warning: {}", warning.message());
-            }
+        for warning in &out.warnings {
+            print_warning(warning, json_mode);
         }
-        let exported = outcome.exported;
-        let mut value = match serde_json::to_value(&exported) {
-            Ok(v) => v,
-            Err(e) => {
-                CliError::new("JSON_SERIALIZE_FAILED", format!("Failed to serialize section: {e}"))
-                    .with_hint("Check for NaN/Infinity values in chart data")
-                    .exit(json_mode, 2);
-            }
-        };
-        let annotate = hwpforge_smithy_hwpx::grid_addr::annotate_section_addresses(
-            &mut value,
-            &exported.section,
-            exported.section_index,
-        );
-        finish_annotation(annotate, json_mode);
-        render_pretty(&value, json_mode)
+        render_pretty(&out.section, json_mode)
     } else {
-        let hwpx_doc = match HwpxDecoder::decode(&bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}"))
-                    .exit(json_mode, 2);
-            }
+        let opts = ToJsonOptions::default().with_styles(!no_styles);
+        let out = match ops::to_json(&bytes, &opts) {
+            Ok(o) => o,
+            Err(e) => exit_ops_error(e, json_mode),
         };
-        let styles = if no_styles { None } else { Some(hwpx_doc.style_store) };
-        let exported = ExportedDocument { document: hwpx_doc.document, styles };
-        let mut value = match serde_json::to_value(&exported) {
-            Ok(v) => v,
-            Err(e) => {
-                CliError::new(
-                    "JSON_SERIALIZE_FAILED",
-                    format!("Failed to serialize document: {e}"),
-                )
-                .with_hint("Check for NaN/Infinity values in chart data")
-                .exit(json_mode, 2);
-            }
-        };
-        let annotate = hwpforge_smithy_hwpx::grid_addr::annotate_document_addresses(
-            &mut value,
-            &exported.document,
-        );
-        finish_annotation(annotate, json_mode);
-        render_pretty(&value, json_mode)
+        for warning in &out.warnings {
+            print_warning(warning, json_mode);
+        }
+        render_pretty(&out.document, json_mode)
     };
 
     if let Err(e) = std::fs::write(output, &json_string) {
@@ -162,45 +120,5 @@ pub fn run(
             json_string.len(),
             if let Some(i) = section_idx { format!(", section {i} only") } else { String::new() }
         );
-    }
-}
-
-fn exit_section_workflow_error(error: SectionWorkflowError, json_mode: bool) -> ! {
-    match error {
-        SectionWorkflowError::Decode { detail } => {
-            CliError::new("DECODE_FAILED", format!("HWPX decode error: {detail}"))
-                .exit(json_mode, 2);
-        }
-        SectionWorkflowError::SectionOutOfRange { requested, sections } => {
-            CliError::new(
-                "SECTION_OUT_OF_RANGE",
-                format!("Section {requested} does not exist (document has {sections} sections)"),
-            )
-            .with_hint(format!("Valid range: 0..{}", sections.saturating_sub(1)))
-            .exit(json_mode, 1);
-        }
-        SectionWorkflowError::SectionIndexMismatch { requested, actual } => {
-            CliError::new(
-                "SECTION_INDEX_MISMATCH",
-                format!(
-                    "--section {requested} does not match JSON section_index {actual}; using --section value"
-                ),
-            )
-            .exit(json_mode, 2);
-        }
-        SectionWorkflowError::PreservingPatch(error) => {
-            CliError::new("PATCH_FAILED", format!("Preserving patch error: {error}"))
-                .with_hint(
-                    "Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow.",
-                )
-                .exit(json_mode, 2);
-        }
-        _ => {
-            CliError::new("SECTION_WORKFLOW_FAILED", error.to_string())
-                .with_hint(
-                    "Update hwpforge so the CLI understands the newer section workflow error.",
-                )
-                .exit(json_mode, 2);
-        }
     }
 }

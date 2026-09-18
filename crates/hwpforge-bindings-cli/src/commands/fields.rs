@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::HwpxFiller;
+use hwpforge::ops;
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run the fields command.
@@ -17,11 +18,15 @@ pub fn run(file: &PathBuf, json_mode: bool) {
         }
     };
 
-    let fields = match HwpxFiller::list_fields(&bytes) {
-        Ok(fields) => fields,
+    // Decoder warnings (`FieldsOutput::warnings`) are not surfaced (W3
+    // report: warnings not surfaced — matches the pre-migration behaviour,
+    // which never captured them either).
+    let fields = match ops::fields(&bytes) {
+        Ok(out) => out.fields,
         Err(e) => {
-            CliError::new("DECODE_FAILED", format!("Cannot decode '{}': {e}", file.display()))
-                .exit(json_mode, 2);
+            let err = compat::cli_error(Command::Fields, e);
+            let exit = compat::exit_code(Command::Fields, &err);
+            err.exit(json_mode, exit);
         }
     };
 

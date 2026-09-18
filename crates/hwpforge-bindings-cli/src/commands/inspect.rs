@@ -7,9 +7,11 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use hwpforge::ops::OpsError;
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 #[derive(Serialize)]
@@ -91,10 +93,18 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
 
     let hwpx_doc = match HwpxDecoder::decode(&bytes) {
         Ok(d) => d,
+        // `ops::inspect`'s own `InspectReport` has no field for the deep
+        // per-section counts this command reports (text_boxes, ole_objects,
+        // rectangles, polygons, non_empty_paragraphs — see
+        // `crate::analysis::deep_counts`), so the JSON schema keeps the
+        // local decode + `summarize_hwpx_document` path (W3 report: ops
+        // gap). Only the `DECODE_FAILED` error is routed through the
+        // shared `hwpforge::ops` code/hint/exit table, via `OpsError::decode`
+        // — the same classification `ops::inspect` itself would produce.
         Err(e) => {
-            CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}"))
-                .with_hint("Check that the file is a valid HWPX document")
-                .exit(json_mode, 2);
+            let err = compat::cli_error(Command::Inspect, OpsError::decode(e));
+            let exit = compat::exit_code(Command::Inspect, &err);
+            err.exit(json_mode, exit);
         }
     };
 

@@ -1,11 +1,10 @@
 //! `to-md` subcommand: convert HWPX to Markdown.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
-use hwpforge_smithy_md::MdEncoder;
+use hwpforge::ops::{self, MdExportOptions, MdMode as OpsMdMode, OpsWarning};
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 use crate::MdMode;
 
@@ -13,61 +12,59 @@ use crate::MdMode;
 pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: bool) {
     check_file_size(input, json_mode);
 
-    // 1. Decode HWPX
-    let hwpx_doc = match HwpxDecoder::decode_file(input) {
-        Ok(d) => d,
+    // Pre-migration `to-md` used `HwpxDecoder::decode_file`, which bundles
+    // file I/O into the decode stage (`HwpxError::Io`) — so a missing or
+    // unreadable input reports `DECODE_FAILED`/exit 2 here, unlike every
+    // other command's `FILE_READ_FAILED`/exit 1. `ops::to_md` takes bytes,
+    // not a path, so the read has to happen here; reproduced with the
+    // legacy code/exit/message shape rather than introducing a
+    // `FILE_READ_FAILED` this command's frozen contract never had.
+    let bytes = match std::fs::read(input) {
+        Ok(b) => b,
         Err(e) => {
             CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);
         }
     };
 
-    // 2. Validate document (Draft → Validated)
-    let document = match hwpx_doc.document.validate() {
-        Ok(d) => d,
-        Err(e) => {
-            CliError::new("VALIDATE_FAILED", format!("Document validation error: {e}"))
-                .exit(json_mode, 2);
-        }
+    let ops_mode = match mode {
+        MdMode::Styled => OpsMdMode::Styled,
+        MdMode::Lossy => OpsMdMode::Lossy,
+        MdMode::Lossless => OpsMdMode::Lossless,
     };
 
-    // 3. Encode to Markdown based on mode
-    let (markdown, images) = match mode {
-        MdMode::Styled => {
-            let lookup = HwpxStyleLookup::new(&hwpx_doc.style_store, &hwpx_doc.image_store);
-            let md_output = MdEncoder::encode_styled(&document, &lookup);
-            (md_output.markdown, md_output.images)
+    // `ops::to_md` reproduces decode → validate → encode in one call. Its
+    // `DECODE_FAILED`/`VALIDATION_FAILED`/`ENCODE_FAILED` route through the
+    // shared compat table; only the legacy `VALIDATE_FAILED` spelling (this
+    // command's own code, not `ops`'s `VALIDATION_FAILED`) differs, and
+    // `compat::cli_error`'s `TABLE` already carries that remap. Decode
+    // warnings (`MdExportOutput::warnings`'s `Decode` entries) are not
+    // surfaced (W3 report) — only `Md` (lossy `TABLE_MERGE_FLATTENED`)
+    // warnings were printed pre-migration.
+    let out = match ops::to_md(&bytes, &MdExportOptions::default().with_mode(ops_mode)) {
+        Ok(o) => o,
+        Err(e) => {
+            let err = compat::cli_error(Command::ToMd, e);
+            let exit = compat::exit_code(Command::ToMd, &err);
+            err.exit(json_mode, exit);
         }
-        MdMode::Lossy => match MdEncoder::encode_lossy_with_report(&document) {
-            Ok((md, warnings)) => {
-                // Warning-first: lossy 렌더가 표현 못 하는 것(병합셀 평탄화)을
-                // 무음으로 버리지 않고 노출한다. styled 모드는 HTML 로 보존.
-                for warning in warnings {
-                    if json_mode {
-                        let warn = serde_json::json!({
-                            "status": "warning",
-                            "code": "TABLE_MERGE_FLATTENED",
-                            "message": warning.to_string(),
-                        });
-                        eprintln!("{}", serde_json::to_string(&warn).unwrap());
-                    } else {
-                        eprintln!("Warning: {warning}");
-                    }
-                }
-                (md, HashMap::new())
-            }
-            Err(e) => {
-                CliError::new("ENCODE_FAILED", format!("Markdown encode error: {e}"))
-                    .exit(json_mode, 2);
-            }
-        },
-        MdMode::Lossless => match MdEncoder::encode_lossless(&document) {
-            Ok(md) => (md, HashMap::new()),
-            Err(e) => {
-                CliError::new("ENCODE_FAILED", format!("Markdown encode error: {e}"))
-                    .exit(json_mode, 2);
-            }
-        },
     };
+    for warning in &out.warnings {
+        if let OpsWarning::Md(_) = warning {
+            let info = warning.info();
+            if json_mode {
+                let warn = serde_json::json!({
+                    "status": "warning",
+                    "code": info.code,
+                    "message": info.message,
+                });
+                eprintln!("{}", serde_json::to_string(&warn).unwrap());
+            } else {
+                eprintln!("Warning: {}", info.message);
+            }
+        }
+    }
+    let markdown = out.markdown;
+    let images: std::collections::HashMap<String, Vec<u8>> = out.images.into_iter().collect();
 
     // 4. Determine output paths
     let (out_dir, md_path) = match output {
