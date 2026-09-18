@@ -45,17 +45,19 @@ supported, because the stable ABI does not cover them.
 ### Hosts without an index
 
 The wheel is a zip file and the package declares no runtime dependencies, so it can be
-unpacked and imported without pip. On Debian 12 (glibc 2.36) or anything newer:
+unpacked and imported without pip. The requirement is glibc 2.28 or newer, not a particular distribution — on any Linux x86_64 host with CPython 3.9+ (Debian 10/11/12, Ubuntu 20.04 and later; the file name below is the x86_64 wheel):
 
 ```console
 python3 -c "import zipfile; zipfile.ZipFile('hwpforge-<version>-cp39-abi3-manylinux_2_28_x86_64.whl').extractall('/opt/hf')"
 PYTHONPATH=/opt/hf python3 -c "import hwpforge; print(hwpforge.__version__)"
 ```
 
-For a workspace release, every wheel and the source distribution are also attached to the
-matching [GitHub Release](https://github.com/ai-screams/HwpForge/releases), so an air-gapped
-host can be served from there instead of from PyPI. A Python-only fix, versioned `X.Y.Z.N`,
-is published to PyPI alone and has no Release of its own.
+GitHub Releases are immutable once published, so wheels are never attached there after the
+fact. Every wheel and the source distribution instead live on PyPI's
+[files page](https://pypi.org/project/hwpforge/#files), with the same bytes and sha256 that
+`pip` sees, so an air-gapped host can download a file straight from that page and unpack it
+the same way as above. A Python-only fix, versioned `X.Y.Z.N`, is published to PyPI alone and
+has no Release of its own.
 
 ## Example
 

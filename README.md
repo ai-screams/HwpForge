@@ -292,6 +292,25 @@ cargo uninstall hwpforge-bindings-mcp          # 삭제
 > 직접 호출합니다. 파일 경로 파싱도, stdout 해석도 필요 없습니다.
 > JSON-RPC로 요청하면 구조화된 JSON으로 응답 — 깔끔합니다.
 
+### 🐍 Python으로 시작하기
+
+```console
+pip install hwpforge
+```
+
+CPython 3.9+ 전용 `abi3` wheel을 Linux(manylinux_2_28 x86_64/aarch64)·macOS(11+ arm64, 10.12+ x86_64)·Windows(x64)에 배포하며, 런타임 의존성은 0개입니다. `pyproject.toml`에 직접 핀할 때는 정확 핀(`==`)보다 `~=`를 권장합니다 — Python 전용 패치(`X.Y.Z.N`)는 정확 핀으로는 받을 수 없습니다.
+
+```python
+import hwpforge
+
+doc = hwpforge.Document.open("proposal.hwpx")
+print(doc.outline()["outline"]["title"])
+doc = doc.fill({"applicant": "홍길동", "date": "2026-09-17"}).document
+doc.save("proposal-filled.hwpx")
+```
+
+`Document`는 불변 값입니다 — 모든 편집 메서드는 원본을 그대로 둔 채 새 문서와 보고서를 담은 `DocumentResult`를 반환합니다. 공유 연산 계층을 쓰는 18개 document 메서드 + 5개 모듈 함수를 제공하며, 호출 이름·옵션 표기·호환 에러 코드는 바인딩마다 다를 수 있습니다. 자세한 내용은 [`hwpforge` 패키지 README](crates/hwpforge-bindings-py/README.md)를 참고하세요.
+
 ### 🔨 문서 생성
 
 ```rust
@@ -412,6 +431,8 @@ HwpForge는 레이어를 나눠서 생각하는 프로젝트입니다.
 - `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)
 - `bindings-*`: CLI / MCP / Python 진입점
 
+`hwpforge`(umbrella crate)의 `ops` 모듈과 `hwpforge-convert`의 `ops` 모듈은 세 바인딩이 공유하는 연산 계층입니다 — CLI·MCP·Python 모두 이 계층을 거쳐 호출합니다.
+
 ### 레이어 구조
 
 ```mermaid
@@ -430,7 +451,7 @@ flowchart TB
 
     CLI["bindings-cli<br/>Hammer"]:::binding
     MCP["bindings-mcp<br/>Anvil MCP Server"]:::binding
-    PY["bindings-py<br/>stub"]:::binding
+    PY["bindings-py<br/>Python"]:::binding
 
     F --> C
     C --> B
@@ -559,7 +580,7 @@ HwpForge/
 │   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect helpers
 │   ├── hwpforge-smithy-pdf/      # PDF 렌더러 (조판 캐시 재생 렌더러, to-pdf 가 사용)
 │   ├── hwpforge-convert/         # 포맷 간 변환 오케스트레이터 (HWP5 → HWPX)
-│   ├── hwpforge-bindings-py/     # Python bindings (stub)
+│   ├── hwpforge-bindings-py/     # Python bindings (shipped, PyPI)
 │   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge, shipped)
 │   └── hwpforge-bindings-mcp/    # MCP Server (hwpforge-mcp)
 ├── tests/                        # 통합 테스트 + golden fixture
@@ -588,7 +609,7 @@ HwpForge/
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (19개 도구 + 4 리소스 + 3 프롬프트)
 - [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (22개 명령어: 19 core + 3 HWP5)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
-- [ ] Python 바인딩 — `pip install hwpforge`로 설치, PyPI 배포
+- [x] Python 바인딩 — `pip install hwpforge`로 설치 (PyPI, 0.16.5부터 wheel 배포)
 
 ## 라이선스
 

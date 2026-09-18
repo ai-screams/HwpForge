@@ -37,11 +37,18 @@ graph TD
     SPDF --> CLI
     SH --> MCP["hwpforge-bindings-mcp<br/>MCP (shipped)"]
     SM --> MCP
-    SH --> PY["hwpforge-bindings-py<br/>Python (stub)"]
+    U --> PY["hwpforge-bindings-py<br/>Python"]
+    CONV --> PY
+    F --> PY
+    SPDF --> PY
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
 > 따라서 `foundation`은 최소한으로 유지합니다.
+
+## 공유 연산 계층: `hwpforge::ops`
+
+공유 문서 연산은 umbrella crate `hwpforge`의 `ops` 모듈(feature `ops`)에 있고, HWP5 변환·PDF 렌더링 연산은 `hwpforge-convert`의 `ops` 모듈에 있습니다. 세 바인딩(CLI·MCP·Python)은 각자 포맷을 다루는 대신 이 연산 계층을 호출하며, 에러 코드 표(`OpsCode`)는 하나로 정의됩니다. 기존 공개 계약이 있는 CLI와 MCP는 레거시 코드 문자열을 각자의 호환 테이블로 유지하고, Python은 `OpsCode` 문자열을 직접 노출합니다.
 
 ## 핵심 원칙: 구조와 스타일의 분리
 

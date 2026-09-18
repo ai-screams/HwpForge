@@ -157,6 +157,8 @@ Rust 크레이트·npm 과 달리 Python wheel 은 release-plz 가 만들지 않
 | `release: published` (umbrella `v*`) | `release.tag_name`                 | **PyPI**                            |
 | `workflow_dispatch`                  | "Use workflow from" 에서 고른 태그 | 입력 `target` (기본값 **TestPyPI**) |
 
+**게시 대상에 GitHub Release 는 없다.** release-plz 가 만드는 워크스페이스 Release 는 발행 후 에셋을 붙일 수 없는 불변 객체라, wheel·sdist 를 그쪽에 복제하는 잡을 두지 않는다 — 특정 파일이 필요하면 PyPI 의 [files 페이지](https://pypi.org/project/hwpforge/#files)에서 받는다(`pip` 이 보는 것과 같은 바이트·sha256).
+
 **태그를 푸시하는 것만으로는 아무 일도 일어나지 않는다.** `py-v*` push 트리거는 제거했다 — 리허설에 쓸 태그를 origin 에 올려야 "Use workflow from" 목록에 뜨는데, 그 준비 동작이 곧 프로덕션 게시가 되어 버리고(그리고 그 파일명을 영구히 태워 이후 릴리스 업로드를 hash 불일치로 깨뜨리고) 만다. 프로덕션에 닿는 길은 릴리스 이벤트와 명시적 수동 실행 둘뿐이고, 기본값은 TestPyPI 다.
 
 수동 실행에는 태그 입력란이 없다. **Actions → PyPI Publish → Run workflow → "Use workflow from" 에서 `Tags` 를 고르고 태그를 선택**한 뒤 `target` 만 정한다. 브랜치를 고르면 `Resolve › Tag` 가 거부한다. 그 드롭다운에 태그가 보이려면 **그 태그의 트리에 `pypi-publish.yml` 이 있어야** 한다 — 이 워크플로가 main 에 들어가기 전에 찍힌 태그로는 수동 실행을 할 수 없다.
