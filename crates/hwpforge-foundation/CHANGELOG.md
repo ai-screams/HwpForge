@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.4...hwpforge-foundation-v0.16.5) - 2026-09-17
+
+### Added
+
+- *(hwpforge)* ops 오류 모델을 단계 구분으로 — Decode/Encode·MdDecode/MdEncode, 의미 손상 봉투, 인자 거부 코드
+
+- *(foundation)* OpsCode 에 IO_FAILED·INPUT_TOO_LARGE·NO_FONTS·ASSET_PLAN_MISMATCH·ASSET_IDENTITY_CONFLICT 추가
+
+- *(foundation)* diagnostics 모듈 — OpsCode 정본 코드 표와 WarningInfo
+
+
+### Documentation
+
+- 브랜치 전체 리뷰 반영 — 릴리스 이력 포인터·architecture mermaid·MSRV 예외 정정
+
+- 공개 문서를 0.16.4 실측에 맞게 정정 — CLI 22·MCP 19·smithy-pdf·설치 명령·정책 문서
+
+
 ## [0.9.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.8.0...hwpforge-foundation-v0.9.0) - 2026-06-28
 
 ### Changed

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.4...hwpforge-smithy-hwpx-v0.16.5) - 2026-09-17
+
+### Added
+
+- *(smithy-hwpx)* fill·insert·delete 진단 쌍둥이, stamp 의 코덱 양방향 경고, umbrella 배선
+
+- *(smithy-hwpx)* 진단 보존 진입점 — 성공 경로의 인코더·디코더 경고를 돌려주는 *_with_diagnostics 쌍둥이
+
+- *(smithy-hwpx)* partition_semantic_loss 공개, PresetInfo 에 Deserialize·JsonSchema 파생
+
+- *(smithy-hwpx)* 의미 손상 fail-closed 를 typed SemanticLoss 오류로 표면화
+
+- *(smithy-hwpx)* EncodeWarning::is_semantic_loss 를 fail-closed 집합의 단일 정의로
+
+
+### Documentation
+
+- 브랜치 전체 리뷰 반영 — 릴리스 이력 포인터·architecture mermaid·MSRV 예외 정정
+
+- 공개 문서를 0.16.4 실측에 맞게 정정 — CLI 22·MCP 19·smithy-pdf·설치 명령·정책 문서
+
+
 ## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.3...hwpforge-smithy-hwpx-v0.16.4) - 2026-08-28
 
 ### Added
