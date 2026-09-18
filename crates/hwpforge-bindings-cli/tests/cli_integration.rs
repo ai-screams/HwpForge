@@ -790,6 +790,97 @@ fn inspect_deep_counts_image_in_table_cell() {
     assert_eq!(sec0["deep_paragraphs"], 7);
 }
 
+/// Value-parity regression (independent review round 2, finding A): a
+/// table/image nested inside an *image's* caption is invisible to
+/// `ops::inspect`'s shared paragraph traversal — Core's
+/// `image_caption_paragraphs_are_skipped_documents_known_gap` test
+/// documents that image captions (unlike table/textbox captions) are not
+/// walked. `inspect.rs`'s `tables`/`images`/`charts` fields must keep
+/// reading from the pre-migration raw-XML `count_occurrences` scan (via
+/// `SectionInfo::merge`'s `deep` parameter), which has no such blind spot,
+/// or these counts silently drop content on any document with such a
+/// caption. No fixture under `tests/fixtures/**` contains an `<hp:caption`
+/// at all (checked by scanning every `.hwpx` fixture's section XML for the
+/// element), so this test builds the document with Core's API and encodes
+/// it, rather than editing fixture bytes by hand.
+#[test]
+fn inspect_deep_counts_table_and_image_nested_in_image_caption() {
+    use hwpforge_core::caption::{Caption, CaptionSide};
+    use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+    use hwpforge_core::page::PageSettings;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::Section;
+    use hwpforge_core::table::{Table, TableCell, TableRow};
+    use hwpforge_core::{Document, Paragraph};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+    use hwpforge_smithy_hwpx::HwpxEncoder;
+
+    fn text_para(text: &str) -> Paragraph {
+        Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    }
+
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    // Caption content: a table and a second image, both nested inside the
+    // *outer* image's caption — exactly the traversal's blind spot.
+    let nested_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+        vec![text_para("caption-table-cell")],
+        HwpUnit::from_pt(100.0).unwrap(),
+    )])]);
+    let nested_image = Image::new(
+        "BinData/nested.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    let mut caption_table_para = text_para("caption-table-host");
+    caption_table_para.add_run(Run::table(nested_table, CharShapeIndex::new(0)));
+    let mut caption_image_para = text_para("caption-image-host");
+    caption_image_para.add_run(Run::image(nested_image, CharShapeIndex::new(0)));
+
+    let mut host_image = Image::new(
+        "BinData/host.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    host_image.caption = Some(Caption::new(
+        vec![text_para("caption text"), caption_table_para, caption_image_para],
+        CaptionSide::Bottom,
+    ));
+
+    let mut host = text_para("host");
+    host.add_run(Run::image(host_image, CharShapeIndex::new(0)));
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let validated = doc.validate().expect("validate");
+    // `HwpxEncoder` silently skips images missing from the `ImageStore`
+    // (XML reference only, no binary data) — no real image bytes are
+    // needed to prove the structural-count divergence.
+    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+
+    let dir = test_tmp();
+    let src = dir.join("image-caption-nested-controls.hwpx");
+    std::fs::write(&src, &bytes).expect("write fixture");
+
+    let (val, _, code) = run_json(&["inspect", src.to_str().unwrap()]);
+    assert_eq!(code, 0, "{val}");
+    let sec0 = &val["sections"][0];
+    // Raw-XML scan sees both `<hp:pic>` (host + caption-nested) and the
+    // caption-nested `<hp:tbl>`; the shared traversal would report 1/0.
+    assert_eq!(sec0["images"], 2, "{val}");
+    assert_eq!(sec0["tables"], 1, "{val}");
+}
+
 #[test]
 fn inspect_deep_counts_header_footer_image_fixture() {
     let f = fixture("mixed_02a_header_image_footer_text_real.hwpx");
@@ -1871,6 +1962,20 @@ fn convert_hwp5_output_write_failure_reports_hwp5_convert_failed() {
     assert_eq!(
         err["hint"],
         "Check that the source is a supported HWP5 document and the output path is writable"
+    );
+    // Independent review round 2, finding B: legacy's write failure came
+    // back through `Hwp5Error::Io`, whose `Display` is `"I/O error: {0}"`
+    // wrapping the raw `io::Error` — not the raw `io::Error` alone. The
+    // message is keyed on the *input* path (source), per the finding-8
+    // comment above. Re-derive the same `io::Error`'s own `Display`
+    // (rather than hardcoding OS-specific strerror text) so the assertion
+    // stays portable across platforms.
+    let same_io_error = std::fs::write(out, []).expect_err("same missing dir must still fail");
+    let message = err["message"].as_str().unwrap_or_default();
+    assert_eq!(
+        message,
+        format!("Cannot convert '{}' to HWPX: I/O error: {same_io_error}", source.display()),
+        "message must wrap the io::Error as Hwp5Error::Io (\"I/O error: \" prefix): {message}"
     );
 }
 
