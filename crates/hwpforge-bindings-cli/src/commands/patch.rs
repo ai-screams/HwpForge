@@ -2,10 +2,11 @@
 
 use std::path::PathBuf;
 
+use hwpforge::ops::exchange::{patch as ops_patch, PatchOptions};
+use hwpforge::ops::OpsError;
+
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
-use hwpforge_smithy_hwpx::{
-    ExportedSection, HwpxPatcher, SectionPatchOutcome, SectionWorkflowError,
-};
 
 /// Run the patch command.
 pub fn run(
@@ -37,45 +38,16 @@ pub fn run(
         }
     };
 
-    // Parse the tree once; the typed section deserializes from it by
-    // reference (no reparse, no clone).
-    let value: serde_json::Value = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(e) => {
-            CliError::new("JSON_PARSE_FAILED", format!("Invalid section JSON: {e}"))
-                .exit(json_mode, 2);
-        }
-    };
-    let exported_section: ExportedSection = match serde::Deserialize::deserialize(&value) {
-        Ok(s) => s,
-        Err(e) => {
-            CliError::new("JSON_PARSE_FAILED", format!("Invalid section JSON: {e}"))
-                .exit(json_mode, 2);
-        }
+    // `ops::exchange::patch` reproduces the whole legacy pipeline itself:
+    // parse the patch JSON, deserialize it as an `ExportedSection`, verify
+    // its grid addresses against it, then apply the preserving patch.
+    let opts = PatchOptions::default().with_section(section_idx).with_patch(json_str);
+    let outcome = match ops_patch(&base_bytes, &opts) {
+        Ok(o) => o,
+        Err(e) => exit_ops_error(Command::Patch, e, json_mode),
     };
 
-    // Supplied cell grid addresses are validated, then discarded (see
-    // from-json): stale addresses after structural edits are rejected.
-    if let Err(e) = hwpforge_smithy_hwpx::grid_addr::verify_section_addresses(
-        &value,
-        &exported_section.section,
-        exported_section.section_index,
-    ) {
-        CliError::new("GRID_ADDR_INVALID", format!("Cell grid address check failed: {e}"))
-            .with_hint(
-                "Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry",
-            )
-            .exit(json_mode, 2);
-    }
-
-    let outcome =
-        match HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported_section) {
-            Ok(outcome) => outcome,
-            Err(error) => exit_section_patch_error(error, json_mode),
-        };
-    let SectionPatchOutcome { bytes, patched_section, sections } = outcome;
-
-    if let Err(e) = std::fs::write(output, &bytes) {
+    if let Err(e) = std::fs::write(output, &outcome.bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
             .exit(json_mode, 1);
     }
@@ -83,9 +55,9 @@ pub fn run(
     let result = serde_json::json!({
         "status": "ok",
         "output": output.display().to_string(),
-        "patched_section": patched_section,
-        "sections": sections,
-        "size_bytes": bytes.len(),
+        "patched_section": outcome.section,
+        "sections": outcome.sections,
+        "size_bytes": outcome.bytes.len(),
     });
 
     if json_mode {
@@ -93,50 +65,16 @@ pub fn run(
     } else {
         println!(
             "Patched section {} -> {} ({} bytes)",
-            patched_section,
+            outcome.section,
             output.display(),
-            bytes.len()
+            outcome.bytes.len()
         );
     }
 }
 
-fn exit_section_patch_error(error: SectionWorkflowError, json_mode: bool) -> ! {
-    match error {
-        SectionWorkflowError::Decode { detail } => {
-            CliError::new("DECODE_FAILED", format!("HWPX decode error: {detail}"))
-                .exit(json_mode, 2);
-        }
-        SectionWorkflowError::SectionOutOfRange { requested, sections } => {
-            CliError::new(
-                "SECTION_OUT_OF_RANGE",
-                format!("Section {requested} does not exist (document has {sections} sections)"),
-            )
-            .with_hint(format!("Valid range: 0..{}", sections.saturating_sub(1)))
-            .exit(json_mode, 1);
-        }
-        SectionWorkflowError::SectionIndexMismatch { requested, actual } => {
-            CliError::new(
-                "SECTION_INDEX_MISMATCH",
-                format!("Requested section {requested} but JSON contains section {actual} data"),
-            )
-            .with_hint(format!(
-                "Use --section {actual} to match the JSON, or re-export section {requested} with this version of hwpforge."
-            ))
-            .exit(json_mode, 2);
-        }
-        SectionWorkflowError::PreservingPatch(error) => {
-            CliError::new("PATCH_FAILED", format!("Preserving patch error: {error}"))
-                .with_hint(
-                    "Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow.",
-                )
-                .exit(json_mode, 2);
-        }
-        _ => {
-            CliError::new("SECTION_WORKFLOW_FAILED", error.to_string())
-                .with_hint(
-                    "Update hwpforge so the CLI understands the newer section workflow error.",
-                )
-                .exit(json_mode, 2);
-        }
-    }
+/// Maps an `ops::exchange::patch` failure onto the frozen contract and exits.
+fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = compat::cli_error(cmd, err);
+    let exit = compat::exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }

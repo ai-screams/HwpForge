@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{FillError, HwpxFiller};
+use hwpforge::ops::edit::{fill as ops_fill, FillOptions};
+use hwpforge::ops::OpsError;
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run the fill command.
@@ -25,9 +27,10 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
         }
     };
 
-    let outcome = match HwpxFiller::fill(&bytes, &values) {
-        Ok(outcome) => outcome,
-        Err(error) => exit_fill_error(error, json_mode),
+    let values: Vec<(String, String)> = values.into_iter().collect();
+    let outcome = match ops_fill(&bytes, &values, &FillOptions::default()) {
+        Ok(o) => o,
+        Err(e) => exit_ops_error(Command::Fill, e, json_mode),
     };
 
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
@@ -68,38 +71,9 @@ fn parse_sets(sets: &[String], json_mode: bool) -> BTreeMap<String, String> {
     values
 }
 
-fn exit_fill_error(error: FillError, json_mode: bool) -> ! {
-    match error {
-        FillError::EmptyValue { name } => {
-            CliError::new("EMPTY_FIELD_VALUE", format!("field '{name}': empty value"))
-                .with_hint("빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요")
-                .exit(json_mode, 1)
-        }
-        FillError::UnknownField { name, available } => CliError::new(
-            "FIELD_NOT_FOUND",
-            format!("field '{name}' not found in document"),
-        )
-        .with_hint(format!(
-            "사용 가능한 필드: [{}] — `hwpforge fields <file>` 로 확인",
-            available.join(", ")
-        ))
-        .exit(json_mode, 1),
-        FillError::DuplicateFieldName { name, count } => CliError::new(
-            "FIELD_NAME_AMBIGUOUS",
-            format!("field '{name}' appears {count} times"),
-        )
-        .with_hint("같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요")
-        .exit(json_mode, 1),
-        FillError::UnfillableField { name, section } => CliError::new(
-            "FIELD_NOT_FILLABLE",
-            format!("field '{name}' in section {section} has no patchable body"),
-        )
-        .with_hint(
-            "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요",
-        )
-        .exit(json_mode, 1),
-        FillError::Workflow(e) => {
-            CliError::new("FILL_FAILED", format!("fill workflow error: {e}")).exit(json_mode, 2)
-        }
-    }
+/// Maps an `ops::edit::fill` failure onto the frozen contract and exits.
+fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = compat::cli_error(cmd, err);
+    let exit = compat::exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }
