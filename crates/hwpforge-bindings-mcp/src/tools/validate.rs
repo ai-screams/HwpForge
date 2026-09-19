@@ -144,33 +144,60 @@ mod tests {
         assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
-    /// `run_validate`'s `Ok(out)` non-`ok` arm (`validate.rs:56-65`) is not
-    /// reachable through the public API with a real file: encoding always
-    /// requires `Document::validate` to pass first (`Document<Validated>`),
-    /// so no HWPX package this crate can produce ever decodes into
-    /// something `Document::validate` then rejects, and `ops::ValidateOutput`
-    /// is `#[non_exhaustive]` with no public constructor, so it cannot be
-    /// built directly either — see `run_validate`'s doc for the exact split.
-    /// `ValidateData` itself has no such restriction (all fields `pub`, not
-    /// `#[non_exhaustive]`), so this covers what that arm actually risks:
-    /// that `valid: false` and a populated `warnings` list serialize
-    /// correctly together, which is the shape the two branches share.
+    /// `run_validate`'s `Ok(out)` non-`ok` arm (`validate.rs:56-65`) was once
+    /// believed unreachable through the public API with a real file, on the
+    /// theory that encoding always requires `Document::validate` to pass
+    /// first. That reasoning only covers packages *this crate's own
+    /// encoder* produces — it says nothing about `HwpxDecoder`, which builds
+    /// a `Document<Draft>` straight from wire XML with none of
+    /// `Document::validate`'s structural rules applied. A hand-tampered
+    /// package — one real section plus a second, empty one, built by
+    /// splicing a bare `<hs:sec>` into `stale-line-cache.hwpx`'s own ZIP —
+    /// decodes cleanly and only fails afterward, in this function's own
+    /// `Document::validate()` call, exercising the arm for real. Built from
+    /// that fixture specifically so the same decode also carries its
+    /// `LAYOUT_CACHE_DROPPED` warning, proving `valid` and `warnings` really
+    /// are independent, as the module doc above promises.
     #[test]
-    fn validate_data_serializes_invalid_with_warnings_present() {
-        let data = ValidateData {
-            valid: false,
-            sections: 1,
-            paragraphs: 3,
-            issues: vec!["Validation error: Section 0 has no paragraphs".to_string()],
-            warnings: vec![ToolWarningInfo::new(
-                "LAYOUT_CACHE_DROPPED",
-                "layout cache dropped at section[0]: ledger construction failed",
-            )],
-        };
+    fn validate_reports_decode_warnings_and_a_real_validation_failure_together() {
+        use std::io::{Cursor, Write};
+
+        let bytes = std::fs::read(fixture("layout/stale-line-cache.hwpx")).expect("read fixture");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("open zip");
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..archive.len() {
+            let entry = archive.by_index_raw(i).expect("entry");
+            writer.raw_copy_file(entry).expect("copy");
+        }
+        // `HwpxDecoder` has no opinion on an empty `<hs:sec>` — it just
+        // decodes zero `<hp:p>` elements — but `Document::validate` rejects
+        // an empty section (`ValidationError::EmptySection`), the cheapest
+        // rule to trip without touching the fixture's own cached section 0.
+        writer
+            .start_file("Contents/section1.xml", zip::write::SimpleFileOptions::default())
+            .expect("start section1");
+        writer
+            .write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"></hs:sec>"#,
+            )
+            .expect("write section1");
+        let tampered = writer.finish().expect("finish").into_inner();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("two-section-one-empty.hwpx");
+        std::fs::write(&path, &tampered).expect("write tampered fixture");
+
+        let data = run_validate(path.to_str().unwrap()).unwrap();
+
+        assert!(!data.valid, "the second, empty section must fail Document::validate");
+        assert_eq!(data.sections, 2, "the decode itself sees both sections");
+        assert!(
+            data.issues.iter().any(|issue| issue.contains("Section 1 has no paragraphs")),
+            "the validation error must name the rule it tripped: {:?}",
+            data.issues
+        );
 
         let value = serde_json::to_value(&data).unwrap();
-        assert_eq!(value["valid"], false);
-        assert!(!value["issues"].as_array().unwrap().is_empty());
         assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
         assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }

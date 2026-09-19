@@ -370,13 +370,8 @@ mod tests {
         );
 
         let value = serde_json::to_value(&data).unwrap();
-        let warning = value["warnings"]
-            .as_array()
-            .expect("warnings array")
-            .iter()
-            .find(|w| w["code"] == "LAYOUT_CACHE_DROPPED")
-            .expect("LAYOUT_CACHE_DROPPED present in the serialized value");
-        assert!(!warning["message"].as_str().unwrap_or_default().is_empty());
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]
