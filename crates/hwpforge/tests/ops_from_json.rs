@@ -394,6 +394,171 @@ fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache()
     );
 }
 
+/// A memo's `anchor_runs` can carry a non-text run — a table, in this
+/// case — that validation permits there. The encoder flattens the anchor
+/// into a single inline `<hp:t>`, keeping only `RunContent::plain_text`
+/// (`build_memo_anchor_xml`), so the table and every paragraph inside it,
+/// cache included, is dropped whole rather than walked. The drop is real
+/// even though the encoder never reaches that far, so the warning must
+/// still fire — with a path that stops at the memo, the nearest container
+/// the encoder's own recursion ever reaches.
+#[test]
+fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{
+        Document, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut cell_para = Paragraph::with_runs(
+        vec![Run::text("anchor cell", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    cell_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let width = HwpUnit::from_mm(20.0).expect("width");
+    let table = Table::new(vec![TableRow::new(vec![TableCell::new(vec![cell_para], width)])]);
+
+    let memo_body = Paragraph::with_runs(
+        vec![Run::text("memo body", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let anchor_runs = vec![Run::table(table, CharShapeIndex::new(0))];
+    let memo = Control::memo_with_anchor(vec![memo_body], anchor_runs);
+
+    let host = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0)), Run::control(memo, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    assert!(host.layout_cache.is_none(), "the cache sits only inside the anchor table's cell");
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = out.meta().warnings.iter().map(|w| w.code.clone()).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").count(),
+        1,
+        "exactly one warning even though the cache sits inside a dropped anchor run: {codes:?}"
+    );
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].memo"),
+        "path should stop at the memo — the encoder never recurses into a dropped anchor run: {}",
+        warning.message
+    );
+}
+
+/// A group whose first child (`Equation`) the encoder never emits as a
+/// container child (see `encode_group_child_xml`) sits before a text box
+/// that does carry a layout cache. The encoder's own `emitted_idx` counter
+/// only advances for a child it actually serializes, so the real encoder
+/// would number the text box `group[0]`, not the source list's `group[1]` —
+/// `from_json`'s warning must report the same number.
+#[test]
+fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_index() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut boxed_para = Paragraph::with_runs(
+        vec![Run::text("boxed", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    boxed_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let equation = Control::Equation {
+        script: "a over b".to_string(),
+        width: HwpUnit::new(1000).unwrap(),
+        height: HwpUnit::new(1000).unwrap(),
+        base_line: 60,
+        text_color: Color::from_rgb(0, 0, 0),
+        font: "HancomEQN".to_string(),
+        inst_id: None,
+    };
+    let text_box = Control::TextBox {
+        paragraphs: vec![boxed_para],
+        width: HwpUnit::new(2000).unwrap(),
+        height: HwpUnit::new(2000).unwrap(),
+        placement: None,
+        caption: None,
+        style: None,
+        text_vertical_align: Default::default(),
+    };
+    let group = Control::Group {
+        // Source order: the dropped Equation comes first, then the cached
+        // text box — the whole point of this test is that the encoder's
+        // emitted-index counter does not shift with it.
+        children: vec![equation, text_box],
+        width: HwpUnit::new(3000).unwrap(),
+        height: HwpUnit::new(2000).unwrap(),
+        placement: None,
+        inst_id: None,
+    };
+
+    let host = Paragraph::with_runs(
+        vec![Run::control(group, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].group[0]"),
+        "the dropped Equation must not consume a GroupChild index — the encoder numbers the \
+         text box group[0], not the source list's group[1]: {}",
+        warning.message
+    );
+}
+
 /// An exported document whose only paragraph carries a footnote whose body
 /// is a heading. Built rather than loaded: no committed fixture triggers a
 /// semantic-loss encode warning.

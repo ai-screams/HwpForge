@@ -533,11 +533,15 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
 /// `hwpforge-smithy-hwpx::encoder`, so the path this returns reads the
 /// same way a real encoder-side `LayoutCacheDropped` warning would.
 ///
-/// Two spots the encoder itself never path-tracks fall back to a bare
+/// One spot the encoder itself never path-tracks falls back to a bare
 /// `section[i]` path instead of inventing a segment it never emits: master
-/// pages (`build_masterpage_entries` never receives a sink) and a memo's
-/// `anchor_runs` (collapsed to plain text before encoding — see
-/// [`first_in_control`] — never walked as paragraphs).
+/// pages (`build_masterpage_entries` never receives a sink). A memo's
+/// `anchor_runs` get a similar fallback but one step deeper — the memo's own
+/// path rather than the section's — because the encoder flattens
+/// `anchor_runs` to plain text and never recurses into a non-text run there
+/// (see [`first_in_control`]), yet a cache nested inside one is still real
+/// and still dropped, so it must still be found, just reported at the
+/// nearest real container instead of a path the encoder never builds.
 fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<ParagraphPath> {
     let base = vec![PathSeg::Section(section_index)];
 
@@ -647,13 +651,7 @@ fn first_in_caption(caption: Option<&Caption>, path: &[PathSeg]) -> Option<Parag
 
 /// Recurses into the paragraph-bearing [`Control`] variants — shape body
 /// text and captions, footnotes/endnotes, group children, and a memo's
-/// visible body content.
-///
-/// `Memo::anchor_runs` is intentionally not walked: the encoder collapses
-/// it to plain text (`build_memo_anchor_xml`) and never recurses into it,
-/// so a cache nested there would never reach a `LayoutCacheDropped` site in
-/// the real encoder either — walking it here would report a drop the
-/// encoder itself cannot produce.
+/// visible body content and anchor.
 fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath> {
     match control {
         Control::TextBox { paragraphs, caption, .. }
@@ -679,15 +677,46 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
         | Control::Arc { caption, .. }
         | Control::Curve { caption, .. }
         | Control::ConnectLine { caption, .. } => first_in_caption(caption.as_ref(), path),
-        Control::Group { children, .. } => children.iter().enumerate().find_map(|(idx, child)| {
-            let mut child_path = path.to_vec();
-            child_path.push(PathSeg::GroupChild(idx));
-            first_in_control(child, &child_path)
-        }),
-        Control::Memo { content, .. } => {
+        Control::Group { children, .. } => {
+            // `emitted_idx` mirrors `encode_group_child_xml`'s own counter
+            // exactly (`hwpforge-smithy-hwpx::encoder::shapes`): it advances
+            // only for a child that counter actually serializes, so a
+            // dropped child (`Equation`/`EmbeddedChart`/… — anything outside
+            // [`group_child_is_emitted`]) never consumes a `GroupChild`
+            // index and the next emitted child reuses it, exactly as the
+            // real encoder's `sink.enter(PathSeg::GroupChild(emitted_idx))`
+            // does before deciding whether to bump it.
+            let mut emitted_idx = 0usize;
+            children.iter().find_map(|child| {
+                let mut child_path = path.to_vec();
+                child_path.push(PathSeg::GroupChild(emitted_idx));
+                let found = first_in_control(child, &child_path);
+                if group_child_is_emitted(child) {
+                    emitted_idx += 1;
+                }
+                found
+            })
+        }
+        Control::Memo { content, anchor_runs, .. } => {
             let mut memo_path = path.to_vec();
             memo_path.push(PathSeg::Memo);
-            first_in_paragraphs(content, &memo_path, PathSeg::NestedParagraph)
+            first_in_paragraphs(content, &memo_path, PathSeg::NestedParagraph).or_else(|| {
+                // The encoder flattens `anchor_runs` into a single inline
+                // `<hp:t>` anchor, keeping only `RunContent::plain_text`
+                // (`build_memo_anchor_xml`) — a `Table`/`Control`/`Image`
+                // run there is dropped whole and never reaches the
+                // encoder's own path-tracked recursion, so there is no real
+                // per-path segment to report for whatever is nested inside
+                // it either. `first_in_run` is reused only to *detect* a
+                // cache there (same descent as everywhere else); the path
+                // it would have built is discarded in favour of the memo's
+                // own path, the nearest real container — the same fallback
+                // shape master pages use above, one level deeper.
+                anchor_runs
+                    .iter()
+                    .any(|run| first_in_run(run, &memo_path).is_some())
+                    .then(|| ParagraphPath(memo_path.clone()))
+            })
         }
         // Core's own `Control::walk_paragraphs` has no wildcard here on
         // purpose, so a new paragraph-bearing variant fails *that* match at
@@ -698,6 +727,29 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
         // variant added to Core's match must be added here by hand too.
         _ => None,
     }
+}
+
+/// Whether `encode_group_child_xml` (`hwpforge-smithy-hwpx::encoder::shapes`)
+/// emits `child` as a container child at all — the exact set its match
+/// covers, including the nested-`Group` branch it checks ahead of that
+/// match. Anything outside this set (`Equation`, `EmbeddedChart`, `Footnote`,
+/// `Memo`, …) is dropped rather than fabricated (Wave A group support), so
+/// it never advances the encoder's own `emitted_idx` counter — see
+/// [`first_in_control`]'s `Control::Group` arm above.
+fn group_child_is_emitted(child: &Control) -> bool {
+    matches!(
+        child,
+        Control::TextBox { .. }
+            | Control::Rect { .. }
+            | Control::Line { .. }
+            | Control::Ellipse { .. }
+            | Control::Arc { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+            | Control::TextArt { .. }
+            | Control::Group { .. }
+    )
 }
 
 // ── patch ───────────────────────────────────────────────────────
