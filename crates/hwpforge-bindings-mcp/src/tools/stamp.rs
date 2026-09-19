@@ -333,6 +333,50 @@ mod tests {
             "stamp_plan must surface the decode warning: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        let warning = value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .find(|w| w["code"] == "LAYOUT_CACHE_DROPPED")
+            .expect("LAYOUT_CACHE_DROPPED present in the serialized value");
+        assert!(!warning["message"].as_str().unwrap_or_default().is_empty());
+    }
+
+    /// `stamp_plan_surfaces_decode_warnings` only exercises plan (pure
+    /// decode/projection); this exercises apply — the admission-gated,
+    /// re-encoding half — on the same fixture, so the decode warning must
+    /// still reach the caller once a real edit and encode have happened in
+    /// between. `LAYOUT_CACHE_DROPPED` is not a semantic-loss warning
+    /// (`EncodeWarning::is_semantic_loss`), so it must not fail admission
+    /// closed the way `NoteHeadSkipped` etc. would.
+    #[test]
+    fn stamp_apply_on_a_stale_fixture_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let plan = run_stamp_plan(&path).unwrap();
+        assert_eq!(plan.candidates.len(), 1, "{:?}", plan.candidates);
+        let specs = vec![named(&plan.candidates[0], "성명")];
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("stamped.hwpx");
+        let data = run_stamp(&path, &specs, &[], None, out.to_str().unwrap(), None).unwrap();
+
+        assert_eq!(data.stamped.len(), 1);
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "stamp apply must surface the decode warning too, not just stamp_plan: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        let warning = value["warnings"]
+            .as_array()
+            .expect("warnings array")
+            .iter()
+            .find(|w| w["code"] == "LAYOUT_CACHE_DROPPED")
+            .expect("LAYOUT_CACHE_DROPPED present in the serialized value");
+        assert!(!warning["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]

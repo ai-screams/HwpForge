@@ -138,5 +138,40 @@ mod tests {
             "validate must surface the decode warning of a successful decode: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
+    }
+
+    /// `run_validate`'s `Ok(out)` non-`ok` arm (`validate.rs:56-65`) is not
+    /// reachable through the public API with a real file: encoding always
+    /// requires `Document::validate` to pass first (`Document<Validated>`),
+    /// so no HWPX package this crate can produce ever decodes into
+    /// something `Document::validate` then rejects, and `ops::ValidateOutput`
+    /// is `#[non_exhaustive]` with no public constructor, so it cannot be
+    /// built directly either — see `run_validate`'s doc for the exact split.
+    /// `ValidateData` itself has no such restriction (all fields `pub`, not
+    /// `#[non_exhaustive]`), so this covers what that arm actually risks:
+    /// that `valid: false` and a populated `warnings` list serialize
+    /// correctly together, which is the shape the two branches share.
+    #[test]
+    fn validate_data_serializes_invalid_with_warnings_present() {
+        let data = ValidateData {
+            valid: false,
+            sections: 1,
+            paragraphs: 3,
+            issues: vec!["Validation error: Section 0 has no paragraphs".to_string()],
+            warnings: vec![ToolWarningInfo::new(
+                "LAYOUT_CACHE_DROPPED",
+                "layout cache dropped at section[0]: ledger construction failed",
+            )],
+        };
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["valid"], false);
+        assert!(!value["issues"].as_array().unwrap().is_empty());
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 }

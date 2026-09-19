@@ -100,6 +100,42 @@ mod tests {
         assert_eq!(err.code, "FIELD_NOT_FOUND");
     }
 
+    /// The failure-path check above never actually fills a field. This
+    /// exercises the genuine success path — a field that exists — and
+    /// checks both the typed `warnings` vec and the serialized wire shape:
+    /// `#[serde(skip_serializing_if = "Vec::is_empty")]` must omit the key
+    /// entirely on a clean fill, not emit an empty array. `"성명: (   )"`
+    /// converted markdown is a stamp-plan *text candidate*, not an actual
+    /// click-here field, so this uses the native fixture that already
+    /// carries one (`user_email`, unfilled) instead.
+    #[test]
+    fn fill_via_mcp_surface_reports_no_warnings_on_a_successful_clean_fill() {
+        let path = fixture("fields/clickhere_named.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let values =
+            std::collections::BTreeMap::from([("user_email".to_string(), "a@b.c".to_string())]);
+        let out = dir.path().join("out.hwpx");
+        let data = run_fill(&path, &values, out.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            data.filled.len(),
+            1,
+            "the one existing field must be filled: {:?}",
+            data.filled
+        );
+        assert!(
+            data.warnings.is_empty(),
+            "a clean successful fill must not warn: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert!(
+            value.get("warnings").is_none(),
+            "empty warnings must be omitted from the wire shape, not an empty array: {value}"
+        );
+    }
+
     /// 줄 조판 캐시가 낡은 fixture 를 채우면, fill 이 이름 해석을 위해 돌린
     /// 디코드의 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
     #[test]
@@ -116,5 +152,9 @@ mod tests {
             "fill must surface the decode warning: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 }

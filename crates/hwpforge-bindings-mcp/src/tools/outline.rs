@@ -27,19 +27,38 @@ const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 pub fn run_outline(file_path: &str) -> Result<OutlineData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
     let out = ops::outline(&bytes).map_err(|e| compat::tool_error(Tool::Outline, e))?;
-    let outline = out.outline;
     let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
-    let inline_size = serde_json::to_string(&outline).map(|s| s.len()).unwrap_or(usize::MAX);
+    build_outline_data(out.outline, warnings)
+}
+
+/// Builds the final [`OutlineData`], gating on the complete serialized
+/// response — including `warnings` — rather than on the navigation map
+/// alone: a document with many decode warnings but a small outline could
+/// otherwise slip past a narrower check while still exceeding the real
+/// inline ceiling. Unlike `diff`'s `report_path`, outline has no
+/// externalization path, so an oversized response — whether driven by the
+/// map or by `warnings` alone — always errors.
+///
+/// Split out from [`run_outline`] so a test can exercise the gate with a
+/// synthetic oversized `warnings` list, without needing a fixture large
+/// enough to trigger it for real.
+fn build_outline_data(
+    outline: DocumentOutline,
+    warnings: Vec<ToolWarningInfo>,
+) -> Result<OutlineData, ToolErrorInfo> {
+    let data = OutlineData { outline, warnings };
+
+    let inline_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(usize::MAX);
     if inline_size > MAX_INLINE_RESPONSE {
         return Err(ToolErrorInfo::new(
             "OUTPUT_TOO_LARGE",
-            format!("Navigation map is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
+            format!("Navigation response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
             "Use the CLI instead: hwpforge outline <file> --json",
         ));
     }
 
-    Ok(OutlineData { outline, warnings })
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -91,6 +110,10 @@ mod tests {
             "outline must surface the decode warning: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -107,5 +130,27 @@ mod tests {
 
         let err = run_outline(garbage.to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "DECODE_ERROR");
+    }
+
+    /// The outline itself is empty here — the oversized total comes
+    /// entirely from `warnings` — so this exercises the branch the
+    /// whole-payload gate exists for (finding #4). Outline has no
+    /// `report_path`-style externalization, so this must still error
+    /// rather than silently return an oversized response.
+    #[test]
+    fn outline_oversized_warnings_alone_reports_output_too_large() {
+        let outline = DocumentOutline {
+            title: None,
+            sections: Vec::new(),
+            headings: Vec::new(),
+            tables: Vec::new(),
+            fields: Vec::new(),
+            bookmarks: Vec::new(),
+        };
+        let huge =
+            vec![ToolWarningInfo::new("STUB_OVERSIZED", "x".repeat(MAX_INLINE_RESPONSE + 1))];
+
+        let err = build_outline_data(outline, huge).unwrap_err();
+        assert_eq!(err.code, "OUTPUT_TOO_LARGE");
     }
 }

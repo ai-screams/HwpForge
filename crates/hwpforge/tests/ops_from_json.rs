@@ -278,7 +278,9 @@ fn from_json_warns_when_the_input_carries_a_layout_cache_it_does_not_re_emit() {
         .into_iter()
         .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
         .expect("warning present");
-    assert!(warning.message.contains("section[0]"), "{}", warning.message);
+    // The path names the actual cached paragraph, not just the section —
+    // `SimpleTable.hwpx`'s cache sits on the section's first body paragraph.
+    assert!(warning.message.contains("section[0].para[0]"), "{}", warning.message);
     assert!(warning.message.contains("not re-emitted"), "{}", warning.message);
 
     // The drop is real, not just unreported: the rebuilt package carries no
@@ -316,6 +318,80 @@ fn from_json_reports_no_layout_cache_warning_when_there_is_none_to_drop() {
 
     let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
     assert!(!codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+}
+
+/// The section's only cached paragraph lives inside an image's caption —
+/// `Section::for_each_paragraph` deliberately does not visit those (a
+/// documented gap on `Document::for_each_paragraph_mut`), so this exercises
+/// `from_json`'s own local traversal rather than that Core walker. The
+/// encoder drops that cache too, so the warning must still fire exactly
+/// once, with a path that reaches into the caption rather than stopping at
+/// the section.
+#[test]
+fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache() {
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{
+        Caption, CaptionSide, Document, Image, ImageFormat, PageSettings, Paragraph, Run, Section,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut caption_para = Paragraph::with_runs(
+        vec![Run::text("caption", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    caption_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let mut image = Image::new(
+        "BinData/image1.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    image.caption = Some(Caption::new(vec![caption_para], CaptionSide::Bottom));
+
+    let host = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0)), Run::image(image, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    assert!(host.layout_cache.is_none(), "the cache sits only on the caption paragraph");
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = out.meta().warnings.iter().map(|w| w.code.clone()).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").count(),
+        1,
+        "exactly one warning even though the cache is nested in an image caption: {codes:?}"
+    );
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].caption.npara[0]"),
+        "path must reach into the image caption, not stop at the section: {}",
+        warning.message
+    );
 }
 
 /// An exported document whose only paragraph carries a footnote whose body
