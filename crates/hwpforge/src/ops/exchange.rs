@@ -31,8 +31,8 @@ use hwpforge_smithy_hwpx::grid_addr::{
 };
 use hwpforge_smithy_hwpx::presets::style_store_for_preset;
 use hwpforge_smithy_hwpx::{
-    EncodeOptions, ExportedDocument, ExportedSection, HwpxDecoder, HwpxEncoder, HwpxPatcher,
-    SectionPatchOutcome,
+    EncodeOptions, EncodeWarning, ExportedDocument, ExportedSection, HwpxDecoder, HwpxEncoder,
+    HwpxPatcher, ParagraphPath, PathSeg, SectionPatchOutcome,
 };
 use serde::{Deserialize, Serialize};
 
@@ -340,8 +340,10 @@ pub struct FromJsonOutput {
     /// counted before the encode consumes it (same reason as
     /// [`sections`](Self::sections)).
     pub paragraphs: usize,
-    /// Encode warnings. Generation has no original meaning to preserve, so
-    /// these are reported, never fatal.
+    /// Encode warnings, then one `LAYOUT_CACHE_DROPPED` per section whose
+    /// input JSON carried a non-empty layout cache that this encode did not
+    /// re-emit. Generation has no original meaning to preserve, so these are
+    /// reported, never fatal.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -393,6 +395,17 @@ impl FromJsonOutput {
 /// meaning could be lost, so the warnings describe the generated output and
 /// are returned with it.
 ///
+/// # Warnings
+///
+/// Besides the encoder's own diagnostics, one `LAYOUT_CACHE_DROPPED` per
+/// section whose JSON carried a non-empty layout cache — [`to_json`] exports
+/// each paragraph's promoted `linesegarray` cache, but this function always
+/// encodes with [`EncodeOptions::default`], whose `emit_layout_cache` stays
+/// off (a stale cache after edits is worse than none). Without this warning
+/// the round trip is silently render-degraded: 한글 recomputes layout on
+/// open regardless, but `hwpforge`'s own PDF path needs the cache and would
+/// otherwise fail later with no link back to this step.
+///
 /// # Errors
 ///
 /// - [`OpsError::Json`] (code `JSON_PARSE_FAILED`) when the text is not JSON
@@ -432,6 +445,33 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let paragraphs: usize =
         exported.document.sections().iter().map(|section| section.paragraphs.len()).sum();
 
+    // Same reason this must run before `validate()` consumes the tree: the
+    // encode below always runs with `EncodeOptions::default` (emit off), so
+    // a cache the input carried is dropped without a trace unless flagged
+    // here. Walked recursively (`Section::for_each_paragraph`) so a cache
+    // nested under a header/footer/table cell/note is caught too — one
+    // warning per section that carries at least one non-empty cache.
+    let layout_cache_warnings: Vec<OpsWarning> = exported
+        .document
+        .sections()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, section)| {
+            let mut has_cache = false;
+            section.for_each_paragraph(|p| {
+                has_cache |= p.layout_cache.as_ref().is_some_and(|c| !c.is_empty());
+            });
+            has_cache.then(|| {
+                OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
+                    path: ParagraphPath(vec![PathSeg::Section(index)]),
+                    reason: "layout cache present in the JSON was not re-emitted — from_json \
+                             encodes with emit_layout_cache off by design"
+                        .to_string(),
+                })
+            })
+        })
+        .collect();
+
     let style_store = match exported.styles {
         Some(styles) => styles,
         None => style_store_for_preset("default")
@@ -452,11 +492,15 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     )
     .map_err(OpsError::encode)?;
 
+    let mut warnings: Vec<OpsWarning> =
+        outcome.warnings.into_iter().map(OpsWarning::Encode).collect();
+    warnings.extend(layout_cache_warnings);
+
     Ok(FromJsonOutput {
         bytes: outcome.bytes,
         sections: validated.section_count(),
         paragraphs,
-        warnings: outcome.warnings.into_iter().map(OpsWarning::Encode).collect(),
+        warnings,
     })
 }
 

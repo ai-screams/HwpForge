@@ -2597,6 +2597,34 @@ fn from_json_json_mode() {
     assert!(val["size_bytes"].is_number(), "missing 'size_bytes' field");
 }
 
+/// `rect.hwpx` carries a `linesegarray` layout cache that `to-json` promotes
+/// into the export; `from-json` always re-encodes with the cache emission
+/// off, which must not be a silent drop.
+#[test]
+fn from_json_warns_when_the_json_carries_a_layout_cache_it_drops() {
+    let f = fixture("rect.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("doc.json");
+    let hwpx_out = tmp.join("roundtrip.hwpx");
+
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let (_, stderr, code) =
+        run(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("[from-json] layout cache dropped at section[0]"), "stderr: {stderr}");
+
+    let (val, _, code) =
+        run_json(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let warnings = val["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap_or_default().contains("layout cache dropped")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn from_json_nonexistent_input() {
     let tmp = test_tmp();

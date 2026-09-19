@@ -69,6 +69,16 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
 mod tests {
     use super::*;
 
+    /// Repo-level fixture, shared with other crates' tests.
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
     #[test]
     fn from_json_invalid_extension() {
         let err = run_from_json("{}", "/tmp/out.txt").unwrap_err();
@@ -115,5 +125,26 @@ mod tests {
         assert!(data.size_bytes > 0);
         assert!(data.sections >= 1);
         assert!(data.paragraphs >= 1);
+    }
+
+    /// `rect.hwpx` carries a `linesegarray` layout cache that `to_json`
+    /// promotes into the export; `from_json` always re-encodes with the
+    /// cache emission off, which must surface as a warning, not a silent
+    /// drop, through this tool's own warnings channel too.
+    #[test]
+    fn from_json_warns_when_the_input_carries_a_layout_cache_it_does_not_re_emit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = fixture("shapes/rect.hwpx");
+        let json_data = crate::tools::to_json::run_to_json(&path, None, None).unwrap();
+        let json_str = json_data.json_content.expect("inline JSON expected");
+
+        let out_path = dir.path().join("from_json.hwpx");
+        let data = run_from_json(&json_str, out_path.to_str().unwrap()).unwrap();
+
+        assert!(
+            data.warnings.iter().any(|w| w.contains("layout cache dropped at section[0]")),
+            "{:?}",
+            data.warnings
+        );
     }
 }
