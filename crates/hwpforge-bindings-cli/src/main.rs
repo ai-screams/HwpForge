@@ -2,6 +2,7 @@
 
 mod analysis;
 mod commands;
+mod compat;
 mod error;
 
 use std::path::PathBuf;

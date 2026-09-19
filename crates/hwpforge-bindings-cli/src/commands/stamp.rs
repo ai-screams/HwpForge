@@ -7,20 +7,22 @@
 
 use std::path::{Path, PathBuf};
 
-use hwpforge_smithy_hwpx::stamp::{
-    parse_stamp_map, CellStampError, HwpxStamper, StampError, StampMap, StamperError,
-};
+use hwpforge::ops::stamp::{stamp as ops_stamp, stamp_plan as ops_stamp_plan, StampOptions};
+use hwpforge::ops::OpsError;
+use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run the `stamp-plan` command (candidate discovery, both classes).
 pub fn run_plan(file: &PathBuf, json_mode: bool) {
     check_file_size(file, json_mode);
     let bytes = read_file(file, json_mode);
-    let plan = match HwpxStamper::plan_bytes_v2(&bytes) {
-        Ok(p) => p,
-        Err(e) => exit_stamper_error(e, json_mode),
+    let out = match ops_stamp_plan(&bytes) {
+        Ok(o) => o,
+        Err(e) => exit_ops_error(Command::StampPlan, e, json_mode),
     };
+    let plan = out.plan;
 
     if json_mode {
         let result = serde_json::json!({
@@ -134,72 +136,70 @@ pub fn run(
         .exit(json_mode, 1);
     }
 
-    match parsed {
-        StampMap::Legacy(specs) => {
-            let result = match HwpxStamper::stamp(&bytes, &specs) {
-                Ok(r) => r,
-                Err(e) => exit_stamper_error(e, json_mode),
-            };
-            let manifest_json = serde_json::to_string_pretty(&result.manifest).unwrap();
-            write_artifacts(output, &manifest_file, &result.bytes, &manifest_json, json_mode);
+    // `ops::stamp::stamp` handles both the legacy spec-array and v2 envelope
+    // shapes itself and returns one unified `StampOutput` — `parsed` is only
+    // matched again below to pick which of the two legacy JSON/text shapes
+    // to print.
+    let result = match ops_stamp(&bytes, &parsed, &StampOptions::default()) {
+        Ok(r) => r,
+        Err(e) => exit_ops_error(Command::Stamp, e, json_mode),
+    };
+    let manifest =
+        result.manifest.as_ref().expect("StampOptions::default() always requests a manifest");
+    let manifest_json = serde_json::to_string_pretty(manifest).unwrap();
+    write_artifacts(output, &manifest_file, &result.bytes, &manifest_json, json_mode);
 
+    match &parsed {
+        StampMap::Legacy(_) => {
             if json_mode {
                 let out = serde_json::json!({
                     "status": "ok",
                     "output": output.display().to_string(),
                     "manifest": manifest_file.display().to_string(),
-                    "stamped": result.outcome.stamped,
-                    "ignored": result.outcome.ignored,
-                    "skipped_guarded": result.outcome.skipped_guarded.len(),
+                    "stamped": result.stamped,
+                    "ignored": result.ignored,
+                    "skipped_guarded": result.skipped_guarded,
                     "size_bytes": result.bytes.len(),
                 });
                 println!("{}", serde_json::to_string(&out).unwrap());
             } else {
                 println!(
                     "Stamped {} field(s) (ignored {}, guarded-skipped {}) -> {}",
-                    result.outcome.stamped.len(),
-                    result.outcome.ignored,
-                    result.outcome.skipped_guarded.len(),
+                    result.stamped.len(),
+                    result.ignored,
+                    result.skipped_guarded,
                     output.display()
                 );
-                for s in &result.outcome.stamped {
+                for s in &result.stamped {
                     println!("  + {} = {:?} ({})", s.name, s.marker, s.pattern.id());
                 }
                 println!("Manifest -> {}", manifest_file.display());
             }
         }
-        StampMap::V2(request) => {
-            let result = match HwpxStamper::stamp_v2(&bytes, &request) {
-                Ok(r) => r,
-                Err(e) => exit_stamper_error(e, json_mode),
-            };
-            let manifest_json = serde_json::to_string_pretty(&result.manifest).unwrap();
-            write_artifacts(output, &manifest_file, &result.bytes, &manifest_json, json_mode);
-
+        StampMap::V2(_) => {
             if json_mode {
                 let out = serde_json::json!({
                     "status": "ok",
                     "output": output.display().to_string(),
                     "manifest": manifest_file.display().to_string(),
-                    "stamped_text": result.outcome.text.stamped,
-                    "stamped_cells": result.outcome.cells.stamped,
-                    "ignored": result.outcome.text.ignored + result.outcome.cells.ignored,
-                    "skipped_guarded": result.outcome.text.skipped_guarded.len()
-                        + result.outcome.cells.skipped_guarded.len(),
+                    "stamped_text": result.stamped,
+                    "stamped_cells": result.stamped_cells,
+                    "ignored": result.ignored,
+                    "skipped_guarded": result.skipped_guarded,
                     "size_bytes": result.bytes.len(),
                 });
                 println!("{}", serde_json::to_string(&out).unwrap());
             } else {
                 println!(
                     "Stamped {} text + {} cell field(s) -> {}",
-                    result.outcome.text.stamped.len(),
-                    result.outcome.cells.stamped.len(),
+                    result.stamped.len(),
+                    result.stamped_cells.len(),
                     output.display()
                 );
-                for s in &result.outcome.text.stamped {
+                for s in &result.stamped {
                     println!("  + {} = {:?} ({})", s.name, s.marker, s.pattern.id());
                 }
-                for s in &result.outcome.cells.stamped {
+                for s in &result.stamped_cells {
                     println!("  + {} @ t{} ({},{})", s.name, s.table, s.at.row, s.at.col);
                 }
                 println!("Manifest -> {}", manifest_file.display());
@@ -243,175 +243,10 @@ fn read_file(file: &PathBuf, json_mode: bool) -> Vec<u8> {
     }
 }
 
-fn exit_stamper_error(error: StamperError, json_mode: bool) -> ! {
-    match error {
-        StamperError::NotRoundTripSafe { component, diff_path } => CliError::new(
-            "INPUT_NOT_ROUNDTRIP_SAFE",
-            format!("input is not round-trip-safe: {component} differs at {diff_path}"),
-        )
-        .with_hint(
-            "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). \
-             코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다",
-        )
-        .exit(json_mode, 1),
-        // Review L2: entry names are untrusted — {:?} escapes control chars.
-        StamperError::UncarriedZipEntries { entries } => CliError::new(
-            "INPUT_ENTRIES_NOT_CARRIED",
-            format!("encoder does not carry input entries: {entries:?}"),
-        )
-        .with_hint("재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)")
-        .exit(json_mode, 1),
-        StamperError::Stamp(inner) => exit_stamp_error(inner, json_mode),
-        StamperError::ManifestInvariant { detail } => {
-            CliError::new("STAMP_MANIFEST_INVARIANT", detail).exit(json_mode, 2)
-        }
-        StamperError::Codec(msg) => CliError::new("STAMP_CODEC_FAILED", msg).exit(json_mode, 2),
-        StamperError::SourceHashMismatch { expected, actual } => CliError::new(
-            "STAMP_SOURCE_HASH_MISMATCH",
-            format!("map is pinned to {expected}, input is {actual}"),
-        )
-        .with_hint(
-            "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요",
-        )
-        .exit(json_mode, 1),
-        StamperError::CellStamp(inner) => exit_cell_stamp_error(inner, json_mode),
-        StamperError::DeltaMismatch { stage, detail } => CliError::new(
-            "STAMP_DELTA_MISMATCH",
-            format!("post-encode verification failed at {stage}: {detail}"),
-        )
-        .with_hint("산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다")
-        .exit(json_mode, 2),
-        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
-        // — 코드는 과거 `Codec` 과 같은 STAMP_CODEC_FAILED, 메시지는 변형의
-        // Display (접두사 없는 문장이라 과거 `Codec(msg)` 과 바이트 동일),
-        // exit code 도 2 그대로. 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3
-        // compat 테이블의 몫이다. 이 arm 이 없으면 아래 `other` 로 떨어져
-        // 코드가 STAMP_FAILED 로 바뀐다.
-        ref e @ StamperError::SemanticLoss { .. } => {
-            CliError::new("STAMP_CODEC_FAILED", e.to_string()).exit(json_mode, 2)
-        }
-        other => CliError::new("STAMP_FAILED", other.to_string()).exit(json_mode, 2),
-    }
-}
-
-fn exit_cell_stamp_error(error: CellStampError, json_mode: bool) -> ! {
-    match error {
-        CellStampError::TableNotFound { table } => {
-            CliError::new("TABLE_NOT_FOUND", format!("table ordinal {table} does not exist"))
-                .exit(json_mode, 1)
-        }
-        CellStampError::TableGridInvalid { table, detail } => {
-            CliError::new("TABLE_GRID_INVALID", format!("table {table}: {detail}"))
-                .exit(json_mode, 1)
-        }
-        CellStampError::NotAnAnchor { table, requested, anchor } => {
-            let mut err = CliError::new(
-                "STAMP_CELL_NOT_ANCHOR",
-                format!("table {table}: ({},{}) is not an anchor", requested.row, requested.col),
-            );
-            if let Some(anchor) = anchor {
-                err = err.with_hint(format!(
-                    "이 좌표는 병합 피복 위치입니다 — anchor ({},{}) 를 지정하세요",
-                    anchor.row, anchor.col
-                ));
-            }
-            err.exit(json_mode, 1)
-        }
-        CellStampError::TargetNotStampable { table, at } => CliError::new(
-            "STAMP_CELL_NOT_EMPTY",
-            format!("table {table}: cell ({},{}) has authored content", at.row, at.col),
-        )
-        .with_hint("클래스-B 대상은 whitespace-only 빈 셀이어야 합니다")
-        .exit(json_mode, 1),
-        CellStampError::LabelDrift { table, at, claimed, found } => CliError::new(
-            "STAMP_LABEL_DRIFT",
-            format!(
-                "table {table} ({},{}): claimed label {claimed:?}, live {found:?}",
-                at.row, at.col
-            ),
-        )
-        .with_hint("문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요")
-        .exit(json_mode, 1),
-        CellStampError::UnknownCandidate { table, at } => CliError::new(
-            "STAMP_CELL_NOT_CANDIDATE",
-            format!("table {table}: ({},{}) is not a live candidate", at.row, at.col),
-        )
-        .exit(json_mode, 1),
-        CellStampError::DuplicateTarget { table, at } => CliError::new(
-            "STAMP_CELL_TARGET_DUPLICATE",
-            format!("table {table}: cell ({},{}) targeted twice", at.row, at.col),
-        )
-        .exit(json_mode, 1),
-        CellStampError::EmptyName => {
-            CliError::new("STAMP_NAME_EMPTY", "field name must not be empty").exit(json_mode, 1)
-        }
-        CellStampError::BlankHint { name } => {
-            CliError::new("STAMP_HINT_BLANK", format!("cell spec {name:?}: hint must not be blank"))
-                .with_hint("빈 셀엔 마커가 없어 hint 가 필수입니다 (plan 의 suggested_hint 참고)")
-                .exit(json_mode, 1)
-        }
-        CellStampError::DuplicateName { name } => {
-            CliError::new("STAMP_NAME_DUPLICATE", format!("duplicate field name {name:?}"))
-                .exit(json_mode, 1)
-        }
-        CellStampError::NameCollision { name } => CliError::new(
-            "STAMP_NAME_COLLISION",
-            format!("field name {name:?} already exists in the document"),
-        )
-        .exit(json_mode, 1),
-        CellStampError::UncoveredCandidate { table, at } => CliError::new(
-            "STAMP_CANDIDATE_UNCOVERED",
-            format!(
-                "unguarded cell candidate at table {table} ({},{}) has no spec",
-                at.row, at.col
-            ),
-        )
-        .with_hint("모든 무가드 셀 후보는 이름을 붙이거나 ignore 로 명시해야 합니다")
-        .exit(json_mode, 1),
-        other => CliError::new("STAMP_FAILED", other.to_string()).exit(json_mode, 2),
-    }
-}
-
-fn exit_stamp_error(error: StampError, json_mode: bool) -> ! {
-    match error {
-        StampError::UncoveredCandidate { section, path, span, marker } => CliError::new(
-            "STAMP_CANDIDATE_UNCOVERED",
-            format!(
-                "unguarded candidate {marker:?} (section {section}, {path} [{}..{}]) has no spec",
-                span.start, span.end
-            ),
-        )
-        .with_hint("모든 무가드 후보는 이름을 붙이거나 ignore 로 명시해야 합니다 — `stamp-plan` 출력을 빠짐없이 분류하세요")
-        .exit(json_mode, 1),
-        StampError::UnknownSpec { section, path, span } => CliError::new(
-            "STAMP_SPEC_STALE",
-            format!("spec matches no live candidate: section {section}, {path} [{}..{}]", span.start, span.end),
-        )
-        .with_hint("문서가 변경됐거나 span 이 어긋났습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요")
-        .exit(json_mode, 1),
-        StampError::MarkerMismatch { path, expected, found } => CliError::new(
-            "STAMP_MARKER_MISMATCH",
-            format!("marker mismatch at {path}: spec {expected:?}, document {found:?}"),
-        )
-        .exit(json_mode, 1),
-        StampError::DuplicateSpec { path, span } => CliError::new(
-            "STAMP_SPEC_DUPLICATE",
-            format!("duplicate specs for {path} [{}..{}]", span.start, span.end),
-        )
-        .exit(json_mode, 1),
-        StampError::DuplicateName { name } => {
-            CliError::new("STAMP_NAME_DUPLICATE", format!("duplicate field name {name:?}"))
-                .exit(json_mode, 1)
-        }
-        StampError::NameCollision { name } => CliError::new(
-            "STAMP_NAME_COLLISION",
-            format!("field name {name:?} already exists in the document"),
-        )
-        .with_hint("기존 누름틀과 이름이 겹칩니다 — `fields` 로 기존 이름을 확인하세요")
-        .exit(json_mode, 1),
-        StampError::EmptyName => {
-            CliError::new("STAMP_NAME_EMPTY", "field name must not be empty").exit(json_mode, 1)
-        }
-        other => CliError::new("STAMP_FAILED", other.to_string()).exit(json_mode, 2),
-    }
+/// Maps an `ops::stamp::{stamp_plan,stamp}` failure onto the frozen contract
+/// and exits.
+fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = compat::cli_error(cmd, err);
+    let exit = compat::exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }

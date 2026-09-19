@@ -2,10 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{
-    ExportedDocument, HwpxDecoder, HwpxPatcher, SectionWorkflowError, SectionWorkflowWarning,
-};
+use hwpforge::ops::{self, ExportSectionOptions, OpsWarning, ToJsonOptions};
+use hwpforge_smithy_hwpx::SectionWorkflowWarning;
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful JSON export.
@@ -26,6 +26,16 @@ pub struct ToJsonData {
 }
 
 /// Export HWPX to JSON (full document or single section).
+///
+/// Decoder warnings (`OpsWarning::Decode`, the first stage of both
+/// `ops::to_json` and `ops::export_section`) are **not** surfaced here: the
+/// pre-migration tool never captured them (it called the library's
+/// non-diagnostics entry points), `ToJsonData.warnings` is part of the
+/// frozen schema, and `to_json_section_embeds_preservation_metadata` pins an
+/// empty `warnings` list for a clean document — so they are dropped rather
+/// than added, and listed in the W2 report's "warnings not surfaced" list.
+/// Every other warning (`SectionWorkflow`, `GridAddr`) is fed through
+/// `compat::warning`, unchanged from what this file computed by hand before.
 pub fn run_to_json(
     file_path: &str,
     section_idx: Option<usize>,
@@ -46,51 +56,28 @@ pub fn run_to_json(
     let mut warnings: Vec<ToolWarningInfo> = Vec::new();
 
     let json_string = if let Some(idx) = section_idx {
-        let outcome = HwpxPatcher::export_section_for_edit(&bytes, idx, true)
-            .map_err(map_section_workflow_error_for_to_json)?;
-        if let Some(warning) = outcome.warning {
-            warnings.push(map_section_workflow_warning_for_to_json(warning));
+        let out = ops::export_section(&bytes, &ExportSectionOptions::default().with_section(idx))
+            .map_err(|e| compat::tool_error(Tool::ToJson, e))?;
+        for w in &out.warnings {
+            match w {
+                OpsWarning::Decode(_) => {}
+                OpsWarning::SectionWorkflow(sw) => {
+                    warnings.push(map_section_workflow_warning_for_to_json(sw.clone()));
+                }
+                other => warnings.push(compat::warning(other)),
+            }
         }
-        let exported = outcome.exported;
-        let mut value = serde_json::to_value(&exported).map_err(|e| {
-            ToolErrorInfo::new(
-                "SERIALIZE_ERROR",
-                format!("Failed to serialize section: {e}"),
-                "This may be a bug.",
-            )
-        })?;
-        let addr_warnings = hwpforge_smithy_hwpx::grid_addr::annotate_section_addresses(
-            &mut value,
-            &exported.section,
-            exported.section_index,
-        )
-        .map_err(map_grid_addr_projection_error)?;
-        warnings.extend(addr_warnings.into_iter().map(map_grid_addr_warning));
-        render_pretty_value(&value)?
+        render_pretty_value(&out.section)?
     } else {
-        let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
-            ToolErrorInfo::new(
-                "DECODE_ERROR",
-                format!("HWPX decode failed: {e}"),
-                "Check that the file is a valid HWPX document.",
-            )
-        })?;
-        let styles = Some(hwpx_doc.style_store);
-        let exported = ExportedDocument { document: hwpx_doc.document, styles };
-        let mut value = serde_json::to_value(&exported).map_err(|e| {
-            ToolErrorInfo::new(
-                "SERIALIZE_ERROR",
-                format!("Failed to serialize document: {e}"),
-                "This may be a bug.",
-            )
-        })?;
-        let addr_warnings = hwpforge_smithy_hwpx::grid_addr::annotate_document_addresses(
-            &mut value,
-            &exported.document,
-        )
-        .map_err(map_grid_addr_projection_error)?;
-        warnings.extend(addr_warnings.into_iter().map(map_grid_addr_warning));
-        render_pretty_value(&value)?
+        let out = ops::to_json(&bytes, &ToJsonOptions::default())
+            .map_err(|e| compat::tool_error(Tool::ToJson, e))?;
+        for w in &out.warnings {
+            match w {
+                OpsWarning::Decode(_) => {}
+                other => warnings.push(compat::warning(other)),
+            }
+        }
+        render_pretty_value(&out.document)?
     };
 
     let size_bytes = json_string.len() as u64;
@@ -135,70 +122,20 @@ fn render_pretty_value(value: &serde_json::Value) -> Result<String, ToolErrorInf
     })
 }
 
-fn map_grid_addr_projection_error(
-    error: hwpforge_smithy_hwpx::grid_addr::GridAddrError,
-) -> ToolErrorInfo {
-    ToolErrorInfo::new(
-        "GRID_ADDR_PROJECTION_FAILED",
-        format!("Grid address projection failed: {error}"),
-        "This may be a bug.",
-    )
-}
-
-fn map_grid_addr_warning(
-    warning: hwpforge_smithy_hwpx::grid_addr::GridAddrWarning,
-) -> ToolWarningInfo {
-    ToolWarningInfo::new(
-        "TABLE_GRID_UNADDRESSABLE",
-        format!(
-            "table #{} in section {} exported without grid addresses: {}",
-            warning.table_ordinal, warning.section, warning.reason
-        ),
-    )
-}
-
+/// Kept as a standalone function (rather than inlined at the one call site)
+/// so `to_json_maps_preservation_warning_for_machine_consumers` keeps
+/// exercising this exact mapping. `compat::warning` already reproduces the
+/// legacy `(code, message)` pair byte for byte (`SectionWorkflowWarning::code`/
+/// `::message` are what it reads); only the tool-specific hint — absent from
+/// the generic compat envelope — is re-applied here.
 fn map_section_workflow_warning_for_to_json(warning: SectionWorkflowWarning) -> ToolWarningInfo {
-    match warning {
-        SectionWorkflowWarning::PreservationMetadataUnavailable { detail } => ToolWarningInfo::new(
-            "PRESERVATION_METADATA_UNAVAILABLE",
-            format!("Preserving patch metadata unavailable: {detail}"),
-        )
-        .with_hint(
+    let mapped = compat::warning(&OpsWarning::SectionWorkflow(warning));
+    if mapped.code == "PRESERVATION_METADATA_UNAVAILABLE" {
+        mapped.with_hint(
             "This JSON export may inspect correctly, but later hwpforge_patch can fail until preservation metadata is available. Re-export with the current tool after simplifying unsupported mixed-content edits.",
-        ),
-        _ => ToolWarningInfo::new("SECTION_WORKFLOW_WARNING", warning.message()),
-    }
-}
-
-fn map_section_workflow_error_for_to_json(error: SectionWorkflowError) -> ToolErrorInfo {
-    match error {
-        SectionWorkflowError::Decode { detail } => ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {detail}"),
-            "Check that the file is a valid HWPX document.",
-        ),
-        SectionWorkflowError::SectionOutOfRange { requested, sections } => ToolErrorInfo::new(
-            "SECTION_OUT_OF_RANGE",
-            format!("Section {requested} does not exist (document has {sections} sections)"),
-            format!("Valid range: 0..={}", sections.saturating_sub(1)),
-        ),
-        SectionWorkflowError::SectionIndexMismatch { requested, actual } => ToolErrorInfo::new(
-            "SECTION_INDEX_MISMATCH",
-            format!("Requested section {requested} but JSON contains section {actual} data"),
-            format!(
-                "Use section: {actual} to match the JSON, or re-export section {requested} with hwpforge_to_json."
-            ),
-        ),
-        SectionWorkflowError::PreservingPatch(error) => ToolErrorInfo::new(
-            "PATCH_ERROR",
-            format!("Preserving patch failed: {error}"),
-            "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow.",
-        ),
-        _ => ToolErrorInfo::new(
-            "SECTION_WORKFLOW_ERROR",
-            error.to_string(),
-            "Update hwpforge so this MCP binding understands the newer section workflow error.",
-        ),
+        )
+    } else {
+        mapped
     }
 }
 
@@ -206,7 +143,6 @@ fn map_section_workflow_error_for_to_json(error: SectionWorkflowError) -> ToolEr
 mod tests {
     use super::*;
     use hwpforge_smithy_hwpx::ExportedSection;
-    use hwpforge_smithy_hwpx::SectionWorkflowWarning;
     use hwpforge_smithy_hwpx::SECTION_PRESERVATION_VERSION;
 
     #[test]

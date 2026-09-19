@@ -2,8 +2,9 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::HwpxDecoder;
+use hwpforge::ops::{self, InspectOptions};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Summary of a single section.
@@ -68,26 +69,35 @@ pub struct InspectData {
 }
 
 /// Inspect an HWPX file and return structural summary.
+///
+/// `_show_styles` stays unused: `InspectData` has no `styles` field (schema
+/// freeze — adding one is a W4 decision), matching the pre-migration tool,
+/// which also decoded without ever building a style summary.
+///
+/// The legacy contract counts `tables`/`images`/`charts` (and `paragraphs`)
+/// **top-level only** — `Section::content_counts()`/`paragraphs.len()`, not
+/// descending into table cells, headers/footers, notes, memos or master
+/// pages. `ops::inspect`'s per-section deep counts
+/// (`InspectSection::{tables,images,charts,paragraphs}`) do that deeper
+/// traversal, so this maps from the shallow counterparts
+/// (`InspectSection::top_level_*`) instead — values are byte-identical to
+/// what this file computed by hand before. Decoder warnings
+/// (`ops::InspectOutput::warnings`) are not surfaced: `InspectData` has no
+/// field for them (schema freeze) — see the W2 report.
 pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
-    let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is a valid HWPX document.",
-        )
-    })?;
+    let out = ops::inspect(&bytes, &InspectOptions::default())
+        .map_err(|e| compat::tool_error(Tool::Inspect, e))?;
+    let report = out.report;
 
-    let doc = &hwpx_doc.document;
-    let meta = doc.metadata();
     let metadata = MetadataInfo {
-        title: meta.title.clone().unwrap_or_default(),
-        author: meta.author.clone().unwrap_or_default(),
-        subject: meta.subject.clone().unwrap_or_default(),
-        created: meta.created.clone(),
-        modified: meta.modified.clone(),
-        keywords: meta.keywords.clone(),
+        title: report.metadata.title,
+        author: report.metadata.author,
+        subject: report.metadata.subject,
+        created: report.metadata.created,
+        modified: report.metadata.modified,
+        keywords: report.metadata.keywords,
     };
 
     let mut total_tables: usize = 0;
@@ -95,34 +105,31 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
     let mut total_charts: usize = 0;
     let mut total_paragraphs: usize = 0;
 
-    let section_details: Vec<SectionDetail> = doc
-        .sections()
-        .iter()
-        .enumerate()
-        .map(|(i, sec)| {
-            let counts = sec.content_counts();
-
-            total_tables += counts.tables;
-            total_images += counts.images;
-            total_charts += counts.charts;
-            total_paragraphs += sec.paragraphs.len();
+    let section_details: Vec<SectionDetail> = report
+        .section_details
+        .into_iter()
+        .map(|s| {
+            total_tables += s.top_level_tables;
+            total_images += s.top_level_images;
+            total_charts += s.top_level_charts;
+            total_paragraphs += s.top_level_paragraphs;
 
             SectionDetail {
-                index: i,
-                paragraphs: sec.paragraphs.len(),
-                tables: counts.tables,
-                images: counts.images,
-                charts: counts.charts,
-                has_header: !sec.headers.is_empty(),
-                has_footer: !sec.footers.is_empty(),
-                has_page_number: sec.page_number.is_some(),
+                index: s.index,
+                paragraphs: s.top_level_paragraphs,
+                tables: s.top_level_tables,
+                images: s.top_level_images,
+                charts: s.top_level_charts,
+                has_header: s.has_header,
+                has_footer: s.has_footer,
+                has_page_number: s.has_page_number,
             }
         })
         .collect();
 
     Ok(InspectData {
         metadata,
-        sections: section_details.len(),
+        sections: report.sections,
         total_paragraphs,
         total_tables,
         total_images,

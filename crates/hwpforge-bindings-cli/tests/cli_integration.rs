@@ -566,6 +566,39 @@ fn convert_unknown_preset() {
 }
 
 #[test]
+fn convert_unknown_preset_rejected_before_missing_input_is_read() {
+    // W3 remediation finding 6: legacy validated `--preset` before any
+    // input I/O — a bogus preset must still report UNKNOWN_PRESET even
+    // against a nonexistent input file, not FILE_READ_FAILED.
+    let tmp = test_tmp();
+    let out = tmp.join("output.hwpx");
+    let (err, _, code) = run_json(&[
+        "convert",
+        "/nonexistent/input.md",
+        "-o",
+        out.to_str().unwrap(),
+        "--preset",
+        "bogus",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "UNKNOWN_PRESET");
+    assert_eq!(err["hint"], "Available presets: default");
+}
+
+#[test]
+fn convert_unknown_preset_rejected_before_stdin_is_read() {
+    // Same guard, `-` (stdin) input this time — an empty stdin would
+    // otherwise either block or surface as a different failure; the
+    // preset check must fire first and never touch stdin.
+    let (_, stderr, code) =
+        run_with_stdin(&["--json", "convert", "-", "-o", "/dev/null", "--preset", "bogus"], "");
+    assert_eq!(code, 1);
+    let err: serde_json::Value = serde_json::from_str(&stderr)
+        .unwrap_or_else(|e| panic!("invalid JSON stderr: {e}\n{stderr}"));
+    assert_eq!(err["code"], "UNKNOWN_PRESET");
+}
+
+#[test]
 fn convert_stdin() {
     let tmp = test_tmp();
     let out = tmp.join("output.hwpx");
@@ -757,6 +790,158 @@ fn inspect_deep_counts_image_in_table_cell() {
     assert_eq!(sec0["deep_paragraphs"], 7);
 }
 
+/// Value-parity regression (independent review round 2, finding A): a
+/// table/image/chart nested inside an *image's* caption is invisible to
+/// `ops::inspect`'s shared paragraph traversal — Core's
+/// `image_caption_paragraphs_are_skipped_documents_known_gap` test
+/// documents that image captions (unlike table/textbox captions) are not
+/// walked. `inspect.rs`'s `tables`/`images`/`charts`/`deep_paragraphs`
+/// fields must keep reading from the pre-migration local scanner (via
+/// `SectionInfo::merge`'s `deep` parameter — the raw-XML
+/// `count_occurrences` scan for the first three, `count_paragraphs_recursive`
+/// for the last), or these counts silently drop content or change value on
+/// any document exercising these two independent blind spots. No fixture
+/// under `tests/fixtures/**` contains an `<hp:caption` at all (checked by
+/// scanning every `.hwpx` fixture's section XML for the element), so this
+/// test builds the document with Core's API and encodes it, rather than
+/// editing fixture bytes by hand.
+///
+/// This fixture pins two *different* legacy-vs-`ops` divergences, so a
+/// regression on either field is caught even though the mechanisms differ:
+///
+/// - `tables`/`images`/`charts`: a table, a second image and a chart are
+///   nested inside the outer image's caption. The raw-XML scan sees every
+///   `<hp:tbl>`/`<hp:pic>`/`<hp:chart>` in the section regardless of
+///   nesting; `ops::inspect`'s traversal never enters the caption at all,
+///   so it would see only the outer image and nothing nested in it.
+///   **If `SectionInfo::merge` read `ops_section.{tables,images,charts}`
+///   instead of `deep.{tables,images,charts}`, this test would see
+///   `tables=0, images=1, charts=0` instead of the asserted `1, 2, 1`.**
+/// - `deep_paragraphs`: the section also carries one master-page paragraph.
+///   `ops::inspect`'s traversal (`Section::for_each_paragraph` /
+///   `walk_paragraphs`, `crates/hwpforge-core/src/section.rs`) explicitly
+///   walks `section.master_pages`; the CLI's own local
+///   `count_paragraphs_recursive` (`analysis/deep_counts.rs`) sums only
+///   `section.paragraphs` plus headers and footers — no `master_pages` term
+///   exists in that file at all. Both scopes independently treat an
+///   `Image` run as a paragraph-less leaf (skip its caption), which is why
+///   the caption's three nested paragraphs contribute to neither scope's
+///   count — the master page is the only paragraph source that tells them
+///   apart. **If `SectionInfo::merge` read `ops_section.paragraphs` instead
+///   of `deep.deep_paragraphs`, this test would see `deep_paragraphs=2`
+///   (1 body + 1 master page) instead of the asserted `1`.**
+#[test]
+fn inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page() {
+    use hwpforge_core::caption::{Caption, CaptionSide};
+    use hwpforge_core::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+    use hwpforge_core::control::Control;
+    use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+    use hwpforge_core::page::PageSettings;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::{MasterPage, Section};
+    use hwpforge_core::table::{Table, TableCell, TableRow};
+    use hwpforge_core::{Document, Paragraph};
+    use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+    use hwpforge_smithy_hwpx::HwpxEncoder;
+
+    fn text_para(text: &str) -> Paragraph {
+        Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    }
+
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    // Caption content: a table, a second image and a chart, all nested
+    // inside the *outer* image's caption — exactly the traversal's blind
+    // spot for these three fields.
+    let nested_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+        vec![text_para("caption-table-cell")],
+        HwpUnit::from_pt(100.0).unwrap(),
+    )])]);
+    let nested_image = Image::new(
+        "BinData/nested.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    let nested_chart = Control::Chart {
+        chart_type: ChartType::Bar,
+        data: ChartData::category(&["A", "B"], &[("Series1", [1.0, 2.0].as_slice())]),
+        width: HwpUnit::new(10000).unwrap(),
+        height: HwpUnit::new(8000).unwrap(),
+        title: None,
+        legend: LegendPosition::default(),
+        grouping: ChartGrouping::Clustered,
+        bar_shape: None,
+        explosion: None,
+        of_pie_type: None,
+        radar_style: None,
+        wireframe: None,
+        bubble_3d: None,
+        scatter_style: None,
+        show_markers: None,
+        stock_variant: None,
+    };
+    let mut caption_table_para = text_para("caption-table-host");
+    caption_table_para.add_run(Run::table(nested_table, CharShapeIndex::new(0)));
+    let mut caption_image_para = text_para("caption-image-host");
+    caption_image_para.add_run(Run::image(nested_image, CharShapeIndex::new(0)));
+    let mut caption_chart_para = text_para("caption-chart-host");
+    caption_chart_para.add_run(Run::control(nested_chart, CharShapeIndex::new(0)));
+
+    let mut host_image = Image::new(
+        "BinData/host.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    host_image.caption = Some(Caption::new(
+        vec![text_para("caption text"), caption_table_para, caption_image_para, caption_chart_para],
+        CaptionSide::Bottom,
+    ));
+
+    let mut host = text_para("host");
+    host.add_run(Run::image(host_image, CharShapeIndex::new(0)));
+
+    let mut section = Section::with_paragraphs(vec![host], PageSettings::a4());
+    // Second, independent blind spot: a master-page paragraph, present
+    // only in `ops_section.paragraphs`'s scope (see doc comment above).
+    section.master_pages =
+        Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_para("master-page-para")])]);
+
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let validated = doc.validate().expect("validate");
+    // `HwpxEncoder` silently skips images missing from the `ImageStore`
+    // (XML reference only, no binary data) — no real image bytes are
+    // needed to prove the structural-count divergence. Neither `validate`
+    // nor the encoder inspect an `Image`'s caption or a section's master
+    // pages any deeper than the round-trip needs (`RunContent::Image` is a
+    // validation no-op; master pages aren't in `validate_sections` at all).
+    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+
+    let dir = test_tmp();
+    let src = dir.join("image-caption-and-masterpage-nested-controls.hwpx");
+    std::fs::write(&src, &bytes).expect("write fixture");
+
+    let (val, _, code) = run_json(&["inspect", src.to_str().unwrap()]);
+    assert_eq!(code, 0, "{val}");
+    let sec0 = &val["sections"][0];
+    // Legacy (pinned) values. `ops` scope, listed for contrast, is in the
+    // doc comment above.
+    assert_eq!(sec0["images"], 2, "{val}");
+    assert_eq!(sec0["tables"], 1, "{val}");
+    assert_eq!(sec0["charts"], 1, "{val}");
+    assert_eq!(sec0["deep_paragraphs"], 1, "{val}");
+}
+
 #[test]
 fn inspect_deep_counts_header_footer_image_fixture() {
     let f = fixture("mixed_02a_header_image_footer_text_real.hwpx");
@@ -806,6 +991,41 @@ fn inspect_deep_counts_polygon_fixture() {
     assert_eq!(code, 0);
     assert_eq!(val["sections"][0]["polygons"], 1);
     assert_eq!(val["sections"][0]["lines"], 0);
+}
+
+#[test]
+fn inspect_section_object_key_set_is_unchanged() {
+    // W3 remediation: `inspect.rs` now sources paragraph/table/image/chart
+    // counts and has_header/has_footer/has_page_number from `ops::inspect`
+    // instead of decoding by hand — the `--json` schema (key set) must stay
+    // byte-identical regardless of source.
+    let f = fixture("rect.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let sec0 = val["sections"][0].as_object().expect("sections[0] is an object");
+    let mut keys: Vec<&str> = sec0.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "charts",
+            "deep_non_empty_paragraphs",
+            "deep_paragraphs",
+            "has_footer",
+            "has_header",
+            "has_page_number",
+            "images",
+            "index",
+            "lines",
+            "non_empty_paragraphs",
+            "ole_objects",
+            "paragraphs",
+            "polygons",
+            "rectangles",
+            "tables",
+            "text_boxes",
+        ]
+    );
 }
 
 #[test]
@@ -1788,6 +2008,39 @@ fn convert_hwp5_nonexistent_file() {
 }
 
 #[test]
+fn convert_hwp5_output_write_failure_reports_hwp5_convert_failed() {
+    // W3 remediation finding 8: legacy wrote the output *inside*
+    // `hwp5_to_hwpx_with_options`, so a write failure there (missing
+    // parent directory) failed as HWP5_CONVERT_FAILED, exit 2, with the
+    // convert hint — not a generic FILE_WRITE_FAILED.
+    let source = fixture("hwp5_02.hwp");
+    let out = std::path::Path::new("/nonexistent-dir-convert-hwp5/out.hwpx");
+
+    let (err, _, code) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "HWP5_CONVERT_FAILED");
+    assert_eq!(
+        err["hint"],
+        "Check that the source is a supported HWP5 document and the output path is writable"
+    );
+    // Independent review round 2, finding B: legacy's write failure came
+    // back through `Hwp5Error::Io`, whose `Display` is `"I/O error: {0}"`
+    // wrapping the raw `io::Error` — not the raw `io::Error` alone. The
+    // message is keyed on the *input* path (source), per the finding-8
+    // comment above. Re-derive the same `io::Error`'s own `Display`
+    // (rather than hardcoding OS-specific strerror text) so the assertion
+    // stays portable across platforms.
+    let same_io_error = std::fs::write(out, []).expect_err("same missing dir must still fail");
+    let message = err["message"].as_str().unwrap_or_default();
+    assert_eq!(
+        message,
+        format!("Cannot convert '{}' to HWPX: I/O error: {same_io_error}", source.display()),
+        "message must wrap the io::Error as Hwp5Error::Io (\"I/O error: \" prefix): {message}"
+    );
+}
+
+#[test]
 fn census_hwp5_json_with_companion() {
     let source = fixture("mixed_02b_textbox_with_image_real.hwp");
     let companion = fixture("mixed_02b_textbox_with_image_real.hwpx");
@@ -2290,6 +2543,40 @@ fn from_json_invalid_json() {
     let out = tmp.join("out.hwpx");
     let (_, _, code) = run(&["from-json", bad_json.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 2);
+}
+
+#[test]
+fn from_json_syntax_error_reports_no_hint() {
+    // W3 remediation: the pre-`ops` classification of JSON_PARSE_FAILED —
+    // a raw syntax error never carried a hint, only the schema-mismatch
+    // case did (`from_json_schema_mismatch_reports_the_legacy_hint`).
+    let tmp = test_tmp();
+    let bad_json = tmp.join("bad.json");
+    std::fs::write(&bad_json, "not valid json").unwrap();
+    let out = tmp.join("out.hwpx");
+    let (err, _, code) =
+        run_json(&["from-json", bad_json.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "JSON_PARSE_FAILED");
+    assert!(err.get("hint").is_none(), "syntax errors carry no hint: {err:?}");
+}
+
+#[test]
+fn from_json_schema_mismatch_reports_the_legacy_hint() {
+    // Valid JSON, but not an ExportedDocument — the schema-mismatch call
+    // site, distinct from the raw-syntax one above.
+    let tmp = test_tmp();
+    let wrong_shape = tmp.join("wrong_shape.json");
+    std::fs::write(&wrong_shape, r#"{"foo": 1}"#).unwrap();
+    let out = tmp.join("out.hwpx");
+    let (err, _, code) =
+        run_json(&["from-json", wrong_shape.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(err["code"], "JSON_PARSE_FAILED");
+    assert_eq!(
+        err["hint"],
+        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"
+    );
 }
 
 #[test]
@@ -3310,6 +3597,24 @@ fn read_rejects_conflicting_targets() {
     let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--field", "x"]);
     assert_eq!(code, 1);
     assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+}
+
+#[test]
+fn read_arg_guards_run_before_the_file_is_read() {
+    // W3 remediation: legacy checked target-count/paras-without-section
+    // before `check_file_size`/`fs::read`, so these reject even against a
+    // file that does not exist — FILE_READ_FAILED must not shadow them.
+    let (err, _, code) = run_json(&["read", "/nonexistent/file.hwpx"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+
+    // `--table` supplies the single required target so this isolates the
+    // paras-without-section guard, same as `read_error_paths_report_stable_
+    // codes`'s `--table 0 --paras 0` case.
+    let (err, _, code) =
+        run_json(&["read", "/nonexistent/file.hwpx", "--table", "0", "--paras", "0..1"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_WITHOUT_SECTION");
 }
 
 #[test]
@@ -4568,6 +4873,35 @@ fn set_cell_map_arg_conflicts_rejected() {
         "0,0",
         "--right-of",
         "성명",
+        "--text",
+        "x",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+    assert!(!out.exists());
+}
+
+#[test]
+fn set_cell_map_arg_conflict_rejected_before_map_file_is_read() {
+    // W3 remediation: the --map/single-target mutual-exclusion guard must
+    // run before the (possibly nonexistent) --map file is read — a
+    // combined-flags misuse should never surface as FILE_READ_FAILED just
+    // because the map path happens not to exist.
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never3.hwpx");
+
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        "/nonexistent/missing.json",
+        "--table",
+        "0",
+        "--at",
+        "0,0",
         "--text",
         "x",
         "-o",

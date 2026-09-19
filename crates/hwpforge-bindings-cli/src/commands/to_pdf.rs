@@ -12,16 +12,15 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use hwpforge_convert::{hwp5_to_hwpx_bytes_with_options, ConvertOptions};
+use hwpforge_convert::ops::{to_pdf, ConvertOpsWarning, ToPdfOptions};
+use hwpforge_convert::ConvertWarning;
 use hwpforge_smithy_hwp5::Hwp5Warning;
-use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder};
+use hwpforge_smithy_hwpx::DecodeWarning;
 use hwpforge_smithy_pdf::font::FontDiscovery;
-use hwpforge_smithy_pdf::{
-    render_document, PartialCachePolicy, PdfError, PdfInput, PdfOptions, PdfWarning,
-    RenderFailureMode,
-};
+use hwpforge_smithy_pdf::PdfWarning;
 
-use crate::error::{check_file_size, CliError, ErrorCause};
+use crate::compat::{self, Command};
+use crate::error::{check_file_size, CliError};
 
 /// OLE2/CFB magic — HWP5 컨테이너.
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -68,13 +67,14 @@ fn detect_format(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-fn convert_warning_dto(w: &hwpforge_convert::ConvertWarning) -> WarningDto {
+fn convert_warning_dto(w: &ConvertWarning) -> WarningDto {
     let w = match w {
-        hwpforge_convert::ConvertWarning::Hwp5(w) => w,
+        ConvertWarning::Hwp5(w) => w,
         // W1b: 인코드 캐시 드롭 — 문단 경로+사유를 그대로 표면화.
-        hwpforge_convert::ConvertWarning::HwpxEncode(
-            hwpforge_smithy_hwpx::EncodeWarning::LayoutCacheDropped { path, reason },
-        ) => {
+        ConvertWarning::HwpxEncode(hwpforge_smithy_hwpx::EncodeWarning::LayoutCacheDropped {
+            path,
+            reason,
+        }) => {
             return WarningDto {
                 stage: "convert",
                 code: "LAYOUT_CACHE_DROPPED",
@@ -250,66 +250,6 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
     WarningDto { stage: "render", code, message, location }
 }
 
-/// [`PdfError`] → 안정 cause DTO — 최상위 `PDF_RENDER_FAILED` 계약은
-/// 유지하고 variant 를 SCREAMING_SNAKE 코드로 세분화한다.
-///
-/// `UnsupportedContent.kind` 는 필수 보존: corpus 집계에서 셀 비텍스트와
-/// 기타 admission 거부가 한 덩어리로 합쳐지는 것을 막는다.
-fn pdf_error_cause(err: &PdfError) -> ErrorCause {
-    let (code, kind, location): (&'static str, Option<String>, Option<String>) = match err {
-        PdfError::NoRenderableCache { section } => {
-            ("NO_RENDERABLE_CACHE", None, Some(format!("s{section}")))
-        }
-        PdfError::MissingLayoutCache { first, .. } => {
-            ("MISSING_LAYOUT_CACHE", None, Some(first.clone()))
-        }
-        PdfError::UnsupportedContent { kind, location } => {
-            ("UNSUPPORTED_CONTENT", Some((*kind).to_string()), Some(location.clone()))
-        }
-        PdfError::InternalInvariant { .. } => ("INTERNAL_INVARIANT", None, None),
-        PdfError::GlyphsUnavailable { location, .. } => {
-            ("GLYPHS_UNAVAILABLE", None, Some(location.clone()))
-        }
-        PdfError::AmbiguousHeaderFooter { kind, .. } => {
-            ("AMBIGUOUS_HEADER_FOOTER", Some((*kind).to_string()), None)
-        }
-        PdfError::FontUnresolved { .. } => ("FONT_UNRESOLVED", None, None),
-        PdfError::FontStyleUnavailable { location, .. } => {
-            ("FONT_STYLE_UNAVAILABLE", None, Some(location.clone()))
-        }
-        PdfError::ImageDataMissing { location, .. } => {
-            ("IMAGE_DATA_MISSING", None, Some(location.clone()))
-        }
-        PdfError::UnsupportedImageFormat { format, location, .. } => {
-            ("UNSUPPORTED_IMAGE_FORMAT", Some((*format).to_string()), Some(location.clone()))
-        }
-        PdfError::ImageDecodeFailed { location, .. } => {
-            ("IMAGE_DECODE_FAILED", None, Some(location.clone()))
-        }
-        PdfError::InvalidImageGeometry { location, .. } => {
-            ("INVALID_IMAGE_GEOMETRY", None, Some(location.clone()))
-        }
-        PdfError::ImageAssetConflict { location, .. } => {
-            ("IMAGE_ASSET_CONFLICT", None, Some(location.clone()))
-        }
-        PdfError::FontAxisMismatch { location, .. } => {
-            ("FONT_AXIS_MISMATCH", None, Some(location.clone()))
-        }
-        PdfError::FontEmbedRestricted { .. } => ("FONT_EMBED_RESTRICTED", None, None),
-        PdfError::FontFaceAmbiguous { .. } => ("FONT_FACE_AMBIGUOUS", None, None),
-        PdfError::InvalidCache { .. } => ("INVALID_CACHE", None, None),
-        PdfError::FontIo(_) => ("FONT_IO", None, None),
-        PdfError::StyleUnavailable { location, .. } => {
-            ("STYLE_UNAVAILABLE", None, Some(location.clone()))
-        }
-        PdfError::Backend(_) => ("BACKEND", None, None),
-        // PdfError 는 #[non_exhaustive] — 새 variant 는 조용한 오분류 대신
-        // 집계에서 눈에 띄는 UNCLASSIFIED 로 표면화한다.
-        _ => ("UNCLASSIFIED", None, None),
-    };
-    ErrorCause { stage: "render", code, kind, location }
-}
-
 fn parse_discovery(s: &str, json_mode: bool) -> FontDiscovery {
     match s {
         "explicit" => FontDiscovery::ExplicitOnly,
@@ -370,62 +310,36 @@ pub fn run(
         }
     }
 
-    // HWP5 → HWPX (조판 캐시 carry — 렌더 재료).
-    let hwpx_bytes = if detected == "hwp5" {
-        let (converted, convert_warnings) = hwp5_to_hwpx_bytes_with_options(
-            &bytes,
-            ConvertOptions::default().with_carry_layout_cache(true),
-        )
-        .unwrap_or_else(|err| {
-            CliError::new(
-                "HWP5_CONVERT_FAILED",
-                format!("Cannot convert '{}' to HWPX: {err}", input.display()),
-            )
-            .exit(json_mode, 2)
-        });
-        warnings.extend(convert_warnings.iter().map(convert_warning_dto));
-        converted
-    } else {
-        bytes
-    };
-
-    let decoded = HwpxDecoder::decode(&hwpx_bytes).unwrap_or_else(|err| {
-        CliError::new("HWPX_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
-            .exit(json_mode, 2)
+    // HWP5 변환(캐시 carry 고정) → HWPX 디코드 → 검증 → 렌더 — 한 번의 ops
+    // 호출로 (`hwpforge_convert::ops::to_pdf`). `detect_format` 은 이미
+    // 로컬에서 통과했으므로 ops 내부의 같은 콘텐츠-스니핑은 여기서 절대
+    // `UnrecognizedFormat` 을 내지 않는다 — 그 오류의 정확한 레거시
+    // 메시지(파일명 포함)는 위 로컬 체크가 이미 낸다.
+    let pdf_options = ToPdfOptions::default()
+        .with_font_dirs(font_dirs.to_vec())
+        .with_discovery(discovery)
+        .with_degraded(degraded)
+        .with_partial_cache_reject(partial_cache_reject);
+    let rendered = to_pdf(&bytes, &pdf_options).unwrap_or_else(|err| {
+        let cli_err = compat::convert_error(Command::ToPdf, err);
+        let exit = compat::exit_code(Command::ToPdf, &cli_err);
+        cli_err.exit(json_mode, exit)
     });
-    warnings.extend(decoded.warnings.iter().map(decode_warning_dto));
-
-    let validated = decoded.document.validate().unwrap_or_else(|err| {
-        CliError::new("VALIDATION_FAILED", format!("Document validation failed: {err}"))
-            .exit(json_mode, 2)
-    });
-
-    let mut options = PdfOptions::default();
-    options.font_dirs = font_dirs.to_vec();
-    options.discovery = discovery;
-    options.failure_mode =
-        if degraded { RenderFailureMode::Degraded } else { RenderFailureMode::Fatal };
-    options.partial_cache = if partial_cache_reject {
-        PartialCachePolicy::Reject
-    } else {
-        PartialCachePolicy::WarnAndSkip
-    };
-
-    // W2a §3 D1: 이미지 바이트가 렌더러에 도달하는 유일한 배관 —
-    // bare store 는 image_data=None 이므로 반드시 브리지 경유.
-    let bridge =
-        hwpforge_smithy_hwpx::HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
-    let rendered = render_document(&PdfInput { document: &validated, styles: &bridge }, &options)
-        .unwrap_or_else(|err| {
-            CliError::new("PDF_RENDER_FAILED", format!("Cannot render PDF: {err}"))
-                .with_cause(pdf_error_cause(&err))
-                .with_hint(
-                    "cacheless documents need a Hancom re-save; font errors may need \
-                         --font-dir/--discovery or --degraded",
-                )
-                .exit(json_mode, 2)
+    for w in &rendered.warnings {
+        warnings.push(match w {
+            ConvertOpsWarning::Convert(inner) => convert_warning_dto(inner),
+            ConvertOpsWarning::Decode(inner) => decode_warning_dto(inner),
+            ConvertOpsWarning::Render(inner) => render_warning_dto(inner),
+            // `ConvertOpsWarning` is `#[non_exhaustive]` — `to_pdf` only ever
+            // emits the three staged variants above today.
+            _ => WarningDto {
+                stage: "render",
+                code: "OTHER",
+                message: format!("{w:?}"),
+                location: None,
+            },
         });
-    warnings.extend(rendered.warnings.iter().map(render_warning_dto));
+    }
 
     // 산출 경로: 미지정 = 입력의 .pdf 교체. 쓰기는 원자적 (tmp → rename) —
     // tmp 이름에 pid 를 넣어 동시 실행 충돌을 피하고, 실패 시 잔여물을 정리한다.
@@ -580,142 +494,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pdf_error_cause_maps_every_variant() {
-        use hwpforge_smithy_pdf::font::FaceStyle;
-        let loc = || "s0/p1/t0r0c0".to_string();
-        let cases: Vec<(PdfError, &str, Option<&str>, Option<&str>)> = vec![
-            (PdfError::NoRenderableCache { section: 2 }, "NO_RENDERABLE_CACHE", None, Some("s2")),
-            (
-                PdfError::MissingLayoutCache { count: 3, first: "s0/p7".into() },
-                "MISSING_LAYOUT_CACHE",
-                None,
-                Some("s0/p7"),
-            ),
-            (
-                PdfError::UnsupportedContent {
-                    kind: "table mixed with inline image",
-                    location: loc(),
-                },
-                "UNSUPPORTED_CONTENT",
-                Some("table mixed with inline image"),
-                Some("s0/p1/t0r0c0"),
-            ),
-            (PdfError::InternalInvariant { detail: "d".into() }, "INTERNAL_INVARIANT", None, None),
-            (
-                PdfError::GlyphsUnavailable { face: "f".into(), count: 1, location: loc() },
-                "GLYPHS_UNAVAILABLE",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::AmbiguousHeaderFooter { kind: "header", detail: "d".into() },
-                "AMBIGUOUS_HEADER_FOOTER",
-                Some("header"),
-                None,
-            ),
-            (PdfError::FontUnresolved { face: "f".into() }, "FONT_UNRESOLVED", None, None),
-            (
-                PdfError::FontStyleUnavailable {
-                    face: "f".into(),
-                    style: FaceStyle::Bold,
-                    location: loc(),
-                },
-                "FONT_STYLE_UNAVAILABLE",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::ImageDataMissing { key: "k".into(), location: loc() },
-                "IMAGE_DATA_MISSING",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::UnsupportedImageFormat {
-                    key: "k".into(),
-                    format: "Bmp",
-                    location: loc(),
-                },
-                "UNSUPPORTED_IMAGE_FORMAT",
-                Some("Bmp"),
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::ImageDecodeFailed {
-                    key: "k".into(),
-                    detail: "d".into(),
-                    location: loc(),
-                },
-                "IMAGE_DECODE_FAILED",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::InvalidImageGeometry {
-                    key: "k".into(),
-                    detail: "d".into(),
-                    location: loc(),
-                },
-                "INVALID_IMAGE_GEOMETRY",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::ImageAssetConflict { key: "k".into(), location: loc() },
-                "IMAGE_ASSET_CONFLICT",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::FontAxisMismatch { location: loc(), fonts: vec!["a".into()] },
-                "FONT_AXIS_MISMATCH",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (
-                PdfError::FontEmbedRestricted {
-                    face: "f".into(),
-                    path: "/x".into(),
-                    reason: "r".into(),
-                },
-                "FONT_EMBED_RESTRICTED",
-                None,
-                None,
-            ),
-            (
-                PdfError::FontFaceAmbiguous {
-                    face: "f".into(),
-                    style: FaceStyle::Bold,
-                    detail: "d".into(),
-                },
-                "FONT_FACE_AMBIGUOUS",
-                None,
-                None,
-            ),
-            (PdfError::InvalidCache { detail: "d".into() }, "INVALID_CACHE", None, None),
-            (
-                PdfError::FontIo(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),
-                "FONT_IO",
-                None,
-                None,
-            ),
-            (
-                PdfError::StyleUnavailable { what: "font name", location: loc() },
-                "STYLE_UNAVAILABLE",
-                None,
-                Some("s0/p1/t0r0c0"),
-            ),
-            (PdfError::Backend("b".into()), "BACKEND", None, None),
-        ];
-        for (err, code, kind, location) in &cases {
-            let cause = pdf_error_cause(err);
-            assert_eq!(cause.stage, "render", "{err:?}");
-            assert_eq!(&cause.code, code, "{err:?}");
-            assert_eq!(cause.kind.as_deref(), *kind, "{err:?}");
-            assert_eq!(cause.location.as_deref(), *location, "{err:?}");
-        }
-    }
+    // `pdf_error_cause_maps_every_variant` is gone along with `pdf_error_cause`
+    // (W3): the `PDF_RENDER_FAILED` cause now comes from
+    // `compat::convert_error`, which delegates to
+    // `hwpforge_convert::ops::ConvertOpsError::cause_info` — that mapping's
+    // own doc comment says it "reproduces the CLI's `pdf_error_cause`", and
+    // `hwpforge-convert`'s `tests/ops_inventory.rs` already proves it stays
+    // exhaustive over `PdfErrorCode` as the enum grows. Re-testing the same
+    // table here would just duplicate that coverage in a crate that no
+    // longer owns the mapping.
 
     #[test]
     fn parse_discovery_accepts_documented_modes() {
