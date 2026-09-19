@@ -346,7 +346,7 @@ impl HwpForgeServer {
     /// Use to understand document layout before editing.
     #[tool(
         name = "hwpforge_inspect",
-        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, and page numbers per section."
+        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, page numbers per section, and any decode warnings."
     )]
     async fn hwpforge_inspect(
         &self,
@@ -858,7 +858,7 @@ impl HwpForgeServer {
     /// Returns validation status and any issues found.
     #[tool(
         name = "hwpforge_validate",
-        description = "Validate an HWPX file structure and integrity. Returns validation status, section/paragraph counts, and any issues found. Use to verify files before editing or after generation."
+        description = "Validate an HWPX file structure and integrity. Returns validation status, section/paragraph counts, any issues found, and any decode warnings (present whether or not the document validated). Use to verify files before editing or after generation."
     )]
     async fn hwpforge_validate(
         &self,

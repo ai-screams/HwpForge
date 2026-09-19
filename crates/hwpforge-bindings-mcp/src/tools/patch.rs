@@ -5,7 +5,9 @@ use serde::Serialize;
 use hwpforge::ops::{self, PatchOptions};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, read_file_string, write_output_file, ToolErrorInfo};
+use crate::output::{
+    read_file_bytes, read_file_string, write_output_file, ToolErrorInfo, ToolWarningInfo,
+};
 
 /// Output data from a successful patch operation.
 #[derive(Debug, Serialize)]
@@ -18,6 +20,11 @@ pub struct PatchData {
     pub sections: usize,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
+    /// Decode warnings for the base package (`ops::PatchOutput::warnings`)
+    /// — a preserving patch never re-encodes, so there is no encode half.
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Patch a section in an existing HWPX file with JSON data.
@@ -47,11 +54,13 @@ pub fn run_patch(
 
     write_output_file(output_path, &outcome.bytes)?;
 
+    let warnings: Vec<ToolWarningInfo> = outcome.warnings.iter().map(compat::warning).collect();
     Ok(PatchData {
         output_path: output_path.to_string(),
         patched_section: outcome.section,
         sections: outcome.sections,
         size_bytes: outcome.bytes.len() as u64,
+        warnings,
     })
 }
 
@@ -122,6 +131,7 @@ mod tests {
         assert!(patched_path.exists());
         assert_eq!(data.patched_section, 0);
         assert!(data.size_bytes > 0);
+        assert!(data.warnings.is_empty(), "a clean base must not warn: {:?}", data.warnings);
 
         let patched_json =
             crate::tools::to_json::run_to_json(patched_path.to_str().unwrap(), Some(0), None)
@@ -133,6 +143,37 @@ mod tests {
             .as_text()
             .expect("first run text");
         assert_eq!(first_text, "[TEST] preserving patch");
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 patch 하면, 대상 base 를 검증하려고 돌린
+    /// 디코드의 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn patch_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let json_data = crate::tools::to_json::run_to_json(&path, Some(0), None).unwrap();
+        let json = json_data.json_content.expect("inline section json expected");
+
+        let dir = tempfile::tempdir().unwrap();
+        let section_json_path = dir.path().join("section.json");
+        std::fs::write(&section_json_path, json).unwrap();
+        let out = dir.path().join("out.hwpx");
+
+        let data = run_patch(&path, 0, section_json_path.to_str().unwrap(), out.to_str().unwrap())
+            .unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "patch must surface the base decode warning: {:?}",
+            data.warnings
+        );
     }
 
     #[test]

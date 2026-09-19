@@ -20,7 +20,7 @@ use hwpforge_smithy_hwpx::stamp::{
 };
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful stamp-plan operation.
 #[derive(Debug, Serialize)]
@@ -36,6 +36,10 @@ pub struct StampPlanData {
     /// Tables excluded from cell detection (invalid grid) — explicit
     /// incomplete-coverage diagnostics.
     pub skipped_tables: Vec<SkippedTable>,
+    /// Decoder warnings for this document (`ops::StampPlanOutput::warnings`).
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Output data from a successful stamp operation.
@@ -56,17 +60,24 @@ pub struct StampData {
     pub skipped_guarded: usize,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
+    /// What decoding the input reported, then the successful encode's
+    /// non-semantic warnings (`ops::StampOutput::warnings`). Omitted when
+    /// empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Discover both candidate classes (text markers + label-adjacent cells).
 pub fn run_stamp_plan(file_path: &str) -> Result<StampPlanData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
     let out = ops::stamp_plan(&bytes).map_err(|e| compat::tool_error(Tool::StampPlan, e))?;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
     Ok(StampPlanData {
         source_sha256: out.plan.source_sha256,
         candidates: out.plan.text,
         cells: out.plan.cells,
         skipped_tables: out.plan.skipped_tables,
+        warnings,
     })
 }
 
@@ -154,6 +165,7 @@ pub fn run_stamp(
     }
 
     let size_bytes = out.bytes.len() as u64;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
     Ok(StampData {
         output_path: output_path.to_string(),
         manifest_path: manifest_file,
@@ -162,6 +174,7 @@ pub fn run_stamp(
         ignored: out.ignored,
         skipped_guarded: out.skipped_guarded,
         size_bytes,
+        warnings,
     })
 }
 
@@ -276,6 +289,7 @@ mod tests {
         assert_eq!(data.stamped_cells.len(), 1);
         assert_eq!(data.stamped_cells[0].name, "성명");
         assert_eq!(data.ignored, 1);
+        assert!(data.warnings.is_empty(), "a clean input must not warn: {:?}", data.warnings);
 
         // 산출물은 즉시 fields 로 발견 가능.
         let fields = crate::tools::fields::run_fields(out.to_str().unwrap()).unwrap();
@@ -296,6 +310,29 @@ mod tests {
         let data = run_stamp_plan(&src).unwrap();
         assert_eq!(data.candidates.len(), 3, "{:?}", data.candidates);
         assert_eq!(data.candidates.iter().filter(|c| c.guard.is_some()).count(), 1);
+        assert!(data.warnings.is_empty(), "a clean template must not warn: {:?}", data.warnings);
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 plan 하면, 결과가 순수 디코드/투영이므로
+    /// 그 디코드 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn stamp_plan_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_stamp_plan(&path).unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "stamp_plan must surface the decode warning: {:?}",
+            data.warnings
+        );
     }
 
     #[test]
@@ -310,6 +347,7 @@ mod tests {
         assert_eq!(data.stamped.len(), 2);
         assert_eq!(data.skipped_guarded, 1);
         assert!(std::path::Path::new(&data.manifest_path).exists());
+        assert!(data.warnings.is_empty(), "a clean template must not warn: {:?}", data.warnings);
 
         // 스탬프 산출물은 즉시 fields 툴로 소비 가능해야 한다.
         let fields = crate::tools::fields::run_fields(out.to_str().unwrap()).unwrap();
