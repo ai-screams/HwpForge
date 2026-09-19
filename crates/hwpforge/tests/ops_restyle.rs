@@ -166,7 +166,7 @@ fn a_document_without_fonts_has_nothing_to_rebind() {
 }
 
 #[test]
-fn meta_carries_exactly_the_preset_and_warnings_keys() {
+fn meta_carries_exactly_the_documented_keys() {
     let out =
         restyle(&fixture("SimpleTable.hwpx"), &RestyleOptions::default().with_preset("latest"))
             .expect("restyle");
@@ -175,9 +175,45 @@ fn meta_carries_exactly_the_preset_and_warnings_keys() {
     let mut fields: Vec<&str> =
         value.as_object().expect("object").keys().map(String::as_str).collect();
     fields.sort_unstable();
-    assert_eq!(fields, ["preset", "warnings"]);
+    // Actual: {"preset":"latest","sections":1,"paragraphs":2,"warnings":[]}
+    assert_eq!(fields, ["paragraphs", "preset", "sections", "warnings"]);
     assert_eq!(value["preset"], "latest");
     assert!(value["warnings"].is_array());
+}
+
+#[test]
+fn meta_deserializes_json_written_before_sections_and_paragraphs_existed() {
+    // The exact key set hwpforge 0.16.5's `RestyleMeta` wrote — pinned by
+    // `meta_carries_exactly_the_preset_and_warnings_keys` at main@350851f,
+    // before this review fix (`git show 350851f:crates/hwpforge/tests/ops_restyle.rs`).
+    let old_json = r#"{"preset":"modern","warnings":[]}"#;
+
+    let meta: hwpforge::ops::RestyleMeta =
+        serde_json::from_str(old_json).expect("older-writer JSON must still deserialize");
+
+    assert_eq!(meta.preset, "modern");
+    assert_eq!(meta.sections, 0, "no `sections` key in older JSON — must default, not fail");
+    assert_eq!(meta.paragraphs, 0, "no `paragraphs` key in older JSON — must default, not fail");
+}
+
+#[test]
+fn sections_and_paragraphs_match_an_inspect_of_the_output_without_a_second_decode() {
+    // `restyle` measures its own counts on the document it already
+    // decoded, before re-encoding — this pins that measurement against an
+    // independent `inspect` of the bytes it produced, so the two can never
+    // silently drift.
+    use hwpforge::ops::{inspect, InspectOptions};
+
+    let out =
+        restyle(&fixture("SimpleTable.hwpx"), &RestyleOptions::default().with_preset("modern"))
+            .expect("restyle");
+
+    let inspected = inspect(&out.bytes, &InspectOptions::default()).expect("inspect the output");
+    let top_level_paragraphs: usize =
+        inspected.report.section_details.iter().map(|s| s.top_level_paragraphs).sum();
+
+    assert_eq!(out.sections, inspected.report.sections);
+    assert_eq!(out.paragraphs, top_level_paragraphs);
 }
 
 /// Anything reaching `warnings` is something the caller may ignore.

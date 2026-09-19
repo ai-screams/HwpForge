@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::HwpxDecoder;
+use hwpforge::ops;
 
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
@@ -20,33 +20,43 @@ pub struct ValidateData {
 }
 
 /// Validate an HWPX file structure and integrity.
+///
+/// `ops::validate` treats an undecodable package as an
+/// [`ops::OpsError::Decode`] (a *query cannot be answered* failure), but this
+/// tool's frozen contract has never propagated that as a `ToolErrorInfo`: a
+/// bad file is reported as `valid: false` with the decode failure folded
+/// into `issues`, same as a failed `Document::validate` check, so both
+/// branches are reconstructed here rather than routed through
+/// `compat::tool_error`. `ops::validate`'s only error variant is `Decode`
+/// (see its `# Errors` docs), and `OpsError::Decode`'s `Display` is
+/// transparent to the wrapped `HwpxError`, so `format!("HWPX decode failed:
+/// {err}")` reproduces the pre-migration message byte for byte. Decoder
+/// warnings (`ops::ValidateOutput::warnings`) are not surfaced: `ValidateData`
+/// has no field for them (schema freeze) — see the W2 report.
 pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
-    // Phase 1: Decode
-    let hwpx_doc = match HwpxDecoder::decode(&bytes) {
-        Ok(doc) => doc,
-        Err(e) => {
-            return Ok(ValidateData {
+    match ops::validate(&bytes) {
+        Ok(out) if out.ok => Ok(ValidateData {
+            valid: true,
+            sections: out.sections,
+            paragraphs: out.paragraphs,
+            issues: vec![],
+        }),
+        Ok(out) => {
+            let detail = out.errors.first().map(|e| e.message.as_str()).unwrap_or_default();
+            Ok(ValidateData {
                 valid: false,
-                sections: 0,
-                paragraphs: 0,
-                issues: vec![format!("HWPX decode failed: {e}")],
-            });
+                sections: out.sections,
+                paragraphs: out.paragraphs,
+                issues: vec![format!("Validation error: {detail}")],
+            })
         }
-    };
-
-    let sections = hwpx_doc.document.sections().len();
-    let paragraphs: usize = hwpx_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
-
-    // Phase 2: Validate
-    match hwpx_doc.document.validate() {
-        Ok(_) => Ok(ValidateData { valid: true, sections, paragraphs, issues: vec![] }),
-        Err(e) => Ok(ValidateData {
+        Err(err) => Ok(ValidateData {
             valid: false,
-            sections,
-            paragraphs,
-            issues: vec![format!("Validation error: {e}")],
+            sections: 0,
+            paragraphs: 0,
+            issues: vec![format!("HWPX decode failed: {err}")],
         }),
     }
 }

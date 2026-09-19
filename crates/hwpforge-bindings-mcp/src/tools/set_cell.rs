@@ -7,8 +7,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{CellEditError, CellSpec, HwpxCellEditor, SetCellResult};
+use hwpforge::ops;
+use hwpforge_smithy_hwpx::{CellSpec, SetCellResult};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful set-cell operation.
@@ -35,6 +37,10 @@ pub fn run_set_cell(
             "Use a .hwpx extension for the output file.",
         ));
     }
+    // Kept local (not delegated to `ops::set_cell`'s own empty-batch check)
+    // so a missing input file plus an empty batch still reports
+    // INVALID_SET_CELL_MAP rather than FILE_NOT_FOUND — the pre-migration
+    // check order.
     if specs.is_empty() {
         return Err(ToolErrorInfo::new(
             "INVALID_SET_CELL_MAP",
@@ -44,109 +50,16 @@ pub fn run_set_cell(
     }
 
     let bytes = read_file_bytes(file_path)?;
-    let result = HwpxCellEditor::set_cells(&bytes, specs).map_err(map_cell_edit_error)?;
+    let opts = ops::SetCellOptions::default().with_specs(specs.to_vec());
+    let outcome = ops::set_cell(&bytes, &opts).map_err(|e| compat::tool_error(Tool::SetCell, e))?;
 
-    write_output_file(output_path, &result.bytes)?;
+    write_output_file(output_path, &outcome.bytes)?;
 
     Ok(SetCellData {
         output_path: output_path.to_string(),
-        cells: result.outcome.cells,
-        size_bytes: result.bytes.len() as u64,
+        cells: outcome.results,
+        size_bytes: outcome.bytes.len() as u64,
     })
-}
-
-fn map_cell_edit_error(error: CellEditError) -> ToolErrorInfo {
-    let (code, hint): (&str, &str) = match &error {
-        CellEditError::TableNotFound { .. } => {
-            ("TABLE_NOT_FOUND", "표 서수는 hwpforge_to_json export 의 문서 순서 0-base 입니다.")
-        }
-        CellEditError::TableGridInvalid { .. } => (
-            "TABLE_GRID_INVALID",
-            "이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다.",
-        ),
-        CellEditError::CellNotFound { .. } => {
-            ("CELL_NOT_FOUND", "좌표는 병합 전 논리 격자 0-base — export 의 addr 값을 쓰세요.")
-        }
-        CellEditError::LabelAmbiguous { .. } => {
-            ("CELL_LABEL_AMBIGUOUS", "라벨이 여러 셀과 일치합니다 — at 좌표로 직접 지정하세요.")
-        }
-        CellEditError::NonTextContent { .. } => (
-            "CELL_HAS_NON_TEXT_CONTENT",
-            "표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다.",
-        ),
-        CellEditError::TargetDuplicate { .. } => {
-            ("CELL_TARGET_DUPLICATE", "두 편집이 같은 앵커 셀로 resolve 됐습니다.")
-        }
-        CellEditError::TargetConflict { .. } => {
-            ("CELL_TARGET_CONFLICT", "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다.")
-        }
-        CellEditError::NotRoundTripSafe { .. } => (
-            "INPUT_NOT_ROUNDTRIP_SAFE",
-            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed).",
-        ),
-        CellEditError::UncarriedZipEntries { .. } => (
-            "INPUT_ENTRIES_NOT_CARRIED",
-            "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed).",
-        ),
-        CellEditError::Codec(_) => ("SET_CELL_CODEC_FAILED", "Report this as a bug."),
-        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
-        // (코드·메시지·hint 불변). 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3
-        // compat 테이블의 몫이다. 이 arm 이 없으면 아래 `_` 로 떨어져 코드가
-        // SET_CELL_CODEC_FAILED → SET_CELL_FAILED 로 바뀐다.
-        CellEditError::SemanticLoss { .. } => ("SET_CELL_CODEC_FAILED", "Report this as a bug."),
-        _ => ("SET_CELL_FAILED", "Report this as a bug."),
-    };
-    ToolErrorInfo::new(code, error.to_string(), hint)
-}
-
-#[cfg(test)]
-mod semantic_loss_contract_tests {
-    use super::*;
-    use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
-
-    fn warning(reason: &str) -> EncodeWarning {
-        EncodeWarning::NoteHeadSkipped {
-            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
-            reason: reason.into(),
-        }
-    }
-
-    /// R1 F4 회귀 잠금: `SemanticLoss` 는 typed 변형이 됐지만 MCP 가 내보내는
-    /// 코드·메시지·hint 는 과거 `Codec` 경로와 **바이트 동일**해야 한다.
-    /// (arm 이 빠지면 `_` 로 떨어져 SET_CELL_FAILED 가 된다.)
-    ///
-    /// ⚠️ 이 타입의 Display 에는 `StamperError` 와 달리 "codec failure: "
-    /// 접두사가 있다 — 프론트엔드가 `error.to_string()` 을 쓰기 때문이다.
-    #[test]
-    fn semantic_loss_maps_to_the_codec_contract() {
-        let typed = map_cell_edit_error(CellEditError::SemanticLoss {
-            warnings: vec![warning("titleMark first run")],
-            others: vec![],
-        });
-        let legacy = map_cell_edit_error(CellEditError::Codec(
-            "encode produced a semantic-loss warning (fail-closed): note number head skipped at \
-             section[0].para[1]: titleMark first run"
-                .to_string(),
-        ));
-
-        assert_eq!(typed.code, "SET_CELL_CODEC_FAILED");
-        assert_eq!(typed.code, legacy.code);
-        assert_eq!(typed.message, legacy.message, "메시지가 드리프트했다");
-        assert_eq!(typed.hint, legacy.hint, "hint 가 드리프트했다");
-        assert!(typed.message.starts_with("codec failure: "), "{}", typed.message);
-    }
-
-    /// 빈 `warnings` 로도 panic 하지 않아야 한다 (변형은 외부에서 구성 가능).
-    #[test]
-    fn empty_warnings_does_not_panic() {
-        let info =
-            map_cell_edit_error(CellEditError::SemanticLoss { warnings: vec![], others: vec![] });
-        assert_eq!(info.code, "SET_CELL_CODEC_FAILED");
-        assert_eq!(
-            info.message,
-            "codec failure: encode produced a semantic-loss warning (fail-closed)"
-        );
-    }
 }
 
 #[cfg(test)]

@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{DocumentDiff, HwpxDiffer};
+use hwpforge::ops;
+use hwpforge_smithy_hwpx::DocumentDiff;
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Inline response ceiling shared with `hwpforge_to_json` (1 MB).
@@ -25,6 +27,10 @@ pub struct DiffData {
 }
 
 /// Diff two HWPX files; optionally write the full report to `output_path`.
+///
+/// Decoder warnings from both inputs (`ops::DiffOutput::warnings`) are not
+/// surfaced: `DiffData` has no field for them (schema freeze) — see the W2
+/// report.
 pub fn run_diff(
     base_path: &str,
     revised_path: &str,
@@ -33,13 +39,7 @@ pub fn run_diff(
     let base = read_file_bytes(base_path)?;
     let revised = read_file_bytes(revised_path)?;
 
-    let diff = HwpxDiffer::diff(&base, &revised).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Both inputs must be valid HWPX. For .hwp files, convert with hwpforge_convert first.",
-        )
-    })?;
+    let diff = ops::diff(&base, &revised).map_err(|e| compat::tool_error(Tool::Diff, e))?.diff;
 
     let summary = summarize(&diff);
 

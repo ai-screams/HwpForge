@@ -4,13 +4,15 @@
 use hwpforge::core::control::Control;
 use hwpforge::core::image::ImageStore;
 use hwpforge::core::run::Run;
+use hwpforge::core::table::grid::GridCoord;
 use hwpforge::core::table::{Table, TableCell, TableRow};
 use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
 use hwpforge::foundation::diagnostics::OpsCode;
 use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge::hwpx::stamp::{
-    parse_stamp_map, StampAction, StampMap, StampRequestV2, StampSpec, STAMP_MANIFEST_V2_VERSION,
-    STAMP_MANIFEST_VERSION, STAMP_MAP_VERSION,
+    parse_stamp_map, CellLabelClaim, CellStampAction, CellStampSpec, StampAction, StampMap,
+    StampRequestV2, StampSpec, STAMP_MANIFEST_V2_VERSION, STAMP_MANIFEST_VERSION,
+    STAMP_MAP_VERSION,
 };
 use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge::hwpx::{HwpxEncoder, HwpxFiller};
@@ -101,6 +103,11 @@ fn a_legacy_map_stamps_and_reports_the_v1_manifest() {
         .filter_map(|field| field.name)
         .collect();
     assert_eq!(names, ["성명", "동의"], "the stamped fields are discoverable");
+    let stamped_names: Vec<&str> = out.stamped.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(stamped_names, ["성명", "동의"], "spec order, not document order");
+    assert!(out.stamped_cells.is_empty(), "a legacy request never carries cell specs");
+    assert_eq!(out.ignored, 0);
+    assert_eq!(out.skipped_guarded, 0);
     // A successful stamp now reports the encode's non-semantic warnings
     // instead of a hard-coded empty list; this document produces none. The
     // only non-semantic `EncodeWarning` needs `emit_layout_cache`, which a
@@ -197,7 +204,11 @@ fn turning_the_manifest_off_omits_it_from_the_output_and_the_wire() {
 
     assert!(out.manifest.is_none());
     assert!(!out.bytes.is_empty(), "the document is produced either way");
-    assert_eq!(keys(&serde_json::to_value(out.meta()).expect("serialise")), ["warnings"]);
+    assert_eq!(out.stamped.len(), 2, "apply-phase fields stay populated without the manifest");
+    assert_eq!(
+        keys(&serde_json::to_value(out.meta()).expect("serialise")),
+        ["ignored", "skipped_guarded", "stamped", "stamped_cells", "warnings"]
+    );
 }
 
 /// The regenerating-edit policy row: an encode that loses meaning produces
@@ -239,9 +250,16 @@ fn meta_carries_exactly_the_documented_keys() {
         .expect("stamp");
 
     let value = serde_json::to_value(out.meta()).expect("serialise");
-    assert_eq!(keys(&value), ["manifest", "warnings"]);
+    assert_eq!(
+        keys(&value),
+        ["ignored", "manifest", "skipped_guarded", "stamped", "stamped_cells", "warnings"]
+    );
     assert_eq!(value["manifest"]["schema_version"], STAMP_MANIFEST_VERSION);
     assert_eq!(value["manifest"]["fields"].as_array().expect("fields").len(), 2);
+    assert_eq!(value["stamped"].as_array().expect("stamped").len(), 2);
+    assert_eq!(value["stamped_cells"], serde_json::json!([]));
+    assert_eq!(value["ignored"], 0);
+    assert_eq!(value["skipped_guarded"], 0);
     assert_eq!(value["warnings"], serde_json::json!([]));
 }
 
@@ -287,4 +305,99 @@ fn decode_warnings_reach_the_stamp_output() {
     let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
     assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
     assert!(out.manifest.is_some(), "the stamp itself still happened");
+}
+
+/// Two unguarded paren blanks plus a checkbox inside a `※`-prefixed
+/// instruction paragraph, which downgrades that checkbox to guarded (see
+/// `paragraph_guard` in `smithy-hwpx`'s stamp detector).
+fn two_unguarded_and_one_guarded() -> Vec<u8> {
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![
+            text_para("성명: (   )"),
+            text_para("소속: (  )"),
+            text_para("※ 해당하는 항목의 □에 표시"),
+        ],
+        PageSettings::a4(),
+    ));
+    encode(doc)
+}
+
+/// `stamped`, `stamped_cells`, `ignored` and `skipped_guarded` are the
+/// apply-phase disposition of every plan candidate, not a projection of the
+/// manifest — this covers all four on one request: one candidate named, one
+/// explicitly ignored, one guarded candidate left uncovered.
+#[test]
+fn ignored_and_guarded_candidates_are_both_counted_without_being_stamped() {
+    let bytes = two_unguarded_and_one_guarded();
+    let plan = stamp_plan(&bytes).expect("plan").plan;
+    let unguarded: Vec<_> = plan.text.iter().filter(|c| c.guard.is_none()).collect();
+    assert_eq!(unguarded.len(), 2, "{:?}", plan.text);
+    assert_eq!(plan.text.len(), 3, "two unguarded plus one guarded checkbox: {:?}", plan.text);
+
+    let named = |c: &hwpforge::hwpx::stamp::StampCandidate, action: StampAction| StampSpec {
+        section: c.section,
+        path: c.path.clone(),
+        span: c.span.clone(),
+        marker: c.marker.clone(),
+        action,
+    };
+    let specs = vec![
+        named(unguarded[0], StampAction::Field { name: "성명".into(), hint: None }),
+        named(unguarded[1], StampAction::Ignore),
+    ];
+
+    let out = stamp(&bytes, &StampMap::Legacy(specs), &StampOptions::default()).expect("stamp");
+
+    assert_eq!(out.stamped.len(), 1, "{:?}", out.stamped);
+    assert_eq!(out.stamped[0].name, "성명");
+    assert!(out.stamped_cells.is_empty(), "no cell specs in this request");
+    assert_eq!(out.ignored, 1, "the second unguarded candidate was explicitly ignored");
+    assert_eq!(out.skipped_guarded, 1, "the guarded checkbox needed no spec and got none");
+}
+
+/// A 1×2 label table (label cell + stampable empty cell) so a v2 request can
+/// promote the empty cell to a class-B field.
+fn label_form() -> Vec<u8> {
+    let width = HwpUnit::new(8000).expect("width");
+    let row = TableRow::new(vec![
+        TableCell::new(vec![text_para("성명")], width),
+        TableCell::new(vec![text_para("")], width),
+    ]);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(Table::new(vec![row]), CharShapeIndex::new(0)));
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    encode(doc)
+}
+
+/// A class-B cell stamp lands in `stamped_cells`, not `stamped` — the two
+/// lists are kept apart because they carry materially different shapes
+/// (`StampedField` vs. `CellStampedField`).
+#[test]
+fn a_cell_stamp_lands_in_stamped_cells_not_the_text_list() {
+    let bytes = label_form();
+    let plan = stamp_plan(&bytes).expect("plan");
+    assert_eq!(plan.plan.cells.len(), 1, "{:?}", plan.plan.cells);
+
+    let request = StampRequestV2 {
+        schema_version: STAMP_MAP_VERSION,
+        source_sha256: plan.plan.source_sha256.clone(),
+        text: Vec::new(),
+        cells: vec![CellStampSpec {
+            table: 0,
+            at: GridCoord::new(0, 1),
+            label: Some(CellLabelClaim { at: GridCoord::new(0, 0), text: "성명".into() }),
+            action: CellStampAction::Field { name: "성명".into(), hint: "성명 입력".into() },
+        }],
+    };
+
+    let out = stamp(&bytes, &StampMap::V2(request), &StampOptions::default()).expect("stamp");
+
+    assert!(out.stamped.is_empty(), "no text specs in this request");
+    assert_eq!(out.stamped_cells.len(), 1);
+    assert_eq!(out.stamped_cells[0].name, "성명");
+    assert_eq!(out.ignored, 0);
+    assert_eq!(out.skipped_guarded, 0);
 }

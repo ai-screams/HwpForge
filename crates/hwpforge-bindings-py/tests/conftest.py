@@ -25,6 +25,8 @@ FIELD_FIXTURES = REPO / "tests" / "fixtures" / "fields"
 PDF_FIXTURES = REPO / "tests" / "fixtures" / "pdf-rules"
 LIST_FIXTURES = REPO / "tests" / "fixtures" / "user_samples" / "lists"
 LAYOUT_FIXTURES = REPO / "tests" / "fixtures" / "layout"
+TABLE_FIXTURES = REPO / "tests" / "fixtures" / "tables"
+STAMP_FIXTURES = REPO / "tests" / "fixtures" / "stamp"
 SYNTHETIC_FACE = Path(__file__).resolve().parent / "fixtures" / "synthetic_face.hwpx"
 PDF_TEST_FONTS = Path(__file__).resolve().parent / "fixtures" / "fonts"
 
@@ -138,6 +140,24 @@ def heading_and_numbered_bytes() -> bytes:
 def stale_line_cache_bytes() -> bytes:
     """A document whose line layout cache the decoder has to drop, with a warning."""
     return _read(LAYOUT_FIXTURES / "stale-line-cache.hwpx")
+
+
+@pytest.fixture(scope="session")
+def nested_table_bytes() -> bytes:
+    """A table nested inside another table's cell.
+
+    `inspect`'s shallow (`top_level_*`) counts stop at the outer table, so
+    this is the smallest committed fixture where the shallow and deep table
+    counts of a section genuinely disagree.
+    """
+    return _read(TABLE_FIXTURES / "table_08_nested_table.hwpx")
+
+
+@pytest.fixture(scope="session")
+def stamp_placeholder_bytes() -> bytes:
+    """A document with one unguarded class-A candidate per marker plus one
+    guarded one (`※` instruction context), for the apply-phase counters."""
+    return _read(STAMP_FIXTURES / "placeholder_basic.hwpx")
 
 
 def all_paragraphs(data: bytes) -> list:

@@ -68,7 +68,11 @@ fn the_asset_plan_lists_one_entry_per_image_run_in_document_order() {
 
 #[test]
 fn decode_rejects_an_unknown_preset_before_parsing_anything() {
-    let err = decode_md("# 제목", &ConvertMdOptions::default().with_preset("modern"))
+    // `modern` used to be the canonical "not-default" example, but it is
+    // now a real, accepted preset (see `a_non_default_preset_swaps_the_base_font_and_nothing_structural`
+    // below) — `gov_proposal` names a real *template*, not a *preset*,
+    // which makes it the most likely typo a caller now makes.
+    let err = decode_md("# 제목", &ConvertMdOptions::default().with_preset("gov_proposal"))
         .expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::PresetNotFound, "{err}");
@@ -173,15 +177,113 @@ fn an_unknown_preset_is_refused() {
 
     assert_eq!(err.code(), OpsCode::PresetNotFound, "{err}");
     assert!(err.to_string().contains("gov_proposal"), "{err}");
+    assert!(err.hint().is_some(), "the CLI hint points at `templates`");
+}
+
+#[test]
+fn every_builtin_preset_produces_the_font_it_declares() {
+    // `builtin_presets()` is the contract `templates()` advertises to every
+    // frontend, so `convert_md` must honour it for *every* preset name,
+    // `"default"` included — even where the template
+    // `decode_with_default` resolves has a different base font of its own.
+    // One loop, `preset.font` only: no name is special-cased here.
+    //
+    // The check reads the *actual body run's* char shape, not a fixed
+    // index: the encoded store's char shape 0 belongs to Hancom's own
+    // built-in default style set (unrelated to this template), not to the
+    // "body" style our registry resolved — only the run the Markdown
+    // itself produced is guaranteed to carry the style this preset swap
+    // touched.
+    use hwpforge::core::StyleLookup;
+
+    for preset in hwpforge::hwpx::builtin_presets() {
+        let out = convert_md(
+            "본문입니다.\n",
+            None,
+            &ConvertMdOptions::default().with_preset(preset.name.clone()),
+        )
+        .unwrap_or_else(|e| panic!("[{}] {e} ({})", preset.name, e.code().as_str()));
+        let decoded = HwpxDecoder::decode(&out.bytes)
+            .unwrap_or_else(|e| panic!("[{}] output must decode: {e}", preset.name));
+
+        assert!(
+            decoded.style_store.iter_fonts().any(|f| f.face_name == preset.font),
+            "[{}] the base font table must carry the preset's declared font",
+            preset.name
+        );
+        let run = &decoded.document.sections()[0].paragraphs[0].runs[0];
+        assert_eq!(
+            decoded.style_store.char_font_name(run.char_shape_id),
+            Some(preset.font.as_str()),
+            "[{}] the body text's own char shape must resolve to the preset's font",
+            preset.name
+        );
+    }
+}
+
+#[test]
+fn a_non_default_preset_swaps_the_base_font_and_nothing_structural() {
+    let markdown = "# 제목\n\n## 부제\n\n본문입니다.\n\n- 첫째\n- 둘째\n";
+    let default_out =
+        convert_md(markdown, None, &ConvertMdOptions::default()).expect("default convert");
+    let modern_out = convert_md(markdown, None, &ConvertMdOptions::default().with_preset("modern"))
+        .expect("modern convert");
+
+    let default_decoded = HwpxDecoder::decode(&default_out.bytes).expect("decode default");
+    let modern_decoded = HwpxDecoder::decode(&modern_out.bytes).expect("decode modern");
+
+    assert!(
+        modern_decoded.style_store.iter_fonts().any(|f| f.face_name == "맑은 고딕"),
+        "the modern preset's font must reach the font table"
+    );
+    assert!(
+        !modern_decoded.style_store.iter_fonts().any(|f| f.face_name == "한컴바탕"),
+        "the default base font must not remain alongside the preset's"
+    );
+
+    // Structure (paragraph count, text, shape counts) is untouched by a
+    // face-name-only swap.
+    assert_eq!(default_decoded.document.sections().len(), modern_decoded.document.sections().len());
+    let paras = |doc: &hwpforge::core::Document| -> usize {
+        doc.sections().iter().map(|s| s.paragraphs.len()).sum()
+    };
+    assert_eq!(paras(&default_decoded.document), paras(&modern_decoded.document));
+    assert_eq!(
+        default_decoded.style_store.char_shape_count(),
+        modern_decoded.style_store.char_shape_count()
+    );
+    assert_eq!(
+        default_decoded.style_store.para_shape_count(),
+        modern_decoded.style_store.para_shape_count()
+    );
+}
+
+#[test]
+fn every_builtin_preset_converts_a_small_document_without_error() {
+    // The font-truthfulness check itself lives in
+    // `every_builtin_preset_produces_the_font_it_declares`; this loop only
+    // pins that every preset name reaches a decodable package.
+    for preset in hwpforge::hwpx::builtin_presets() {
+        let out = convert_md(
+            "# 제목\n\n본문입니다.\n",
+            None,
+            &ConvertMdOptions::default().with_preset(preset.name.clone()),
+        )
+        .unwrap_or_else(|e| panic!("[{}] {e} ({})", preset.name, e.code().as_str()));
+
+        HwpxDecoder::decode(&out.bytes)
+            .unwrap_or_else(|e| panic!("[{}] output must decode: {e}", preset.name));
+    }
 }
 
 #[test]
 fn no_markdown_can_reach_the_two_style_stages_as_a_failure() {
     // `STYLE_STORE_FAILED` and `STYLE_REBIND_FAILED` are wired, but neither
     // is reachable *from this operation*: the store is built from the same
-    // registry `decode_md` resolved, and the document's shape indices come
-    // from that same decode, so the two can never disagree. The preset gate
-    // (only `"default"`) is what keeps the registry invariant.
+    // registry `decode_md` resolved (only its fonts' face names change for
+    // a non-default preset — indices and counts never do), and the
+    // document's shape indices come from that same decode, so the two can
+    // never disagree.
     //
     // Constructs chosen to allocate as many distinct char/para shapes as the
     // decoder will: headings push para shapes, code blocks and blockquotes
@@ -204,7 +306,7 @@ fn no_markdown_can_reach_the_two_style_stages_as_a_failure() {
 }
 
 #[test]
-fn meta_carries_exactly_the_assets_and_warnings_keys() {
+fn meta_carries_exactly_the_documented_keys() {
     let dir = scratch("convert_md_meta");
     std::fs::write(dir.join("logo.png"), ONE_PIXEL_PNG).expect("write image");
     let out = convert_md("![로고](logo.png)\n", Some(&dir), &ConvertMdOptions::default())
@@ -214,8 +316,49 @@ fn meta_carries_exactly_the_assets_and_warnings_keys() {
     let mut fields: Vec<&str> =
         value.as_object().expect("object").keys().map(String::as_str).collect();
     fields.sort_unstable();
-    assert_eq!(fields, ["assets", "warnings"]);
+    // Actual: {"sections":1,"paragraphs":1,"assets":[{"kind":"embedded",
+    // "occurrence":{"paragraph":0,"run":0},"key":"image1.png","format":"Png"}],
+    // "warnings":[]}
+    assert_eq!(fields, ["assets", "paragraphs", "sections", "warnings"]);
     assert_eq!(value["assets"].as_array().expect("array").len(), 1);
+}
+
+#[test]
+fn meta_deserializes_json_written_before_sections_and_paragraphs_existed() {
+    // The exact key set hwpforge 0.16.5's `ConvertMeta` wrote — pinned by
+    // `meta_carries_exactly_the_assets_and_warnings_keys` at main@350851f,
+    // before this review fix (`git show 350851f:crates/hwpforge/tests/ops_convert_md.rs`).
+    let old_json = r#"{"assets":[],"warnings":[]}"#;
+
+    let meta: hwpforge::ops::ConvertMeta =
+        serde_json::from_str(old_json).expect("older-writer JSON must still deserialize");
+
+    assert!(meta.assets.is_empty());
+    assert_eq!(meta.sections, 0, "no `sections` key in older JSON — must default, not fail");
+    assert_eq!(meta.paragraphs, 0, "no `paragraphs` key in older JSON — must default, not fail");
+}
+
+#[test]
+fn sections_and_paragraphs_match_an_inspect_of_the_output_without_a_second_decode() {
+    // `convert_md` measures its own counts on the document it already
+    // built, before encoding — this pins that measurement against an
+    // independent `inspect` of the bytes it produced, so the two can never
+    // silently drift.
+    use hwpforge::ops::{inspect, InspectOptions};
+
+    let out = convert_md(
+        "# 제목\n\n## 부제\n\n본문입니다.\n\n- 첫째\n- 둘째\n",
+        None,
+        &ConvertMdOptions::default(),
+    )
+    .expect("convert");
+
+    let inspected = inspect(&out.bytes, &InspectOptions::default()).expect("inspect the output");
+    let top_level_paragraphs: usize =
+        inspected.report.section_details.iter().map(|s| s.top_level_paragraphs).sum();
+
+    assert_eq!(out.sections, inspected.report.sections);
+    assert_eq!(out.paragraphs, top_level_paragraphs);
 }
 
 /// base64 without a dependency — the test needs exactly one encode.

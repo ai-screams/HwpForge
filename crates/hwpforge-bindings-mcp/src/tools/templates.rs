@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::presets::{builtin_presets, PresetInfo};
+use hwpforge::ops::{self, OpsError};
+use hwpforge_smithy_hwpx::presets::PresetInfo;
 
+use crate::compat::{self, Tool};
 use crate::output::ToolErrorInfo;
 
 /// Output data from the templates tool.
@@ -14,16 +16,20 @@ pub struct TemplatesData {
 }
 
 /// Get available templates, optionally filtered by name.
+///
+/// `ops::templates` has no name-filter or not-found concept of its own (it
+/// just lists every built-in preset); the by-name lookup and its
+/// `PRESET_NOT_FOUND` refusal stay MCP-local, built on top of the shared
+/// preset list.
 pub fn run_templates(name: Option<&str>) -> Result<TemplatesData, ToolErrorInfo> {
-    let presets = builtin_presets();
+    let presets = ops::templates().presets;
 
     if let Some(name) = name {
         let filtered: Vec<PresetInfo> = presets.into_iter().filter(|p| p.name == name).collect();
         if filtered.is_empty() {
-            return Err(ToolErrorInfo::new(
-                "PRESET_NOT_FOUND",
-                format!("Preset '{name}' not found"),
-                "Available presets: default, modern, classic, latest. Use hwpforge_templates without a name to list all.",
+            return Err(compat::tool_error(
+                Tool::Templates,
+                OpsError::PresetNotFound { name: name.to_string() },
             ));
         }
         Ok(TemplatesData { templates: filtered })
