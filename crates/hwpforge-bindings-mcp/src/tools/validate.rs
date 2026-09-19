@@ -4,7 +4,8 @@ use serde::Serialize;
 
 use hwpforge::ops;
 
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::compat;
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a validation check.
 #[derive(Debug, Serialize)]
@@ -17,6 +18,13 @@ pub struct ValidateData {
     pub paragraphs: usize,
     /// List of issues found (empty if valid).
     pub issues: Vec<String>,
+    /// Decode warnings raised on the way in (`ops::ValidateOutput::warnings`)
+    /// — present whether the document validated or not; empty (and never
+    /// populated) when the input could not even be decoded, since then
+    /// `ops::validate` never produces a warning list to surface. Omitted
+    /// when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Validate an HWPX file structure and integrity.
@@ -31,8 +39,9 @@ pub struct ValidateData {
 /// (see its `# Errors` docs), and `OpsError::Decode`'s `Display` is
 /// transparent to the wrapped `HwpxError`, so `format!("HWPX decode failed:
 /// {err}")` reproduces the pre-migration message byte for byte. Decoder
-/// warnings (`ops::ValidateOutput::warnings`) are not surfaced: `ValidateData`
-/// has no field for them (schema freeze) — see the W2 report.
+/// warnings from a *successful* decode (`ops::ValidateOutput::warnings`) are
+/// surfaced through `ValidateData::warnings` regardless of `valid` — an
+/// undecodable input has no decode to warn from, so that branch stays empty.
 pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
@@ -42,6 +51,7 @@ pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
             sections: out.sections,
             paragraphs: out.paragraphs,
             issues: vec![],
+            warnings: out.warnings.iter().map(compat::warning).collect(),
         }),
         Ok(out) => {
             let detail = out.errors.first().map(|e| e.message.as_str()).unwrap_or_default();
@@ -50,6 +60,7 @@ pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
                 sections: out.sections,
                 paragraphs: out.paragraphs,
                 issues: vec![format!("Validation error: {detail}")],
+                warnings: out.warnings.iter().map(compat::warning).collect(),
             })
         }
         Err(err) => Ok(ValidateData {
@@ -57,6 +68,7 @@ pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
             sections: 0,
             paragraphs: 0,
             issues: vec![format!("HWPX decode failed: {err}")],
+            warnings: vec![],
         }),
     }
 }
@@ -88,6 +100,7 @@ mod tests {
         assert!(data.sections >= 1);
         assert!(data.paragraphs >= 1);
         assert!(data.issues.is_empty());
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
     }
 
     #[test]
@@ -100,5 +113,30 @@ mod tests {
         assert!(!data.valid);
         assert_eq!(data.sections, 0);
         assert!(!data.issues.is_empty());
+        assert!(data.warnings.is_empty(), "an undecodable input has no decode to warn from");
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 는 여전히 유효한 문서이므로 `valid: true`
+    /// 지만, 그 성공한 디코드의 경고(`LAYOUT_CACHE_DROPPED`)는 여전히
+    /// `warnings` 에 실려야 한다 — valid 여부와 무관하게.
+    #[test]
+    fn validate_surfaces_decode_warnings_on_a_valid_document() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_validate(&path).unwrap();
+        assert!(data.valid, "{:?}", data.issues);
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "validate must surface the decode warning of a successful decode: {:?}",
+            data.warnings
+        );
     }
 }

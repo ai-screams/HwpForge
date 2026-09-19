@@ -6,7 +6,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::DocumentDiff;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Inline response ceiling shared with `hwpforge_to_json` (1 MB).
 const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
@@ -24,13 +24,15 @@ pub struct DiffData {
     pub report_path: Option<String>,
     /// One-line change summary.
     pub summary: String,
+    /// Decoder warnings from **both** inputs (`ops::DiffOutput::warnings`):
+    /// every warning from `base_path` first, then every warning from
+    /// `revised_path`, each group in decoder order — the same provenance
+    /// rule `ops::diff` documents. Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Diff two HWPX files; optionally write the full report to `output_path`.
-///
-/// Decoder warnings from both inputs (`ops::DiffOutput::warnings`) are not
-/// surfaced: `DiffData` has no field for them (schema freeze) — see the W2
-/// report.
 pub fn run_diff(
     base_path: &str,
     revised_path: &str,
@@ -39,7 +41,9 @@ pub fn run_diff(
     let base = read_file_bytes(base_path)?;
     let revised = read_file_bytes(revised_path)?;
 
-    let diff = ops::diff(&base, &revised).map_err(|e| compat::tool_error(Tool::Diff, e))?.diff;
+    let out = ops::diff(&base, &revised).map_err(|e| compat::tool_error(Tool::Diff, e))?;
+    let diff = out.diff;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     let summary = summarize(&diff);
 
@@ -69,10 +73,10 @@ pub fn run_diff(
                 "Pass output_path to write the full report to a file.",
             ));
         }
-        return Ok(DiffData { diff: None, report_path, summary });
+        return Ok(DiffData { diff: None, report_path, summary, warnings });
     }
 
-    Ok(DiffData { diff: Some(diff), report_path, summary })
+    Ok(DiffData { diff: Some(diff), report_path, summary, warnings })
 }
 
 fn summarize(diff: &DocumentDiff) -> String {
@@ -114,6 +118,31 @@ mod tests {
         let diff = data.diff.expect("inline diff");
         assert!(diff.identical);
         assert_eq!(data.summary, "identical");
+        assert!(data.warnings.is_empty(), "a clean pair must not warn: {:?}", data.warnings);
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 base 와 revised 양쪽에 쓰면, 두 디코드
+    /// 모두의 경고(`LAYOUT_CACHE_DROPPED`)가 base-then-revised 순서로
+    /// `warnings` 에 실려야 한다.
+    #[test]
+    fn diff_surfaces_decode_warnings_from_both_inputs() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_diff(&path, &path, None).unwrap();
+        let count = data.warnings.iter().filter(|w| w.code == "LAYOUT_CACHE_DROPPED").count();
+        assert_eq!(
+            count, 2,
+            "diffing the fixture against itself must surface one warning per side: {:?}",
+            data.warnings
+        );
     }
 
     #[test]

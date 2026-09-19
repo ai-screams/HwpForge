@@ -6,7 +6,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::DocumentOutline;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from an outline projection.
 #[derive(Debug, Serialize)]
@@ -14,20 +14,21 @@ pub struct OutlineData {
     /// The document navigation map (headings, tables, fields, bookmarks).
     #[serde(flatten)]
     pub outline: DocumentOutline,
+    /// Decoder warnings for this document (`ops::OutlineOutput::warnings`).
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Inline response ceiling shared with `hwpforge_to_json` (1 MB).
 const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Build the document navigation map for an HWPX file.
-///
-/// Decoder warnings (`ops::OutlineOutput::warnings`) are not surfaced:
-/// `OutlineData` has no field for them, and this migration does not add one
-/// (schema freeze) — see the W2 report's "warnings not surfaced" list.
 pub fn run_outline(file_path: &str) -> Result<OutlineData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
     let out = ops::outline(&bytes).map_err(|e| compat::tool_error(Tool::Outline, e))?;
     let outline = out.outline;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     let inline_size = serde_json::to_string(&outline).map(|s| s.len()).unwrap_or(usize::MAX);
     if inline_size > MAX_INLINE_RESPONSE {
@@ -38,7 +39,7 @@ pub fn run_outline(file_path: &str) -> Result<OutlineData, ToolErrorInfo> {
         ));
     }
 
-    Ok(OutlineData { outline })
+    Ok(OutlineData { outline, warnings })
 }
 
 #[cfg(test)]
@@ -67,6 +68,29 @@ mod tests {
         assert_eq!(data.outline.tables[0].ordinal, 0);
         assert_eq!((data.outline.tables[0].rows, data.outline.tables[0].cols), (Some(2), Some(2)));
         assert!(data.outline.tables[0].addressable);
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 outline 하면, 디코드 경고
+    /// (`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn outline_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_outline(&path).unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "outline must surface the decode warning: {:?}",
+            data.warnings
+        );
     }
 
     #[test]
