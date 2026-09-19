@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{DocumentOutline, HwpxReader};
+use hwpforge::ops;
+use hwpforge_smithy_hwpx::DocumentOutline;
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output data from an outline projection.
@@ -18,15 +20,14 @@ pub struct OutlineData {
 const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Build the document navigation map for an HWPX file.
+///
+/// Decoder warnings (`ops::OutlineOutput::warnings`) are not surfaced:
+/// `OutlineData` has no field for them, and this migration does not add one
+/// (schema freeze) — see the W2 report's "warnings not surfaced" list.
 pub fn run_outline(file_path: &str) -> Result<OutlineData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
-    let outline = HwpxReader::outline(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
-        )
-    })?;
+    let out = ops::outline(&bytes).map_err(|e| compat::tool_error(Tool::Outline, e))?;
+    let outline = out.outline;
 
     let inline_size = serde_json::to_string(&outline).map(|s| s.len()).unwrap_or(usize::MAX);
     if inline_size > MAX_INLINE_RESPONSE {

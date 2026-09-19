@@ -2,8 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{FieldInfo, HwpxFiller};
+use hwpforge::ops;
+use hwpforge_smithy_hwpx::FieldInfo;
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output data from a fields listing.
@@ -16,15 +18,12 @@ pub struct FieldsData {
 }
 
 /// List named click-here fields in an HWPX document.
+///
+/// Decoder warnings (`ops::FieldsOutput::warnings`) are not surfaced:
+/// `FieldsData` has no field for them (schema freeze) — see the W2 report.
 pub fn run_fields(file_path: &str) -> Result<FieldsData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
-    let fields = HwpxFiller::list_fields(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
-        )
-    })?;
-    let fillable_count = fields.iter().filter(|f| f.fillable).count();
-    Ok(FieldsData { fields, fillable_count })
+    let out = ops::fields(&bytes).map_err(|e| compat::tool_error(Tool::Fields, e))?;
+    let fillable_count = out.fields.iter().filter(|f| f.fillable).count();
+    Ok(FieldsData { fields: out.fields, fillable_count })
 }

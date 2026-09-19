@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::HwpxReader;
+use hwpforge::ops;
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run the outline command.
@@ -17,11 +18,16 @@ pub fn run(file: &PathBuf, json_mode: bool) {
         }
     };
 
-    let outline = match HwpxReader::outline(&bytes) {
-        Ok(outline) => outline,
+    // Decoder warnings (`OutlineOutput::warnings`) are not surfaced: the
+    // pre-migration CLI never captured them (it called `HwpxReader::outline`
+    // directly), and this migration does not add a print path for them
+    // (W3 report: warnings not surfaced).
+    let outline = match ops::outline(&bytes) {
+        Ok(out) => out.outline,
         Err(e) => {
-            CliError::new("DECODE_FAILED", format!("Cannot decode '{}': {e}", file.display()))
-                .exit(json_mode, 2);
+            let err = compat::cli_error(Command::Outline, e);
+            let exit = compat::exit_code(Command::Outline, &err);
+            err.exit(json_mode, exit);
         }
     };
 

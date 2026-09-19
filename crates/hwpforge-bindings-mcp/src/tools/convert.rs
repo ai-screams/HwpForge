@@ -2,11 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_foundation::FontId;
+use hwpforge::ops::{convert_md as ops_convert_md, ConvertMdOptions, OpsError};
 use hwpforge_smithy_hwpx::presets::builtin_presets;
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
-use hwpforge_smithy_md::{load_referenced_images, MdDecoder};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful conversion.
@@ -34,18 +33,19 @@ pub fn run_convert(
     output_path: &str,
     preset: &str,
 ) -> Result<ConvertData, ToolErrorInfo> {
-    // 1. Validate preset
-    let presets = builtin_presets();
-    let preset_info = presets.iter().find(|p| p.name == preset).ok_or_else(|| {
-        ToolErrorInfo::new(
-            "PRESET_NOT_FOUND",
-            format!("Preset '{preset}' not found"),
-            "Use hwpforge_templates to see available presets.",
-        )
-    })?;
-    let preset_font = preset_info.font.clone();
+    // 1. Preset existence, checked before touching the filesystem: this
+    //    preserves the legacy ordering (a preset typo must not cost a file
+    //    read or an output-extension check). `ops::convert_md` checks the
+    //    same thing again, authoritatively, once it has a document to
+    //    build.
+    if !builtin_presets().iter().any(|p| p.name == preset) {
+        return Err(compat::tool_error(
+            Tool::ConvertMd,
+            OpsError::PresetNotFound { name: preset.to_string() },
+        ));
+    }
 
-    // 2. Validate output extension
+    // 2. Validate output extension (MCP-local — stays outside `ops`).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
             "INVALID_EXTENSION",
@@ -72,21 +72,11 @@ pub fn run_convert(
         markdown.to_string()
     };
 
-    // 4. Decode Markdown → Core Document
-    let mut md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
-        ToolErrorInfo::new(
-            "MD_DECODE_ERROR",
-            format!("Markdown decode failed: {e}"),
-            "Check Markdown syntax. Use GFM (GitHub Flavored Markdown).",
-        )
-    })?;
-
-    // 4b. 이미지 참조를 BinData 로 적재 (W6 §12b). 인라인 입력은 base_dir
-    //     이 없다 — 상대 경로 참조는 typed 경고로 제외되고 data: URI 만
-    //     임베드된다 (파일 입력은 md 파일의 부모 디렉터리 기준 + 경로
-    //     탈출 차단).
-    // bare 파일명의 parent() 는 빈 경로 `Some("")` — 현재 디렉터리로
-    // 정규화 (독립 리뷰 B2).
+    // 4. base_dir — image references resolve relative to the markdown
+    //    file's directory (W6 §12b); inline input has none, so a relative
+    //    reference is excluded (and reported) while an inline `data:` URI
+    //    still embeds. Bare filenames' `parent()` is the empty path
+    //    `Some("")` — normalize to the current directory (독립 리뷰 B2).
     let base_dir = if is_file {
         match std::path::Path::new(markdown).parent() {
             Some(p) if p.as_os_str().is_empty() => Some(std::path::Path::new(".")),
@@ -95,88 +85,27 @@ pub fn run_convert(
     } else {
         None
     };
-    let embedded = load_referenced_images(&mut md_doc.document, base_dir);
-    let warnings: Vec<String> =
-        embedded.warnings.iter().map(std::string::ToString::to_string).collect();
 
-    // 5. Count sections and paragraphs
-    let sections: usize = md_doc.document.sections().len();
-    let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
+    // 5. Delegate decode → preset font swap → asset resolve → style
+    //    rebind → validate → encode to `ops::convert_md`.
+    let out =
+        ops_convert_md(&md_content, base_dir, &ConvertMdOptions::default().with_preset(preset))
+            .map_err(|e| compat::tool_error(Tool::ConvertMd, e))?;
 
-    // 6. Apply preset font to style registry, then build the registry bridge.
-    //    The bridge owns the store-local style table and rebinds registry-local
-    //    char/para shape ids before encode.
-    //    Only replace base font entries — preserve specialty fonts (e.g., D2Coding
-    //    for code blocks) by checking against the original base font name.
-    let preset_font_id = FontId::new(&preset_font).map_err(|e| {
-        ToolErrorInfo::new("PRESET_ERROR", format!("Invalid preset font name: {e}"), "")
-    })?;
-    let original_base =
-        md_doc.style_registry.fonts.first().map(|f| f.as_str().to_string()).unwrap_or_default();
-    md_doc.style_registry.fonts = md_doc
-        .style_registry
-        .fonts
-        .iter()
-        .map(|f| if f.as_str() == original_base { preset_font_id.clone() } else { f.clone() })
-        .collect();
-    for cs in &mut md_doc.style_registry.char_shapes {
-        if cs.font == original_base {
-            cs.font.clone_from(&preset_font);
-        }
-    }
-    let bridge = HwpxRegistryBridge::from_registry(&md_doc.style_registry).map_err(|e| {
-        ToolErrorInfo::new(
-            "STYLE_STORE_ERROR",
-            format!("Style store construction failed: {e}"),
-            "Check paragraph list references in the resolved style registry.",
-        )
-    })?;
+    // 6. 이미지 임베드 제외 + 인코드 경고 (W6 §12b — typed 경고의 표시
+    //    문자열). 무음 폐기 금지.
+    let warnings: Vec<String> = out.warnings.iter().map(|w| compat::warning(w).message).collect();
 
-    let rebound = bridge.rebind_draft_document(md_doc.document).map_err(|e| {
-        ToolErrorInfo::new(
-            "STYLE_REBIND_ERROR",
-            format!("Style rebind failed: {e}"),
-            "Document style indices do not match the generated HWPX style store.",
-        )
-    })?;
+    // 7. Write output file
+    write_output_file(output_path, &out.bytes)?;
 
-    let validated = rebound.validate().map_err(|e| {
-        ToolErrorInfo::new(
-            "VALIDATION_ERROR",
-            format!("Document validation failed: {e}"),
-            "Check document structure.",
-        )
-    })?;
-
-    // 7. Encode to HWPX bytes — 진단 동반 경로: 인코드 경고(각주 번호 머리
-    // 생략 등)를 무음 폐기하지 않고 warnings 채널로 합류.
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        bridge.style_store(),
-        &embedded.store,
-        hwpforge_smithy_hwpx::EncodeOptions::default(),
-    )
-    .map_err(|e| {
-        ToolErrorInfo::new(
-            "ENCODE_ERROR",
-            format!("HWPX encoding failed: {e}"),
-            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-        )
-    })?;
-    let hwpx_bytes = outcome.bytes;
-    let mut warnings = warnings;
-    warnings.extend(outcome.warnings.iter().map(std::string::ToString::to_string));
-
-    // 8. Write output file
-    write_output_file(output_path, &hwpx_bytes)?;
-
-    let size_bytes: u64 = hwpx_bytes.len() as u64;
+    let size_bytes: u64 = out.bytes.len() as u64;
 
     Ok(ConvertData {
         output_path: output_path.to_string(),
         size_bytes,
-        sections,
-        paragraphs,
+        sections: out.sections,
+        paragraphs: out.paragraphs,
         warnings,
     })
 }

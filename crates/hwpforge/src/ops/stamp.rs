@@ -20,6 +20,22 @@
 //! [`StampedManifest`] carries whichever the request produced instead of
 //! normalising one into the other. `schema_version` discriminates them.
 //!
+//! # Manifest vs. apply-phase outcome
+//!
+//! [`StampOutput::manifest`] and [`StampOutput::stamped`] /
+//! [`StampOutput::stamped_cells`] / [`StampOutput::ignored`] /
+//! [`StampOutput::skipped_guarded`] answer different questions and are
+//! independent of each other. The manifest lists the output document's
+//! *whole* ClickHere field inventory, in document order, and tags only
+//! *whether* a field is one this stamp created; it can be turned off with
+//! [`StampOptions::with_manifest`]. The apply-phase fields are this
+//! [`stamp`] call's disposition of every plan candidate — what got named
+//! (spec order, the same [`StampedField`] / [`CellStampedField`] shape the
+//! apply pass produced), what was explicitly ignored, and what stayed
+//! untouched because it was guarded and no spec approved it — and they are
+//! always populated, manifest or not. A legacy request never carries cell
+//! specs, so [`StampOutput::stamped_cells`] is always empty on that path.
+//!
 //! # Warnings
 //!
 //! [`stamp_plan`] is a query: it decodes and projects, so it reports the
@@ -52,7 +68,8 @@
 
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{
-    HwpxStamper, StampManifest, StampManifestV2, StampMap, StampPlanV2,
+    CellStampedField, HwpxStamper, StampManifest, StampManifestV2, StampMap, StampPlanV2,
+    StampResult, StampResultV2, StampedField,
 };
 use serde::Serialize;
 
@@ -192,6 +209,24 @@ pub struct StampOutput {
     /// The output inventory, unless [`StampOptions::with_manifest`] turned
     /// it off.
     pub manifest: Option<StampedManifest>,
+    /// Class-A text fields created by this stamp, in spec order.
+    ///
+    /// Empty for a v2 request with no text specs. This is the apply-phase
+    /// outcome, not a projection of `manifest`: the manifest lists the
+    /// output's whole field inventory in document order and only tags
+    /// *whether* each one was stamped, while this is spec order and exists
+    /// independently of [`StampOptions::with_manifest`].
+    pub stamped: Vec<StampedField>,
+    /// Class-B cell fields created by this stamp, in spec order.
+    ///
+    /// Always empty for a legacy ([`StampMap::Legacy`]) request — cell
+    /// specs only exist on the v2 path.
+    pub stamped_cells: Vec<CellStampedField>,
+    /// Number of explicitly ignored candidates, both classes combined.
+    pub ignored: usize,
+    /// Guarded candidates left untouched because no spec approved them,
+    /// both classes combined.
+    pub skipped_guarded: usize,
     /// What decoding the input reported, then the successful encode's
     /// non-semantic warnings — see the module docs for the order and for
     /// which of the codec passes on this path are reported.
@@ -204,6 +239,10 @@ impl StampOutput {
     pub fn meta(&self) -> StampMeta {
         StampMeta {
             manifest: self.manifest.clone(),
+            stamped: self.stamped.clone(),
+            stamped_cells: self.stamped_cells.clone(),
+            ignored: self.ignored,
+            skipped_guarded: self.skipped_guarded,
             warnings: self.warnings.iter().map(OpsWarning::info).collect(),
         }
     }
@@ -219,6 +258,15 @@ pub struct StampMeta {
     /// The output inventory; absent when the caller asked for no manifest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<StampedManifest>,
+    /// Class-A text fields created by this stamp, in spec order.
+    pub stamped: Vec<StampedField>,
+    /// Class-B cell fields created by this stamp, in spec order.
+    pub stamped_cells: Vec<CellStampedField>,
+    /// Number of explicitly ignored candidates, both classes combined.
+    pub ignored: usize,
+    /// Guarded candidates left untouched because no spec approved them,
+    /// both classes combined.
+    pub skipped_guarded: usize,
     /// Non-fatal diagnostics.
     pub warnings: Vec<WarningInfo>,
 }
@@ -262,21 +310,41 @@ pub fn stamp(
     request: &StampMap,
     opts: &StampOptions,
 ) -> Result<StampOutput, OpsError> {
-    let (bytes, manifest, decode_warnings, encode_warnings) = match request {
+    #[allow(clippy::type_complexity)]
+    let (
+        bytes,
+        manifest,
+        stamped,
+        stamped_cells,
+        ignored,
+        skipped_guarded,
+        decode_warnings,
+        encode_warnings,
+    ) = match request {
         StampMap::Legacy(specs) => {
             let diagnosed = HwpxStamper::stamp_with_diagnostics(hwpx, specs)?;
+            let StampResult { bytes, manifest, outcome } = diagnosed.value;
             (
-                diagnosed.value.bytes,
-                StampedManifest::V1(diagnosed.value.manifest),
+                bytes,
+                StampedManifest::V1(manifest),
+                outcome.stamped,
+                Vec::new(),
+                outcome.ignored,
+                outcome.skipped_guarded.len(),
                 diagnosed.decode_warnings,
                 diagnosed.encode_warnings,
             )
         }
         StampMap::V2(envelope) => {
             let diagnosed = HwpxStamper::stamp_v2_with_diagnostics(hwpx, envelope)?;
+            let StampResultV2 { bytes, manifest, outcome } = diagnosed.value;
             (
-                diagnosed.value.bytes,
-                StampedManifest::V2(diagnosed.value.manifest),
+                bytes,
+                StampedManifest::V2(manifest),
+                outcome.text.stamped,
+                outcome.cells.stamped,
+                outcome.text.ignored + outcome.cells.ignored,
+                outcome.text.skipped_guarded.len() + outcome.cells.skipped_guarded.len(),
                 diagnosed.decode_warnings,
                 diagnosed.encode_warnings,
             )
@@ -287,7 +355,15 @@ pub fn stamp(
     let mut warnings: Vec<OpsWarning> =
         decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(encode_warnings.into_iter().map(OpsWarning::Encode));
-    Ok(StampOutput { bytes, manifest: opts.manifest.then_some(manifest), warnings })
+    Ok(StampOutput {
+        bytes,
+        manifest: opts.manifest.then_some(manifest),
+        stamped,
+        stamped_cells,
+        ignored,
+        skipped_guarded,
+        warnings,
+    })
 }
 
 #[cfg(test)]

@@ -137,15 +137,47 @@ class StampManifest(TypedDict):
     output_sha256: str
     fields: list[dict[str, Any]]
 
+# One class-A (inline marker) field created by `stamp`, in spec order — the
+# apply-phase outcome, not a projection of `manifest`.
+class StampedField(TypedDict):
+    name: str
+    section: int
+    path: str
+    span: Span
+    marker: str
+    pattern: str
+
+# A label reference `stamp_plan` suggested and the spec claimed, re-verified
+# against the live document at apply time.
+class CellLabelClaim(TypedDict):
+    at: GridCoord
+    text: str
+
+# One class-B (table cell) field created by `stamp`, in spec order.
+class CellStampedField(TypedDict):
+    name: str
+    table: int
+    at: GridCoord
+    label: NotRequired[CellLabelClaim]
+    hint: str
+    original_text: str
+
 class StampReport(TypedDict):
     manifest: NotRequired[StampManifest]
+    stamped: list[StampedField]
+    stamped_cells: list[CellStampedField]
+    ignored: int
+    skipped_guarded: int
     warnings: list[WarningInfo]
 
 class RestyleReport(TypedDict):
     preset: str
+    sections: int
+    paragraphs: int
     warnings: list[WarningInfo]
 
 class EncodeReport(TypedDict):
+    paragraphs: int
     warnings: list[WarningInfo]
 
 # What became of one image reference in the Markdown source. Internally tagged
@@ -170,6 +202,8 @@ class RemoteAsset(TypedDict):
 AssetOutcome: TypeAlias = EmbeddedAsset | DroppedAsset | RemoteAsset
 
 class ConvertMdReport(TypedDict):
+    sections: int
+    paragraphs: int
     assets: list[AssetOutcome]
     warnings: list[WarningInfo]
 
@@ -206,6 +240,9 @@ class InspectMetadata(TypedDict):
 class InspectSection(TypedDict):
     index: int
     top_level_paragraphs: int
+    top_level_tables: int
+    top_level_images: int
+    top_level_charts: int
     paragraphs: int
     tables: int
     images: int

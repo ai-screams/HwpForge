@@ -2,11 +2,9 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{
-    scan_delete_warnings, HwpxStructuralEditor, InsertPosition, ParagraphLocator,
-    StructuralEditError,
-};
+use hwpforge::ops::{self, OpsWarning};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output of a structural edit.
@@ -20,6 +18,21 @@ pub struct StructuralData {
     /// Non-blocking advisories (e.g. index-mark removal). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// Keeps only the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …),
+/// dropping the admission decode's warnings that `ops::insert_para`/
+/// `ops::delete_para` now also report — this tool never surfaced decode
+/// warnings before the migration (`insert_para`'s `warnings` was always
+/// `Vec::new()`), so this filter reproduces that byte for byte: `insert_para`
+/// never produces a `Structural` warning, so it still comes out empty, and
+/// `delete_para` keeps exactly its advisory-scan messages.
+fn structural_advisories(warnings: &[OpsWarning]) -> Vec<String> {
+    warnings
+        .iter()
+        .filter(|w| matches!(w, OpsWarning::Structural(_)))
+        .map(|w| compat::warning(w).message)
+        .collect()
 }
 
 /// Delete top-level paragraphs, all-or-nothing.
@@ -37,14 +50,12 @@ pub fn run_delete_para(
         ));
     }
     let bytes = read_file_bytes(file_path)?;
-    let targets: Vec<ParagraphLocator> =
-        indices.iter().map(|&index| ParagraphLocator { section, index }).collect();
-    // Advisory scan (shared library messages — never a refusal): surfaced
-    // only alongside a successful edit.
-    let warnings: Vec<String> =
-        scan_delete_warnings(&bytes, &targets).iter().map(ToString::to_string).collect();
-    let out = HwpxStructuralEditor::delete_paragraphs(&bytes, &targets).map_err(map_error)?;
-    write_bytes(&out, output_path)?;
+    let opts =
+        ops::DeleteParaOptions::default().with_section(section).with_indexes(indices.to_vec());
+    let out =
+        ops::delete_para(&bytes, &opts).map_err(|e| compat::tool_error(Tool::DeletePara, e))?;
+    let warnings = structural_advisories(&out.warnings);
+    write_bytes(&out.bytes, output_path)?;
     Ok(StructuralData {
         output_path: output_path.to_string(),
         change: format!("deleted {} paragraph(s) from section {section}", indices.len()),
@@ -77,11 +88,15 @@ pub fn run_insert_para(
         }
     };
     let bytes = read_file_bytes(file_path)?;
-    let position = if before { InsertPosition::Before } else { InsertPosition::After };
-    let anchor_loc = ParagraphLocator { section, index: anchor };
-    let out = HwpxStructuralEditor::insert_paragraphs(&bytes, anchor_loc, position, &block)
-        .map_err(map_error)?;
-    write_bytes(&out, output_path)?;
+    let opts = ops::InsertParaOptions::default()
+        .with_section(section)
+        .with_anchor(anchor)
+        .with_text(block.clone())
+        .with_before(before);
+    let out =
+        ops::insert_para(&bytes, &opts).map_err(|e| compat::tool_error(Tool::InsertPara, e))?;
+    let warnings = structural_advisories(&out.warnings);
+    write_bytes(&out.bytes, output_path)?;
     let where_ = if before { "before" } else { "after" };
     Ok(StructuralData {
         output_path: output_path.to_string(),
@@ -89,10 +104,14 @@ pub fn run_insert_para(
             "inserted {} paragraph(s) {where_} section {section} paragraph {anchor}",
             block.len()
         ),
-        warnings: Vec::new(),
+        warnings,
     })
 }
 
+/// Writes bytes to `path` without creating parent directories (unlike
+/// `output::write_output_file`) — a missing parent must fail with
+/// `FILE_WRITE_FAILED`, which this tool has reported since before the ops
+/// migration.
 fn write_bytes(bytes: &[u8], path: &str) -> Result<(), ToolErrorInfo> {
     std::fs::write(path, bytes).map_err(|e| {
         ToolErrorInfo::new(
@@ -101,48 +120,6 @@ fn write_bytes(bytes: &[u8], path: &str) -> Result<(), ToolErrorInfo> {
             "Check the output path and permissions.",
         )
     })
-}
-
-fn map_error(err: StructuralEditError) -> ToolErrorInfo {
-    let (code, hint): (&str, &str) = match &err {
-        StructuralEditError::NotRoundTripSafe { .. } => (
-            "INPUT_NOT_ROUNDTRIP_SAFE",
-            "Structural edits require a round-trip-safe input; this document has a codec fidelity gap.",
-        ),
-        StructuralEditError::ReferenceStranded { .. } => (
-            "REFERENCE_STRANDED",
-            "This paragraph carries a bookmark/cross-ref/footnote; deleting it could strand a reference.",
-        ),
-        StructuralEditError::HardBreakLoss { .. } => {
-            ("HARD_BREAK_LOSS", "This paragraph carries a hard page/column break.")
-        }
-        StructuralEditError::SectionPropertiesParagraph { .. }
-        | StructuralEditError::InsertBeforeSectionProperties { .. } => (
-            "SECTION_PROPERTIES_PARAGRAPH",
-            "The section's first paragraph holds page setup; it cannot be deleted or displaced.",
-        ),
-        StructuralEditError::EmptySection { .. } => {
-            ("EMPTY_SECTION", "A section must keep at least one paragraph.")
-        }
-        StructuralEditError::MultiParagraphText => {
-            ("MULTI_PARAGRAPH_TEXT", "Insert one paragraph per call; text may not contain line breaks.")
-        }
-        StructuralEditError::SectionOutOfRange { .. }
-        | StructuralEditError::ParagraphOutOfRange { .. } => {
-            ("INDEX_OUT_OF_RANGE", "Use hwpforge_outline to see section and paragraph counts.")
-        }
-        StructuralEditError::DuplicateTarget { .. } => {
-            ("DUPLICATE_TARGET", "Each paragraph index may appear once per batch.")
-        }
-        StructuralEditError::DeltaMismatch { .. } => {
-            ("SELF_VERIFY_FAILED", "The edit did not verify; no output was written.")
-        }
-        StructuralEditError::Codec(_) => {
-            ("STRUCTURAL_CODEC", "Check that the file is valid HWPX.")
-        }
-        _ => ("STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
-    };
-    ToolErrorInfo::new(code, err.to_string(), hint)
 }
 
 #[cfg(test)]

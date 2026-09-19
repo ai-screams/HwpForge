@@ -29,17 +29,14 @@ use hwpforge_smithy_hwpx::grid_addr::{
     annotate_document_addresses, annotate_section_addresses, verify_document_addresses,
     verify_section_addresses,
 };
+use hwpforge_smithy_hwpx::presets::style_store_for_preset;
 use hwpforge_smithy_hwpx::{
     EncodeOptions, ExportedDocument, ExportedSection, HwpxDecoder, HwpxEncoder, HwpxPatcher,
-    HwpxStyleStore, SectionPatchOutcome,
+    SectionPatchOutcome,
 };
 use serde::{Deserialize, Serialize};
 
 use super::{OpsError, OpsWarning};
-
-/// The font a generated document falls back to when the JSON carries no
-/// style store, matching `hwpforge from-json`.
-const FALLBACK_FONT: &str = "함초롬돋움";
 
 // ── to_json ─────────────────────────────────────────────────────
 
@@ -51,8 +48,9 @@ pub struct ToJsonOptions {
     ///
     /// Defaults to `true`. The CLI spells the same switch as the inverted
     /// `--no-styles`, so the two must not be confused: dropping the styles
-    /// means a later [`from_json`] rebuilds them from
-    /// [`FALLBACK_FONT`](self), which is lossy.
+    /// means a later [`from_json`] rebuilds them from the built-in
+    /// `"default"` preset registry, which still loses whatever fonts,
+    /// sizes or colours the original store carried.
     pub styles: bool,
 }
 
@@ -338,20 +336,26 @@ pub struct FromJsonOutput {
     /// consumed by the encode, so a caller that reports "N sections" cannot
     /// recover it afterwards without decoding the result again.
     pub sections: usize,
+    /// Total paragraph count across all sections of the generated document,
+    /// counted before the encode consumes it (same reason as
+    /// [`sections`](Self::sections)).
+    pub paragraphs: usize,
     /// Encode warnings. Generation has no original meaning to preserve, so
     /// these are reported, never fatal.
     pub warnings: Vec<OpsWarning>,
 }
 
-/// The wire payload of an operation whose only report is its warnings.
+/// The wire payload of [`from_json`].
 ///
 /// # Keys
 ///
-/// `warnings`.
+/// `paragraphs`, `warnings`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct EncodeMeta {
+    /// Total paragraph count across all sections of the generated document.
+    pub paragraphs: usize,
     /// Encode warnings.
     pub warnings: Vec<WarningInfo>,
 }
@@ -360,15 +364,25 @@ impl FromJsonOutput {
     /// The wire shape of this result.
     #[must_use]
     pub fn meta(&self) -> EncodeMeta {
-        EncodeMeta { warnings: self.warnings.iter().map(OpsWarning::info).collect() }
+        EncodeMeta {
+            paragraphs: self.paragraphs,
+            warnings: self.warnings.iter().map(OpsWarning::info).collect(),
+        }
     }
 }
 
 /// Builds an HWPX package from an exported JSON document.
 ///
 /// Reproduces `hwpforge from-json` minus the file I/O: parse, verify any
-/// supplied grid addresses, fall back to a default style store when the JSON
-/// carries none, validate, inherit images from `base`, encode.
+/// supplied grid addresses, fall back to the built-in `"default"` style
+/// preset when the JSON carries none, validate, inherit images from `base`,
+/// encode.
+///
+/// The fallback is the full `"default"` preset registry
+/// ([`style_store_for_preset`]) — char shapes, paragraph shapes, styles and
+/// border fills, not only a font — because a document whose paragraphs
+/// reference shape indices needs those shapes to exist, not only a font to
+/// draw them with. A fonts-only store leaves such references dangling.
 ///
 /// Supplied grid addresses are validated and then discarded. Their absence
 /// means no check was asked for; a mismatch means the caller edited against a
@@ -385,6 +399,9 @@ impl FromJsonOutput {
 ///   or does not match the exported-document schema.
 /// - [`OpsError::GridAddr`] (code `GRID_ADDR_INVALID`) when a supplied cell
 ///   address does not match the document.
+/// - [`OpsError::PresetNotFound`] (code `PRESET_NOT_FOUND`) when the
+///   built-in `"default"` preset cannot be built — not reachable today, kept
+///   for the day the registry changes shape.
 /// - [`OpsError::Core`] (code `VALIDATION_FAILED`) when the document is
 ///   structurally invalid.
 /// - [`OpsError::Decode`] when `base` is not a decodable HWPX package, and
@@ -409,8 +426,17 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
 
     verify_document_addresses(&value, &exported.document)?;
 
-    let style_store =
-        exported.styles.unwrap_or_else(|| HwpxStyleStore::with_default_fonts(FALLBACK_FONT));
+    // Counted before `validate()` consumes `exported.document` — the
+    // validated tree carries no direct paragraph iterator of its own that
+    // makes this cheaper to redo afterwards.
+    let paragraphs: usize =
+        exported.document.sections().iter().map(|section| section.paragraphs.len()).sum();
+
+    let style_store = match exported.styles {
+        Some(styles) => styles,
+        None => style_store_for_preset("default")
+            .ok_or_else(|| OpsError::PresetNotFound { name: "default".to_string() })?,
+    };
     let validated = exported.document.validate()?;
 
     let image_store = match &opts.base {
@@ -429,6 +455,7 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     Ok(FromJsonOutput {
         bytes: outcome.bytes,
         sections: validated.section_count(),
+        paragraphs,
         warnings: outcome.warnings.into_iter().map(OpsWarning::Encode).collect(),
     })
 }

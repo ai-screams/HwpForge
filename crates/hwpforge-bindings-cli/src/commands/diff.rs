@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::HwpxDiffer;
+use hwpforge::ops;
 
+use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
 
 /// Run the diff command.
@@ -22,10 +23,15 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     let base_bytes = read(base);
     let revised_bytes = read(revised);
 
-    let diff = match HwpxDiffer::diff(&base_bytes, &revised_bytes) {
-        Ok(d) => d,
+    // Decoder warnings from both inputs (`DiffOutput::warnings`) are not
+    // surfaced (W3 report: warnings not surfaced — the pre-migration CLI
+    // never captured them either).
+    let diff = match ops::diff(&base_bytes, &revised_bytes) {
+        Ok(out) => out.diff,
         Err(e) => {
-            CliError::new("DECODE_FAILED", format!("Cannot diff: {e}")).exit(json_mode, 2);
+            let err = compat::cli_error(Command::Diff, e);
+            let exit = compat::exit_code(Command::Diff, &err);
+            err.exit(json_mode, exit);
         }
     };
 
