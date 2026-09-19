@@ -27,15 +27,16 @@ pub struct ToJsonData {
 
 /// Export HWPX to JSON (full document or single section).
 ///
-/// Decoder warnings (`OpsWarning::Decode`, the first stage of both
-/// `ops::to_json` and `ops::export_section`) are **not** surfaced here: the
-/// pre-migration tool never captured them (it called the library's
-/// non-diagnostics entry points), `ToJsonData.warnings` is part of the
-/// frozen schema, and `to_json_section_embeds_preservation_metadata` pins an
-/// empty `warnings` list for a clean document — so they are dropped rather
-/// than added, and listed in the W2 report's "warnings not surfaced" list.
-/// Every other warning (`SectionWorkflow`, `GridAddr`) is fed through
-/// `compat::warning`, unchanged from what this file computed by hand before.
+/// Every warning `ops::to_json`/`ops::export_section` reports — decode
+/// (`OpsWarning::Decode`, e.g. `LAYOUT_CACHE_DROPPED`/`UNKNOWN_ENUM_VALUE`),
+/// section-workflow and grid-address — is surfaced through `ToJsonData.warnings`.
+/// A JSON export the caller reuses for `from_json`/`patch` would otherwise
+/// persist a decode-time fallback (an unknown enum value, a dropped layout
+/// cache) without disclosing it. `SectionWorkflow`'s
+/// `PRESERVATION_METADATA_UNAVAILABLE` keeps its tool-specific hint via
+/// [`map_section_workflow_warning_for_to_json`]; every other warning goes
+/// through `compat::warning` unchanged from what this file computed by hand
+/// before.
 pub fn run_to_json(
     file_path: &str,
     section_idx: Option<usize>,
@@ -60,7 +61,6 @@ pub fn run_to_json(
             .map_err(|e| compat::tool_error(Tool::ToJson, e))?;
         for w in &out.warnings {
             match w {
-                OpsWarning::Decode(_) => {}
                 OpsWarning::SectionWorkflow(sw) => {
                     warnings.push(map_section_workflow_warning_for_to_json(sw.clone()));
                 }
@@ -72,10 +72,7 @@ pub fn run_to_json(
         let out = ops::to_json(&bytes, &ToJsonOptions::default())
             .map_err(|e| compat::tool_error(Tool::ToJson, e))?;
         for w in &out.warnings {
-            match w {
-                OpsWarning::Decode(_) => {}
-                other => warnings.push(compat::warning(other)),
-            }
+            warnings.push(compat::warning(w));
         }
         render_pretty_value(&out.document)?
     };
@@ -179,6 +176,36 @@ mod tests {
         assert_eq!(mapped.code, "PRESERVATION_METADATA_UNAVAILABLE");
         assert!(mapped.message.contains("raw/semantic mismatch"));
         assert!(mapped.hint.as_deref().unwrap().contains("hwpforge_patch"));
+    }
+
+    /// Repo-level fixture whose layout cache the decoder drops
+    /// (`LAYOUT_CACHE_DROPPED`), shared with other crates' tests.
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn to_json_surfaces_decode_warnings_for_both_export_shapes() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+
+        let full = run_to_json(&path, None, None).unwrap();
+        assert!(
+            full.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "full-document export must surface the decode warning: {:?}",
+            full.warnings
+        );
+
+        let section = run_to_json(&path, Some(0), None).unwrap();
+        assert!(
+            section.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "section export must surface the decode warning: {:?}",
+            section.warnings
+        );
     }
 
     #[test]

@@ -39,6 +39,32 @@ fn reports_structure_of_a_table_fixture() {
 }
 
 #[test]
+fn section_deserializes_json_written_before_the_top_level_fields_existed() {
+    // The exact key set hwpforge 0.16.5's `InspectSection` wrote (main@350851f
+    // `crates/hwpforge/src/ops/inspect.rs`, before this review fix) — no
+    // `top_level_tables`/`top_level_images`/`top_level_charts`.
+    let old_json = r#"{
+        "index": 0,
+        "top_level_paragraphs": 2,
+        "paragraphs": 3,
+        "tables": 1,
+        "images": 0,
+        "charts": 0,
+        "has_header": false,
+        "has_footer": false,
+        "has_page_number": false
+    }"#;
+
+    let section: hwpforge::ops::inspect::InspectSection =
+        serde_json::from_str(old_json).expect("older-writer JSON must still deserialize");
+
+    assert_eq!(section.tables, 1, "the deep field the older writer already had must round-trip");
+    assert_eq!(section.top_level_tables, 0, "no `top_level_tables` key — must default, not fail");
+    assert_eq!(section.top_level_images, 0, "no `top_level_images` key — must default, not fail");
+    assert_eq!(section.top_level_charts, 0, "no `top_level_charts` key — must default, not fail");
+}
+
+#[test]
 fn a_table_nested_in_a_footnote_is_deep_only() {
     // Built rather than loaded: no fixture has a table that only a note
     // carries. A footnote body is exactly the case the deep traversal

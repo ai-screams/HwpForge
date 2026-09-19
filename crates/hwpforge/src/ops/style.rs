@@ -142,9 +142,17 @@ pub struct RestyleMeta {
     /// The preset that was applied.
     pub preset: String,
     /// Number of sections in the re-encoded document.
+    ///
+    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
+    /// earlier has no `sections` key, from before this field existed.
+    #[serde(default)]
     pub sections: usize,
     /// Body-flow paragraphs summed over those sections (top-level only —
     /// see [`RestyleOutput::paragraphs`]).
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::sections`].
+    #[serde(default)]
     pub paragraphs: usize,
     /// Non-semantic encode warnings.
     pub warnings: Vec<WarningInfo>,

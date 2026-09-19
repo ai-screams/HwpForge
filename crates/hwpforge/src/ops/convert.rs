@@ -187,9 +187,17 @@ impl ConvertOutput {
 #[non_exhaustive]
 pub struct ConvertMeta {
     /// Number of sections in the generated document.
+    ///
+    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
+    /// earlier has no `sections` key, from before this field existed.
+    #[serde(default)]
     pub sections: usize,
     /// Body-flow paragraphs summed over those sections (top-level only —
     /// see [`ConvertOutput::paragraphs`]).
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::sections`].
+    #[serde(default)]
     pub paragraphs: usize,
     /// One entry per planned image, in document order.
     pub assets: Vec<AssetOutcome>,

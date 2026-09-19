@@ -126,14 +126,28 @@ pub struct InspectSection {
     /// matching the CLI/MCP `inspect` contract (a table nested inside a
     /// table cell, note, header/footer or master page is not counted).
     /// Deep counts, nested ones included, are [`Self::tables`].
+    ///
+    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
+    /// earlier has no `top_level_tables` key, from before this field
+    /// existed. A defaulted `0` on such input is not a real "no tables"
+    /// answer — [`Self::tables`] is the field that input still carries.
+    #[serde(default)]
     pub top_level_tables: usize,
     /// Top-level images in this section — top-level only, the same rule
     /// [`Self::top_level_tables`] documents. Deep counts are
     /// [`Self::images`].
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::top_level_tables`].
+    #[serde(default)]
     pub top_level_images: usize,
     /// Top-level charts in this section — top-level only, the same rule
     /// [`Self::top_level_tables`] documents. Deep counts are
     /// [`Self::charts`].
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::top_level_tables`].
+    #[serde(default)]
     pub top_level_charts: usize,
     /// Paragraphs the shared traversal visits inside this section.
     pub paragraphs: usize,
