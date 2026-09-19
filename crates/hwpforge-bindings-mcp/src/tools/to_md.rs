@@ -192,6 +192,10 @@ mod tests {
             "to_md must surface the decode warning: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]

@@ -64,19 +64,45 @@ pub fn run_diff(
         None => None,
     };
 
-    let inline_size = serde_json::to_string(&diff).map(|s| s.len()).unwrap_or(usize::MAX);
+    build_diff_data(diff, summary, report_path, warnings)
+}
+
+/// Builds the final [`DiffData`], gating on the complete serialized
+/// response — including `warnings` — rather than on `diff` alone: a
+/// document pair with many decode warnings but a small diff could
+/// otherwise slip past a narrower check while still exceeding the real
+/// inline ceiling.
+///
+/// Split out from [`run_diff`] so a test can exercise the gate with a
+/// synthetic oversized `warnings` list, without needing a fixture large
+/// enough to trigger it for real.
+fn build_diff_data(
+    diff: DocumentDiff,
+    summary: String,
+    report_path: Option<String>,
+    warnings: Vec<ToolWarningInfo>,
+) -> Result<DiffData, ToolErrorInfo> {
+    let mut data = DiffData { diff: Some(diff), report_path, summary, warnings };
+
+    let inline_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(usize::MAX);
     if inline_size > MAX_INLINE_RESPONSE {
-        if report_path.is_none() {
+        if data.report_path.is_none() {
             return Err(ToolErrorInfo::new(
                 "OUTPUT_TOO_LARGE",
-                format!("Diff report is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
+                format!("Diff response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
                 "Pass output_path to write the full report to a file.",
             ));
         }
-        return Ok(DiffData { diff: None, report_path, summary, warnings });
+        // The full diff already lives at `report_path`; externalize it by
+        // dropping the inline copy and return `summary` + `warnings`
+        // instead. If `warnings` alone still exceeds the ceiling there is
+        // nowhere left to put them — the same blind spot `to_json`'s own
+        // gate has for its `warnings` field — so this does not re-check;
+        // the response goes out anyway rather than erroring on a part of
+        // the payload that has no externalization path of its own.
+        data.diff = None;
     }
-
-    Ok(DiffData { diff: Some(diff), report_path, summary, warnings })
+    Ok(data)
 }
 
 fn summarize(diff: &DocumentDiff) -> String {
@@ -143,6 +169,10 @@ mod tests {
             "diffing the fixture against itself must surface one warning per side: {:?}",
             data.warnings
         );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -219,5 +249,34 @@ mod tests {
         .unwrap();
         assert_eq!(data.report_path.as_deref(), report.to_str());
         assert!(report.exists());
+    }
+
+    /// `diff` itself (an identical-pair report) is tiny here — the
+    /// oversized total comes entirely from `warnings` — so this exercises
+    /// the branch the whole-payload gate exists for (finding #3): a small
+    /// diff and a large `warnings` list must still take the externalized
+    /// path when a `report_path` is available, not slip past unnoticed.
+    #[test]
+    fn diff_oversized_warnings_alone_take_the_externalized_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("probe.hwpx");
+        crate::tools::convert::run_convert("본문", false, path.to_str().unwrap(), "default")
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let out = ops::diff(&bytes, &bytes).unwrap();
+        assert!(out.diff.identical, "guard: a probe diffed against itself must be identical");
+        let summary = summarize(&out.diff);
+
+        let report = dir.path().join("report.json");
+        let huge =
+            vec![ToolWarningInfo::new("STUB_OVERSIZED", "x".repeat(MAX_INLINE_RESPONSE + 1))];
+
+        let data =
+            build_diff_data(out.diff, summary, Some(report.to_str().unwrap().to_string()), huge)
+                .expect("a report_path must externalize the diff instead of erroring");
+
+        assert!(data.diff.is_none(), "diff must be dropped once the complete payload is oversized");
+        assert_eq!(data.report_path.as_deref(), report.to_str());
+        assert_eq!(data.warnings.len(), 1);
     }
 }

@@ -23,7 +23,13 @@
 //! and leaves every other byte alone, so it has no encode stage and no
 //! encode warnings.
 
+use hwpforge_core::caption::Caption;
+use hwpforge_core::control::Control;
 use hwpforge_core::image::ImageStore;
+use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::section::Section;
+use hwpforge_core::table::Table;
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::grid_addr::{
     annotate_document_addresses, annotate_section_addresses, verify_document_addresses,
@@ -406,6 +412,17 @@ impl FromJsonOutput {
 /// open regardless, but `hwpforge`'s own PDF path needs the cache and would
 /// otherwise fail later with no link back to this step.
 ///
+/// The warning's `path` points at the *first* cached paragraph found,
+/// walking every paragraph the encoder would serialize — including
+/// paragraphs nested inside an image's caption, which
+/// [`Section::for_each_paragraph`] deliberately does not visit (see
+/// [`hwpforge_core::document::Document::for_each_paragraph_mut`]) but the
+/// encoder drops that cache too, so a bare `section[i]` marker would miss
+/// it silently. The one exception is a cache inside a master page: the
+/// encoder itself keeps no path there (master pages never reach the
+/// per-paragraph encode path that tracks one), so the warning still stops
+/// at the bare section marker in that case.
+///
 /// # Errors
 ///
 /// - [`OpsError::Json`] (code `JSON_PARSE_FAILED`) when the text is not JSON
@@ -448,22 +465,19 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     // Same reason this must run before `validate()` consumes the tree: the
     // encode below always runs with `EncodeOptions::default` (emit off), so
     // a cache the input carried is dropped without a trace unless flagged
-    // here. Walked recursively (`Section::for_each_paragraph`) so a cache
-    // nested under a header/footer/table cell/note is caught too — one
-    // warning per section that carries at least one non-empty cache.
+    // here. `first_layout_cache_path` walks every paragraph the encoder
+    // would serialize (including image captions — see its doc), so one
+    // warning per section that carries at least one non-empty cache, with
+    // `path` naming the first such paragraph rather than just the section.
     let layout_cache_warnings: Vec<OpsWarning> = exported
         .document
         .sections()
         .iter()
         .enumerate()
         .filter_map(|(index, section)| {
-            let mut has_cache = false;
-            section.for_each_paragraph(|p| {
-                has_cache |= p.layout_cache.as_ref().is_some_and(|c| !c.is_empty());
-            });
-            has_cache.then(|| {
+            first_layout_cache_path(section, index).map(|path| {
                 OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
-                    path: ParagraphPath(vec![PathSeg::Section(index)]),
+                    path,
                     reason: "layout cache present in the JSON was not re-emitted — from_json \
                              encodes with emit_layout_cache off by design"
                         .to_string(),
@@ -502,6 +516,188 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         paragraphs,
         warnings,
     })
+}
+
+// ── layout-cache path discovery (from_json warning) ──────────────
+
+/// Finds the path of the first paragraph in `section` whose promoted
+/// [`Paragraph::layout_cache`] is non-empty.
+///
+/// This walks every paragraph the HWPX encoder would serialize —
+/// including paragraphs nested inside an image's [`Caption`], which
+/// [`Section::for_each_paragraph`] deliberately does not visit (see
+/// [`hwpforge_core::document::Document::for_each_paragraph_mut`] for that
+/// documented gap). The segments used here (`BodyParagraph`, `Header`,
+/// `TableCell`, `Caption`, `TextBox`, `NestedParagraph`, …) are the same
+/// [`PathSeg`] vocabulary the encoder's own `EncodeSink` builds in
+/// `hwpforge-smithy-hwpx::encoder`, so the path this returns reads the
+/// same way a real encoder-side `LayoutCacheDropped` warning would.
+///
+/// Two spots the encoder itself never path-tracks fall back to a bare
+/// `section[i]` path instead of inventing a segment it never emits: master
+/// pages (`build_masterpage_entries` never receives a sink) and a memo's
+/// `anchor_runs` (collapsed to plain text before encoding — see
+/// [`first_in_control`] — never walked as paragraphs).
+fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<ParagraphPath> {
+    let base = vec![PathSeg::Section(section_index)];
+
+    first_in_paragraphs(&section.paragraphs, &base, PathSeg::BodyParagraph)
+        .or_else(|| {
+            section.headers.iter().enumerate().find_map(|(i, hf)| {
+                let mut path = base.clone();
+                path.push(PathSeg::Header(i));
+                first_in_paragraphs(&hf.paragraphs, &path, PathSeg::NestedParagraph)
+            })
+        })
+        .or_else(|| {
+            section.footers.iter().enumerate().find_map(|(i, hf)| {
+                let mut path = base.clone();
+                path.push(PathSeg::Footer(i));
+                first_in_paragraphs(&hf.paragraphs, &path, PathSeg::NestedParagraph)
+            })
+        })
+        .or_else(|| {
+            // The encoder never path-tracks master pages (see this
+            // function's doc), so there is no real segment to append here
+            // — but the *detection* must still recurse into runs (table
+            // cells, captions, …), not just check each top-level paragraph
+            // directly, or a cache nested one level deeper than before
+            // would stop being caught at all (a real narrowing, not just
+            // an imprecise path).
+            let carries_cache = section.master_pages.iter().flatten().any(|mp| {
+                mp.paragraphs.iter().any(|p| first_in_paragraph(p, base.clone()).is_some())
+            });
+            carries_cache.then(|| ParagraphPath(base.clone()))
+        })
+}
+
+/// Whether `p` itself carries a non-empty promoted layout cache.
+fn paragraph_has_cache(p: &Paragraph) -> bool {
+    p.layout_cache.as_ref().is_some_and(|c| !c.is_empty())
+}
+
+/// Finds the path of the first cached paragraph in `paragraphs`, appending
+/// `seg(index)` to `prefix` for each one tried — callers pass
+/// [`PathSeg::BodyParagraph`] for a section's top-level paragraphs and
+/// [`PathSeg::NestedParagraph`] for every other container, matching
+/// `hwpforge-smithy-hwpx::encoder::section::build_sublist`.
+fn first_in_paragraphs(
+    paragraphs: &[Paragraph],
+    prefix: &[PathSeg],
+    seg: impl Fn(usize) -> PathSeg,
+) -> Option<ParagraphPath> {
+    paragraphs.iter().enumerate().find_map(|(idx, p)| {
+        let mut path = prefix.to_vec();
+        path.push(seg(idx));
+        first_in_paragraph(p, path)
+    })
+}
+
+/// Checks `p` itself, then recurses into its runs — pre-order, matching
+/// [`Paragraph::for_each_paragraph`].
+fn first_in_paragraph(p: &Paragraph, path: Vec<PathSeg>) -> Option<ParagraphPath> {
+    if paragraph_has_cache(p) {
+        return Some(ParagraphPath(path));
+    }
+    p.runs.iter().find_map(|run| first_in_run(run, &path))
+}
+
+/// Recurses into a run's content: tables and controls the encoder itself
+/// recurses into, plus [`RunContent::Image`], which it does not (the gap
+/// this whole module exists to close for the warning's purposes).
+fn first_in_run(run: &Run, path: &[PathSeg]) -> Option<ParagraphPath> {
+    match &run.content {
+        RunContent::Table(table) => first_in_table(table, path),
+        RunContent::Control(control) => first_in_control(control, path),
+        RunContent::Image(image) => first_in_caption(image.caption.as_ref(), path),
+        RunContent::Text(_) | RunContent::InlineText(_) => None,
+        // `RunContent` is `#[non_exhaustive]` too, so this crate's match
+        // needs a wildcard regardless of Core's own coverage — a future
+        // variant that carries paragraphs would need a hand-added arm here.
+        _ => None,
+    }
+}
+
+/// Row → cell → cell paragraphs (nested tables recurse via
+/// [`first_in_paragraphs`] → [`first_in_paragraph`] → [`first_in_run`]),
+/// then the table's own caption.
+fn first_in_table(table: &Table, path: &[PathSeg]) -> Option<ParagraphPath> {
+    table
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(row_idx, row)| {
+            row.cells.iter().enumerate().find_map(|(cell_idx, cell)| {
+                let mut cell_path = path.to_vec();
+                cell_path.push(PathSeg::TableCell { row: row_idx, cell: cell_idx });
+                first_in_paragraphs(&cell.paragraphs, &cell_path, PathSeg::NestedParagraph)
+            })
+        })
+        .or_else(|| first_in_caption(table.caption.as_ref(), path))
+}
+
+/// A caption's own paragraphs, if it has one — shared by tables, shapes and
+/// (via [`first_in_run`]) images.
+fn first_in_caption(caption: Option<&Caption>, path: &[PathSeg]) -> Option<ParagraphPath> {
+    let caption = caption?;
+    let mut cap_path = path.to_vec();
+    cap_path.push(PathSeg::Caption);
+    first_in_paragraphs(&caption.paragraphs, &cap_path, PathSeg::NestedParagraph)
+}
+
+/// Recurses into the paragraph-bearing [`Control`] variants — shape body
+/// text and captions, footnotes/endnotes, group children, and a memo's
+/// visible body content.
+///
+/// `Memo::anchor_runs` is intentionally not walked: the encoder collapses
+/// it to plain text (`build_memo_anchor_xml`) and never recurses into it,
+/// so a cache nested there would never reach a `LayoutCacheDropped` site in
+/// the real encoder either — walking it here would report a drop the
+/// encoder itself cannot produce.
+fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath> {
+    match control {
+        Control::TextBox { paragraphs, caption, .. }
+        | Control::Ellipse { paragraphs, caption, .. }
+        | Control::Polygon { paragraphs, caption, .. } => {
+            let mut tb_path = path.to_vec();
+            tb_path.push(PathSeg::TextBox);
+            first_in_paragraphs(paragraphs, &tb_path, PathSeg::NestedParagraph)
+                .or_else(|| first_in_caption(caption.as_ref(), path))
+        }
+        Control::Footnote { paragraphs, .. } => {
+            let mut note_path = path.to_vec();
+            note_path.push(PathSeg::Footnote);
+            first_in_paragraphs(paragraphs, &note_path, PathSeg::NestedParagraph)
+        }
+        Control::Endnote { paragraphs, .. } => {
+            let mut note_path = path.to_vec();
+            note_path.push(PathSeg::Endnote);
+            first_in_paragraphs(paragraphs, &note_path, PathSeg::NestedParagraph)
+        }
+        Control::Line { caption, .. }
+        | Control::Rect { caption, .. }
+        | Control::Arc { caption, .. }
+        | Control::Curve { caption, .. }
+        | Control::ConnectLine { caption, .. } => first_in_caption(caption.as_ref(), path),
+        Control::Group { children, .. } => children.iter().enumerate().find_map(|(idx, child)| {
+            let mut child_path = path.to_vec();
+            child_path.push(PathSeg::GroupChild(idx));
+            first_in_control(child, &child_path)
+        }),
+        Control::Memo { content, .. } => {
+            let mut memo_path = path.to_vec();
+            memo_path.push(PathSeg::Memo);
+            first_in_paragraphs(content, &memo_path, PathSeg::NestedParagraph)
+        }
+        // Core's own `Control::walk_paragraphs` has no wildcard here on
+        // purpose, so a new paragraph-bearing variant fails *that* match at
+        // compile time. This copy cannot get the same guarantee — `Control`
+        // is `#[non_exhaustive]`, so a match from this crate needs a
+        // wildcard regardless — so a future paragraph-bearing variant would
+        // silently fall into this arm instead of failing to build. Any new
+        // variant added to Core's match must be added here by hand too.
+        _ => None,
+    }
 }
 
 // ── patch ───────────────────────────────────────────────────────
