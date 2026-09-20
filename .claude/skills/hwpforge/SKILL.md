@@ -85,7 +85,7 @@ What does the user want?
 │     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
 │
 ├─ Check whether a .hwpx is structurally sound (before further editing)
-│     → validate  (decode + Document::validate; exit 0 valid, 1 invalid, 2 undecodable)
+│     → validate  (decode + Document::validate; exit 0 valid, 1 file/argument error, 2 undecodable, 3 invalid)
 │
 └─ Need the JSON shape, or the list of styles
       → schema        (JSON Schema for document/section types)

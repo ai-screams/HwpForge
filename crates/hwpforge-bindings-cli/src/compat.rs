@@ -332,13 +332,19 @@ const TABLE: &[Row] = &[
     row!(DeletePara, ReferenceStranded, "REFERENCE_STRANDED", 1),
     row!(DeletePara, HardBreakLoss, "HARD_BREAK_LOSS", 1),
     row!(DeletePara, EmptySection, "EMPTY_SECTION", 1),
-    // No row for InsertTextRequired ("INSERT_TEXT_REQUIRED"): clap's
+    // InsertTextRequired ("INSERT_TEXT_REQUIRED"): clap's
     // `#[arg(long = "text", required = true)]` already refuses an empty
     // `--text` list before `run_insert` is ever called, so the legacy CLI
-    // never had a code for this case — `ops::edit::insert_para`'s own
-    // `# Errors` doc names it (`OpsError::InvalidInput`/`OpsCode::InsertTextRequired`)
-    // for callers with no such clap guard (e.g. MCP). New code, no legacy
-    // precedent to preserve — falls through to `code.as_str()` if ever hit.
+    // never had a call site for this case — `ops::edit::insert_para`'s own
+    // `# Errors` doc names it (`OpsError::Rejected`/`OpsCode::InsertTextRequired`)
+    // for callers with no such clap guard (e.g. MCP). Given a row anyway
+    // (audit finding — an unrouted new code silently fell through to
+    // `exit_code`'s fallback, exit 2, the codec-failure class, though this
+    // is an argument rejection): exit 1, the argument-error class every
+    // other `insert-para`/`delete-para` row in this table uses. New code,
+    // no legacy precedent to preserve (`tests/data/legacy_codes.txt`'s own
+    // note on this pair).
+    row!(InsertPara, InsertTextRequired, "INSERT_TEXT_REQUIRED", 1),
     row!(InsertPara, MultiParagraphText, "MULTI_PARAGRAPH_TEXT", 1),
     row!(InsertPara, InsertBeforeSectionProperties, "INSERT_BEFORE_SECTION_PROPERTIES", 1),
     // Shared between both commands (structural.rs's exit_structural_error
@@ -887,7 +893,7 @@ mod tests {
         ("templates", "PRESET_NOT_FOUND"),
         ("schema", "UNKNOWN_SCHEMA_TYPE"),
         ("to-md", "DIR_CREATE_FAILED"), ("to-md", "FILE_WRITE_FAILED"),
-        ("validate", "FILE_READ_FAILED"),
+        ("validate", "FILE_READ_FAILED"), ("validate", "JSON_SERIALIZE_FAILED"),
         ("shared", "INPUT_TOO_LARGE"),
     ];
 

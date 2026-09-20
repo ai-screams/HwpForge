@@ -123,8 +123,13 @@ pub struct FillMeta {
 ///
 /// # Errors
 ///
-/// - [`OpsError::InvalidInput`] when `values` is empty (the frontends call
-///   this `NO_VALUES`) or names a field twice.
+/// - [`OpsError::Rejected`] with [`OpsCode::NoValues`] when `values` is
+///   empty (the frontends call this `NO_VALUES`).
+/// - [`OpsError::InvalidInput`] when `values` names a field twice —
+///   reachable only when a caller bypasses the frontends' own duplicate
+///   check (the CLI's `parse_sets`/`DUPLICATE_SET`, MCP's equivalent);
+///   every shipped frontend already rejects a repeated name before calling
+///   this function.
 /// - [`OpsError::Fill`] for every library rejection: an unknown name
 ///   (`FIELD_NOT_FOUND`), an empty value (`EMPTY_FIELD_VALUE`), a duplicated
 ///   field name in the *document* (`FIELD_NAME_AMBIGUOUS`), or a field with
@@ -287,9 +292,10 @@ pub struct SetCellMeta {
 ///
 /// # Errors
 ///
-/// - [`OpsError::InvalidInput`] for an unusable option combination (the
-///   frontends call these `INVALID_SET_CELL_ARGS` and, for an empty batch,
-///   `INVALID_SET_CELL_MAP`).
+/// - [`OpsError::Rejected`] with [`OpsCode::InvalidSetCellArgs`] for an
+///   unusable option combination, or [`OpsCode::InvalidSetCellMap`] for an
+///   empty `specs` batch (the frontends call these `INVALID_SET_CELL_ARGS`
+///   and `INVALID_SET_CELL_MAP`).
 /// - [`OpsError::CellEdit`] for every library rejection, including
 ///   `TABLE_NOT_FOUND`, `CELL_LABEL_AMBIGUOUS`,
 ///   `CELL_HAS_NON_TEXT_CONTENT`, the admission refusals
@@ -508,9 +514,11 @@ pub struct StructuralMeta {
 ///
 /// # Errors
 ///
-/// - [`OpsError::InvalidInput`] when `text` is empty (the MCP server calls
-///   this `INSERT_TEXT_REQUIRED`). The library treats an empty batch as a
-///   byte-identical no-op, so this operation has to refuse it here.
+/// - [`OpsError::Rejected`] with [`OpsCode::InsertTextRequired`] when `text`
+///   is empty (the MCP server calls this `INSERT_TEXT_REQUIRED`; the CLI's
+///   own `--text` clap guard already refuses an empty list ahead of this
+///   call). The library treats an empty batch as a byte-identical no-op,
+///   so this operation has to refuse it here.
 /// - [`OpsError::StructuralEdit`] for every library rejection, including
 ///   `SECTION_OUT_OF_RANGE`, `PARAGRAPH_OUT_OF_RANGE`,
 ///   `MULTI_PARAGRAPH_TEXT` (a text containing a newline) and
@@ -555,9 +563,10 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
 ///
 /// # Errors
 ///
-/// - [`OpsError::InvalidInput`] when `indexes` is empty (the frontends call
-///   this `DELETE_NO_TARGET`). The library treats an empty target list as a
-///   byte-identical no-op, so this operation has to refuse it here.
+/// - [`OpsError::Rejected`] with [`OpsCode::DeleteNoTarget`] when `indexes`
+///   is empty (the frontends call this `DELETE_NO_TARGET`). The library
+///   treats an empty target list as a byte-identical no-op, so this
+///   operation has to refuse it here.
 /// - [`OpsError::StructuralEdit`] for every library rejection, including
 ///   `SECTION_OUT_OF_RANGE`, `PARAGRAPH_OUT_OF_RANGE`, `DUPLICATE_TARGET`,
 ///   `REFERENCE_STRANDED`, `HARD_BREAK_LOSS` and `EMPTY_SECTION`.
