@@ -386,7 +386,7 @@ impl HwpForgeServer {
     /// Use `section` parameter to extract a single section (token-efficient).
     #[tool(
         name = "hwpforge_to_json",
-        description = "Export HWPX to JSON for editing. Use section parameter (0-based) to extract a single section for token efficiency. Returns JSON inline or writes to file."
+        description = "Export HWPX to JSON for editing. Use section parameter (0-based) to extract a single section for token efficiency. Returns JSON inline (under ~750-800 KB of document JSON; larger documents are rejected with OUTPUT_TOO_LARGE because escaping the JSON as a string field adds overhead) or writes to file with output_path."
     )]
     async fn hwpforge_to_json(
         &self,
