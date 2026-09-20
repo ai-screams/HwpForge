@@ -1,4 +1,45 @@
 //! CLI error types with JSON-friendly output.
+//!
+//! # What an oversized input reports, per command
+//!
+//! Review finding C3: an input past [`MAX_FILE_SIZE`] does not report the
+//! same code/exit everywhere — which one depends on the input's *kind*
+//! (primary document vs. an auxiliary map/spec/JSON file) and, for the
+//! primary document, on whether that command reads through [`read_input`]/
+//! [`read_input_string`] or calls [`read_bounded`]/[`read_bounded_string`]
+//! directly.
+//!
+//! Every command that takes a path (all but `templates`/`schema`) calls
+//! [`check_file_size`] first, so a **regular file whose `metadata()` already
+//! reports it oversized** always reports the same thing, regardless of
+//! command: `INPUT_TOO_LARGE`, exit 1, message `"File '{path}' is {N} MB,
+//! exceeds {M} MB limit"` (`check_file_size`, below). `legacy_codes.txt`
+//! attributes this to the pseudo-command `shared` for exactly this reason.
+//!
+//! What differs by command is the **second gate**, the bounded read itself
+//! — the one that also catches a source whose `metadata()` lied (a FIFO or
+//! process substitution reports `0`, see [`hwpforge::ops::fs::read_bounded`]
+//! and this module's own [`read_capped`]):
+//!
+//! | Input kind | Commands | Code | Exit | Message source |
+//! | --- | --- | --- | --- | --- |
+//! | Primary document | `inspect`, `to-json`, `outline`, `diff` (both files), `delete-para`/`insert-para`, `read`, `fields`, `fill`, `set-cell`, `stamp`, `validate`, `census-hwp5`, and `from-json`'s own JSON input, `patch`'s base *and* its section-JSON input | `INPUT_TOO_LARGE` (cap hit) or `FILE_READ_FAILED` (any other I/O error) | 1 | [`read_input`]/[`read_input_string`] itself distinguishes the two — same code as the pre-check, different message: `"File '{path}' exceeds {M} MB limit"` |
+//! | Primary document | `convert` (Markdown) | `FILE_READ_FAILED` | 1 | [`read_bounded_string`] called directly in `commands/convert.rs` — does not special-case the cap hit, so it reports the same code as a missing file |
+//! | Primary document | `to-md` (HWPX) | `DECODE_FAILED` | 2 | `commands/to_md.rs` reads via [`read_bounded`] directly and reports every read failure as a decode failure — pre-migration, `to-md` bundled its file read into the decode stage, and this reproduces that byte-for-byte (see that call site's own comment) |
+//! | Primary document | `convert-hwp5` (HWP5) | `HWP5_DECODE_FAILED` | 2 | `commands/convert_hwp5.rs` reads via [`read_bounded`] directly; same reasoning as `to-md`, HWP5-flavoured — the legacy first read this replaced always reported `HWP5_DECODE_FAILED` for an unreadable file, cap hit included |
+//! | Primary document (diagnostic-only, no `ops` counterpart) | `audit-hwp5` (source and result) | `FILE_READ_FAILED` | 1 | `commands/audit_hwp5.rs`'s `read_required` helper wraps [`read_bounded`] directly |
+//! | Auxiliary — base HWPX | `from-json --base` | `FILE_READ_FAILED` | 1 | `commands/from_json.rs` reads via [`read_bounded`] directly — an optional file this command can run without, so it never earned the primary input's split |
+//! | Auxiliary — stamp/set-cell map | `stamp --map`, `set-cell --map` | `FILE_READ_FAILED` | 1 | `commands/stamp.rs`/`commands/set_cell.rs` read via [`read_bounded_string`] directly |
+//!
+//! `patch`'s section-JSON file is *not* in the auxiliary rows above on
+//! purpose: unlike the other two frontend-shared map/JSON files (`stamp`'s
+//! and `set-cell`'s), it goes through [`read_input_string`] like a primary
+//! document, so it gets the same `INPUT_TOO_LARGE`/`FILE_READ_FAILED` split.
+//!
+//! `convert`'s own `INPUT_TOO_LARGE`/exit-1 row in `legacy_codes.txt` is a
+//! third source, unrelated to either gate above: a dedicated stdin-size
+//! check (`MAX_STDIN_SIZE`) that only exists for `convert -`, the one
+//! command that reads from stdin.
 
 use serde::Serialize;
 use std::fmt;

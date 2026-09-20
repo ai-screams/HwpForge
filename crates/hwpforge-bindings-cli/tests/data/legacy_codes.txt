@@ -13,6 +13,10 @@
 # file except `templates.rs` and `schema.rs`), so `INPUT_TOO_LARGE` is not
 # attributed to one command.
 #
+# This file is a frozen historical snapshot, not a live map of today's
+# call sites — for which command reports what on an *oversized* input
+# today, see `src/error.rs`'s module docs.
+#
 # hint column (exact, not a category — `src/compat.rs`'s inventory test
 # compares `TABLE`'s hint field against this text byte-for-byte, per the W3
 # adversarial-review addendum: a prior lane's snapshot recorded only code
