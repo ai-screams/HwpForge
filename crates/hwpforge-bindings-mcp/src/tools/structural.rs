@@ -199,8 +199,13 @@ mod tests {
         let data =
             run_insert_para(&base, 0, 2, false, Some("끼움"), None, out.to_str().unwrap()).unwrap();
 
-        assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
-        assert!(data.warnings[0].contains("LAYOUT_CACHE_DROPPED"), "{:?}", data.warnings);
+        // Assert on the serialized wire shape, not the typed struct, so a
+        // serde regression (skipped or renamed `warnings`) fails here too.
+        let json = serde_json::to_value(&data).unwrap();
+        let warnings = json["warnings"].as_array().expect("warnings is an array");
+        assert_eq!(warnings.len(), 1, "{json}");
+        let first = warnings[0].as_str().expect("warning entries are strings");
+        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
     }
 
     /// The documented merge order — what the decode reported, then what the
@@ -215,9 +220,13 @@ mod tests {
         let out = dir.path().join("out.hwpx");
         let data = run_delete_para(&base, 0, &[2], out.to_str().unwrap()).unwrap();
 
-        assert_eq!(data.warnings.len(), 2, "{:?}", data.warnings);
-        assert!(data.warnings[0].contains("LAYOUT_CACHE_DROPPED"), "{:?}", data.warnings);
-        assert!(data.warnings[1].contains("index-mark"), "{:?}", data.warnings);
+        let json = serde_json::to_value(&data).unwrap();
+        let warnings = json["warnings"].as_array().expect("warnings is an array");
+        assert_eq!(warnings.len(), 2, "{json}");
+        let first = warnings[0].as_str().expect("warning entries are strings");
+        let second = warnings[1].as_str().expect("warning entries are strings");
+        assert!(first.contains("LAYOUT_CACHE_DROPPED"), "{json}");
+        assert!(second.contains("index-mark"), "{json}");
     }
 
     #[test]
