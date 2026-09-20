@@ -14,6 +14,16 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
 }
 
+/// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is still
+/// admissible — the same fixture `fill`/`insert_para`/`delete_para`/`stamp`
+/// use for their own decode-warning tests (`ops_insert_para.rs`,
+/// `ops_delete_para.rs`), so the surfaces cannot disagree about what "a
+/// document that warns" means.
+fn warning_fixture() -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/");
+    std::fs::read(format!("{path}stale-line-cache.hwpx")).expect("stale-line-cache.hwpx")
+}
+
 /// A store with every language slot filled, which is what the encoder needs
 /// before it will write a font table.
 fn minimal_store() -> HwpxStyleStore {
@@ -216,27 +226,56 @@ fn sections_and_paragraphs_match_an_inspect_of_the_output_without_a_second_decod
     assert_eq!(out.paragraphs, top_level_paragraphs);
 }
 
-/// Anything reaching `warnings` is something the caller may ignore.
+/// Before this fix, `restyle` decoded the package but never read
+/// `decoded.warnings`, so a stale line-layout cache vanished silently in
+/// both the MCP `hwpforge_restyle` tool and Python's `Document.restyle()`
+/// (both already had a `warnings` channel — it just stayed empty).
+#[test]
+fn decode_warnings_reach_the_restyle_output() {
+    let out = restyle(&warning_fixture(), &RestyleOptions::default().with_preset("modern"))
+        .expect("restyle");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
+}
+
+/// A clean fixture must not gain a warning from this fix.
+#[test]
+fn a_clean_fixture_still_reports_no_warnings() {
+    let out =
+        restyle(&fixture("SimpleTable.hwpx"), &RestyleOptions::default().with_preset("modern"))
+            .expect("restyle");
+
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+/// Anything reaching `warnings` is something the caller may ignore, and
+/// never a semantic loss — those are refused outright (see
+/// `semantic_loss_returns_no_bytes_at_all`), so this list must never carry
+/// one of those codes.
 ///
-/// The loop below is only meaningful if it has something to iterate, so the
-/// exact list is pinned first. It is empty, and that is a property of the
-/// encoder rather than of this operation: the only non-semantic
-/// `EncodeWarning` is `LayoutCacheDropped`, which the encoder raises solely
-/// under `EncodeOptions::emit_layout_cache` — an opt-in no editing surface
-/// sets. No committed fixture reaches it.
-///
-/// Pinning emptiness rather than waving at it means the day a fixture does
-/// produce one, this test fails and the classification assertion below stops
-/// being decorative. The non-empty half of the same contract is already
-/// covered by `semantic_loss_returns_no_bytes_at_all`, where the refusal
-/// carries both warning groups.
+/// `sample1.hwpx` decodes with its own `LAYOUT_CACHE_DROPPED` — a
+/// pre-existing property of that fixture (it also has known malformed XML,
+/// see `hwpforge-smithy-hwpx/tests/golden.rs`'s `#[ignore]` on it), unrelated
+/// to this restyle's own encode: the only non-semantic `EncodeWarning` is
+/// `LayoutCacheDropped`, which the encoder raises solely under
+/// `EncodeOptions::emit_layout_cache` — an opt-in no editing surface sets.
+/// Before this fix the decode half of `warnings` was silently dropped
+/// (`decode_warnings_reach_the_restyle_output`), so this fixture used to
+/// pin an empty list; now it pins the one warning the decode legitimately
+/// found, and the loop below still guards against a semantic-loss code ever
+/// joining it.
 #[test]
 fn every_returned_warning_is_non_semantic() {
     let out = restyle(&fixture("sample1.hwpx"), &RestyleOptions::default().with_preset("modern"))
         .expect("restyle");
 
     let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
-    assert_eq!(codes, Vec::<String>::new(), "this encode raises nothing: {codes:?}");
+    assert_eq!(
+        codes,
+        ["LAYOUT_CACHE_DROPPED"],
+        "the decode's own warning, carried through: {codes:?}"
+    );
 
     for code in &codes {
         assert_ne!(code, "NOTE_HEAD_SKIPPED", "{codes:?}");

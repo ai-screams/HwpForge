@@ -20,18 +20,39 @@ pub struct StructuralData {
     pub warnings: Vec<String>,
 }
 
-/// Keeps only the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …),
-/// dropping the admission decode's warnings that `ops::insert_para`/
-/// `ops::delete_para` now also report — this tool never surfaced decode
-/// warnings before the migration (`insert_para`'s `warnings` was always
-/// `Vec::new()`), so this filter reproduces that byte for byte: `insert_para`
-/// never produces a `Structural` warning, so it still comes out empty, and
-/// `delete_para` keeps exactly its advisory-scan messages.
+/// Renders one warning into this file's `Vec<String>` shape: a
+/// [`OpsWarning::Structural`] advisory keeps its own `Display` (unchanged,
+/// pre-migration behaviour); every other kind — chiefly `Decode`, for
+/// example `LAYOUT_CACHE_DROPPED` — renders as `"{code}: {message}"` via
+/// [`OpsWarning::info`]. Matches the CLI's `structural.rs::render_warning`
+/// (`1ac435b`) so the two frontends never disagree about the string.
+fn render_warning(warning: &OpsWarning) -> String {
+    match warning {
+        OpsWarning::Structural(sw) => sw.to_string(),
+        other => {
+            let info = other.info();
+            format!("{}: {}", info.code, info.message)
+        }
+    }
+}
+
+/// Keeps the advisory scan's own warnings (`INDEX_MARK_REMOVED`, …) and,
+/// additively (W5 follow-up), the admission decode's warnings that
+/// `ops::insert_para`/`ops::delete_para` also report (for example
+/// `LAYOUT_CACHE_DROPPED`) — before this follow-up the filter kept only
+/// `Structural`, dropping decode warnings entirely (`insert_para`'s
+/// `warnings` was always empty because it never produces a `Structural`
+/// warning). `ops::edit`'s documented merge order is decode-then-advisory
+/// (see that module's doc comment), and this filter does not reorder, so the
+/// array comes out decode-first — the same order the CLI's `structural.rs`
+/// renders (`out.warnings.iter().map(render_warning)`, no reordering there
+/// either). Every existing `Structural` string stays byte-identical:
+/// [`render_warning`] still calls `sw.to_string()` for that variant.
 fn structural_advisories(warnings: &[OpsWarning]) -> Vec<String> {
     warnings
         .iter()
-        .filter(|w| matches!(w, OpsWarning::Structural(_)))
-        .map(|w| compat::warning(w).message)
+        .filter(|w| matches!(w, OpsWarning::Structural(_) | OpsWarning::Decode(_)))
+        .map(render_warning)
         .collect()
 }
 
@@ -138,6 +159,23 @@ mod tests {
         path.to_str().unwrap().to_string()
     }
 
+    /// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is
+    /// still admissible — the same fixture `ops::edit`'s own tests use
+    /// (`crates/hwpforge/tests/ops_insert_para.rs`/`ops_delete_para.rs`), so
+    /// the two surfaces cannot disagree about what "a document that warns"
+    /// means. Copied into the tempdir because these tools take a file path,
+    /// not bytes.
+    fn warning_fixture(dir: &tempfile::TempDir) -> String {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/layout/stale-line-cache.hwpx"
+        ))
+        .expect("stale-line-cache.hwpx");
+        let path = dir.path().join("stale-line-cache.hwpx");
+        std::fs::write(&path, bytes).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
     #[test]
     fn insert_para_via_mcp_surface() {
         let dir = tempfile::tempdir().unwrap();
@@ -147,6 +185,39 @@ mod tests {
             run_insert_para(&base, 0, 1, false, Some("삽입"), None, out.to_str().unwrap()).unwrap();
         assert!(data.change.contains("inserted 1 paragraph"));
         assert!(out.exists());
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
+    }
+
+    /// W5 follow-up: `insert_para` has no advisory scan of its own, so
+    /// before this fix its `warnings` was always empty — the admission
+    /// decode's `LAYOUT_CACHE_DROPPED` never reached this tool's output.
+    #[test]
+    fn insert_para_surfaces_the_decode_warning_from_a_stale_layout_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = warning_fixture(&dir);
+        let out = dir.path().join("out.hwpx");
+        let data =
+            run_insert_para(&base, 0, 2, false, Some("끼움"), None, out.to_str().unwrap()).unwrap();
+
+        assert_eq!(data.warnings.len(), 1, "{:?}", data.warnings);
+        assert!(data.warnings[0].contains("LAYOUT_CACHE_DROPPED"), "{:?}", data.warnings);
+    }
+
+    /// The documented merge order — what the decode reported, then what the
+    /// edit itself advises — must survive this tool's filter unreordered.
+    /// Paragraph 2 of the fixture carries an index mark (see
+    /// `ops_delete_para.rs::the_decode_warning_precedes_the_delete_advisory`),
+    /// so deleting it produces one of each.
+    #[test]
+    fn delete_para_surfaces_the_decode_warning_before_its_own_advisory() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = warning_fixture(&dir);
+        let out = dir.path().join("out.hwpx");
+        let data = run_delete_para(&base, 0, &[2], out.to_str().unwrap()).unwrap();
+
+        assert_eq!(data.warnings.len(), 2, "{:?}", data.warnings);
+        assert!(data.warnings[0].contains("LAYOUT_CACHE_DROPPED"), "{:?}", data.warnings);
+        assert!(data.warnings[1].contains("index-mark"), "{:?}", data.warnings);
     }
 
     #[test]

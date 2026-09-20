@@ -183,6 +183,56 @@ mod tests {
         assert!(!out.exists(), "fail-closed 인데 산출 파일이 생성됐다");
     }
 
+    /// A package whose decode raises `LAYOUT_CACHE_DROPPED` and which is
+    /// still admissible — the same fixture the ops-layer and `structural.rs`
+    /// decode-warning tests use, so the surfaces cannot disagree about what
+    /// "a document that warns" means.
+    ///
+    /// `RestyleData::warnings` is `Vec<String>` (unlike `stamp`/`set_cell`'s
+    /// `Vec<ToolWarningInfo>`), so there is no `code` key here — asserting
+    /// on the message text instead.
+    #[test]
+    fn restyle_surfaces_the_decode_warning_from_a_stale_layout_cache() {
+        let src = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/layout/stale-line-cache.hwpx"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("restyled.hwpx");
+
+        let data = run_restyle(src, "modern", out.to_str().unwrap()).unwrap();
+
+        let value = serde_json::to_value(&data).unwrap();
+        let warnings = value["warnings"].as_array().expect("warnings array");
+        assert_eq!(warnings.len(), 1, "{value}");
+        let message = warnings[0].as_str().expect("warnings entries are strings");
+        assert!(!message.is_empty());
+        assert!(message.contains("layout cache dropped"), "{message}");
+    }
+
+    /// A clean fixture must not gain a warning from this fix, and the
+    /// `skip_serializing_if` on `warnings` means the key is absent entirely
+    /// rather than an empty array.
+    #[test]
+    fn restyle_on_a_clean_fixture_has_no_warnings_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("source.hwpx");
+        crate::tools::convert::run_convert(
+            "# Test\n\nSome content.",
+            false,
+            hwpx_path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+        let out_path = dir.path().join("restyled.hwpx");
+
+        let data =
+            run_restyle(hwpx_path.to_str().unwrap(), "modern", out_path.to_str().unwrap()).unwrap();
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert!(value.get("warnings").is_none(), "{value}");
+    }
+
     #[test]
     fn restyle_preserves_all_shape_indices_with_complex_doc() {
         // Regression test: documents with code blocks reference higher char/para
