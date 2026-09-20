@@ -1,7 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SetCellRequest",
-  "description": "Request parameters for `hwpforge_set_cell`.",
   "type": "object",
   "properties": {
     "file_path": {

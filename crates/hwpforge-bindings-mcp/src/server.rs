@@ -1077,8 +1077,39 @@ mod request_schema_tests {
     //! serde_json/schemars serialization order instead) so an upstream rename
     //! or reshape fails loudly here instead of silently changing the wire
     //! contract.
+    //!
+    //! W6c audit follow-up: these tests used to compare against
+    //! `schemars::schema_for!(StampRequest)` directly — the schemars type's
+    //! own raw output, complete with a top-level `title`/`description` for
+    //! the wrapper type. But that is not what the server actually sends: the
+    //! `#[tool(...)]` macro derives each tool's `inputSchema` via
+    //! `rmcp::handler::server::common::schema_for_input`, which strips
+    //! top-level `title`/`description` before caching it (see that
+    //! function's doc in the `rmcp` crate — "the wrapper type name and doc,
+    //! which are noise to the LLM"). The fixtures below were frozen from the
+    //! `schema_for!` shape and never had those two keys removed, so the
+    //! baseline this test locked was never the wire contract the client
+    //! actually receives over `tools/list`. [`server_input_schema`] fixes
+    //! that by asking the same [`ToolRouter`] the running server uses for its
+    //! tool list — `HwpForgeServer::tool_router()` — for the tool's
+    //! [`Tool::input_schema`] directly, so a mismatch here means the wire
+    //! contract itself changed, not merely that `schema_for!`'s raw output
+    //! did.
 
     use super::*;
+
+    /// The `inputSchema` the server would actually publish for `tool_name`
+    /// over `tools/list` — built the same way `HwpForgeServer::new` builds
+    /// its own router, so this reads the live wire shape rather than
+    /// reconstructing it by hand.
+    fn server_input_schema(tool_name: &str) -> serde_json::Value {
+        let tools = HwpForgeServer::tool_router().list_all();
+        let tool = tools
+            .into_iter()
+            .find(|t| t.name.as_ref() == tool_name)
+            .unwrap_or_else(|| panic!("tool `{tool_name}` not found in the router's tool list"));
+        serde_json::Value::Object((*tool.input_schema).clone())
+    }
 
     fn baseline(rel: &str) -> serde_json::Value {
         let text = std::fs::read_to_string(
@@ -1090,7 +1121,7 @@ mod request_schema_tests {
 
     #[test]
     fn stamp_request_schema_matches_baseline() {
-        let actual = serde_json::to_value(schemars::schema_for!(StampRequest)).unwrap();
+        let actual = server_input_schema("hwpforge_stamp");
         assert_eq!(
             actual,
             baseline("stamp_request_schema.json"),
@@ -1103,7 +1134,7 @@ mod request_schema_tests {
 
     #[test]
     fn set_cell_request_schema_matches_baseline() {
-        let actual = serde_json::to_value(schemars::schema_for!(SetCellRequest)).unwrap();
+        let actual = server_input_schema("hwpforge_set_cell");
         assert_eq!(
             actual,
             baseline("set_cell_request_schema.json"),
