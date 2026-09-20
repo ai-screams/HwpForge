@@ -9,6 +9,17 @@
 # `tool_error` must keep emitting exactly these codes for the tool named on
 # each line. Regenerate only by re-auditing the source, never by copying
 # `compat.rs`'s own table (that would make the check circular).
+#
+# ── This file holds only pre-migration rows, including two now retired ──
+# Two pairs below (`convert PRESET_ERROR`, `from_json INTERNAL_ERROR`) were
+# genuinely emitted by the pre-migration source, so they stay here — but no
+# code path emits either any more post-migration (`src/compat.rs`'s
+# `RETIRED_BY_MIGRATION` list has the full reasoning; both conditions now
+# classify under a *different* `OpsCode` no legacy tool ever surfaced, so
+# neither string can be constructed today). `new_codes.txt` (same
+# directory) is the mirror case: a code with no pre-migration call site at
+# all, reachable only after this migration. `src/compat.rs`'s
+# `snapshot_pairs()` reads both files.
 convert	ENCODE_ERROR
 convert	INPUT_TOO_LARGE
 convert	INVALID_EXTENSION

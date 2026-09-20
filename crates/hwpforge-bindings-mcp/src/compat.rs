@@ -53,8 +53,28 @@
 //! dedicated match arm rather than a `TABLE` row precisely so
 //! `tests/data/legacy_codes.txt` — an audited snapshot of what the
 //! pre-migration source actually emitted — never needs a fabricated
-//! `validate` entry. A *decoded-but-invalid* document still folds its
-//! verdict into `valid: false`, unchanged from before.
+//! `validate` entry. This row's code (not its hint) is frozen instead in
+//! `tests/data/new_codes.txt` (a code/tool with no pre-migration call site
+//! to audit at all — see that file's header) so it stays checked without
+//! putting a "pre-migration" claim on it that isn't true. A
+//! *decoded-but-invalid* document still folds its verdict into `valid:
+//! false`, unchanged from before.
+//!
+//! # `None` means "ask `ops`", not "no hint" — currently dormant for MCP
+//!
+//! [`Row::hint`] is `Option<&'static str>`; unlike the CLI's `compat.rs`
+//! (which needed a three-state `Hint` enum — many of its rows are
+//! genuinely hint-less pre-migration calls, and blindly asking `ops` for
+//! those would silently add a hint the legacy CLI never had), every row in
+//! this module's `TABLE` today carries `Some` — a W6b audit comparison
+//! script found 0 of them byte-identical to `hwpforge::ops::hint_for`'s own
+//! text for that code (mostly a trailing-period difference, e.g. `Fill`'s
+//! `EMPTY_FIELD_VALUE`, or a wording difference, e.g. every `DecodeFailed`
+//! row), so nothing collapses today. [`tool_error`]'s `Some(row)` branch
+//! still treats `None` as "ask `err.hint()`" — uniform with the CLI's
+//! `Hint::FromOps`/no-row fallback — so the next row added with no literal
+//! gets `ops`'s hint rather than a silently blank one, and there is no
+//! existing "frozen no-hint" row here for that redefinition to break.
 
 use hwpforge::ops::{OpsError, OpsWarning};
 use hwpforge_foundation::diagnostics::OpsCode;
@@ -118,7 +138,10 @@ pub enum Tool {
 }
 
 /// One static compatibility-table row: for this `(tool, code)` pair, emit
-/// `legacy` as the code, and `hint` (if any) instead of `err.hint()`.
+/// `legacy` as the code, and `hint` — `Some` is the frozen legacy literal;
+/// `None` means "ask `err.hint()`" (module docs' "`None` means 'ask `ops`'"
+/// — every row today is `Some`, so this is currently dormant, but it keeps
+/// `None`'s meaning uniform with the CLI's `compat.rs`).
 struct Row {
     tool: Tool,
     code: OpsCode,
@@ -520,7 +543,15 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
     let code = err.code();
     let message = err.to_string();
     match TABLE.iter().find(|row| row.tool == tool && row.code == code) {
-        Some(row) => ToolErrorInfo::new(row.legacy, message, row.hint.unwrap_or_default()),
+        // `row.hint == None` means "ask `err.hint()`" (module docs' "`None`
+        // means 'ask `ops`'" — uniform with the no-row branch below and
+        // with the CLI's `compat.rs`), not "no hint at all"; every row
+        // today is `Some`, so this arm is currently dormant.
+        Some(row) => ToolErrorInfo::new(
+            row.legacy,
+            message,
+            row.hint.or_else(|| err.hint()).unwrap_or_default(),
+        ),
         None => ToolErrorInfo::new(code.as_str(), message, err.hint().unwrap_or_default()),
     }
 }
@@ -630,12 +661,21 @@ mod tests {
 
     const SNAPSHOT: &str =
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/legacy_codes.txt"));
+    /// A code with no pre-migration call site at all (`legacy_codes.txt`'s
+    /// own header note) — `validate DECODE_FAILED` today. Read alongside
+    /// `SNAPSHOT`; a separate file, not a separate table, so both stay
+    /// audited snapshots rather than `compat.rs`'s own claims re-typed
+    /// under a new name.
+    const SNAPSHOT_NEW: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/new_codes.txt"));
 
-    /// Parses `tests/data/legacy_codes.txt` into `(tool_name, code)` pairs,
-    /// skipping `#`-prefixed comment lines and blank lines.
+    /// Parses `tests/data/legacy_codes.txt` and `tests/data/new_codes.txt`
+    /// into `(tool_name, code)` pairs, skipping `#`-prefixed comment lines
+    /// and blank lines.
     fn snapshot_pairs() -> BTreeSet<(&'static str, &'static str)> {
-        SNAPSHOT
-            .lines()
+        [SNAPSHOT, SNAPSHOT_NEW]
+            .into_iter()
+            .flat_map(str::lines)
             .map(str::trim)
             .filter(|line| !line.is_empty() && !line.starts_with('#'))
             .map(|line| {
@@ -646,6 +686,30 @@ mod tests {
                 (tool, code)
             })
             .collect()
+    }
+
+    /// `SNAPSHOT` (pre-migration) and `SNAPSHOT_NEW` (no pre-migration call
+    /// site) must not both audit the same `(tool, code)` pair.
+    #[test]
+    fn legacy_and_new_snapshots_stay_disjoint() {
+        fn pairs(text: &str) -> BTreeSet<(&str, &str)> {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| {
+                    let mut parts = line.split('\t');
+                    (parts.next().expect("tool column"), parts.next().expect("code column"))
+                })
+                .collect()
+        }
+        let legacy = pairs(SNAPSHOT);
+        let new = pairs(SNAPSHOT_NEW);
+        for pair in &new {
+            assert!(
+                !legacy.contains(pair),
+                "{pair:?} is audited in both legacy_codes.txt and new_codes.txt"
+            );
+        }
     }
 
     /// The snapshot's tool names, in [`Tool`] terms. `output`,
@@ -715,6 +779,11 @@ mod tests {
         ("read", "READ_PARAS_WITHOUT_SECTION"),
         ("to_json", "SECTION_WORKFLOW_ERROR"),
         ("patch", "SECTION_WORKFLOW_ERROR"),
+        // `Tool::Validate`'s own dedicated match arm (module docs' "The
+        // tool with a dedicated match arm instead of a table row") —
+        // `new_codes.txt`, not `legacy_codes.txt`, but still routed through
+        // `tool_error`, not `MCP_LOCAL`/`RETIRED_BY_MIGRATION` below.
+        ("validate", "DECODE_FAILED"),
     ];
 
     /// (b) MCP-local codes never routed through `tool_error`/`TABLE` — the
@@ -1056,6 +1125,22 @@ mod tests {
     fn assert_code(tool: Tool, err: OpsError, expected: &str) {
         let got = tool_error(tool, err);
         assert_eq!(got.code, expected, "{tool:?}: {got:?}");
+    }
+
+    /// Pins `tests/data/new_codes.txt`'s only row: `Tool::Validate`'s
+    /// dedicated match arm (module docs) reproduces `ops`'s own
+    /// `DECODE_FAILED` wire string (not the `DECODE_ERROR` every other
+    /// decode-gated tool below uses) and the hint borrowed from those
+    /// tools' own rows.
+    #[test]
+    fn validate_decode_failure_matches_the_new_codes_snapshot() {
+        let err = OpsError::decode(HwpxError::Zip("not a zip file".into()));
+        let got = tool_error(Tool::Validate, err);
+        assert_eq!(got.code, "DECODE_FAILED");
+        assert_eq!(
+            got.hint,
+            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first."
+        );
     }
 
     #[test]

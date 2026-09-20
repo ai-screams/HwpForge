@@ -1,0 +1,23 @@
+# Frozen (tool, code) contract for a code with NO pre-migration call site —
+# a condition the pre-migration tool never reported as an error at all.
+# `legacy_codes.txt` (same directory) is the pre-migration snapshot;
+# `src/compat.rs`'s `snapshot_pairs()` reads both files. Same column format
+# (`tool<TAB>CODE`).
+#
+# ── `validate DECODE_FAILED` — HIGH-2 audit fix, not a legacy string ────
+# Pre-migration, `hwpforge_validate` folded a decode failure into its own
+# `valid: false` payload instead of returning an error at all (an
+# audit-flagged bug: a genuine HWP5 file then read as "Invalid HWPX" rather
+# than as a decode failure) — so there is no pre-migration call site to
+# audit, and no legacy string to preserve. `src/compat.rs`'s `tool_error`
+# now routes this case through a dedicated `Tool::Validate` match arm (see
+# its module docs) that returns `err.code().as_str()` — `ops`'s own wire
+# string, `DECODE_FAILED` — not the `DECODE_ERROR` every *other* MCP tool
+# below uses; this row freezes that deliberate, still-inconsistent choice
+# from the commit that adds it, the same "frozen forward" status
+# `legacy_codes.txt`'s rows have, just without a pre-migration origin. Only
+# the *hint* is legacy-borrowed (verbatim from `outline`/`read`/`fields`'s
+# own rows), which is why `src/compat.rs` reproduces it through that
+# dedicated arm rather than a `TABLE` row (a `TABLE` row would need this
+# file to carry a fabricated "pre-migration" entry it never had).
+validate	DECODE_FAILED

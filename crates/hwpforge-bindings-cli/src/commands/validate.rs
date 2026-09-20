@@ -7,7 +7,7 @@
 //! the one purpose-fit gap (W5b finding). It is a new command, not part of
 //! the W3/W4 `ops` migration `compat.rs`'s module docs describe, so its
 //! `(code, hint, exit)` shape has no legacy CLI to reproduce; it is frozen
-//! from this commit forward instead (`tests/data/legacy_codes.txt`'s header).
+//! from this commit forward instead (`tests/data/new_codes.txt`'s header).
 
 use std::path::Path;
 

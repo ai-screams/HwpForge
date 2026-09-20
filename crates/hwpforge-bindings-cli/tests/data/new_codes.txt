@@ -1,0 +1,32 @@
+# Frozen (command, code, exit, hint) contract for call sites with NO
+# pre-migration source to audit — a command the migration itself
+# introduced, or a code an existing command can now reach that the
+# pre-migration CLI structurally could not reach. `legacy_codes.txt` (same
+# directory) is the pre-W3-migration snapshot; `src/compat.rs`'s
+# `snapshot_rows()` reads both files and keeps them disjoint (see its
+# header note). Same column format as `legacy_codes.txt`
+# (`command<TAB>code<TAB>exit<TAB>hint`); "frozen from the commit that adds
+# it" here means the same thing "frozen from the pre-migration source"
+# means there — once a row lands, `src/compat.rs`'s `TABLE` must keep
+# producing it.
+#
+# ── `validate` — new command, no legacy CLI to audit ────────────────────
+# `validate` did not exist before this migration (W5b); it is wired
+# straight against `hwpforge::ops::validate`. READ-FIRST like the "(all
+# others)" group in `legacy_codes.txt`'s precedence note:
+# `check_file_size`/`std::fs::read` run before `ops::validate` is ever
+# called, and there is no argument to validate ahead of that.
+validate	DECODE_FAILED	2	-
+validate	FILE_READ_FAILED	1	-
+validate	JSON_SERIALIZE_FAILED	2	-
+#
+# ── `insert-para INSERT_TEXT_REQUIRED` — reachable only post-migration ──
+# Clap's `#[arg(long = "text", required = true)]` already refuses an empty
+# `--text` list before `run_insert` is ever called, so the pre-migration
+# CLI never had a call site for `ops::edit::insert_para`'s own
+# `InsertTextRequired` rejection (reachable only through a frontend with no
+# equivalent guard, e.g. MCP) — audit finding: an unrouted new code
+# silently took `exit_code`'s fallback (2, the codec-failure class) instead
+# of 1. Exit 1, the argument-error class every other `insert-para`/
+# `delete-para` row in `legacy_codes.txt` uses.
+insert-para	INSERT_TEXT_REQUIRED	1	-

@@ -27,22 +27,51 @@
 //!
 //! # Design: no silent fallback
 //!
-//! Every row in [`TABLE`] is explicit — `hint: None` is a *frozen* legacy
-//! value, not "unset, ask `err.hint()`". This module never falls back to
-//! [`OpsError::hint`]/[`ConvertOpsError::hint`] for a `(command, code)` pair
-//! that has legacy precedent: `hwpforge::ops`'s own `hint_for` table
-//! disagrees with the legacy CLI in both directions — it adds a hint
-//! `fields`/`outline`/`diff`/`to-json`/`patch`/`to-md`/`from-json`'s
-//! `DECODE_FAILED` never had, and it phrases `PRESET_NOT_FOUND` in Korean
-//! where `templates`'s legacy hint is English. Falling through even once
-//! would silently add or reword a hint the frozen contract forbids
-//! changing. The one place this module *does* fall through
-//! (`code.as_str()` + `err.hint()`/`err.hint()`) is for an `OpsCode` that has
-//! **no legacy row at all** — a new code `ops` can reach that the
-//! pre-migration CLI never emitted (for example `convert`'s
+//! Every row in [`TABLE`] is explicit — [`Hint::None`] is a *frozen* legacy
+//! "no hint at all" value, never "unset, ask `err.hint()`". A W6b audit
+//! comparison script found ~20 `(command, code)` pairs where the code has
+//! an `hwpforge::ops::hint_for` entry but the legacy call site genuinely
+//! had no hint (every non-`Inspect` `DecodeFailed` row, both structural
+//! `InputNotRoundtripSafe`/`InputEntriesNotCarried` pairs, `Read`'s and
+//! `Stamp`'s own `TableGridInvalid`, …) — a blanket "`None` asks `ops`"
+//! rule would silently *add* a hint to every one of them. `hwpforge::ops`'s
+//! own `hint_for` table disagrees with the legacy CLI in both directions
+//! anyway — it adds hints commands like `fields`/`outline`/`diff` never
+//! had, and it phrases `PRESET_NOT_FOUND` in Korean where `templates`'s
+//! legacy hint is English — so [`Hint::Literal`] rows (kept verbatim
+//! because `hint_for` disagrees or has no entry for that code) never fall
+//! through either.
+//!
+//! The same comparison also found 13 rows whose legacy literal is
+//! byte-identical to `hint_for`'s own text for that code (`Inspect`'s
+//! `DecodeFailed`, every `Fill`/`SetCell` hint below that also appears in
+//! `hint_for`, five of `Stamp`'s). Those are [`Hint::FromOps`]: instead of
+//! spelling the same string a third time, [`resolved_hint`] asks
+//! `err.hint()` for them — same output, one fewer place the wording can
+//! drift. The inventory's fidelity test ([`tests::every_table_row_matches_a_real_snapshot_shape`])
+//! is what makes this safe: it resolves every row (including
+//! `Hint::FromOps` ones) through [`resolved_hint`] and checks the result
+//! against the audited snapshot, so a future `hint_for` wording change
+//! that would silently alter one of these 13 rows' CLI output fails there.
+//!
+//! The one place this module falls through unconditionally
+//! (`code.as_str()` + `err.hint()`) is for an `OpsCode` that has **no
+//! legacy row at all** — a new code `ops` can reach that the pre-migration
+//! CLI never emitted (for example `convert`'s
 //! `ASSET_PLAN_MISMATCH`/`ASSET_IDENTITY_CONFLICT`, which the old
 //! hand-rolled image-embed path never distinguished as a hard error). That
-//! is new coverage, not a divergence to hide.
+//! is new coverage, not a divergence to hide — and it is the same
+//! `err.hint()` call `Hint::FromOps` makes, just with no `TABLE` row to
+//! carry a legacy code string either.
+//!
+//! A handful of frontend-neutral candidates this comparison surfaced
+//! (`ToJson`/`JsonSerializeFailed`'s "Check for NaN/Infinity values in
+//! chart data", `Patch`'s `PatchFailed` hint) were deliberately **not**
+//! moved into `hint_for`: `hwpforge::ops` is shared with the Python
+//! bindings, which this lane did not audit, and adding a `hint_for` entry
+//! changes what `OpsError::hint()` returns for every caller, not just this
+//! one. Left as `Hint::Literal` pending a lane that can verify the
+//! Python-bindings ripple.
 //!
 //! # Exit codes vary by command, not by code
 //!
@@ -227,30 +256,77 @@ pub enum Command {
     Validate,
 }
 
+/// A row's frozen hint status (module docs' "Design: no silent fallback").
+#[derive(Debug, Clone, Copy)]
+enum Hint {
+    /// Frozen: the legacy call site had no `.with_hint(...)` at all. Never
+    /// asks `ops` for one, even where `hint_for` has an entry for this
+    /// code — that would silently add a hint the legacy contract never had.
+    None,
+    /// Frozen: the legacy literal, kept verbatim because `hint_for` either
+    /// has no entry for this code or its wording genuinely differs.
+    Literal(&'static str),
+    /// The legacy literal was byte-identical to `hint_for`'s own text for
+    /// this code — resolved dynamically through [`resolved_hint`] instead
+    /// of duplicating the string.
+    FromOps,
+}
+
 /// One static compatibility-table row: for this `(cmd, code)` pair, emit
-/// `legacy` as the code, `hint` (frozen — `None` is a legacy "no hint", not
-/// "ask `err.hint()`") and `exit` as the process exit code.
+/// `legacy` as the code, `hint` (see [`Hint`] — frozen, never a silent
+/// fallback) and `exit` as the process exit code.
 struct Row {
     cmd: Command,
     code: OpsCode,
     legacy: &'static str,
-    hint: Option<&'static str>,
+    hint: Hint,
     exit: i32,
 }
 
 macro_rules! row {
     ($cmd:ident, $code:ident, $legacy:literal, $exit:literal) => {
-        Row { cmd: Command::$cmd, code: OpsCode::$code, legacy: $legacy, hint: None, exit: $exit }
+        Row {
+            cmd: Command::$cmd,
+            code: OpsCode::$code,
+            legacy: $legacy,
+            hint: Hint::None,
+            exit: $exit,
+        }
+    };
+    ($cmd:ident, $code:ident, $legacy:literal, $exit:literal, ops) => {
+        Row {
+            cmd: Command::$cmd,
+            code: OpsCode::$code,
+            legacy: $legacy,
+            hint: Hint::FromOps,
+            exit: $exit,
+        }
     };
     ($cmd:ident, $code:ident, $legacy:literal, $exit:literal, $hint:literal) => {
         Row {
             cmd: Command::$cmd,
             code: OpsCode::$code,
             legacy: $legacy,
-            hint: Some($hint),
+            hint: Hint::Literal($hint),
             exit: $exit,
         }
     };
+}
+
+/// The hint [`cli_error`]/[`convert_error`] use for a resolved `hint`,
+/// asking `ops` for [`Hint::FromOps`] through the exact same [`OpsError::hint`]/
+/// [`ConvertOpsError::hint`] lookup production code already has to make
+/// (`ops_hint` is that call's result) — never a second, hand-copied
+/// `hint_for` table. The inventory fidelity test uses this too, so a
+/// [`Hint::FromOps`] row is checked against the string production would
+/// actually emit, not a hand-typed one.
+#[must_use]
+fn resolved_hint(hint: Hint, ops_hint: Option<&'static str>) -> Option<&'static str> {
+    match hint {
+        Hint::None => None,
+        Hint::Literal(text) => Some(text),
+        Hint::FromOps => ops_hint,
+    }
 }
 
 /// The compatibility table. See the module docs for why every reachable
@@ -291,7 +367,7 @@ const TABLE: &[Row] = &[
     row!(Convert, EncodeFailed, "ENCODE_FAILED", 2),
 
     // ── Inspect (ops::inspect) ─────────────────────────────────────────
-    row!(Inspect, DecodeFailed, "DECODE_FAILED", 2, "Check that the file is a valid HWPX document"),
+    row!(Inspect, DecodeFailed, "DECODE_FAILED", 2, ops),
     // ANALYSIS_FAILED: ops gap, see module docs — no row, no ops code exists.
 
     // ── ToJson (ops::to_json / ops::export_section) ───────────────────
@@ -384,10 +460,10 @@ const TABLE: &[Row] = &[
 
     // ── Fill (ops::edit::fill) ─────────────────────────────────────────
     row!(Fill, NoValues, "NO_VALUES", 1, "예: hwpforge fill doc.hwpx --set 과제명=\"AI 문서 자동화\" -o out.hwpx"),
-    row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", 1, "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요"),
+    row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", 1, ops),
     // FieldNotFound: dynamic hint, see cli_error.
-    row!(Fill, FieldNameAmbiguous, "FIELD_NAME_AMBIGUOUS", 1, "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요"),
-    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", 1, "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요"),
+    row!(Fill, FieldNameAmbiguous, "FIELD_NAME_AMBIGUOUS", 1, ops),
+    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", 1, ops),
     row!(Fill, FillFailed, "FILL_FAILED", 2),
 
     // ── SetCell (ops::edit::set_cell) ──────────────────────────────────
@@ -396,13 +472,13 @@ const TABLE: &[Row] = &[
     row!(SetCell, InvalidSetCellArgs, "INVALID_SET_CELL_ARGS", 1),
     row!(SetCell, InvalidSetCellMap, "INVALID_SET_CELL_MAP", 1),
     // TableNotFound: always has a dynamic (table-count) hint, no flat shape — see cli_error.
-    row!(SetCell, TableGridInvalid, "TABLE_GRID_INVALID", 1, "이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다"),
+    row!(SetCell, TableGridInvalid, "TABLE_GRID_INVALID", 1, ops),
     row!(SetCell, CellNotFound, "CELL_NOT_FOUND", 1),
     row!(SetCell, CellLabelAmbiguous, "CELL_LABEL_AMBIGUOUS", 1, "라벨이 여러 셀과 일치합니다 — --at 좌표로 직접 지정하세요"),
-    row!(SetCell, CellHasNonTextContent, "CELL_HAS_NON_TEXT_CONTENT", 1, "표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다"),
+    row!(SetCell, CellHasNonTextContent, "CELL_HAS_NON_TEXT_CONTENT", 1, ops),
     row!(SetCell, CellTargetDuplicate, "CELL_TARGET_DUPLICATE", 1),
-    row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", 1, "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다"),
-    row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"),
+    row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", 1, ops),
+    row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, ops),
     row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1),
     row!(SetCell, SetCellCodecFailed, "SET_CELL_CODEC_FAILED", 1),
     row!(SetCell, UpstreamUnmapped, "SET_CELL_FAILED", 1),
@@ -413,11 +489,11 @@ const TABLE: &[Row] = &[
 
     // ── Stamp (ops::stamp::stamp) ───────────────────────────────────────
     row!(Stamp, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"),
-    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)"),
+    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, ops),
     row!(Stamp, StampManifestInvariant, "STAMP_MANIFEST_INVARIANT", 2),
     row!(Stamp, StampCodecFailed, "STAMP_CODEC_FAILED", 2),
     row!(Stamp, StampSourceHashMismatch, "STAMP_SOURCE_HASH_MISMATCH", 1, "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요"),
-    row!(Stamp, StampDeltaMismatch, "STAMP_DELTA_MISMATCH", 2, "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다"),
+    row!(Stamp, StampDeltaMismatch, "STAMP_DELTA_MISMATCH", 2, ops),
     // `stamper_code`'s default arm folds every unrecognized `StamperError`
     // variant into `OpsCode::UpstreamUnmapped` (module docs) — no
     // classifier in `crates/hwpforge/src/ops/mod.rs` ever produces
@@ -427,12 +503,12 @@ const TABLE: &[Row] = &[
     row!(Stamp, TableNotFound, "TABLE_NOT_FOUND", 1),
     row!(Stamp, TableGridInvalid, "TABLE_GRID_INVALID", 1),
     // StampCellNotAnchor: dynamic hint, see cli_error.
-    row!(Stamp, StampCellNotEmpty, "STAMP_CELL_NOT_EMPTY", 1, "클래스-B 대상은 whitespace-only 빈 셀이어야 합니다"),
-    row!(Stamp, StampLabelDrift, "STAMP_LABEL_DRIFT", 1, "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"),
+    row!(Stamp, StampCellNotEmpty, "STAMP_CELL_NOT_EMPTY", 1, ops),
+    row!(Stamp, StampLabelDrift, "STAMP_LABEL_DRIFT", 1, ops),
     row!(Stamp, StampCellNotCandidate, "STAMP_CELL_NOT_CANDIDATE", 1),
     row!(Stamp, StampCellTargetDuplicate, "STAMP_CELL_TARGET_DUPLICATE", 1),
     row!(Stamp, StampNameEmpty, "STAMP_NAME_EMPTY", 1),
-    row!(Stamp, StampHintBlank, "STAMP_HINT_BLANK", 1, "빈 셀엔 마커가 없어 hint 가 필수입니다 (plan 의 suggested_hint 참고)"),
+    row!(Stamp, StampHintBlank, "STAMP_HINT_BLANK", 1, ops),
     // StampNameDuplicate/StampNameCollision/StampCandidateUncovered:
     // dual-source (text-spec vs cell-spec wording), see cli_error.
     row!(Stamp, StampSpecStale, "STAMP_SPEC_STALE", 1, "문서가 변경됐거나 span 이 어긋났습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"),
@@ -576,18 +652,18 @@ pub fn cli_error(cmd: Command, err: OpsError) -> CliError {
 
     let code = err.code();
     let message = err.to_string();
-    match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
-        Some(row) => match row.hint {
-            Some(hint) => CliError::new(row.legacy, message).with_hint(hint),
-            None => CliError::new(row.legacy, message),
-        },
+    let (legacy, hint) = match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
+        Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
         // New OpsCode with no legacy precedent for this command (module
         // docs) — `code.as_str()` and `err.hint()` are `ops`'s own,
-        // introduced by this migration, not a divergence to hide.
-        None => match err.hint() {
-            Some(hint) => CliError::new(code.as_str(), message).with_hint(hint),
-            None => CliError::new(code.as_str(), message),
-        },
+        // introduced by this migration, not a divergence to hide. The same
+        // `err.hint()` a `Hint::FromOps` row would resolve to, just with no
+        // legacy code string to carry either.
+        None => (code.as_str(), err.hint()),
+    };
+    match hint {
+        Some(hint) => CliError::new(legacy, message).with_hint(hint),
+        None => CliError::new(legacy, message),
     }
 }
 
@@ -634,15 +710,13 @@ fn semantic_loss_error(cmd: Command, warnings: &[WarningInfo]) -> Option<CliErro
 pub fn convert_error(cmd: Command, err: ConvertOpsError) -> CliError {
     let code = err.code();
     let message = err.to_string();
-    let base = match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
-        Some(row) => match row.hint {
-            Some(hint) => CliError::new(row.legacy, message).with_hint(hint),
-            None => CliError::new(row.legacy, message),
-        },
-        None => match err.hint() {
-            Some(hint) => CliError::new(code.as_str(), message).with_hint(hint),
-            None => CliError::new(code.as_str(), message),
-        },
+    let (legacy, hint) = match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
+        Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
+        None => (code.as_str(), err.hint()),
+    };
+    let base = match hint {
+        Some(hint) => CliError::new(legacy, message).with_hint(hint),
+        None => CliError::new(legacy, message),
     };
     match err.cause_info() {
         Some(cause) => base.with_cause(ErrorCause {
@@ -718,6 +792,13 @@ mod tests {
 
     const SNAPSHOT: &str =
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/legacy_codes.txt"));
+    /// Codes/commands with no pre-migration call site to audit
+    /// (`legacy_codes.txt`'s own header note) — `validate` and
+    /// `insert-para INSERT_TEXT_REQUIRED` today. Read alongside `SNAPSHOT`;
+    /// kept a separate file (not a separate table) so both stay audited
+    /// snapshots, not compat.rs's own claims re-typed under a new name.
+    const SNAPSHOT_NEW: &str =
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/new_codes.txt"));
 
     /// One `tests/data/legacy_codes.txt` data row, hint parsed into
     /// [`SnapshotHint`].
@@ -741,13 +822,18 @@ mod tests {
         Literal(&'static str),
     }
 
-    /// Parses every non-comment, non-blank line of `tests/data/legacy_codes.txt`.
-    /// Comment lines (including the `[compound: …]`/`[wildcard: …]`
-    /// annotations directly above some rows) and blank lines are skipped;
-    /// everything else must be a 4-column `command\tcode\texit\thint` row.
+    /// Parses every non-comment, non-blank line of `tests/data/legacy_codes.txt`
+    /// *and* `tests/data/new_codes.txt` (module docs — the migration split
+    /// "pre-migration" and "no pre-migration call site" rows across the two
+    /// files; a `(command, code)` pair audited in one must not also appear
+    /// in the other, see `legacy_and_new_snapshots_stay_disjoint`). Comment
+    /// lines (including the `[compound: …]`/`[wildcard: …]` annotations
+    /// directly above some rows) and blank lines are skipped; everything
+    /// else must be a 4-column `command\tcode\texit\thint` row.
     fn snapshot_rows() -> Vec<SnapshotRow> {
-        SNAPSHOT
-            .lines()
+        [SNAPSHOT, SNAPSHOT_NEW]
+            .into_iter()
+            .flat_map(str::lines)
             .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
             .map(|line| {
                 let mut parts = line.splitn(4, '\t');
@@ -977,9 +1063,16 @@ mod tests {
             let candidates = by_pair
                 .get(&(name, row.legacy))
                 .unwrap_or_else(|| panic!("({name}, {}) has no snapshot rows at all", row.legacy));
+            // `Hint::FromOps` rows resolve through the exact same
+            // `OpsError::hint()` lookup `cli_error` uses — `OpsError::Rejected`
+            // is `OpsError`'s own public escape hatch for pinning an
+            // arbitrary code (`hint()` only ever consults `self.code()`), so
+            // this needs no per-code error constructor.
+            let ops_hint = OpsError::Rejected { code: row.code, reason: String::new() }.hint();
+            let resolved = resolved_hint(row.hint, ops_hint);
             let matches = candidates.iter().any(|c| {
                 c.exit == row.exit
-                    && match (&c.hint, row.hint) {
+                    && match (&c.hint, resolved) {
                         (SnapshotHint::None, None) => true,
                         (SnapshotHint::Literal(text), Some(hint)) => *text == hint,
                         _ => false,
@@ -989,7 +1082,7 @@ mod tests {
                 matches,
                 "TABLE row ({name}, {}, exit={}, hint={:?}) matches none of the snapshot's \
                  shapes for that (command, code): {candidates:?}",
-                row.legacy, row.exit, row.hint
+                row.legacy, row.exit, resolved
             );
         }
     }
@@ -1037,6 +1130,144 @@ mod tests {
         }
     }
 
+    /// `SNAPSHOT` (pre-migration) and `SNAPSHOT_NEW` (no pre-migration call
+    /// site) must not both audit the same `(command, code)` pair — that
+    /// would be two conflicting "audited" answers for one call site (both
+    /// files' own header notes commit to this).
+    #[test]
+    fn legacy_and_new_snapshots_stay_disjoint() {
+        fn pairs(text: &str) -> BTreeSet<(&str, &str)> {
+            text.lines()
+                .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+                .map(|line| {
+                    let mut parts = line.splitn(4, '\t');
+                    (parts.next().expect("command column"), parts.next().expect("code column"))
+                })
+                .collect()
+        }
+        let legacy = pairs(SNAPSHOT);
+        let new = pairs(SNAPSHOT_NEW);
+        for pair in &new {
+            assert!(
+                !legacy.contains(pair),
+                "{pair:?} is audited in both legacy_codes.txt and new_codes.txt"
+            );
+        }
+    }
+
+    /// Cross-frontend agreement (audit finding: "two snapshots never
+    /// compared"). For every `TABLE` row, checks whether CLI's legacy wire
+    /// string for that `(command, code)` also exists somewhere in MCP's
+    /// frozen vocabulary (`hwpforge-bindings-mcp/tests/data/legacy_codes.txt`
+    /// and `new_codes.txt`, included as plain data — this crate cannot depend
+    /// on that one, and the MCP snapshot records legacy *strings*, not
+    /// `OpsCode` variants, so this proves "CLI's wire string for this code
+    /// exists in MCP's vocabulary too", not "MCP's own `ops` classifier
+    /// reaches the same `OpsCode` here" — that would need MCP's
+    /// `compat.rs`, out of this crate's reach). `ConvertHwp5`/`ToPdf`/
+    /// `Schema` are excluded: MCP has no tool for HWP5→HWPX/PDF conversion
+    /// or the schema catalogue, so there is nothing in its vocabulary to
+    /// compare those rows against — not a divergence, an absent operation.
+    /// Every code the comparison script found unmatched for a command MCP
+    /// *does* have is `KNOWN_CODE_DIVERGENCE`, with a one-line reason each
+    /// (seeded from that script's output — see the W6b report).
+    #[test]
+    fn cli_legacy_codes_agree_with_mcp_vocabulary_or_are_a_known_divergence() {
+        const MCP_LEGACY: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hwpforge-bindings-mcp/tests/data/legacy_codes.txt"
+        ));
+        const MCP_NEW: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hwpforge-bindings-mcp/tests/data/new_codes.txt"
+        ));
+        let mcp_codes: BTreeSet<&str> = [MCP_LEGACY, MCP_NEW]
+            .into_iter()
+            .flat_map(str::lines)
+            .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+            .map(|line| line.split('\t').nth(1).expect("code column"))
+            .collect();
+
+        /// Codes reachable from a command MCP has a tool for, where CLI's
+        /// legacy wire string is not in MCP's vocabulary at all (each
+        /// frontend spelled its own error independently, pre-`ops`) —
+        /// see the brief's own two examples: `convert`'s `UNKNOWN_PRESET`
+        /// (MCP's `convert` uses `PRESET_NOT_FOUND`, matching every *other*
+        /// command/tool) and `from-json`'s `JSON_PARSE_FAILED` (MCP's
+        /// `from_json` uses `JSON_PARSE_ERROR`).
+        const KNOWN_CODE_DIVERGENCE: &[OpsCode] = &[
+            // CLI: DECODE_FAILED (every non-Inspect row) / HWPX_DECODE_FAILED
+            // (to-pdf, excluded above). MCP: DECODE_ERROR, always.
+            OpsCode::DecodeFailed,
+            // CLI: ENCODE_FAILED. MCP: ENCODE_ERROR.
+            OpsCode::EncodeFailed,
+            // CLI: FILL_FAILED. MCP: FILL_ERROR.
+            OpsCode::FillFailed,
+            // delete-para/insert-para kept the pre-ops UNCARRIED_ZIP_ENTRIES/
+            // wildcard STRUCTURAL_EDIT_FAILED strings for this code;
+            // set-cell/stamp already agree with MCP on INPUT_ENTRIES_NOT_CARRIED.
+            OpsCode::InputEntriesNotCarried,
+            // CLI keeps its own INSERT_BEFORE_SECTION_PROPERTIES; MCP folds
+            // it into the shared SECTION_PROPERTIES_PARAGRAPH wildcard arm
+            // (R1 fix, MCP compat.rs docs).
+            OpsCode::InsertBeforeSectionProperties,
+            // CLI-only: unreachable through MCP's typed `CellSpec` list (MCP
+            // compat.rs module docs) — no MCP vocabulary entry to compare.
+            OpsCode::InvalidSetCellArgs,
+            // CLI: JSON_PARSE_FAILED. MCP: JSON_PARSE_ERROR.
+            OpsCode::JsonParseFailed,
+            // CLI: JSON_SERIALIZE_FAILED. MCP: SERIALIZE_ERROR (predates
+            // `ops`, also covers MCP's own local pretty-print stage).
+            OpsCode::JsonSerializeFailed,
+            // CLI: MD_DECODE_FAILED. MCP: MD_DECODE_ERROR.
+            OpsCode::MdDecodeFailed,
+            // CLI keeps distinct PARAGRAPH_OUT_OF_RANGE; MCP folds
+            // paragraph/section-out-of-range into one shared INDEX_OUT_OF_RANGE.
+            OpsCode::ParagraphOutOfRange,
+            // CLI: PATCH_FAILED. MCP: PATCH_ERROR.
+            OpsCode::PatchFailed,
+            // `convert`'s legacy string is UNKNOWN_PRESET, not the
+            // PRESET_NOT_FOUND every other command/tool (including MCP's
+            // `convert`) uses — CLI's own pre-migration inconsistency, not a
+            // cross-frontend one (brief's own example).
+            OpsCode::PresetNotFound,
+            // CLI keeps distinct SPAN_COUNT_MISMATCH; MCP folds it into the
+            // wildcard STRUCTURAL_EDIT_FAILED.
+            OpsCode::SpanCountMismatch,
+            // CLI: STYLE_REBIND_FAILED. MCP: STYLE_REBIND_ERROR.
+            OpsCode::StyleRebindFailed,
+            // CLI: STYLE_STORE_FAILED. MCP: STYLE_STORE_ERROR.
+            OpsCode::StyleStoreFailed,
+            // Each command/tool keeps its own default-arm string
+            // (STAMP_FAILED, SET_CELL_FAILED, STRUCTURAL_EDIT_FAILED, plus
+            // CLI-only SECTION_WORKFLOW_FAILED for patch) — by design,
+            // module docs' "Table vs. special cases".
+            OpsCode::UpstreamUnmapped,
+            // CLI: VALIDATION_FAILED (VALIDATE_FAILED for to-md). MCP:
+            // VALIDATION_ERROR.
+            OpsCode::ValidationFailed,
+        ];
+        const NO_MCP_EQUIVALENT: &[Command] =
+            &[Command::ConvertHwp5, Command::ToPdf, Command::Schema];
+
+        for row in TABLE {
+            if NO_MCP_EQUIVALENT.contains(&row.cmd) {
+                continue;
+            }
+            if mcp_codes.contains(row.legacy) {
+                continue;
+            }
+            assert!(
+                KNOWN_CODE_DIVERGENCE.contains(&row.code),
+                "{:?} (CLI legacy {:?}, command {:?}) has no matching string in MCP's \
+                 vocabulary and is not in KNOWN_CODE_DIVERGENCE",
+                row.code,
+                row.legacy,
+                row.cmd
+            );
+        }
+    }
+
     // ── round-trip checks: construct a representative OpsError/ConvertOpsError
     // per code, confirm cli_error's/convert_error's output matches. ────────
 
@@ -1044,6 +1275,28 @@ mod tests {
         let got = cli_error(cmd, err);
         assert_eq!(got.code, expected_code, "{cmd:?}: {got:?}");
         assert_eq!(exit_code(cmd, &got), expected_exit, "{cmd:?}: {got:?}");
+    }
+
+    #[test]
+    fn from_ops_rows_keep_emitting_the_same_hint_text_as_before_the_refactor() {
+        // Regression guard for the `Hint::FromOps` collapse (module docs):
+        // these rows used to carry their own literal; now they resolve
+        // through `err.hint()` (== `hint_for` for this code). The generic
+        // fidelity test (c) already proves every `TABLE` row byte-matches
+        // the snapshot, but this pins two representative rows end-to-end
+        // through `cli_error` itself, not just the table lookup.
+        let err = OpsError::decode(hwpforge_smithy_hwpx::HwpxError::Zip("bad".into()));
+        let got = cli_error(Command::Inspect, err);
+        assert_eq!(got.code, "DECODE_FAILED");
+        assert_eq!(got.hint.as_deref(), Some("Check that the file is a valid HWPX document"));
+
+        let err = OpsError::Fill(FillError::EmptyValue { name: "x".into() });
+        let got = cli_error(Command::Fill, err);
+        assert_eq!(got.code, "EMPTY_FIELD_VALUE");
+        assert_eq!(
+            got.hint.as_deref(),
+            Some("빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요")
+        );
     }
 
     #[test]
