@@ -6,7 +6,9 @@ use hwpforge::ops::{self, ExportSectionOptions, OpsWarning, ToJsonOptions};
 use hwpforge_smithy_hwpx::SectionWorkflowWarning;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
+use crate::output::{
+    read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo, MAX_INLINE_RESPONSE,
+};
 
 /// Output data from a successful JSON export.
 #[derive(Debug, Serialize)]
@@ -29,9 +31,6 @@ pub struct ToJsonData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
-
-/// Inline response ceiling shared with `hwpforge_outline`/`hwpforge_diff` (1 MB).
-const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Export HWPX to JSON (full document or single section).
 ///

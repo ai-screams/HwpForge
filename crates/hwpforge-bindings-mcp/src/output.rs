@@ -14,6 +14,16 @@ pub use hwpforge::ops::fs::MAX_FILE_SIZE;
 /// Maximum inline content size: 50 MB.
 pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
 
+/// Inline response ceiling shared by `hwpforge_to_json`, `hwpforge_outline`
+/// and `hwpforge_diff` (1 MB) — a different budget from [`MAX_INLINE_SIZE`]
+/// above, and measured differently: each of those three tools' `build_*_data`
+/// gates on the size of the *complete* serialized response (primary payload
+/// plus `warnings`, and for `to_json` the JSON-escaping overhead of
+/// re-wrapping already-serialized document JSON as a string field — see that
+/// module's docs), not on the primary payload alone. W6c audit follow-up:
+/// this used to be three copies of the same literal, one per tool module.
+pub const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
+
 /// Read a file as bytes with size check and structured errors.
 ///
 /// Uses `metadata()` for size guard (prevents OOM in the common case), then
@@ -487,5 +497,13 @@ mod tests {
         let err = write_output_file(link.to_str().unwrap(), b"data").unwrap_err();
         assert_eq!(err.code, "WRITE_ERROR");
         assert!(!real_target.exists(), "symlink target must not be written through");
+    }
+
+    /// W6c audit follow-up: `to_json`/`outline`/`diff` used to each declare
+    /// their own `1024 * 1024` literal; this pins the one shared value they
+    /// now all import from here instead.
+    #[test]
+    fn max_inline_response_is_one_megabyte() {
+        assert_eq!(MAX_INLINE_RESPONSE, 1024 * 1024);
     }
 }
