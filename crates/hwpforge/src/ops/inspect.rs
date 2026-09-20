@@ -188,20 +188,28 @@ pub struct InspectSection {
     // ── package-scope counts (W6b: single-decode CLI parity) ──────
     //
     // The nine fields below give the CLI's pre-migration local scanner
-    // (`hwpforge-bindings-cli`'s `analysis/deep_counts.rs`) everything it
-    // needs from this one decode, so it no longer has to decode the same
-    // bytes a second time — except charts, which stay a raw scan in that
-    // CLI (`hwpforge-bindings-cli/src/commands/inspect.rs`'s own doc
-    // explains why: `hwpforge-smithy-hwpx`'s decoder only reconstructs
+    // (`hwpforge-bindings-cli`'s `analysis/deep_counts.rs`) the same
+    // *scope* it used to compute for itself: captions included, master
+    // pages excluded. But only the last three (paragraph counts) are
+    // actually what the CLI's `--json` reports under the same names —
+    // [`Self::tables_all`] through [`Self::polygons`] (the six *object*
+    // counts) are a decoded-object count, and the CLI does not read them:
+    // see the audit-follow-up note on those six fields below for why, and
+    // `hwpforge-bindings-cli/src/commands/inspect.rs`'s own doc for what
+    // the CLI computes instead.
+    //
+    // Charts stay a raw scan in that CLI too, for a related but distinct
+    // reason (`hwpforge-smithy-hwpx`'s decoder only reconstructs
     // `Control::Chart` for a section's own top-level paragraphs, never for
     // one nested in a caption, a table cell, a text box or anywhere else
     // `hwpforge::ops::walk`'s `object_counts` also reaches — see that
     // module's doc and its
     // `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
-    // reproduction. Offering a decode-based chart count here would
+    // reproduction). Offering a decode-based chart count here would
     // silently undercount relative to the CLI's existing raw-XML-scan
     // `charts` field for exactly the documents that gap affects, which is
-    // the "no fake support" line this crate holds elsewhere too.
+    // the "no fake support" line this crate holds elsewhere too — there is
+    // no `charts_all` field for the same reason.
     //
     // Each field below is a *third* scope, distinct from both
     // [`Self::top_level_tables`] (no nesting at all) and [`Self::tables`]
@@ -218,31 +226,55 @@ pub struct InspectSection {
     // [`Self::top_level_tables`].
     /// Tables, captions included, master pages excluded — see the note
     /// above [`Self::has_page_number`].
+    ///
+    /// # Audit follow-up: this is a decoded-object count, not a raw scan
+    ///
+    /// This field walks the *decoded* Core tree (`hwpforge::ops::walk`'s
+    /// `object_counts`), so a `<hp:tbl>`/`<hp:pic>`/… element the decoder
+    /// accepts but cannot represent — for example an `<hp:pic>` with no
+    /// usable `binaryItemIDRef`, which `convert_picture`
+    /// (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
+    /// rather than an error — is invisible here even though the element is
+    /// genuinely in the section XML. `hwpforge-bindings-cli`'s `inspect`
+    /// command has the **same field name** in its `--json` output
+    /// (`tables`, not `tables_all` — the CLI's own legacy spelling), but
+    /// that one is a raw XML element scan and does *not* have this gap; the
+    /// two can disagree on such a document, and the CLI does not read this
+    /// field precisely because of that. Do not assume the two agree.
     #[serde(default)]
     pub tables_all: usize,
-    /// Images, captions included, master pages excluded — same scope as
-    /// [`Self::tables_all`].
+    /// Images, captions included, master pages excluded — same scope, and
+    /// the same decoded-object-vs-raw-scan caveat, as [`Self::tables_all`].
     #[serde(default)]
     pub images_all: usize,
     /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), same
-    /// scope as [`Self::tables_all`].
+    /// scope and caveat as [`Self::tables_all`].
     #[serde(default)]
     pub text_boxes: usize,
-    /// Line drawing objects, same scope as [`Self::tables_all`].
+    /// Line drawing objects, same scope and caveat as [`Self::tables_all`].
     #[serde(default)]
     pub lines: usize,
     /// Pure rectangles (HWPX `<hp:rect>` *without* a nested `<hp:drawText>`
     /// — a text-bearing one counts under [`Self::text_boxes`] instead,
-    /// never both), same scope as [`Self::tables_all`].
+    /// never both), same scope and caveat as [`Self::tables_all`].
     #[serde(default)]
     pub rectangles: usize,
-    /// Polygon drawing objects, same scope as [`Self::tables_all`].
+    /// Polygon drawing objects, same scope and caveat as
+    /// [`Self::tables_all`].
     #[serde(default)]
     pub polygons: usize,
     /// Body-flow paragraphs with visible text — [`Self::top_level_paragraphs`]
     /// scope (no recursion into headers/footers/master pages), but each
     /// paragraph's visibility probes one recursion step deeper (e.g. a
     /// paragraph with no direct text but a text-bearing table counts).
+    ///
+    /// Unlike the six object counts above, this field has no CLI
+    /// divergence caveat: the CLI's `--json` `non_empty_paragraphs` reads
+    /// this value directly. Paragraph presence is not something the
+    /// decoder ever silently drops the way an unrepresentable picture
+    /// reference is, and both this field and the CLI's pre-migration
+    /// scanner compute it from a decode of the same bytes with the same
+    /// decoder — deterministically identical, not merely usually so.
     #[serde(default)]
     pub non_empty_paragraphs: usize,
     /// Body + header + footer paragraphs, recursing into table cells and

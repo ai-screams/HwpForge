@@ -1,6 +1,8 @@
-//! Section-scoped counting helpers for [`super::inspect`].
+//! Section-scoped counting helpers for [`super::inspect`], plus the
+//! caption-aware container-descent policy [`super::exchange`] shares with
+//! them ([`ControlDescent`]/[`control_descent`]).
 //!
-//! Two traversal policies live here, deliberately kept apart rather than
+//! Two traversal *policies* live here, deliberately kept apart rather than
 //! unified into one generic walker — collapsing them is a silent value
 //! change, not a simplification (see
 //! `inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page`
@@ -50,6 +52,20 @@
 //!   skips is one [`object_counts`] still visits, which is exactly the
 //!   asymmetry the pinned fixture exercises (a caption holding a table, an
 //!   image and a chart, plus a master-page paragraph).
+//!
+//! [`ControlDescent`]/[`control_descent`] are a *third*, distinct thing: not
+//! a traversal policy of their own, but the shared "which nested paragraph
+//! lists does this `Control` expose" classification both [`object_counts`]
+//! (via [`visit_control_for_objects`]) and `super::exchange`'s
+//! `first_layout_cache_path` build their own, genuinely different walks on
+//! top of — a table cell/caption or group-child recursion written down once
+//! instead of twice, audit follow-up W6b finding 4 ("`exchange.rs` still has
+//! its own layout-cache traversal while `walk.rs` reimplements the
+//! overlapping policy"). What differs at each call site (a counting
+//! increment here, an [`hwpforge_smithy_hwpx::PathSeg`] tag and an
+//! encoder-mirroring group-child index there) stays local to that call
+//! site; only the "what containers exist and what do they nest" fact is
+//! shared.
 
 use hwpforge_core::caption::Caption;
 use hwpforge_core::control::Control;
@@ -61,8 +77,21 @@ use hwpforge_core::table::Table;
 // ── object counts (caption-aware, master-page-blind) ──────────────
 
 /// Structural object counts for one section, matching the legacy CLI raw-XML
-/// scanner's scope (captions included, master pages excluded) — see the
+/// scanner's *scope* (captions included, master pages excluded) — see the
 /// module doc.
+///
+/// "Matching scope" is not "matching values": this walks the *decoded* Core
+/// tree, so an element the decoder accepts but cannot represent — an
+/// `<hp:pic>` with no usable `binaryItemIDRef`, which `convert_picture`
+/// (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
+/// rather than an error, for example — silently undercounts here relative to
+/// a genuine raw-XML element scan over the same bytes. `hwpforge-bindings-cli`
+/// keeps its own `--json` `tables`/`images`/`text_boxes`/`lines`/
+/// `rectangles`/`polygons` fields sourced from exactly such a raw scan
+/// instead of from this module for that reason (see its `commands/
+/// inspect.rs` doc) — this module's counts feed `InspectSection`'s
+/// `tables_all`/`images_all`/… fields, a deliberately distinct scope
+/// (see that struct's doc).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ObjectCounts {
     /// Tables, at any nesting depth (cells, captions, shape groups, memos).
@@ -142,59 +171,117 @@ fn visit_caption_for_objects(caption: Option<&Caption>, counts: &mut ObjectCount
 }
 
 fn visit_control_for_objects(control: &Control, counts: &mut ObjectCounts) {
+    // Counting still needs the concrete variant — [`control_descent`]
+    // describes only the shared *recursion*, not which counter (if any)
+    // each variant bumps, so that part stays a direct match here.
+    // `Control::Chart` is deliberately not counted at all — see the module
+    // doc's "Charts are deliberately not one of the counted fields here"
+    // paragraph.
     match control {
-        // `Control::Chart` is deliberately not counted here — see the
-        // module doc's "Charts are deliberately not one of the counted
-        // fields here" paragraph.
-        Control::TextBox { paragraphs, caption, .. } => {
-            counts.text_boxes += 1;
+        Control::TextBox { .. } => counts.text_boxes += 1,
+        Control::Polygon { .. } => counts.polygons += 1,
+        Control::Line { .. } => counts.lines += 1,
+        Control::Rect { .. } => counts.rectangles += 1,
+        _ => {}
+    }
+    match control_descent(control) {
+        ControlDescent::Body { paragraphs, caption } => {
             visit_paragraphs_for_objects(paragraphs, counts);
-            visit_caption_for_objects(caption.as_ref(), counts);
+            visit_caption_for_objects(caption, counts);
         }
-        Control::Ellipse { paragraphs, caption, .. } => {
-            visit_paragraphs_for_objects(paragraphs, counts);
-            visit_caption_for_objects(caption.as_ref(), counts);
-        }
-        Control::Polygon { paragraphs, caption, .. } => {
-            counts.polygons += 1;
-            visit_paragraphs_for_objects(paragraphs, counts);
-            visit_caption_for_objects(caption.as_ref(), counts);
-        }
-        Control::Line { caption, .. } => {
-            counts.lines += 1;
-            visit_caption_for_objects(caption.as_ref(), counts);
-        }
-        Control::Rect { caption, .. } => {
-            counts.rectangles += 1;
-            visit_caption_for_objects(caption.as_ref(), counts);
-        }
-        Control::Arc { caption, .. }
-        | Control::Curve { caption, .. }
-        | Control::ConnectLine { caption, .. } => {
-            visit_caption_for_objects(caption.as_ref(), counts);
-        }
-        Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+        ControlDescent::CaptionOnly(caption) => visit_caption_for_objects(caption, counts),
+        ControlDescent::Footnote(paragraphs) | ControlDescent::Endnote(paragraphs) => {
             visit_paragraphs_for_objects(paragraphs, counts);
         }
-        Control::Group { children, .. } => {
+        ControlDescent::Group(children) => {
             // Unlike `exchange.rs`'s `first_in_control` (which mirrors the
             // *encoder*'s `emitted_idx` to build a path the encoder would
             // recognise), counting has no path to build and no encoder
             // round-trip to mirror — every decoded child is really in the
-            // input file, so every child is visited unconditionally.
+            // input file, so every child is visited unconditionally. This is
+            // exactly the policy [`ControlDescent::Group`]'s own doc says a
+            // caller must apply for itself.
             for child in children {
                 visit_control_for_objects(child, counts);
             }
         }
-        Control::Memo { content, anchor_runs, .. } => {
+        ControlDescent::Memo { content, anchor_runs } => {
             visit_paragraphs_for_objects(content, counts);
             for run in anchor_runs {
                 visit_run_for_objects(run, counts);
             }
         }
-        // `Control` is `#[non_exhaustive]`; a wildcard is required
+        ControlDescent::None => {}
+    }
+}
+
+// ── shared container-descent policy (also used by `exchange::from_json`) ──
+
+/// What one [`Control`] variant offers to the caption/paragraph-aware
+/// container walk [`object_counts`] and `exchange::first_layout_cache_path`
+/// both need — the *recursion structure* only, never what either walk does
+/// once it gets there (a counting increment on this module's side, an
+/// [`hwpforge_smithy_hwpx::PathSeg`] tag on `exchange`'s). Before this
+/// existed, both files hand-wrote the same "which nested paragraph lists
+/// does this control expose" policy independently — this is the one place
+/// that policy is written down, so the two cannot drift apart silently the
+/// way the module doc's opening paragraph warns two *different* policies
+/// must not be collapsed into one.
+pub(crate) enum ControlDescent<'a> {
+    /// Paragraph content, then a caption if the control has one —
+    /// `TextBox`/`Ellipse`/`Polygon`. All three share this shape (and, on
+    /// `exchange`'s side, the same `PathSeg::TextBox` tag) even though only
+    /// `TextBox`/`Polygon` bump a counter here.
+    Body { paragraphs: &'a [Paragraph], caption: Option<&'a Caption> },
+    /// A caption only, no body content of its own —
+    /// `Line`/`Rect`/`Arc`/`Curve`/`ConnectLine`.
+    CaptionOnly(Option<&'a Caption>),
+    /// A footnote's body.
+    Footnote(&'a [Paragraph]),
+    /// An endnote's body — kept apart from [`Self::Footnote`] only because
+    /// `exchange` tags the two with different `PathSeg` variants; this
+    /// module's own counting treats them identically.
+    Endnote(&'a [Paragraph]),
+    /// A shape group's children, in source order. Unlike every other arm
+    /// here, a caller must apply its own group-child-index policy
+    /// (`object_counts` visits every child; `exchange` skips an index for a
+    /// child the encoder never emits — see `exchange::group_child_is_emitted`)
+    /// rather than getting one from this enum, because the two callers'
+    /// policies genuinely differ and neither is "more correct" for the
+    /// other's purpose.
+    Group(&'a [Control]),
+    /// A memo's visible content, plus its `anchor_runs` — the latter is a
+    /// run list, not a paragraph list, because the encoder flattens it to
+    /// plain text and never recurses into a non-text run there (see
+    /// `exchange::first_in_control`'s memo arm); a caller that cares must
+    /// walk `anchor_runs` itself.
+    Memo { content: &'a [Paragraph], anchor_runs: &'a [Run] },
+    /// Nothing this walk needs to see (`Chart`, `Equation`, `Field`, …).
+    None,
+}
+
+/// Classifies `control` for [`ControlDescent`] — the shared recursion
+/// policy [`object_counts`] and `exchange::first_layout_cache_path` both
+/// build on. See [`ControlDescent`]'s own doc for what each arm means.
+pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
+    match control {
+        Control::TextBox { paragraphs, caption, .. }
+        | Control::Ellipse { paragraphs, caption, .. }
+        | Control::Polygon { paragraphs, caption, .. } => {
+            ControlDescent::Body { paragraphs, caption: caption.as_ref() }
+        }
+        Control::Line { caption, .. }
+        | Control::Rect { caption, .. }
+        | Control::Arc { caption, .. }
+        | Control::Curve { caption, .. }
+        | Control::ConnectLine { caption, .. } => ControlDescent::CaptionOnly(caption.as_ref()),
+        Control::Footnote { paragraphs, .. } => ControlDescent::Footnote(paragraphs),
+        Control::Endnote { paragraphs, .. } => ControlDescent::Endnote(paragraphs),
+        Control::Group { children, .. } => ControlDescent::Group(children),
+        Control::Memo { content, anchor_runs, .. } => ControlDescent::Memo { content, anchor_runs },
+        // `Control` is `#[non_exhaustive]`; every caller needs a wildcard
         // regardless of Core's own match coverage.
-        _ => {}
+        _ => ControlDescent::None,
     }
 }
 

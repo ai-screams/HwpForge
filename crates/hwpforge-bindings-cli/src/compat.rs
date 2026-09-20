@@ -1156,21 +1156,50 @@ mod tests {
     }
 
     /// Cross-frontend agreement (audit finding: "two snapshots never
-    /// compared"). For every `TABLE` row, checks whether CLI's legacy wire
-    /// string for that `(command, code)` also exists somewhere in MCP's
-    /// frozen vocabulary (`hwpforge-bindings-mcp/tests/data/legacy_codes.txt`
-    /// and `new_codes.txt`, included as plain data — this crate cannot depend
-    /// on that one, and the MCP snapshot records legacy *strings*, not
-    /// `OpsCode` variants, so this proves "CLI's wire string for this code
-    /// exists in MCP's vocabulary too", not "MCP's own `ops` classifier
-    /// reaches the same `OpsCode` here" — that would need MCP's
-    /// `compat.rs`, out of this crate's reach). `ConvertHwp5`/`ToPdf`/
-    /// `Schema` are excluded: MCP has no tool for HWP5→HWPX/PDF conversion
-    /// or the schema catalogue, so there is nothing in its vocabulary to
-    /// compare those rows against — not a divergence, an absent operation.
-    /// Every code the comparison script found unmatched for a command MCP
-    /// *does* have is `KNOWN_CODE_DIVERGENCE`, with a one-line reason each
-    /// (seeded from that script's output — see the W6b report).
+    /// compared" — and a follow-up audit finding on *this very test*: an
+    /// earlier version compared against ONE global MCP vocabulary merged
+    /// across every tool, so a CLI row could "agree" by matching some
+    /// *other* tool's string for the same code. `insert-para`/`delete-para`
+    /// `SECTION_OUT_OF_RANGE` was exactly such a false agreement: that
+    /// string is genuinely in MCP's vocabulary — for `patch`/`to_json`, not
+    /// for `insert_para`/`delete_para`, which emit `INDEX_OUT_OF_RANGE`
+    /// instead — so the merged set hid a real divergence). This version
+    /// compares each row against only the MCP *tool*
+    /// [`mcp_tool_name`] maps its `Command` to, via a per-tool vocabulary
+    /// map, not a flat union.
+    ///
+    /// For every `TABLE` row, checks whether CLI's legacy wire string for
+    /// that `(command, code)` also exists in the *mapped tool's own* rows of
+    /// MCP's frozen vocabulary (`hwpforge-bindings-mcp/tests/data/
+    /// legacy_codes.txt` and `new_codes.txt`, included as plain data — this
+    /// crate cannot depend on that one, and the MCP snapshot records legacy
+    /// *strings*, not `OpsCode` variants, so this proves "CLI's wire string
+    /// for this code exists in MCP's vocabulary for the same tool", not
+    /// "MCP's own `ops` classifier reaches the same `OpsCode` here" — that
+    /// would need MCP's `compat.rs`, out of this crate's reach). MCP's
+    /// shared `output` tool (file I/O reachable from nearly every MCP tool)
+    /// is deliberately not unioned into every tool's vocabulary here — this
+    /// test only walks `TABLE`, which never carries a CLI-local I/O code
+    /// (those are `CLI_LOCAL`'s, compared to MCP's `output` tool nowhere in
+    /// this crate), so there is nothing in `TABLE` such a union would ever
+    /// legitimately match; adding it back would silently reopen the same
+    /// cross-tool leakage this fix closes.
+    ///
+    /// [`Command::ConvertHwp5`]/[`Command::ToPdf`]/[`Command::Schema`] have
+    /// no mapped tool at all (`mcp_tool_name` returns `None`): MCP has no
+    /// tool for HWP5→HWPX/PDF conversion or the schema catalogue, so there
+    /// is nothing in its vocabulary to compare those rows against — not a
+    /// divergence, an absent operation. Every code the comparison script
+    /// found unmatched for a command MCP *does* have a tool for is
+    /// `KNOWN_CODE_DIVERGENCE`, keyed by `(Command, OpsCode)` rather than
+    /// bare `OpsCode` — the `SectionOutOfRange` case above is exactly why a
+    /// bare-`OpsCode` key cannot express this: `patch`/`to-json`'s
+    /// `SECTION_OUT_OF_RANGE` genuinely agrees with MCP, only
+    /// `insert-para`/`delete-para`'s does not — with a one-line reason each
+    /// (seeded from that script's output — see the W6b report). On a
+    /// mismatch, every offending row is collected and reported together in
+    /// one panic, not just the first — the same reason `assert_eq!` beats a
+    /// loop of single asserts for a maintainer chasing this down later.
     #[test]
     fn cli_legacy_codes_agree_with_mcp_vocabulary_or_are_a_known_divergence() {
         const MCP_LEGACY: &str = include_str!(concat!(
@@ -1181,91 +1210,210 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../hwpforge-bindings-mcp/tests/data/new_codes.txt"
         ));
-        let mcp_codes: BTreeSet<&str> = [MCP_LEGACY, MCP_NEW]
+        let mut mcp_codes_by_tool: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for line in [MCP_LEGACY, MCP_NEW]
             .into_iter()
             .flat_map(str::lines)
             .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
-            .map(|line| line.split('\t').nth(1).expect("code column"))
-            .collect();
+        {
+            let mut columns = line.split('\t');
+            let tool = columns.next().expect("tool column");
+            let code = columns.next().expect("code column");
+            mcp_codes_by_tool.entry(tool).or_default().insert(code);
+        }
 
-        /// Codes reachable from a command MCP has a tool for, where CLI's
-        /// legacy wire string is not in MCP's vocabulary at all (each
-        /// frontend spelled its own error independently, pre-`ops`) —
-        /// see the brief's own two examples: `convert`'s `UNKNOWN_PRESET`
-        /// (MCP's `convert` uses `PRESET_NOT_FOUND`, matching every *other*
+        /// Maps a CLI [`Command`] to the MCP tool name MCP's own snapshot
+        /// files spell it with (hyphens become underscores — the same
+        /// transform [`cmd_name`] would need reversed). `None` means MCP
+        /// has no tool for this command at all — see this test's doc for
+        /// why those three are excluded rather than compared against
+        /// nothing.
+        fn mcp_tool_name(cmd: Command) -> Option<&'static str> {
+            match cmd {
+                Command::ConvertHwp5 | Command::ToPdf | Command::Schema => None,
+                Command::Convert => Some("convert"),
+                Command::Inspect => Some("inspect"),
+                Command::ToJson => Some("to_json"),
+                Command::FromJson => Some("from_json"),
+                Command::Outline => Some("outline"),
+                Command::Diff => Some("diff"),
+                Command::DeletePara => Some("delete_para"),
+                Command::InsertPara => Some("insert_para"),
+                Command::Read => Some("read"),
+                Command::Fields => Some("fields"),
+                Command::Fill => Some("fill"),
+                Command::SetCell => Some("set_cell"),
+                Command::StampPlan => Some("stamp_plan"),
+                Command::Stamp => Some("stamp"),
+                Command::Patch => Some("patch"),
+                Command::Templates => Some("templates"),
+                Command::ToMd => Some("to_md"),
+                Command::Validate => Some("validate"),
+            }
+        }
+
+        /// Every [`Command`] variant, exhaustive by hand the same way
+        /// [`cmd_name`] is — used only to drive the typo guard below over
+        /// every mapped tool name at once, not to compare `TABLE` rows.
+        const ALL_COMMANDS: &[Command] = &[
+            Command::ConvertHwp5,
+            Command::ToPdf,
+            Command::Convert,
+            Command::Inspect,
+            Command::ToJson,
+            Command::FromJson,
+            Command::Outline,
+            Command::Diff,
+            Command::DeletePara,
+            Command::InsertPara,
+            Command::Read,
+            Command::Fields,
+            Command::Fill,
+            Command::SetCell,
+            Command::StampPlan,
+            Command::Stamp,
+            Command::Patch,
+            Command::Templates,
+            Command::Schema,
+            Command::ToMd,
+            Command::Validate,
+        ];
+
+        // Guards the mapping above against a typo (e.g. `"tojson"` for
+        // `"to_json"`): such a typo would make every row for that command
+        // "divergent" and get silently absorbed by growing
+        // `KNOWN_CODE_DIVERGENCE` instead of being caught here.
+        for cmd in ALL_COMMANDS {
+            if let Some(tool) = mcp_tool_name(*cmd) {
+                assert!(
+                    mcp_codes_by_tool.contains_key(tool),
+                    "mcp_tool_name({cmd:?}) = {tool:?}, but no tool by that name exists in \
+                     MCP's snapshot files — check for a spelling mismatch"
+                );
+            }
+        }
+
+        /// `(command, code)` pairs where CLI's legacy wire string is not in
+        /// that command's mapped MCP tool's vocabulary at all (each
+        /// frontend spelled its own error independently, pre-`ops`) — see
+        /// the brief's own two examples: `convert`'s `UNKNOWN_PRESET` (MCP's
+        /// `convert` uses `PRESET_NOT_FOUND`, matching every *other*
         /// command/tool) and `from-json`'s `JSON_PARSE_FAILED` (MCP's
         /// `from_json` uses `JSON_PARSE_ERROR`).
-        const KNOWN_CODE_DIVERGENCE: &[OpsCode] = &[
-            // CLI: DECODE_FAILED (every non-Inspect row) / HWPX_DECODE_FAILED
-            // (to-pdf, excluded above). MCP: DECODE_ERROR, always.
-            OpsCode::DecodeFailed,
+        const KNOWN_CODE_DIVERGENCE: &[(Command, OpsCode)] = &[
+            // CLI: DECODE_FAILED, every command below. MCP: DECODE_ERROR,
+            // always (except `validate`'s own dedicated arm, which is why
+            // `Validate` is *not* listed here — it genuinely agrees).
+            (Command::Convert, OpsCode::DecodeFailed),
+            (Command::Inspect, OpsCode::DecodeFailed),
+            (Command::ToJson, OpsCode::DecodeFailed),
+            (Command::FromJson, OpsCode::DecodeFailed),
+            (Command::Outline, OpsCode::DecodeFailed),
+            (Command::Diff, OpsCode::DecodeFailed),
+            (Command::DeletePara, OpsCode::DecodeFailed),
+            (Command::InsertPara, OpsCode::DecodeFailed),
+            (Command::Read, OpsCode::DecodeFailed),
+            (Command::Fields, OpsCode::DecodeFailed),
+            (Command::Fill, OpsCode::DecodeFailed),
+            (Command::SetCell, OpsCode::DecodeFailed),
+            (Command::StampPlan, OpsCode::DecodeFailed),
+            (Command::Stamp, OpsCode::DecodeFailed),
+            (Command::Patch, OpsCode::DecodeFailed),
+            (Command::ToMd, OpsCode::DecodeFailed),
             // CLI: ENCODE_FAILED. MCP: ENCODE_ERROR.
-            OpsCode::EncodeFailed,
+            (Command::Convert, OpsCode::EncodeFailed),
+            (Command::FromJson, OpsCode::EncodeFailed),
+            (Command::ToMd, OpsCode::EncodeFailed),
             // CLI: FILL_FAILED. MCP: FILL_ERROR.
-            OpsCode::FillFailed,
+            (Command::Fill, OpsCode::FillFailed),
             // delete-para/insert-para kept the pre-ops UNCARRIED_ZIP_ENTRIES/
             // wildcard STRUCTURAL_EDIT_FAILED strings for this code;
             // set-cell/stamp already agree with MCP on INPUT_ENTRIES_NOT_CARRIED.
-            OpsCode::InputEntriesNotCarried,
+            (Command::DeletePara, OpsCode::InputEntriesNotCarried),
+            (Command::InsertPara, OpsCode::InputEntriesNotCarried),
             // CLI keeps its own INSERT_BEFORE_SECTION_PROPERTIES; MCP folds
             // it into the shared SECTION_PROPERTIES_PARAGRAPH wildcard arm
             // (R1 fix, MCP compat.rs docs).
-            OpsCode::InsertBeforeSectionProperties,
+            (Command::InsertPara, OpsCode::InsertBeforeSectionProperties),
             // CLI-only: unreachable through MCP's typed `CellSpec` list (MCP
             // compat.rs module docs) — no MCP vocabulary entry to compare.
-            OpsCode::InvalidSetCellArgs,
+            (Command::SetCell, OpsCode::InvalidSetCellArgs),
             // CLI: JSON_PARSE_FAILED. MCP: JSON_PARSE_ERROR.
-            OpsCode::JsonParseFailed,
+            (Command::FromJson, OpsCode::JsonParseFailed),
+            (Command::Patch, OpsCode::JsonParseFailed),
             // CLI: JSON_SERIALIZE_FAILED. MCP: SERIALIZE_ERROR (predates
             // `ops`, also covers MCP's own local pretty-print stage).
-            OpsCode::JsonSerializeFailed,
+            (Command::ToJson, OpsCode::JsonSerializeFailed),
             // CLI: MD_DECODE_FAILED. MCP: MD_DECODE_ERROR.
-            OpsCode::MdDecodeFailed,
+            (Command::Convert, OpsCode::MdDecodeFailed),
+            (Command::ToMd, OpsCode::MdDecodeFailed),
             // CLI keeps distinct PARAGRAPH_OUT_OF_RANGE; MCP folds
             // paragraph/section-out-of-range into one shared INDEX_OUT_OF_RANGE.
-            OpsCode::ParagraphOutOfRange,
+            (Command::DeletePara, OpsCode::ParagraphOutOfRange),
+            (Command::InsertPara, OpsCode::ParagraphOutOfRange),
             // CLI: PATCH_FAILED. MCP: PATCH_ERROR.
-            OpsCode::PatchFailed,
+            (Command::Patch, OpsCode::PatchFailed),
             // `convert`'s legacy string is UNKNOWN_PRESET, not the
             // PRESET_NOT_FOUND every other command/tool (including MCP's
             // `convert`) uses — CLI's own pre-migration inconsistency, not a
             // cross-frontend one (brief's own example).
-            OpsCode::PresetNotFound,
+            (Command::Convert, OpsCode::PresetNotFound),
             // CLI keeps distinct SPAN_COUNT_MISMATCH; MCP folds it into the
             // wildcard STRUCTURAL_EDIT_FAILED.
-            OpsCode::SpanCountMismatch,
+            (Command::DeletePara, OpsCode::SpanCountMismatch),
+            (Command::InsertPara, OpsCode::SpanCountMismatch),
+            // insert-para/delete-para keep their own legacy SECTION_OUT_OF_
+            // RANGE; MCP's `insert_para`/`delete_para` use INDEX_OUT_OF_RANGE
+            // instead (`patch`/`to-json` genuinely agree with MCP on
+            // SECTION_OUT_OF_RANGE, so this is command-specific, not a
+            // blanket OpsCode divergence — the case this test's own doc
+            // names as the reason the key is `(Command, OpsCode)`, not
+            // `OpsCode` alone).
+            (Command::DeletePara, OpsCode::SectionOutOfRange),
+            (Command::InsertPara, OpsCode::SectionOutOfRange),
             // CLI: STYLE_REBIND_FAILED. MCP: STYLE_REBIND_ERROR.
-            OpsCode::StyleRebindFailed,
+            (Command::Convert, OpsCode::StyleRebindFailed),
             // CLI: STYLE_STORE_FAILED. MCP: STYLE_STORE_ERROR.
-            OpsCode::StyleStoreFailed,
+            (Command::Convert, OpsCode::StyleStoreFailed),
             // Each command/tool keeps its own default-arm string
             // (STAMP_FAILED, SET_CELL_FAILED, STRUCTURAL_EDIT_FAILED, plus
             // CLI-only SECTION_WORKFLOW_FAILED for patch) — by design,
             // module docs' "Table vs. special cases".
-            OpsCode::UpstreamUnmapped,
+            (Command::DeletePara, OpsCode::UpstreamUnmapped),
+            (Command::InsertPara, OpsCode::UpstreamUnmapped),
+            (Command::SetCell, OpsCode::UpstreamUnmapped),
+            (Command::Stamp, OpsCode::UpstreamUnmapped),
+            (Command::Patch, OpsCode::UpstreamUnmapped),
             // CLI: VALIDATION_FAILED (VALIDATE_FAILED for to-md). MCP:
             // VALIDATION_ERROR.
-            OpsCode::ValidationFailed,
+            (Command::Convert, OpsCode::ValidationFailed),
+            (Command::FromJson, OpsCode::ValidationFailed),
+            (Command::ToMd, OpsCode::ValidationFailed),
         ];
-        const NO_MCP_EQUIVALENT: &[Command] =
-            &[Command::ConvertHwp5, Command::ToPdf, Command::Schema];
 
-        for row in TABLE {
-            if NO_MCP_EQUIVALENT.contains(&row.cmd) {
-                continue;
-            }
-            if mcp_codes.contains(row.legacy) {
-                continue;
-            }
-            assert!(
-                KNOWN_CODE_DIVERGENCE.contains(&row.code),
-                "{:?} (CLI legacy {:?}, command {:?}) has no matching string in MCP's \
-                 vocabulary and is not in KNOWN_CODE_DIVERGENCE",
-                row.code,
-                row.legacy,
-                row.cmd
-            );
-        }
+        let mismatches: Vec<String> = TABLE
+            .iter()
+            .filter_map(|row| {
+                let tool = mcp_tool_name(row.cmd)?;
+                let agrees =
+                    mcp_codes_by_tool.get(tool).is_some_and(|codes| codes.contains(row.legacy));
+                if agrees || KNOWN_CODE_DIVERGENCE.contains(&(row.cmd, row.code)) {
+                    return None;
+                }
+                Some(format!(
+                    "{:?} (CLI legacy {:?}, command {:?}, mapped MCP tool {tool:?}) has no \
+                     matching string in that tool's MCP vocabulary and is not in \
+                     KNOWN_CODE_DIVERGENCE",
+                    row.code, row.legacy, row.cmd
+                ))
+            })
+            .collect();
+        assert!(
+            mismatches.is_empty(),
+            "{} mismatch(es):\n{}",
+            mismatches.len(),
+            mismatches.join("\n")
+        );
     }
 
     // ── round-trip checks: construct a representative OpsError/ConvertOpsError

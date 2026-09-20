@@ -1,14 +1,17 @@
 # Frozen (command, code, exit, hint) contract for call sites with NO
-# pre-migration source to audit — a command the migration itself
-# introduced, or a code an existing command can now reach that the
-# pre-migration CLI structurally could not reach. `legacy_codes.txt` (same
-# directory) is the pre-W3-migration snapshot; `src/compat.rs`'s
-# `snapshot_rows()` reads both files and keeps them disjoint (see its
-# header note). Same column format as `legacy_codes.txt`
-# (`command<TAB>code<TAB>exit<TAB>hint`); "frozen from the commit that adds
-# it" here means the same thing "frozen from the pre-migration source"
-# means there — once a row lands, `src/compat.rs`'s `TABLE` must keep
-# producing it.
+# pre-migration source to audit: forward-assigned contracts without legacy
+# precedent, including intentionally CLI-unreachable ops codes — a command
+# the migration itself introduced, or an `OpsCode` a guard (clap, a typed
+# argument list, …) keeps this CLI from ever reaching, but which still
+# needs a frozen row for cross-frontend parity (see the
+# `insert-para INSERT_TEXT_REQUIRED` row below — reachable through MCP, not
+# through this CLI at all). `legacy_codes.txt` (same directory) is the
+# pre-W3-migration snapshot; `src/compat.rs`'s `snapshot_rows()` reads both
+# files and keeps them disjoint (see its header note). Same column format
+# as `legacy_codes.txt` (`command<TAB>code<TAB>exit<TAB>hint`); "frozen
+# from the commit that adds it" here means the same thing "frozen from the
+# pre-migration source" means there — once a row lands, `src/compat.rs`'s
+# `TABLE` must keep producing it.
 #
 # ── `validate` — new command, no legacy CLI to audit ────────────────────
 # `validate` did not exist before this migration (W5b); it is wired
