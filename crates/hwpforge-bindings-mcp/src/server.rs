@@ -1,5 +1,6 @@
 //! MCP server definition and handler implementation.
 
+use hwpforge::ops;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -191,12 +192,12 @@ pub struct StampRequest {
     /// each with an action ({"field":{"name":"…"}} or "ignore"). Every
     /// unguarded candidate must be covered (all-or-nothing).
     #[serde(default)]
-    pub specs: Vec<hwpforge_smithy_hwpx::stamp::StampSpec>,
+    pub specs: Vec<ops::StampSpec>,
     /// Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).
     /// Field actions REQUIRE a non-blank hint; presence of any cell spec
     /// requires `source_sha256`.
     #[serde(default)]
-    pub cells: Vec<hwpforge_smithy_hwpx::stamp::CellStampSpec>,
+    pub cells: Vec<ops::CellStampSpec>,
     /// SHA-256 of the input from hwpforge_stamp_plan — mandatory with
     /// `cells` (drift pinning); selects the v2 pipeline when present.
     pub source_sha256: Option<String>,
@@ -215,7 +216,7 @@ pub struct SetCellRequest {
     /// order) plus one of `at` {row,col} (covered positions resolve to their
     /// merge anchor), `right_of` LABEL, or `below` LABEL (normalized exact
     /// match). `text` "" clears the cell. All-or-nothing.
-    pub specs: Vec<hwpforge_smithy_hwpx::CellSpec>,
+    pub specs: Vec<ops::CellSpec>,
     /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
 }
@@ -1060,5 +1061,53 @@ impl ServerHandler for HwpForgeServer {
     ) -> Result<GetPromptResponse, McpError> {
         // rmcp 3.x MRTR(SEP-2322): 항상 완결 응답 — Complete 로 승격.
         prompts::get_prompt(&request.name, request.arguments.as_ref()).map(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod request_schema_tests {
+    //! W6b audit follow-up: `StampRequest.{specs,cells}` and
+    //! `SetCellRequest.specs` are `hwpforge::ops` re-exports of
+    //! `smithy-hwpx`'s own serde types (see `ops::stamp` / `ops::edit` doc
+    //! comments for why a re-export and not a mirror struct), so the
+    //! published MCP tool input schema is still that crate's wire shape by
+    //! a different name. These tests pin the exact JSON Schema so an
+    //! upstream rename or reshape fails loudly here instead of silently
+    //! changing the wire contract.
+
+    use super::*;
+
+    fn baseline(rel: &str) -> serde_json::Value {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(rel),
+        )
+        .unwrap_or_else(|e| panic!("reading tests/data/{rel}: {e}"));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing tests/data/{rel}: {e}"))
+    }
+
+    #[test]
+    fn stamp_request_schema_matches_baseline() {
+        let actual = serde_json::to_value(schemars::schema_for!(StampRequest)).unwrap();
+        assert_eq!(
+            actual,
+            baseline("stamp_request_schema.json"),
+            "hwpforge_stamp's published input schema changed — if this is an \
+             intentional, additive wire change, update \
+             tests/data/stamp_request_schema.json; if it came from an \
+             upstream smithy-hwpx rename, fix it in ops::stamp instead"
+        );
+    }
+
+    #[test]
+    fn set_cell_request_schema_matches_baseline() {
+        let actual = serde_json::to_value(schemars::schema_for!(SetCellRequest)).unwrap();
+        assert_eq!(
+            actual,
+            baseline("set_cell_request_schema.json"),
+            "hwpforge_set_cell's published input schema changed — if this is \
+             an intentional, additive wire change, update \
+             tests/data/set_cell_request_schema.json; if it came from an \
+             upstream smithy-hwpx rename, fix it in ops::edit instead"
+        );
     }
 }

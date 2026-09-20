@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StampRequest",
+  "description": "Request parameters for `hwpforge_stamp`.",
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "description": "Path to the HWPX file to stamp.",
+      "type": "string"
+    },
+    "specs": {
+      "description": "Approved text specs: one per candidate from hwpforge_stamp_plan,\neach with an action ({\"field\":{\"name\":\"…\"}} or \"ignore\"). Every\nunguarded candidate must be covered (all-or-nothing).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StampSpec"
+      },
+      "default": []
+    },
+    "cells": {
+      "description": "Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).\nField actions REQUIRE a non-blank hint; presence of any cell spec\nrequires `source_sha256`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CellStampSpec"
+      },
+      "default": []
+    },
+    "source_sha256": {
+      "description": "SHA-256 of the input from hwpforge_stamp_plan — mandatory with\n`cells` (drift pinning); selects the v2 pipeline when present.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "output_path": {
+      "description": "Output HWPX file path. Must end with `.hwpx`.",
+      "type": "string"
+    },
+    "manifest_path": {
+      "description": "Manifest JSON path (default: `<output>.manifest.json`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "file_path",
+    "output_path"
+  ],
+  "$defs": {
+    "StampSpec": {
+      "description": "One approved candidate: identity (section/path/span/marker) + action.\n\nIdentity must match a live plan candidate exactly — a stale span or\nedited document fails preflight instead of stamping the wrong text.",
+      "type": "object",
+      "properties": {
+        "section": {
+          "description": "Zero-based section index (from [`StampCandidate::section`]).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "path": {
+          "description": "Semantic slot path (from [`StampCandidate::path`]).",
+          "type": "string"
+        },
+        "span": {
+          "description": "UTF-8 byte span within the slot text (from [`StampCandidate::span`]).",
+          "$ref": "#/$defs/Range_of_uint"
+        },
+        "marker": {
+          "description": "Original marker text, verified against the document.",
+          "type": "string"
+        },
+        "action": {
+          "description": "What to do with this candidate.",
+          "$ref": "#/$defs/StampAction"
+        }
+      },
+      "required": [
+        "section",
+        "path",
+        "span",
+        "marker",
+        "action"
+      ]
+    },
+    "Range_of_uint": {
+      "type": "object",
+      "properties": {
+        "start": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "end": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ]
+    },
+    "StampAction": {
+      "description": "Caller decision for one candidate (design §3-3: the caller map is the\nonly source of final field names — no auto-derived names, no suffixes).",
+      "oneOf": [
+        {
+          "description": "Promote to a named ClickHere field.",
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Unique field name (unique across specs AND existing fields).",
+                  "type": "string"
+                },
+                "hint": {
+                  "description": "Optional hint; defaults to the original marker text.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Explicitly leave this candidate unstamped.",
+          "type": "string",
+          "const": "ignore"
+        }
+      ]
+    },
+    "CellStampSpec": {
+      "description": "One approved class-B target: identity + drift claim + action.",
+      "type": "object",
+      "properties": {
+        "table": {
+          "description": "Table ordinal in shared inventory (DFS pre-order) document order.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "at": {
+          "description": "Canonical anchor coordinate of the target cell (covered coordinates\nare rejected at preflight, never silently resolved).",
+          "$ref": "#/$defs/GridCoord"
+        },
+        "label": {
+          "description": "Label drift claim; `None` marks an explicit orphan target.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CellLabelClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "action": {
+          "description": "What to do with this target.",
+          "$ref": "#/$defs/CellStampAction"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "at",
+        "action"
+      ]
+    },
+    "GridCoord": {
+      "description": "Absolute position on the pre-merge logical grid, zero-based.",
+      "type": "object",
+      "properties": {
+        "row": {
+          "description": "Zero-based logical row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "col": {
+          "description": "Zero-based logical column.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "row",
+        "col"
+      ]
+    },
+    "CellLabelClaim": {
+      "description": "Drift re-verification claim for a detected candidate's label.\n\nPresent on specs approving a detected candidate: preflight re-checks\nthat the label cell at `at` still normalize-matches `text`. Absent for\nexplicit (caller-authored) orphan targets.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Anchor coordinate of the label cell.",
+          "$ref": "#/$defs/GridCoord"
+        },
+        "text": {
+          "description": "Label text as reported by plan (compared normalized).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "text"
+      ]
+    },
+    "CellStampAction": {
+      "description": "Caller decision for one class-B cell target.\n\nUnlike class-A [`StampAction`](super::StampAction), the `hint` is\n**required**: a canonical\nempty cell carries no marker text, so the unfilled field body must come\nfrom the caller (see module docs).",
+      "oneOf": [
+        {
+          "description": "Promote the cell content to a named ClickHere field.",
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Unique field name (unique across text+cell specs AND existing\nfields).",
+                  "type": "string"
+                },
+                "hint": {
+                  "description": "Unfilled field body and hint (must not be blank).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "hint"
+              ]
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Explicitly leave this candidate unstamped.",
+          "type": "string",
+          "const": "ignore"
+        }
+      ]
+    }
+  }
+}

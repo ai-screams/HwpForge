@@ -8,7 +8,8 @@
 use serde::Serialize;
 
 use hwpforge::ops;
-use hwpforge_smithy_hwpx::{CellSpec, SetCellResult};
+use hwpforge::ops::CellSpec;
+use hwpforge_smithy_hwpx::SetCellResult;
 
 use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};

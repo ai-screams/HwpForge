@@ -77,6 +77,30 @@ use serde::Serialize;
 
 use super::{OpsError, OpsWarning};
 
+/// One approved class-A (text) candidate — the request DTO `stamp` takes
+/// (inside a [`StampMap::Legacy`] array, or `text` of its v2 envelope) and
+/// every frontend's wire schema is built from.
+///
+/// W6b audit follow-up: a re-export of `smithy-hwpx`'s own type, not an
+/// `ops`-owned mirror. `ops::stamp` consumes a whole [`StampMap`] as a plain
+/// Rust value rather than parsing JSON into this type itself, so there is no
+/// ops-side parsing step for a mirror struct to front — the frontends'
+/// `#[derive(Deserialize)]` request structs decode straight into this type
+/// today, and re-exporting it here just gives them one name to import
+/// (`hwpforge::ops::StampSpec`) instead of reaching past `ops` into
+/// `smithy-hwpx` directly. If `smithy-hwpx` ever renames or reshapes this
+/// type, fix the break here; a schema snapshot test in `hwpforge-bindings-mcp`
+/// pins the JSON shape so an incompatible change fails loudly there.
+pub use hwpforge_smithy_hwpx::stamp::StampSpec;
+
+/// One approved class-B (cell) target — the request DTO `stamp` takes
+/// (inside the `cells` batch of a [`StampMap::V2`] envelope) and every
+/// frontend's wire schema is built from.
+///
+/// W6b audit follow-up: same re-export rationale as [`StampSpec`] above —
+/// see that doc comment.
+pub use hwpforge_smithy_hwpx::stamp::CellStampSpec;
+
 /// The manifest path a stamp writes when the caller supplies none.
 ///
 /// Replaces `output`'s extension with `manifest.json` via

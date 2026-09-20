@@ -88,8 +88,8 @@ pub use inspect_meta::InspectMeta;
 pub use convert::{convert_md, decode_md, ConvertMdOptions, ConvertMeta, ConvertOutput, MdDecoded};
 pub use diff::{diff, DiffMeta, DiffOutput};
 pub use edit::{
-    delete_para, fill, insert_para, set_cell, DeleteParaOptions, FillMeta, FillOptions, FillOutput,
-    InsertParaOptions, SetCellMeta, SetCellOptions, SetCellOutput, StructuralMeta,
+    delete_para, fill, insert_para, set_cell, CellSpec, DeleteParaOptions, FillMeta, FillOptions,
+    FillOutput, InsertParaOptions, SetCellMeta, SetCellOptions, SetCellOutput, StructuralMeta,
     StructuralOutput,
 };
 pub use exchange::{
@@ -106,8 +106,8 @@ pub use read::{
 #[cfg(feature = "schemars")]
 pub use schema::{schema, SchemaKind, SchemaOptions, SchemaOutput};
 pub use stamp::{
-    default_manifest_path, stamp, stamp_plan, StampMeta, StampOptions, StampOutput, StampPlanMeta,
-    StampPlanOutput, StampedManifest,
+    default_manifest_path, stamp, stamp_plan, CellStampSpec, StampMeta, StampOptions, StampOutput,
+    StampPlanMeta, StampPlanOutput, StampSpec, StampedManifest,
 };
 pub use style::{
     restyle, templates, validate, RestyleMeta, RestyleOptions, RestyleOutput, TemplateList,

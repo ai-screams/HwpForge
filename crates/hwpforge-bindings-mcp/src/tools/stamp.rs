@@ -14,9 +14,10 @@
 use serde::Serialize;
 
 use hwpforge::ops;
+use hwpforge::ops::{CellStampSpec, StampSpec};
 use hwpforge_smithy_hwpx::stamp::{
-    CellStampCandidate, CellStampSpec, CellStampedField, SkippedTable, StampCandidate, StampMap,
-    StampRequestV2, StampSpec, StampedField, STAMP_MAP_VERSION,
+    CellStampCandidate, CellStampedField, SkippedTable, StampCandidate, StampMap, StampRequestV2,
+    StampedField, STAMP_MAP_VERSION,
 };
 
 use crate::compat::{self, Tool};
