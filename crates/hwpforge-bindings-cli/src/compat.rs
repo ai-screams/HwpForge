@@ -403,6 +403,8 @@ const TABLE: &[Row] = &[
     row!(Diff, DecodeFailed, "DECODE_FAILED", 2),
 
     // ── DeletePara / InsertPara (ops::edit::{delete_para,insert_para}) ──
+    row!(DeletePara, DecodeFailed, "DECODE_FAILED", 2, ops),
+    row!(InsertPara, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(DeletePara, DeleteNoTarget, "DELETE_NO_TARGET", 1),
     row!(DeletePara, DuplicateTarget, "DUPLICATE_TARGET", 1),
     row!(DeletePara, ReferenceStranded, "REFERENCE_STRANDED", 1),
@@ -459,6 +461,7 @@ const TABLE: &[Row] = &[
     row!(Fields, DecodeFailed, "DECODE_FAILED", 2),
 
     // ── Fill (ops::edit::fill) ─────────────────────────────────────────
+    row!(Fill, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(Fill, NoValues, "NO_VALUES", 1, "예: hwpforge fill doc.hwpx --set 과제명=\"AI 문서 자동화\" -o out.hwpx"),
     row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", 1, ops),
     // FieldNotFound: dynamic hint, see cli_error.
@@ -469,6 +472,12 @@ const TABLE: &[Row] = &[
     // ── SetCell (ops::edit::set_cell) ──────────────────────────────────
     // NOTE: legacy set-cell hard-codes exit 1 for every code, including its
     // own codec failure — the only command that does this (module docs).
+    // DecodeFailed is the one exception: it is the shared decode stage,
+    // not one of set-cell's own error variants, and had no row at all
+    // before this one — its exit was always 2 through `exit_code`'s
+    // fallback (pinned unchanged by `structural_commands_decode_failed_
+    // output_is_unchanged_by_their_new_table_rows`).
+    row!(SetCell, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(SetCell, InvalidSetCellArgs, "INVALID_SET_CELL_ARGS", 1),
     row!(SetCell, InvalidSetCellMap, "INVALID_SET_CELL_MAP", 1),
     // TableNotFound: always has a dynamic (table-count) hint, no flat shape — see cli_error.
@@ -485,9 +494,11 @@ const TABLE: &[Row] = &[
     // EncodeSemanticLoss: reconstructed to SET_CELL_CODEC_FAILED/1, see cli_error.
 
     // ── StampPlan (ops::stamp::stamp_plan — narrow, see legacy_codes.txt) ─
+    row!(StampPlan, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(StampPlan, StampCodecFailed, "STAMP_CODEC_FAILED", 2),
 
     // ── Stamp (ops::stamp::stamp) ───────────────────────────────────────
+    row!(Stamp, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(Stamp, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"),
     row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, ops),
     row!(Stamp, StampManifestInvariant, "STAMP_MANIFEST_INVARIANT", 2),
@@ -1304,7 +1315,6 @@ mod tests {
             // CLI: DECODE_FAILED, every command below. MCP: DECODE_ERROR,
             // always (except `validate`'s own dedicated arm, which is why
             // `Validate` is *not* listed here — it genuinely agrees).
-            (Command::Convert, OpsCode::DecodeFailed),
             (Command::Inspect, OpsCode::DecodeFailed),
             (Command::ToJson, OpsCode::DecodeFailed),
             (Command::FromJson, OpsCode::DecodeFailed),
@@ -1346,7 +1356,6 @@ mod tests {
             (Command::ToJson, OpsCode::JsonSerializeFailed),
             // CLI: MD_DECODE_FAILED. MCP: MD_DECODE_ERROR.
             (Command::Convert, OpsCode::MdDecodeFailed),
-            (Command::ToMd, OpsCode::MdDecodeFailed),
             // CLI keeps distinct PARAGRAPH_OUT_OF_RANGE; MCP folds
             // paragraph/section-out-of-range into one shared INDEX_OUT_OF_RANGE.
             (Command::DeletePara, OpsCode::ParagraphOutOfRange),
@@ -1375,14 +1384,9 @@ mod tests {
             (Command::Convert, OpsCode::StyleRebindFailed),
             // CLI: STYLE_STORE_FAILED. MCP: STYLE_STORE_ERROR.
             (Command::Convert, OpsCode::StyleStoreFailed),
-            // Each command/tool keeps its own default-arm string
-            // (STAMP_FAILED, SET_CELL_FAILED, STRUCTURAL_EDIT_FAILED, plus
-            // CLI-only SECTION_WORKFLOW_FAILED for patch) — by design,
-            // module docs' "Table vs. special cases".
-            (Command::DeletePara, OpsCode::UpstreamUnmapped),
-            (Command::InsertPara, OpsCode::UpstreamUnmapped),
-            (Command::SetCell, OpsCode::UpstreamUnmapped),
-            (Command::Stamp, OpsCode::UpstreamUnmapped),
+            // `patch` keeps its own CLI-only default-arm string,
+            // SECTION_WORKFLOW_FAILED — by design, module docs' "Table vs.
+            // special cases".
             (Command::Patch, OpsCode::UpstreamUnmapped),
             // CLI: VALIDATION_FAILED (VALIDATE_FAILED for to-md). MCP:
             // VALIDATION_ERROR.
@@ -1413,6 +1417,48 @@ mod tests {
             "{} mismatch(es):\n{}",
             mismatches.len(),
             mismatches.join("\n")
+        );
+
+        // Reverse check (review finding C4): the loop above only walks
+        // `TABLE` looking for rows `KNOWN_CODE_DIVERGENCE` can excuse — it
+        // never asks whether an excuse is still needed. Two ways an entry
+        // can rot: it stops matching any `TABLE` row at all (the row was
+        // renamed or removed), or its row's legacy string starts agreeing
+        // with MCP's vocabulary again (a later fix closed the gap) and the
+        // exception is now dead weight nobody would notice removing.
+        let mut dead = Vec::new();
+        let mut stale = Vec::new();
+        for &(cmd, code) in KNOWN_CODE_DIVERGENCE {
+            let Some(row) = TABLE.iter().find(|row| row.cmd == cmd && row.code == code) else {
+                dead.push(format!(
+                    "{cmd:?}/{code:?} is in KNOWN_CODE_DIVERGENCE but matches no TABLE row"
+                ));
+                continue;
+            };
+            // Every command in the list above maps to an MCP tool (unlike
+            // `ConvertHwp5`/`ToPdf`/`Schema`, which never appear here), so
+            // this is reusing the same agreement formula the forward check
+            // runs, not a new one.
+            let Some(tool) = mcp_tool_name(cmd) else { continue };
+            let agrees =
+                mcp_codes_by_tool.get(tool).is_some_and(|codes| codes.contains(row.legacy));
+            if agrees {
+                stale.push(format!(
+                    "{cmd:?}/{code:?} (CLI legacy {:?}) now agrees with MCP tool {tool:?} — \
+                     this exception is no longer needed — remove it from \
+                     KNOWN_CODE_DIVERGENCE",
+                    row.legacy
+                ));
+            }
+        }
+        assert!(
+            dead.is_empty() && stale.is_empty(),
+            "{} dead KNOWN_CODE_DIVERGENCE entrie(s):\n{}\n{} stale KNOWN_CODE_DIVERGENCE \
+             entrie(s):\n{}",
+            dead.len(),
+            dead.join("\n"),
+            stale.len(),
+            stale.join("\n")
         );
     }
 
@@ -1601,5 +1647,41 @@ mod tests {
         // == false`, handled entirely in `validate.rs`, not this table).
         let err = OpsError::decode(hwpforge_smithy_hwpx::HwpxError::Zip("not a zip file".into()));
         assert_code(Command::Validate, err, "DECODE_FAILED", 2);
+    }
+
+    #[test]
+    fn structural_commands_decode_failed_output_is_unchanged_by_their_new_table_rows() {
+        // Review finding C4 (reverse-check follow-up): `DeletePara`,
+        // `InsertPara`, `Fill`, `SetCell`, `StampPlan` and `Stamp` each
+        // decode an existing HWPX package, so `DecodeFailed` is genuinely
+        // reachable for every one of them — but none had a `TABLE` row,
+        // so each fell through `cli_error`'s `None` branch
+        // (`(code.as_str(), err.hint())`). That branch always asks
+        // `err.hint()`, regardless of the `Hint::None` convention every
+        // sibling command with an *explicit* `DecodeFailed` row chose
+        // (module docs: "every non-`Inspect` `DecodeFailed` row … had no
+        // hint at all") — so today's real output for these six already
+        // carries `hint_for(DecodeFailed)`'s text, not `None`. This pins
+        // that exact triple so promoting the six to real `TABLE` rows
+        // (`Hint::FromOps`, matching `Inspect`'s own row) cannot silently
+        // change it.
+        for cmd in [
+            Command::DeletePara,
+            Command::InsertPara,
+            Command::Fill,
+            Command::SetCell,
+            Command::StampPlan,
+            Command::Stamp,
+        ] {
+            let err = OpsError::decode(hwpforge_smithy_hwpx::HwpxError::Zip("bad".into()));
+            let got = cli_error(cmd, err);
+            assert_eq!(got.code, "DECODE_FAILED", "{cmd:?}");
+            assert_eq!(
+                got.hint.as_deref(),
+                Some("Check that the file is a valid HWPX document"),
+                "{cmd:?}"
+            );
+            assert_eq!(exit_code(cmd, &got), 2, "{cmd:?}");
+        }
     }
 }

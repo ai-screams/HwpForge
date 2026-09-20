@@ -33,3 +33,26 @@ validate	JSON_SERIALIZE_FAILED	2	-
 # of 1. Exit 1, the argument-error class every other `insert-para`/
 # `delete-para` row in `legacy_codes.txt` uses.
 insert-para	INSERT_TEXT_REQUIRED	1	-
+#
+# ── `DecodeFailed` for delete-para/insert-para/fill/set-cell/stamp-plan/
+# stamp — a promotion, not a legacy-audit gap ───────────────────────────
+# Each of these six decodes an existing HWPX package, so `DecodeFailed` was
+# always reachable for them; none had a `TABLE` row, so `cli_error` fell
+# through to its `None` branch (`code.as_str()` + `err.hint()`) instead of
+# an explicit one. C4 reverse-check follow-up: promoted to explicit rows
+# so the forward compatibility check can see the real, live divergence
+# `KNOWN_CODE_DIVERGENCE` already excused for them (CLI: DECODE_FAILED,
+# MCP: DECODE_ERROR) — the missing row was hiding it from that check, not
+# a case where the two frontends happened to agree. String and exit are
+# unchanged from what the fallback already produced (pinned by
+# `structural_commands_decode_failed_output_is_unchanged_by_their_new_table_rows`
+# before and after the row landed) — this is a promotion of an existing
+# output to an explicit row, not new behavior, hence here and not a
+# retroactive edit to `legacy_codes.txt` (frozen historical snapshot; see
+# its own header).
+delete-para	DECODE_FAILED	2	Check that the file is a valid HWPX document
+insert-para	DECODE_FAILED	2	Check that the file is a valid HWPX document
+fill	DECODE_FAILED	2	Check that the file is a valid HWPX document
+set-cell	DECODE_FAILED	2	Check that the file is a valid HWPX document
+stamp-plan	DECODE_FAILED	2	Check that the file is a valid HWPX document
+stamp	DECODE_FAILED	2	Check that the file is a valid HWPX document
