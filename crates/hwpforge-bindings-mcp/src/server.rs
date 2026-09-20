@@ -1071,9 +1071,12 @@ mod request_schema_tests {
     //! `smithy-hwpx`'s own serde types (see `ops::stamp` / `ops::edit` doc
     //! comments for why a re-export and not a mirror struct), so the
     //! published MCP tool input schema is still that crate's wire shape by
-    //! a different name. These tests pin the exact JSON Schema so an
-    //! upstream rename or reshape fails loudly here instead of silently
-    //! changing the wire contract.
+    //! a different name. These tests pin the JSON Schema *structurally*
+    //! (`serde_json::Value` equality — key order is not part of what a JSON
+    //! Schema consumer reads, and a byte comparison would couple the test to
+    //! serde_json/schemars serialization order instead) so an upstream rename
+    //! or reshape fails loudly here instead of silently changing the wire
+    //! contract.
 
     use super::*;
 
