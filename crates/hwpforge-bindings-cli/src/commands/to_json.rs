@@ -10,17 +10,17 @@ use crate::error::{check_file_size, CliError};
 // Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
 pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
 
-/// Prints one export warning in this command's shape, skipping decoder
-/// warnings (`OpsWarning::Decode`) — not surfaced pre-migration either (W3
-/// report). `OpsWarning::info()` reproduces the exact legacy wording for
-/// both remaining kinds this command can see: `GridAddr`
+/// Prints one export warning in this command's shape.
+///
+/// `OpsWarning::info()` reproduces the exact legacy wording for the two
+/// kinds this command printed pre-migration: `GridAddr`
 /// (`TABLE_GRID_UNADDRESSABLE`, same `format!` as the old `finish_annotation`)
 /// and `SectionWorkflow` (`warning.code()`/`warning.message()`, same as the
-/// old inline `outcome.warning` print).
+/// old inline `outcome.warning` print). Decoder warnings (`OpsWarning::Decode`,
+/// for example `LAYOUT_CACHE_DROPPED`) were not surfaced pre-W5 — the
+/// pre-migration CLI never captured them either — and are now printed
+/// through this same shape (W5 follow-up, additive).
 fn print_warning(warning: &OpsWarning, json_mode: bool) {
-    if matches!(warning, OpsWarning::Decode(_)) {
-        return;
-    }
     let info = warning.info();
     if json_mode {
         let warn = serde_json::json!({

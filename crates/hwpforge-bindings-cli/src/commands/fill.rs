@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use hwpforge::ops::edit::{fill as ops_fill, FillOptions};
-use hwpforge::ops::OpsError;
+use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
@@ -32,6 +33,11 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
         Ok(o) => o,
         Err(e) => exit_ops_error(Command::Fill, e, json_mode),
     };
+    // Decoder warnings (`FillOutput::warnings`, from the name-resolution
+    // decode) were not surfaced pre-W5. W5 follow-up: additive — a new,
+    // omit-if-empty `warnings` key in `--json`, and one `[fill]`-prefixed
+    // stderr line each in text mode.
+    let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
@@ -39,14 +45,20 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     }
 
     if json_mode {
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "status": "ok",
             "output": output.display().to_string(),
             "filled": outcome.filled,
             "size_bytes": outcome.bytes.len(),
         });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
+        for w in &warnings {
+            eprintln!("[fill] {}: {}", w.code, w.message);
+        }
         println!("Filled {} field(s) -> {}", outcome.filled.len(), output.display());
         for f in &outcome.filled {
             println!("  [{}] {}: {:?} -> filled", f.section, f.name, f.previous);

@@ -10,7 +10,8 @@
 use std::path::PathBuf;
 
 use hwpforge::ops::edit::{set_cell as ops_set_cell, SetCellOptions};
-use hwpforge::ops::OpsError;
+use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{CellResolution, CellSpec};
 
 use crate::compat::{self, Command};
@@ -53,6 +54,11 @@ pub fn run(
         Ok(r) => r,
         Err(e) => exit_ops_error(Command::SetCell, e, json_mode),
     };
+    // Decoder warnings, then the successful encode's non-semantic warnings
+    // (`SetCellOutput::warnings`) were not surfaced pre-W5. W5 follow-up:
+    // additive — a new, omit-if-empty `warnings` key in `--json`, and one
+    // `[set-cell]`-prefixed stderr line each in text mode.
+    let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &result.bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
@@ -60,14 +66,20 @@ pub fn run(
     }
 
     if json_mode {
-        let out = serde_json::json!({
+        let mut out = serde_json::json!({
             "status": "ok",
             "output": output.display().to_string(),
             "cells": result.results,
             "size_bytes": result.bytes.len(),
         });
+        if !warnings.is_empty() {
+            out["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
         println!("{}", serde_json::to_string(&out).unwrap());
     } else {
+        for w in &warnings {
+            eprintln!("[set-cell] {}: {}", w.code, w.message);
+        }
         println!("Set {} cell(s) -> {}", result.results.len(), output.display());
         for c in &result.results {
             let resolved = match c.resolution {

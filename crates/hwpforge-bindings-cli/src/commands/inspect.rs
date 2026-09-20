@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use hwpforge::ops::inspect::{InspectSection, InspectStyles};
-use hwpforge::ops::{self, InspectOptions, OpsError};
+use hwpforge::ops::{self, InspectOptions, OpsError, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
@@ -22,6 +23,12 @@ struct InspectResult {
     sections: Vec<SectionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     styles: Option<InspectStyles>,
+    /// Decode warnings raised while decoding (`ops::InspectOutput::warnings`,
+    /// for example `LAYOUT_CACHE_DROPPED`). Omitted when empty; new key, so a
+    /// clean document's `--json` shape is unchanged (W5 follow-up — see the
+    /// `run` module comment).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<WarningInfo>,
 }
 
 #[derive(Serialize)]
@@ -98,6 +105,13 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
             err.exit(json_mode, exit);
         }
     };
+    // W5 follow-up: the pre-migration CLI never captured decode warnings
+    // here (there was no decode step to capture them from); now that
+    // `ops::inspect` reports them (`LAYOUT_CACHE_DROPPED` etc., mirroring
+    // `hwpforge_inspect`/`doc.inspect()` on the MCP/Python surfaces), they
+    // are additive: a new, omit-if-empty `warnings` key in `--json`, and one
+    // `[inspect]`-prefixed stderr line each in text mode.
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let report = out.report;
 
     // Second decode, only for the deep-count scanner (see module comment
@@ -133,11 +147,15 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         metadata: MetadataInfo { title: report.metadata.title, author: report.metadata.author },
         sections,
         styles: report.styles,
+        warnings,
     };
 
     if json_mode {
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
+        for w in &result.warnings {
+            eprintln!("[inspect] {}: {}", w.code, w.message);
+        }
         println!("Document: {}", file.display());
         println!("  Title:  {}", result.metadata.title);
         println!("  Author: {}", result.metadata.author);
