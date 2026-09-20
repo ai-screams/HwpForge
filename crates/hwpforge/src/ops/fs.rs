@@ -4,17 +4,20 @@
 //! holds. Two steps here reach past that boundary to the filesystem, kept in
 //! this one module so that a frontend without a filesystem — the Python
 //! bindings fed from memory, an object store, an FFI peer — can replace
-//! either and keep the rest of the pipeline untouched:
+//! either and keep the rest of the pipeline untouched. The two steps sit on
+//! different feature gates, because only one of them needs the Markdown
+//! smithy:
 //!
-//! - [`resolve_files_from_dir`] — asset (image) resolution: reads the `file:`
-//!   entries of a plan a caller already made.
-//! - [`read_bounded`] — W6b audit follow-up: reads a whole input document (or
-//!   a stamp map / patch JSON file) from a path, capped at a caller-chosen
-//!   size regardless of what the source's `metadata()` reports. CLI's
-//!   `error::read_input`, MCP's `read_file_bytes` and the Python bindings'
-//!   `Document.open` all read their input through one of this function or
-//!   [`MAX_FILE_SIZE`], so the limit and its off-by-one behaviour cannot
-//!   drift between frontends.
+//! - [`read_bounded`] (gate `ops-hwpx`, so it is available whenever `ops` is)
+//!   — W6b audit follow-up: reads a whole input document (or a stamp map /
+//!   patch JSON file) from a path, capped at a caller-chosen size regardless
+//!   of what the source's `metadata()` reports. CLI's `error::read_input`,
+//!   MCP's `read_file_bytes` and the Python bindings' `Document.open` all
+//!   read their input through one of this function or [`MAX_FILE_SIZE`], so
+//!   the limit and its off-by-one behaviour cannot drift between frontends.
+//! - [`resolve_files_from_dir`] (gate `ops-md`) — asset (image) resolution:
+//!   reads the `file:` entries of a plan a caller already made. This one
+//!   needs `hwpforge_smithy_md`'s asset plan type, so it stays behind `md`.
 //!
 //! The asset pipeline is three steps, and only the middle one is impure:
 //!
@@ -36,6 +39,11 @@ use super::OpsError;
 /// the resolver through the operation layer they already use. `data:` and
 /// remote entries are left untouched — this step never opens a network
 /// connection.
+///
+/// Gated on `ops-md` (unlike the rest of this module): it needs the asset
+/// plan type from `hwpforge_smithy_md`, which is only a dependency once `md`
+/// is on.
+#[cfg(feature = "ops-md")]
 pub use hwpforge_smithy_md::assets::fs::resolve_files_from_dir;
 
 /// The frontend-shared input size limit: 100 MB.

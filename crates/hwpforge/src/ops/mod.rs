@@ -7,12 +7,14 @@
 //! text (`&str` for Markdown and JSON), options are a [`Default`] struct with
 //! consuming `with_*` builders, and the output is
 //! `Result<XxxOutput, OpsError>`. **Operation functions never touch the
-//! filesystem**; the one place that does is the `fs` submodule (feature
-//! `ops-md`), and it does so for exactly two reasons: resolving the `file:`
-//! entries of an asset plan a caller already made, and — W6b audit follow-up
-//! — reading a whole input document from a path under a caller-chosen size
-//! cap ([`fs::read_bounded`]), the one frontend-shared input size gate CLI,
-//! MCP and the Python bindings all read through.
+//! filesystem**; the one place that does is the `fs` submodule, and it does
+//! so for exactly two reasons: reading a whole input document from a path
+//! under a caller-chosen size cap ([`fs::read_bounded`], feature `ops-hwpx`
+//! — W6b audit follow-up), the one frontend-shared input size gate CLI, MCP
+//! and the Python bindings all read through; and resolving the `file:`
+//! entries of an asset plan a caller already made
+//! ([`fs::resolve_files_from_dir`], feature `ops-md` — it needs the Markdown
+//! smithy's asset plan type).
 //!
 //! Output structs are `#[non_exhaustive]` and do **not** derive serde: the
 //! serialisable payload is the wire DTO they carry, and warnings become
@@ -53,7 +55,7 @@ pub mod convert;
 pub mod diff;
 pub mod edit;
 pub mod exchange;
-#[cfg(feature = "ops-md")]
+#[cfg(feature = "ops-hwpx")]
 pub mod fs;
 pub mod inspect;
 pub mod inspect_meta;
@@ -267,7 +269,7 @@ pub enum OpsError {
     /// it already did before the read moved here (the size violation
     /// `read_bounded` also guards against is not an I/O failure and reports
     /// [`OpsCode::InputTooLarge`] through [`OpsError::Rejected`] instead).
-    #[cfg(feature = "ops-md")]
+    #[cfg(feature = "ops-hwpx")]
     #[error(transparent)]
     Io(std::io::Error),
 }
@@ -313,7 +315,7 @@ impl OpsError {
             // special-cases the wrapped `io::ErrorKind` (see the variant
             // doc), never `OpsError::code()`. `UpstreamUnmapped` is still the
             // honest answer: `std::io::Error` has no `OpsCode` of its own.
-            #[cfg(feature = "ops-md")]
+            #[cfg(feature = "ops-hwpx")]
             Self::Io(_) => OpsCode::UpstreamUnmapped,
         }
     }
