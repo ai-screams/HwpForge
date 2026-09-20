@@ -8,7 +8,7 @@ use hwpforge_smithy_hwp5::{census_hwp5, Hwp5CensusReport};
 use hwpforge_smithy_hwpx::{PackageEntryInfo, PackageReader};
 
 use crate::analysis::hwpx_paths::{collect_section_path_inventory, HwpxPathOccurrence};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 #[derive(Debug, Serialize)]
 struct CensusResult {
@@ -75,10 +75,7 @@ pub fn run(
         check_file_size(companion, json_mode);
     }
 
-    let input_bytes = std::fs::read(input).unwrap_or_else(|err| {
-        CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {err}", input.display()))
-            .exit(json_mode, 1)
-    });
+    let input_bytes = read_input(input, json_mode);
 
     let hwp5 = census_hwp5(&input_bytes).unwrap_or_else(|err| {
         CliError::new("HWP5_CENSUS_FAILED", format!("Cannot census '{}': {err}", input.display()))
@@ -116,10 +113,7 @@ pub fn run(
 }
 
 fn census_hwpx_companion(path: &Path, json_mode: bool) -> HwpxCompanionCensus {
-    let bytes = std::fs::read(path).unwrap_or_else(|err| {
-        CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {err}", path.display()))
-            .exit(json_mode, 1)
-    });
+    let bytes = read_input(path, json_mode);
 
     let mut pkg = PackageReader::new(&bytes).unwrap_or_else(|err| {
         CliError::new(

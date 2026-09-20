@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use hwpforge::ops::{self, MdExportOptions, MdMode as OpsMdMode, OpsWarning};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_bounded, CliError};
 use crate::MdMode;
 
 /// Run the to-md command.
@@ -19,7 +19,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     // not a path, so the read has to happen here; reproduced with the
     // legacy code/exit/message shape rather than introducing a
     // `FILE_READ_FAILED` this command's frozen contract never had.
-    let bytes = match std::fs::read(input) {
+    let bytes = match read_bounded(input) {
         Ok(b) => b,
         Err(e) => {
             CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);

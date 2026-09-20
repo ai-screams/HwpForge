@@ -3,20 +3,14 @@
 use std::path::PathBuf;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_bounded, read_input_string, CliError};
 use hwpforge::ops::{self, FromJsonOptions};
 
 /// Run the from-json command.
 pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode: bool) {
     check_file_size(input, json_mode);
 
-    let json_str = match std::fs::read_to_string(input) {
-        Ok(s) => s,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", input.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let json_str = read_input_string(input, json_mode);
 
     // Legacy two-step JSON_PARSE_FAILED classification (5ff81af `run`):
     // syntax errors ("Invalid JSON: {e}", no hint) versus a schema mismatch
@@ -39,7 +33,7 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     let mut opts = FromJsonOptions::default();
     if let Some(base_path) = base {
         check_file_size(base_path, json_mode);
-        let base_bytes = match std::fs::read(base_path) {
+        let base_bytes = match read_bounded(base_path) {
             Ok(b) => b,
             Err(e) => {
                 CliError::new(

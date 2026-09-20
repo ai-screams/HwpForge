@@ -1,5 +1,6 @@
 //! Shared output types for MCP tool responses.
 
+use std::io::Read;
 use std::path::Path;
 
 use serde::Serialize;
@@ -9,16 +10,44 @@ pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 /// Maximum inline content size: 50 MB.
 pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
 
+/// Reads `reader` fully, but never more than `max + 1` bytes.
+///
+/// Backs [`read_file_bytes`]: [`check_file_size`]'s `metadata().len()` guard
+/// is only accurate for regular files — a FIFO or process substitution
+/// reports `0` and would otherwise be read to completion by a plain
+/// `std::fs::read` (measured: an unbounded read of a 200 MB FIFO drove RSS
+/// to 2.8 GB in 20 s). Capping the read itself, not just the pre-check, is
+/// the actual guarantee; `metadata()` is just the cheap fast path for the
+/// common case where it happens to be accurate. Generic over `impl Read` so
+/// unit tests can exercise the cap with a small `max` against a `Cursor`
+/// instead of allocating real megabytes.
+fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    reader.by_ref().take(max + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("input exceeds {} MB limit", max / 1024 / 1024),
+        ));
+    }
+    Ok(buf)
+}
+
 /// Read a file as bytes with size check and structured errors.
 ///
-/// Uses `metadata()` for size guard (prevents OOM), then `read()` with
-/// `ErrorKind`-based error mapping — no separate `exists()` call (TOCTOU-safe).
+/// Uses `metadata()` for size guard (prevents OOM in the common case), then
+/// reads through [`read_capped`] — a hard cap of [`MAX_FILE_SIZE`] bytes
+/// enforced on the read itself, not just on `metadata()` — with
+/// `ErrorKind`-based error mapping. No separate `exists()` call
+/// (TOCTOU-safe).
 pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
     let path = Path::new(file_path);
     check_file_size(path)?;
     // Safety net: if the file disappears between metadata() and read() (TOCTOU),
     // this match catches NotFound again. In normal flow, check_file_size handles it.
-    std::fs::read(path).map_err(|e| match e.kind() {
+    // Also the guarantee for a source (FIFO/process substitution) whose
+    // `metadata().len()` under-reports: `read_capped` still caps it here.
+    let file = std::fs::File::open(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => ToolErrorInfo::new(
             "FILE_NOT_FOUND",
             format!("File not found: {file_path}"),
@@ -29,6 +58,21 @@ pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
             format!("Failed to read file: {e}"),
             "Check file permissions.",
         ),
+    })?;
+    read_capped(file, MAX_FILE_SIZE).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::FileTooLarge {
+            ToolErrorInfo::new(
+                "INPUT_TOO_LARGE",
+                format!("File '{file_path}' exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
+                "Use a smaller file or split the document into sections.",
+            )
+        } else {
+            ToolErrorInfo::new(
+                "READ_ERROR",
+                format!("Failed to read file: {e}"),
+                "Check file permissions.",
+            )
+        }
     })
 }
 
@@ -253,6 +297,31 @@ impl ToolWarningInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn read_capped_within_limit_returns_all_bytes() {
+        let data = vec![7u8; 5];
+        let out = read_capped(Cursor::new(data.clone()), 10).unwrap();
+        assert_eq!(out, data);
+    }
+
+    #[test]
+    fn read_capped_at_exact_limit_returns_all_bytes() {
+        let data = vec![7u8; 10];
+        let out = read_capped(Cursor::new(data.clone()), 10).unwrap();
+        assert_eq!(out, data);
+    }
+
+    #[test]
+    fn read_capped_over_limit_errors_file_too_large() {
+        // 11 bytes through a 10-byte cap: `take(max + 1)` lets the 11th byte
+        // through so the length check can distinguish "exactly at the limit"
+        // from "over it" — this exercises that off-by-one boundary.
+        let data = vec![7u8; 11];
+        let err = read_capped(Cursor::new(data), 10).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge);
+    }
 
     #[test]
     fn read_file_bytes_missing_file() {

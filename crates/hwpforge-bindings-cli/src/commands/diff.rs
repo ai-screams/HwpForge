@@ -6,23 +6,14 @@ use hwpforge::ops::{self, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 /// Run the diff command.
 pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mode: bool) {
     check_file_size(base, json_mode);
     check_file_size(revised, json_mode);
-    let read = |path: &PathBuf| -> Vec<u8> {
-        match std::fs::read(path) {
-            Ok(b) => b,
-            Err(e) => {
-                CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", path.display()))
-                    .exit(json_mode, 1);
-            }
-        }
-    };
-    let base_bytes = read(base);
-    let revised_bytes = read(revised);
+    let base_bytes = read_input(base, json_mode);
+    let revised_bytes = read_input(revised, json_mode);
 
     // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
     // surfaced pre-W5 (the pre-migration CLI never captured them either). W5

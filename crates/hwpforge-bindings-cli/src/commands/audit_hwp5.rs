@@ -13,7 +13,7 @@ use crate::analysis::deep_counts::{
     summarize_hwp5_semantic, summarize_hwpx_document, DeepDocumentSummary, DeepSectionSummary,
     DeepTableCellEvidence, DeepTableEvidence,
 };
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_bounded, CliError};
 
 #[derive(Serialize)]
 struct AuditResult {
@@ -221,7 +221,7 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
 }
 
 fn read_required(path: &Path, label: &str, json_mode: bool) -> Vec<u8> {
-    std::fs::read(path).unwrap_or_else(|err| {
+    read_bounded(path).unwrap_or_else(|err| {
         CliError::new(
             "FILE_READ_FAILED",
             format!("Cannot read {label} '{}': {err}", path.display()),

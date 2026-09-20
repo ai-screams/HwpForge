@@ -8,7 +8,7 @@ use hwpforge::ops::{OpsError, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 /// Run the fill command.
 pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
@@ -20,13 +20,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     }
 
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = read_input(file, json_mode);
 
     let values: Vec<(String, String)> = values.into_iter().collect();
     let outcome = match ops_fill(&bytes, &values, &FillOptions::default()) {

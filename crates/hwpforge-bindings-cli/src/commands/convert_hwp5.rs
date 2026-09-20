@@ -9,7 +9,7 @@ use hwpforge_convert::ConvertWarning;
 use hwpforge_smithy_hwp5::inspect_hwp5_file;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_bounded, CliError};
 
 /// JSON 모드에 싣는 경고 상세 상한 (집계 경고라 문서당 소수 — 폭주 방지 겸).
 const MAX_WARNING_DETAILS: usize = 32;
@@ -49,7 +49,7 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
     // `inspect_hwp5_file`, once inside `hwp5_to_hwpx_with_options`), not a
     // new cost. A failure here (the file vanishing between the two reads)
     // is mapped like the legacy second-read failure was: `HWP5_CONVERT_FAILED`.
-    let bytes = std::fs::read(input).unwrap_or_else(|err| {
+    let bytes = read_bounded(input).unwrap_or_else(|err| {
         CliError::new(
             "HWP5_CONVERT_FAILED",
             format!("Cannot convert '{}' to HWPX: {err}", input.display()),

@@ -5881,3 +5881,117 @@ fn diff_has_no_warnings_key_on_a_clean_fixture() {
     assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
     assert!(stderr.is_empty(), "{stderr}");
 }
+
+// ─── Bounded input reads (audit HIGH-1) ───
+//
+// `check_file_size`'s `metadata().len()` fast path is accurate for regular
+// files but reports 0 for a FIFO — the actual guarantee is the bounded read
+// underneath it (`error::read_input`/`read_bounded`). These two tests drive
+// a real named pipe through the built binary: one under the cap (no
+// regression on the ordinary small-file path), one past it (the new
+// `INPUT_TOO_LARGE` guarantee a FIFO's lying `metadata()` used to let
+// through unbounded).
+
+#[cfg(unix)]
+fn create_fifo(path: &Path) {
+    let status = Command::new("mkfifo").arg(path).status().expect("failed to run mkfifo");
+    assert!(status.success(), "mkfifo failed for {}", path.display());
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_input_under_the_size_cap_reads_successfully() {
+    let tmp = test_tmp();
+    let fifo_path = tmp.join("input.hwpx");
+    create_fifo(&fifo_path);
+
+    // A real (small) fixture, not just arbitrary bytes, so success here
+    // proves the full decode round-trips through the FIFO, not merely that
+    // the read call didn't error.
+    let data = std::fs::read(fixture("rect.hwpx")).expect("read fixture");
+    let writer_path = fifo_path.clone();
+    let writer = std::thread::spawn(move || {
+        // Opening a FIFO for write blocks until a reader opens it — that
+        // reader is the `hwpforge` child process `run_json` spawns below.
+        let mut f = std::fs::File::create(&writer_path).expect("open fifo for write");
+        f.write_all(&data).expect("write fifo data");
+    });
+
+    let (val, stderr, code) = run_json(&["inspect", fifo_path.to_str().unwrap()]);
+    writer.join().expect("writer thread panicked");
+
+    assert_eq!(code, 0, "stderr: {stderr}, value: {val}");
+    assert_eq!(val["status"], "ok", "{val}");
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_input_over_the_size_cap_reports_input_too_large() {
+    let tmp = test_tmp();
+    let fifo_path = tmp.join("oversized.hwpx");
+    create_fifo(&fifo_path);
+
+    let writer_path = fifo_path.clone();
+    let writer = std::thread::spawn(move || {
+        let Ok(mut f) = std::fs::File::create(&writer_path) else { return };
+        let chunk = vec![0u8; 1024 * 1024];
+        // Comfortably over the 100 MB cap; the reader (`read_input`'s
+        // `take(MAX_FILE_SIZE + 1)`) stops consuming once it has the extra
+        // byte it needs to detect the overflow and exits, so this loop
+        // reliably breaks on the first write past that point — `write_all`
+        // then reports `BrokenPipe` (Rust ignores `SIGPIPE`, so a write past
+        // a closed reader is an ordinary `io::Error`, not a fatal signal).
+        for _ in 0..150 {
+            if f.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+    });
+
+    let (val, stderr, code) = run_json(&["inspect", fifo_path.to_str().unwrap()]);
+    let _ = writer.join();
+
+    assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
+    assert_eq!(val["code"], "INPUT_TOO_LARGE", "{val}");
+}
+
+#[cfg(unix)]
+#[test]
+fn set_cell_fifo_map_over_the_size_cap_reports_file_read_failed() {
+    // `set-cell --map` had no `check_file_size` preflight at all before the
+    // `read_to_string` bounded-read fix (audit follow-up) — unlike every
+    // other read site, it never had an `INPUT_TOO_LARGE` code of its own to
+    // reuse. The cap surfaces through this site's existing
+    // `FILE_READ_FAILED`/exit 1 (`read_bounded_string`'s `Err` arm), not a
+    // newly introduced `INPUT_TOO_LARGE`.
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never.hwpx");
+    let fifo_path = tmp.join("oversized_map.json");
+    create_fifo(&fifo_path);
+
+    let writer_path = fifo_path.clone();
+    let writer = std::thread::spawn(move || {
+        let Ok(mut w) = std::fs::File::create(&writer_path) else { return };
+        let chunk = vec![b'a'; 1024 * 1024];
+        for _ in 0..150 {
+            if w.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+    });
+
+    let (val, stderr, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        fifo_path.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    let _ = writer.join();
+
+    assert_eq!(code, 1, "stderr: {stderr}, value: {val}");
+    assert_eq!(val["code"], "FILE_READ_FAILED", "{val}");
+    assert!(!out.exists());
+}

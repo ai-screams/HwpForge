@@ -120,13 +120,7 @@ pub fn run_insert(
 
 fn read_input(file: &PathBuf, json_mode: bool) -> Vec<u8> {
     check_file_size(file, json_mode);
-    match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    }
+    crate::error::read_input(file, json_mode)
 }
 
 fn write_output(
