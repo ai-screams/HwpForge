@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use hwpforge::ops;
 
-use crate::compat;
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a validation check.
@@ -19,10 +19,11 @@ pub struct ValidateData {
     /// List of issues found (empty if valid).
     pub issues: Vec<String>,
     /// Decode warnings raised on the way in (`ops::ValidateOutput::warnings`)
-    /// — present whether the document validated or not; empty (and never
-    /// populated) when the input could not even be decoded, since then
-    /// `ops::validate` never produces a warning list to surface. Omitted
-    /// when empty.
+    /// — present whether the document validated or the decoded document
+    /// simply failed `Document::validate`; empty when there are none. An
+    /// input `ops::validate` cannot even decode never reaches this struct at
+    /// all — it is reported as a `DECODE_FAILED` error instead (see the
+    /// module docs). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
@@ -30,18 +31,22 @@ pub struct ValidateData {
 /// Validate an HWPX file structure and integrity.
 ///
 /// `ops::validate` treats an undecodable package as an
-/// [`ops::OpsError::Decode`] (a *query cannot be answered* failure), but this
-/// tool's frozen contract has never propagated that as a `ToolErrorInfo`: a
-/// bad file is reported as `valid: false` with the decode failure folded
-/// into `issues`, same as a failed `Document::validate` check, so both
-/// branches are reconstructed here rather than routed through
-/// `compat::tool_error`. `ops::validate`'s only error variant is `Decode`
-/// (see its `# Errors` docs), and `OpsError::Decode`'s `Display` is
-/// transparent to the wrapped `HwpxError`, so `format!("HWPX decode failed:
-/// {err}")` reproduces the pre-migration message byte for byte. Decoder
-/// warnings from a *successful* decode (`ops::ValidateOutput::warnings`) are
-/// surfaced through `ValidateData::warnings` regardless of `valid` — an
-/// undecodable input has no decode to warn from, so that branch stays empty.
+/// [`ops::OpsError::Decode`] (a *query cannot be answered* failure). Before
+/// an audit flagged this (HIGH-2), the tool folded that into a `valid:
+/// false` payload just like a failed `Document::validate` check — so a
+/// genuine HWP5 file, or anything else `HwpxDecoder` cannot even open, was
+/// reported as "Invalid HWPX" rather than as a decode failure. `Err(err)`
+/// now routes through [`compat::tool_error`] (`Tool::Validate`'s dedicated
+/// match arm reuses the same `DECODE_FAILED` code and "convert with
+/// hwpforge_convert first" hint every other decode-gated tool already
+/// carries). This is an intentional MCP contract change: a caller that used
+/// to branch on `valid: false` for this case now needs to handle a
+/// `DECODE_FAILED` error. A *decoded-but-invalid* document — `HwpxDecoder`
+/// reads it fine but `Document::validate` then rejects it — keeps the
+/// pre-migration payload shape unchanged: `valid: false` with the rejection
+/// folded into `issues`. Decoder warnings from a *successful* decode
+/// (`ops::ValidateOutput::warnings`) are surfaced through
+/// `ValidateData::warnings` regardless of `valid`.
 pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
@@ -63,13 +68,7 @@ pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
                 warnings: out.warnings.iter().map(compat::warning).collect(),
             })
         }
-        Err(err) => Ok(ValidateData {
-            valid: false,
-            sections: 0,
-            paragraphs: 0,
-            issues: vec![format!("HWPX decode failed: {err}")],
-            warnings: vec![],
-        }),
+        Err(err) => Err(compat::tool_error(Tool::Validate, err)),
     }
 }
 
@@ -103,17 +102,36 @@ mod tests {
         assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
     }
 
+    /// HIGH-2: an undecodable package must be a structured error, not a
+    /// `valid: false` payload with the decode failure folded into `issues`
+    /// — the bug that made a genuine HWP5 file read as "Invalid HWPX".
+    /// Covers both an outright-garbage package and a real `.hwp` file,
+    /// since a `.hwp` file is the case the audit actually measured (it is
+    /// not even a ZIP archive, so `HwpxDecoder` fails immediately).
     #[test]
-    fn validate_invalid_hwpx_bytes() {
+    fn validate_reports_decode_failure_as_an_error_not_as_invalid() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.hwpx");
         std::fs::write(&path, b"not a zip file").unwrap();
 
-        let data = run_validate(path.to_str().unwrap()).unwrap();
-        assert!(!data.valid);
-        assert_eq!(data.sections, 0);
-        assert!(!data.issues.is_empty());
-        assert!(data.warnings.is_empty(), "an undecodable input has no decode to warn from");
+        let err = run_validate(path.to_str().unwrap())
+            .expect_err("an undecodable package must be an error, not a valid:false payload");
+        assert_eq!(err.code, "DECODE_FAILED");
+        assert!(
+            err.hint.contains("hwpforge_convert"),
+            "hint must point at converting a .hwp file first: {:?}",
+            err.hint
+        );
+
+        let hwp_path = fixture("tables/table_01_basic_2x2.hwp");
+        let err = run_validate(&hwp_path)
+            .expect_err("a real .hwp file must be an error, not a valid:false payload");
+        assert_eq!(err.code, "DECODE_FAILED");
+        assert!(
+            err.hint.contains("hwpforge_convert"),
+            "hint must point at converting a .hwp file first: {:?}",
+            err.hint
+        );
     }
 
     fn fixture(rel: &str) -> String {

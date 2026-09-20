@@ -13,7 +13,12 @@ use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarni
 pub struct ToJsonData {
     /// Path to the generated JSON file (if written to file).
     pub output_path: Option<String>,
-    /// Size of the JSON in bytes.
+    /// Size of the exported document/section JSON in bytes — `json_content`'s
+    /// length, not the whole MCP response (`warnings` adds to that but not
+    /// to this field). The `OUTPUT_TOO_LARGE` inline-mode gate below
+    /// measures the complete serialized response, including `warnings`, so
+    /// a response can be rejected as too large even when `size_bytes` alone
+    /// looks small.
     pub size_bytes: u64,
     /// Whether this is a section-only export.
     pub section_only: bool,
@@ -24,6 +29,9 @@ pub struct ToJsonData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
+
+/// Inline response ceiling shared with `hwpforge_outline`/`hwpforge_diff` (1 MB).
+const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Export HWPX to JSON (full document or single section).
 ///
@@ -37,6 +45,14 @@ pub struct ToJsonData {
 /// [`map_section_workflow_warning_for_to_json`]; every other warning goes
 /// through `compat::warning` unchanged from what this file computed by hand
 /// before.
+///
+/// MEDIUM (audit): the inline-mode `OUTPUT_TOO_LARGE` gate used to measure
+/// only the document/section JSON's own length, so a document just under
+/// the ceiling with enough decode warnings attached could still serialize
+/// to an oversized MCP response. [`build_to_json_data`] gates on the
+/// complete serialized [`ToJsonData`] — `warnings` included — exactly as
+/// `hwpforge_outline`'s `build_outline_data` and `hwpforge_diff`'s
+/// `build_diff_data` already do.
 pub fn run_to_json(
     file_path: &str,
     section_idx: Option<usize>,
@@ -90,23 +106,43 @@ pub fn run_to_json(
             warnings,
         })
     } else {
-        // Warn if inline response is very large (> 1 MB)
-        const MAX_INLINE_RESPONSE: u64 = 1024 * 1024;
-        if size_bytes > MAX_INLINE_RESPONSE {
-            return Err(ToolErrorInfo::new(
-                "OUTPUT_TOO_LARGE",
-                format!("JSON output is {} KB, too large for inline response", size_bytes / 1024,),
-                "Use output_path to write to a file, or use section parameter to export a single section.",
-            ));
-        }
-        Ok(ToJsonData {
-            output_path: None,
-            size_bytes,
-            section_only: section_idx.is_some(),
-            json_content: Some(json_string),
-            warnings,
-        })
+        build_to_json_data(json_string, section_idx.is_some(), warnings)
     }
+}
+
+/// Builds the final inline-mode [`ToJsonData`], gating on the complete
+/// serialized response — including `warnings` — rather than on the
+/// document/section JSON alone: a document with many decode warnings but a
+/// small export could otherwise slip past a narrower check while still
+/// exceeding the real inline ceiling (the file-output branch in
+/// [`run_to_json`] has no such gate — it always writes to disk).
+///
+/// Split out from [`run_to_json`] so a test can exercise the gate with a
+/// synthetic oversized `warnings` list, without needing a fixture large
+/// enough to trigger it for real.
+fn build_to_json_data(
+    json_string: String,
+    section_only: bool,
+    warnings: Vec<ToolWarningInfo>,
+) -> Result<ToJsonData, ToolErrorInfo> {
+    let size_bytes = json_string.len() as u64;
+    let data = ToJsonData {
+        output_path: None,
+        size_bytes,
+        section_only,
+        json_content: Some(json_string),
+        warnings,
+    };
+
+    let inline_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(usize::MAX);
+    if inline_size > MAX_INLINE_RESPONSE {
+        return Err(ToolErrorInfo::new(
+            "OUTPUT_TOO_LARGE",
+            format!("JSON response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
+            "Use output_path to write to a file, or use section parameter to export a single section.",
+        ));
+    }
+    Ok(data)
 }
 
 fn render_pretty_value(value: &serde_json::Value) -> Result<String, ToolErrorInfo> {
@@ -225,5 +261,20 @@ mod tests {
         let err = run_to_json("/nonexistent/file.hwpx", None, None)
             .expect_err("missing input must still error");
         assert_ne!(err.code, "INVALID_EXTENSION", "inline mode must not hit the extension guard");
+    }
+
+    /// MEDIUM (audit): the document JSON itself is tiny here — the oversized
+    /// total comes entirely from `warnings` — so this exercises the branch
+    /// the whole-payload gate exists for: a small export and a large
+    /// `warnings` list must still report `OUTPUT_TOO_LARGE`, not slip past
+    /// because only `json_string.len()` was checked. Mirrors
+    /// `outline_oversized_warnings_alone_reports_output_too_large`.
+    #[test]
+    fn to_json_oversized_warnings_alone_reports_output_too_large() {
+        let huge =
+            vec![ToolWarningInfo::new("STUB_OVERSIZED", "x".repeat(MAX_INLINE_RESPONSE + 1))];
+
+        let err = build_to_json_data("{}".to_string(), false, huge).unwrap_err();
+        assert_eq!(err.code, "OUTPUT_TOO_LARGE");
     }
 }

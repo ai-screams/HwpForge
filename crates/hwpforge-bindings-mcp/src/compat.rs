@@ -38,12 +38,23 @@
 //! those are matched on the *wrapped* library error directly, before the
 //! table is consulted, in [`tool_error`].
 //!
-//! # The one tool that never maps an error
+//! # The tool with a dedicated match arm instead of a table row
 //!
-//! `hwpforge_validate` folds a decode failure into its own `valid: false`
-//! payload instead of returning an error, so [`Tool::Validate`] has no table
-//! rows and no caller of [`tool_error`]; the variant exists so the inventory
-//! covers all nineteen tools.
+//! `hwpforge_validate` used to fold a decode failure into its own `valid:
+//! false` payload instead of returning an error (an audit-flagged bug —
+//! HIGH-2 — since a genuine HWP5 file then read as "Invalid HWPX" rather
+//! than as a decode failure). It now calls [`tool_error`] for that case
+//! too, but [`Tool::Validate`] still has no `TABLE` row: the pre-migration
+//! contract never emitted a code for it (there was no error to map), so
+//! there is no frozen legacy string to preserve — `DECODE_FAILED` is a code
+//! this migration is free to introduce, same as any other. What is frozen
+//! is the *hint*, borrowed verbatim from the other decode-gated tools
+//! (`Outline`, `Read`, `Fields`, …); `tool_error` reproduces it through a
+//! dedicated match arm rather than a `TABLE` row precisely so
+//! `tests/data/legacy_codes.txt` — an audited snapshot of what the
+//! pre-migration source actually emitted — never needs a fabricated
+//! `validate` entry. A *decoded-but-invalid* document still folds its
+//! verdict into `valid: false`, unchanged from before.
 
 use hwpforge::ops::{OpsError, OpsWarning};
 use hwpforge_foundation::diagnostics::OpsCode;
@@ -97,9 +108,10 @@ pub enum Tool {
     Templates,
     /// `hwpforge_restyle`.
     Restyle,
-    /// `hwpforge_validate` — never constructed by a tool: validate folds decode
-    /// failures into `valid: false` (see the module docs).
-    #[allow(dead_code, reason = "validate reports decode failure as a payload, not an error")]
+    /// `hwpforge_validate` — reaches [`tool_error`] only for a decode
+    /// failure, through a dedicated match arm rather than a `TABLE` row
+    /// (see the module docs); a decoded-but-invalid document still folds
+    /// its verdict into `valid: false` instead of calling this at all.
     Validate,
     /// `hwpforge_to_md`.
     ToMd,
@@ -148,6 +160,9 @@ const TABLE: &[Row] = &[
     row!(ConvertMd, StyleRebindFailed, "STYLE_REBIND_ERROR", "Document style indices do not match the generated HWPX style store."),
     row!(ConvertMd, ValidationFailed, "VALIDATION_ERROR", "Check document structure."),
     row!(ConvertMd, EncodeFailed, "ENCODE_ERROR", "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues"),
+    // MEDIUM (audit): legacy `PRESET_ERROR` (`FontId::new` rejecting a
+    // *builtin* preset's own font) is retired, not compat-mapped — see
+    // `RETIRED_BY_MIGRATION` in `mod tests`.
 
     // ── Inspect ────────────────────────────────────────────────────
     row!(Inspect, DecodeFailed, "DECODE_ERROR", "Check that the file is a valid HWPX document."),
@@ -202,6 +217,9 @@ const TABLE: &[Row] = &[
     // parameter at all, so that path is unreachable today and DECODE_ERROR
     // has no legacy precedent for this tool — no row until a tool-file lane
     // adds `base` support (flagged in the W2 report).
+    // MEDIUM (audit): legacy `INTERNAL_ERROR` (the default-preset-unbuildable
+    // catch-all) is retired, not compat-mapped — see `RETIRED_BY_MIGRATION`
+    // in `mod tests`.
 
     // ── Patch ──────────────────────────────────────────────────────
     row!(Patch, JsonParseFailed, "JSON_PARSE_ERROR", "Ensure the JSON matches the ExportedSection schema from hwpforge_to_json output."),
@@ -344,6 +362,25 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
     if let OpsError::EncodeSemanticLoss { warnings, .. } = &err {
         if let Some(info) = semantic_loss_error(tool, warnings) {
             return info;
+        }
+    }
+
+    // HIGH-2: `hwpforge_validate` is the one tool with no `TABLE` row for
+    // `DecodeFailed` — see the module docs' "dedicated match arm" section
+    // for why a row would need a fabricated `tests/data/legacy_codes.txt`
+    // entry. Every `HwpxErrorCode` variant `hwpx_code` classifies maps to
+    // the `Decode`-stage `OpsCode::DecodeFailed` (`ops/mod.rs`'s `hwpx_code`
+    // has no other arm reachable from an actual decode), so `err.code()`
+    // here is always `DecodeFailed`; only the *hint* needs reconstructing —
+    // borrowed verbatim from `Outline`/`Read`/`Fields`'s own `TABLE` rows so
+    // a `.hwp` file gets the same "convert first" guidance everywhere.
+    if tool == Tool::Validate {
+        if let OpsError::Decode(_) = &err {
+            return ToolErrorInfo::new(
+                err.code().as_str(),
+                err.to_string(),
+                "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            );
         }
     }
 
@@ -685,10 +722,15 @@ mod tests {
     /// (`INVALID_EXTENSION`, the four `output.rs` codes, `OUTPUT_TOO_LARGE`)
     /// plus the ones this audit found to be genuinely path/IO/manifest-file
     /// concerns with no `ops` equivalent (`FILE_WRITE_FAILED`,
-    /// `DIR_CREATE_ERROR`, `STAMP_MANIFEST_SERIALIZE`, `MANIFEST_PATH_CONFLICT`,
-    /// `INTERNAL_ERROR`, `PRESET_ERROR`). Every remaining snapshot row is
-    /// either covered by `TABLE` or by a `DYNAMIC` special-case arm —
-    /// nothing in the frozen contract is silently unaccounted for.
+    /// `DIR_CREATE_ERROR`, `STAMP_MANIFEST_SERIALIZE`, `MANIFEST_PATH_CONFLICT`).
+    /// `INTERNAL_ERROR` (from_json) and `PRESET_ERROR` (convert) used to be
+    /// listed here too, but a later audit found that claim wrong: both
+    /// conditions *do* now have an `ops` equivalent, just not one that
+    /// reconstructs the same legacy string — see `RETIRED_BY_MIGRATION`
+    /// below for why they are retired instead of compat-mapped. Every
+    /// remaining snapshot row is covered by `TABLE`, by a `DYNAMIC`
+    /// special-case arm, or by `RETIRED_BY_MIGRATION` — nothing in the
+    /// frozen contract is silently unaccounted for.
     #[test]
     fn every_snapshot_row_is_mcp_local_or_in_the_table() {
         const MCP_LOCAL: &[(&str, &str)] = &[
@@ -699,13 +741,11 @@ mod tests {
             ("output", "WRITE_ERROR"),
             ("convert", "INPUT_TOO_LARGE"),
             ("convert", "INVALID_EXTENSION"),
-            ("convert", "PRESET_ERROR"),
             ("diff", "FILE_WRITE_FAILED"),
             ("diff", "OUTPUT_TOO_LARGE"),
             ("diff", "SERIALIZE_ERROR"),
             ("fill", "INVALID_EXTENSION"),
             ("from_json", "INPUT_TOO_LARGE"),
-            ("from_json", "INTERNAL_ERROR"),
             ("from_json", "INVALID_EXTENSION"),
             ("insert_para", "FILE_WRITE_FAILED"),
             ("delete_para", "FILE_WRITE_FAILED"),
@@ -730,21 +770,70 @@ mod tests {
             ("to_md", "INVALID_INPUT"),
         ];
 
+        // MEDIUM (audit): these two rows were filed above as MCP-local ("no
+        // ops equivalent") but that was never re-checked once the tools
+        // migrated to `ops`. Neither string can be constructed any more —
+        // the *condition* each one named still exists, but `ops` now
+        // classifies it under a different code, one that already falls
+        // through `tool_error`'s untabled default (`code.as_str()`) with no
+        // `TABLE` row needed. Both were effectively dead pre-migration too
+        // (a builtin preset's own data was never actually malformed), so no
+        // client can plausibly depend on either literal string — retiring
+        // them (rather than adding a compat row that resurrects a string
+        // nothing emits) is the honest answer.
+        const RETIRED_BY_MIGRATION: &[(&str, &str)] = &[
+            // Pre-migration: `from_json`'s own catch-all for "the built-in
+            // default preset could not be built" (`git show
+            // 350851f:crates/hwpforge-bindings-mcp/src/tools/from_json.rs`
+            // — `style_store_for_preset("default").ok_or_else(...)`).
+            // `ops::from_json`'s own `# Errors` docs name this exact
+            // condition as `OpsError::PresetNotFound` → `PRESET_NOT_FOUND`
+            // ("not reachable today, kept for the day the registry changes
+            // shape") — genuinely no legacy precedent for `PRESET_NOT_FOUND`
+            // on this tool, so (like the `base`/`Decode` gap noted in the
+            // `FromJson` `TABLE` block above) it gets no row and no entry in
+            // `expected_ops_originated`, on purpose.
+            ("from_json", "INTERNAL_ERROR"),
+            // Pre-migration: `convert`'s `FontId::new(&preset_font)`
+            // rejecting a *builtin* preset's own declared font name (`git
+            // show 350851f:crates/hwpforge-bindings-mcp/src/tools/convert.rs`)
+            // — a defensive check against malformed static preset data,
+            // never reachable with real presets. `ops::convert_md`'s
+            // `apply_preset_font` still constructs that `FontId` (`ops/mod.rs`'s
+            // `convert.rs`, `let new_font_id = FontId::new(new_font)?;`), and
+            // a failure there is an `OpsError::Foundation` → `InternalInvariant`
+            // → `INTERNAL_INVARIANT`, undocumented in `convert_md`'s own
+            // `# Errors` (so also intentionally absent from
+            // `expected_ops_originated(ConvertMd)` — same "no legacy
+            // precedent, no row" rule).
+            ("convert", "PRESET_ERROR"),
+        ];
+
         let mut covered: BTreeSet<(&str, &str)> =
             TABLE.iter().map(|row| (tool_name(row.tool), row.legacy)).collect();
         covered.extend(DYNAMIC.iter().copied());
         let mcp_local: BTreeSet<(&str, &str)> = MCP_LOCAL.iter().copied().collect();
+        let retired: BTreeSet<(&str, &str)> = RETIRED_BY_MIGRATION.iter().copied().collect();
 
         for pair in snapshot_pairs() {
             assert!(
-                covered.contains(&pair) || mcp_local.contains(&pair),
-                "{pair:?} is in the snapshot but neither TABLE/DYNAMIC nor the MCP_LOCAL list accounts for it"
+                covered.contains(&pair) || mcp_local.contains(&pair) || retired.contains(&pair),
+                "{pair:?} is in the snapshot but neither TABLE/DYNAMIC, MCP_LOCAL, nor \
+                 RETIRED_BY_MIGRATION accounts for it"
             );
         }
-        // And the reverse: nothing declared MCP-local should also have a
-        // TABLE row (that would mean two conflicting answers for one code).
+        // And the reverse: nothing declared MCP-local or retired should
+        // also have a TABLE/DYNAMIC row (that would mean two conflicting
+        // answers for one code).
         for pair in &mcp_local {
             assert!(!covered.contains(pair), "{pair:?} is both MCP_LOCAL and in TABLE");
+        }
+        for pair in &retired {
+            assert!(!covered.contains(pair), "{pair:?} is both RETIRED_BY_MIGRATION and in TABLE");
+            assert!(
+                !mcp_local.contains(pair),
+                "{pair:?} is both RETIRED_BY_MIGRATION and MCP_LOCAL"
+            );
         }
     }
 
@@ -889,7 +978,11 @@ mod tests {
                 EncodeFailed,
                 EncodeSemanticLoss,
             ],
-            Tool::Validate => &[],
+            // HIGH-2: `ops::validate`'s `# Errors` docs name exactly one
+            // error, `OpsError::Decode` (`DECODE_FAILED`) — see
+            // `tool_error`'s dedicated `Tool::Validate` match arm rather
+            // than a `TABLE` row.
+            Tool::Validate => &[DecodeFailed],
             Tool::ToMd => &[DecodeFailed, ValidationFailed],
         }
     }
@@ -898,11 +991,13 @@ mod tests {
     /// a `TABLE` row for that tool, or is produced by one of `tool_error`'s
     /// dynamic/special-case arms (semantic-loss, `FieldNotFound`, the two
     /// `SectionWorkflow` variants, `StampCellNotAnchor`, the dual-source
-    /// `Stamp*`/`CellStamp*` name codes). The special-case set is listed
-    /// explicitly so this stays a real check, not a tautology.
+    /// `Stamp*`/`CellStamp*` name codes, `Validate`'s `Decode` arm). The
+    /// special-case set is listed explicitly so this stays a real check,
+    /// not a tautology.
     #[test]
     fn every_expected_code_is_covered() {
         const DYNAMIC: &[(Tool, OpsCode)] = &[
+            (Tool::Validate, OpsCode::DecodeFailed),
             (Tool::Fill, OpsCode::FieldNotFound),
             (Tool::ToJson, OpsCode::SectionOutOfRange),
             (Tool::ToJson, OpsCode::SectionIndexMismatch),
