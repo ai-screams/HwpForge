@@ -11,6 +11,7 @@ use hwpforge_foundation::{CharShapeIndex, FieldType, FontIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
 use serde::{Deserialize, Serialize};
 
+use super::walk;
 use super::{OpsError, OpsWarning};
 
 /// Options for [`inspect`].
@@ -63,7 +64,19 @@ pub struct InspectOutput {
 /// and the pre-migration MCP server report as `tables`/`images`/`charts`
 /// today. A table containing an image, or a footnote containing a table,
 /// is where the two disagree: the deep fields see it, the top-level ones
-/// do not.
+/// do not — **except for `charts`**, where that disagreement is currently
+/// vacuous: `hwpforge-smithy-hwpx`'s decoder only reconstructs a
+/// `Control::Chart` for a section's own top-level paragraphs (the
+/// `<hp:switch>`/`<hp:chart>` extraction lives in `decode_section`'s
+/// top-level loop, not in the recursive per-container dispatch every other
+/// nested content type goes through), so a chart nested anywhere — a table
+/// cell, a caption, a text box — is invisible to `charts` and
+/// `top_level_charts` alike; they read the same on such input. See
+/// `hwpforge::ops::walk`'s module doc and its
+/// `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
+/// reproduction. This is a known decoder gap, not something `inspect`
+/// papers over: `charts`/`top_level_charts` still report exactly what the
+/// decoded tree contains, they just cannot contain a nested chart today.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -78,7 +91,10 @@ pub struct InspectReport {
     pub tables: usize,
     /// Images, nested ones included.
     pub images: usize,
-    /// Charts, nested ones included.
+    /// Charts, nested ones included — except a chart nested anywhere but
+    /// a section's own top-level paragraphs, which the decoder cannot
+    /// currently reconstruct at all. See the struct's `# Counting
+    /// contract` doc above.
     pub charts: usize,
     /// Names of the click-here fields, in document order, duplicates kept.
     pub fields: Vec<String>,
@@ -143,7 +159,10 @@ pub struct InspectSection {
     pub top_level_images: usize,
     /// Top-level charts in this section — top-level only, the same rule
     /// [`Self::top_level_tables`] documents. Deep counts are
-    /// [`Self::charts`].
+    /// [`Self::charts`] — though for charts specifically the two currently
+    /// read the same on any input, since the decoder cannot reconstruct a
+    /// nested chart at all (see [`InspectReport`]'s `# Counting contract`
+    /// doc).
     ///
     /// `#[serde(default)]` (`0`): same older-writer absence as
     /// [`Self::top_level_tables`].
@@ -155,7 +174,9 @@ pub struct InspectSection {
     pub tables: usize,
     /// Images in this section, nested ones included.
     pub images: usize,
-    /// Charts in this section, nested ones included.
+    /// Charts in this section, nested ones included — except one nested
+    /// anywhere but this section's own top-level paragraphs, a decoder gap
+    /// [`InspectReport`]'s `# Counting contract` doc explains.
     pub charts: usize,
     /// Whether the section defines a header.
     pub has_header: bool,
@@ -163,6 +184,79 @@ pub struct InspectSection {
     pub has_footer: bool,
     /// Whether the section defines a page number control.
     pub has_page_number: bool,
+
+    // ── package-scope counts (W6b: single-decode CLI parity) ──────
+    //
+    // The nine fields below give the CLI's pre-migration local scanner
+    // (`hwpforge-bindings-cli`'s `analysis/deep_counts.rs`) everything it
+    // needs from this one decode, so it no longer has to decode the same
+    // bytes a second time — except charts, which stay a raw scan in that
+    // CLI (`hwpforge-bindings-cli/src/commands/inspect.rs`'s own doc
+    // explains why: `hwpforge-smithy-hwpx`'s decoder only reconstructs
+    // `Control::Chart` for a section's own top-level paragraphs, never for
+    // one nested in a caption, a table cell, a text box or anywhere else
+    // `hwpforge::ops::walk`'s `object_counts` also reaches — see that
+    // module's doc and its
+    // `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
+    // reproduction. Offering a decode-based chart count here would
+    // silently undercount relative to the CLI's existing raw-XML-scan
+    // `charts` field for exactly the documents that gap affects, which is
+    // the "no fake support" line this crate holds elsewhere too.
+    //
+    // Each field below is a *third* scope, distinct from both
+    // [`Self::top_level_tables`] (no nesting at all) and [`Self::tables`]
+    // (nested, but blind to captions, and — unlike these — walks master
+    // pages too): captions included, master pages excluded. See
+    // `hwpforge::ops::walk`'s module doc for exactly which containers each
+    // policy recurses into, and
+    // `inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page`
+    // in `hwpforge-bindings-cli`'s `cli_integration.rs` for the fixture that
+    // pins the difference.
+    //
+    // `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or earlier
+    // has none of these keys — same reasoning as
+    // [`Self::top_level_tables`].
+    /// Tables, captions included, master pages excluded — see the note
+    /// above [`Self::has_page_number`].
+    #[serde(default)]
+    pub tables_all: usize,
+    /// Images, captions included, master pages excluded — same scope as
+    /// [`Self::tables_all`].
+    #[serde(default)]
+    pub images_all: usize,
+    /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), same
+    /// scope as [`Self::tables_all`].
+    #[serde(default)]
+    pub text_boxes: usize,
+    /// Line drawing objects, same scope as [`Self::tables_all`].
+    #[serde(default)]
+    pub lines: usize,
+    /// Pure rectangles (HWPX `<hp:rect>` *without* a nested `<hp:drawText>`
+    /// — a text-bearing one counts under [`Self::text_boxes`] instead,
+    /// never both), same scope as [`Self::tables_all`].
+    #[serde(default)]
+    pub rectangles: usize,
+    /// Polygon drawing objects, same scope as [`Self::tables_all`].
+    #[serde(default)]
+    pub polygons: usize,
+    /// Body-flow paragraphs with visible text — [`Self::top_level_paragraphs`]
+    /// scope (no recursion into headers/footers/master pages), but each
+    /// paragraph's visibility probes one recursion step deeper (e.g. a
+    /// paragraph with no direct text but a text-bearing table counts).
+    #[serde(default)]
+    pub non_empty_paragraphs: usize,
+    /// Body + header + footer paragraphs, recursing into table cells and
+    /// `TextBox`/`Footnote`/`Endnote`/`Ellipse`/`Polygon`/`Memo` content —
+    /// **not** captions, group children or master pages (contrast
+    /// [`Self::paragraphs`], which walks master pages but not this field's
+    /// containers' captions either).
+    #[serde(default)]
+    pub deep_paragraphs: usize,
+    /// Same recursion as [`Self::deep_paragraphs`], counting only the
+    /// paragraphs with visible text (per the same deep probe as
+    /// [`Self::non_empty_paragraphs`]).
+    #[serde(default)]
+    pub deep_non_empty_paragraphs: usize,
 }
 
 /// Style summary of the document's header definitions.
@@ -255,6 +349,8 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
         let mut counts = Counts::default();
         section.for_each_paragraph(|paragraph| counts.visit(paragraph, &mut fields));
         let top_level = section.content_counts();
+        let objects = walk::object_counts(section);
+        let paragraphs = walk::paragraph_counts(section);
         section_details.push(InspectSection {
             index,
             top_level_paragraphs: section.paragraphs.len(),
@@ -268,6 +364,15 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
             has_header: !section.headers.is_empty(),
             has_footer: !section.footers.is_empty(),
             has_page_number: section.page_number.is_some(),
+            tables_all: objects.tables,
+            images_all: objects.images,
+            text_boxes: objects.text_boxes,
+            lines: objects.lines,
+            rectangles: objects.rectangles,
+            polygons: objects.polygons,
+            non_empty_paragraphs: paragraphs.non_empty_paragraphs,
+            deep_paragraphs: paragraphs.deep_paragraphs,
+            deep_non_empty_paragraphs: paragraphs.deep_non_empty_paragraphs,
         });
     }
 

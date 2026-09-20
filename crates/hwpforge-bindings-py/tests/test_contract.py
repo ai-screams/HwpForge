@@ -471,6 +471,18 @@ def test_inspect_reports_shallow_and_deep_table_counts_separately(
     assert section["top_level_charts"] == 0
 
 
+def test_inspect_section_matches_its_stub(table_bytes: bytes) -> None:
+    """W6b audit follow-up: `InspectSection` gained package-scope counts
+    (`tables_all`/`images_all`/`text_boxes`/`lines`/`rectangles`/`polygons`/
+    `non_empty_paragraphs`/`deep_paragraphs`/`deep_non_empty_paragraphs`) —
+    the runtime dict's key set must still match the stub exactly."""
+    sections = _hwpforge.inspect(table_bytes)["section_details"]
+
+    assert sections, "the fixture must have at least one section"
+    for section in sections:
+        _keys_match_stub(section, "InspectSection")
+
+
 # ── from_json ───────────────────────────────────────────────────
 
 

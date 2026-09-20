@@ -250,6 +250,24 @@ class InspectSection(TypedDict):
     has_header: bool
     has_footer: bool
     has_page_number: bool
+    # Package-scope counts (captions included, master pages excluded — a
+    # third scope, distinct from both the `top_level_*` fields above (no
+    # nesting) and `tables`/`images`/`charts` (nested, but caption-blind and
+    # master-page-inclusive). No `charts_all` here — the HWPX decoder cannot
+    # reconstruct a chart nested in anything but a section's own top-level
+    # paragraphs (see the Rust `InspectSection.charts` field doc and
+    # `InspectReport`'s "Counting contract" doc for the decoder limitation
+    # this traces to), so `hwpforge`'s CLI keeps that one count a raw scan
+    # rather than exposing a value that would silently undercount.
+    tables_all: int
+    images_all: int
+    text_boxes: int
+    lines: int
+    rectangles: int
+    polygons: int
+    non_empty_paragraphs: int
+    deep_paragraphs: int
+    deep_non_empty_paragraphs: int
 
 class FontSummary(TypedDict):
     id: int

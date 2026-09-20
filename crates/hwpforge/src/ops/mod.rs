@@ -60,6 +60,7 @@ pub mod read;
 pub mod schema;
 pub mod stamp;
 pub mod style;
+mod walk;
 
 use hwpforge_core::CoreError;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};

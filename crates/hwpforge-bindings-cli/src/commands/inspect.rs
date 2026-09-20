@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use hwpforge::ops::inspect::{InspectSection, InspectStyles};
-use hwpforge::ops::{self, InspectOptions, OpsError, OpsWarning};
+use hwpforge::ops::{self, InspectOptions, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
-use hwpforge_smithy_hwpx::HwpxDecoder;
+use hwpforge_smithy_hwpx::PackageReader;
 
-use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
+use crate::analysis::hwpx_paths::collect_section_path_inventory;
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, read_input, CliError};
 
@@ -58,39 +58,43 @@ struct SectionInfo {
 }
 
 /// Run the inspect command.
+///
+/// # Single-decode contract (W6b audit follow-up)
+///
+/// Most fields below now come from the one `ops::inspect` decode: the
+/// legacy-scope fields `ops::InspectSection` gained (`tables_all`/
+/// `images_all`/`text_boxes`/`lines`/`rectangles`/`polygons`/
+/// `non_empty_paragraphs`/`deep_paragraphs`/`deep_non_empty_paragraphs` —
+/// see its rustdoc for the exact scope: legacy raw-XML scope, captions
+/// included, master pages excluded) replace what a second, local
+/// `HwpxDecoder::decode` plus a full raw-XML element scan used to supply.
+///
+/// `ole_objects` and `charts` are the two fields that still need bytes read
+/// a second time, both for the same reason but at different layers:
+///
+/// - `ole_objects`: Core's HWPX decoder has no representation for
+///   `<hp:ole>` at all — no `Control` variant is ever constructed for it
+///   (verified by grepping the decoder) — so there is no Core-tree count to
+///   read it from.
+/// - `charts`: Core *can* represent a chart (`Control::Chart`), but
+///   `hwpforge-smithy-hwpx`'s decoder only reconstructs one when it is a
+///   section's own top-level paragraph content — chart is not one of the
+///   `HxRunChildKind` variants the recursive per-container dispatch
+///   handles, so a chart nested in a caption, a table cell, a text box or
+///   anywhere else `ops::walk::object_counts` also reaches is silently
+///   invisible on decode (see that module's doc and its
+///   `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
+///   reproduction — no fixture under `tests/fixtures/**` exercises this
+///   today, but a decode-based count would silently misreport the first
+///   real one).
+///
+/// Both stay a raw scan, but a much lighter one than before:
+/// `collect_section_path_inventory` reads `section-N.xml` text and matches
+/// element names — no `HwpxDecoder::decode`, no document tree.
 pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     check_file_size(file, json_mode);
     let bytes = read_input(file, json_mode);
 
-    // `ops::inspect` is the canonical report: metadata (title/author) and
-    // (with `--styles`) the style summary come from here, plus the
-    // top-level paragraph count and the header/footer/page-number flags,
-    // which the two decoders compute identically (see `SectionInfo::merge`
-    // doc comment).
-    //
-    // The `tables`/`images`/`charts`/`deep_paragraphs` fields do NOT come
-    // from `ops::inspect`, even though it has same-named deep counters.
-    // `ops::inspect`'s shared paragraph traversal (`Section::for_each_paragraph`)
-    // deliberately does not descend into **image** captions (Core's
-    // `image_caption_paragraphs_are_skipped_documents_known_gap` test) — a
-    // table, image or chart nested inside an image's caption is invisible
-    // to it. The pre-migration CLI's raw-XML `count_occurrences` scan (still
-    // run below via `summarize_hwpx_document`, kept for the fields
-    // `ops::InspectReport` has no equivalent for) has no such blind spot —
-    // it counts every `<hp:tbl>`/`<hp:pic>`/`<hp:chart>` element in the
-    // section regardless of nesting. So these four fields keep reading from
-    // the local scanner (`deep`), matching the pre-migration byte-for-byte;
-    // see `inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page`
-    // for
-    // the regression lock. `top_level_paragraphs`/`tables`/`images`/`charts`
-    // (undercounts — see `img_05_image_in_table_cell.hwpx`'s
-    // `inspect_deep_counts_image_in_table_cell` test) stay unused for the
-    // same reason the deep ones aren't sourced from `ops` either.
-    //
-    // `ops::InspectReport` has no field for `text_boxes`/`ole_objects`/
-    // `lines`/`rectangles`/`polygons`/`non_empty_paragraphs` (ops gap, W3
-    // remediation report) — the local `summarize_hwpx_document` scanner
-    // still supplies those, decoding the document a second time.
     let out = match ops::inspect(&bytes, &InspectOptions::default().with_styles(show_styles)) {
         Ok(o) => o,
         Err(e) => {
@@ -108,21 +112,8 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let report = out.report;
 
-    // Second decode, only for the deep-count scanner (see module comment
-    // above). `ops::inspect` already proved these bytes decode; this branch
-    // is therefore not expected to trigger in practice, but stays
-    // symmetrical with the shared `compat::cli_error` path rather than
-    // `.expect`-ing determinism.
-    let hwpx_doc = match HwpxDecoder::decode(&bytes) {
-        Ok(d) => d,
-        Err(e) => {
-            let err = compat::cli_error(Command::Inspect, OpsError::decode(e));
-            let exit = compat::exit_code(Command::Inspect, &err);
-            err.exit(json_mode, exit);
-        }
-    };
-    let deep_summary = match summarize_hwpx_document(&bytes, &hwpx_doc) {
-        Ok(summary) => summary,
+    let raw_scan = match raw_scan_counts_per_section(&bytes, report.section_details.len()) {
+        Ok(counts) => counts,
         Err(err) => {
             CliError::new("ANALYSIS_FAILED", format!("Cannot analyze '{}': {err}", file.display()))
                 .exit(json_mode, 2);
@@ -131,9 +122,9 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
 
     let sections: Vec<SectionInfo> = report
         .section_details
-        .iter()
-        .zip(deep_summary.sections.iter())
-        .map(|(ops_section, deep)| SectionInfo::merge(ops_section, deep))
+        .into_iter()
+        .zip(raw_scan)
+        .map(|(section, raw)| SectionInfo::from_ops(section, raw))
         .collect();
 
     let result = InspectResult {
@@ -178,49 +169,68 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     }
 }
 
+/// The two fields [`run`]'s doc explains still need a raw scan.
+#[derive(Debug, Clone, Copy, Default)]
+struct RawScanCounts {
+    charts: usize,
+    ole_objects: usize,
+}
+
+/// Counts `<hp:chart>` and `<hp:ole>` elements per section — see [`run`]'s
+/// doc for why these two, and only these two, stay a raw scan rather than a
+/// Core-tree count. `collect_section_path_inventory` reads section XML text
+/// and matches element names by local name; it does not build a document
+/// tree, so this is not the "second decode" the W6b finding measured
+/// (135.7 ms), just a comparatively cheap text scan.
+fn raw_scan_counts_per_section(
+    bytes: &[u8],
+    section_count: usize,
+) -> hwpforge_smithy_hwpx::HwpxResult<Vec<RawScanCounts>> {
+    let mut package_reader = PackageReader::new(bytes)?;
+    let occurrences = collect_section_path_inventory(&mut package_reader)?;
+    let mut counts = vec![RawScanCounts::default(); section_count];
+    for occurrence in &occurrences {
+        let Some(slot) = counts.get_mut(occurrence.section_index) else { continue };
+        match occurrence.kind.as_str() {
+            "chart" => slot.charts += 1,
+            "ole" => slot.ole_objects += 1,
+            _ => {}
+        }
+    }
+    Ok(counts)
+}
+
 impl SectionInfo {
-    /// Combines the canonical `ops::inspect` per-section counts with the
-    /// CLI-only deep counts (`ops` gap — module comment on [`run`]) the
-    /// local scanner still computes.
+    /// Builds one section's CLI-facing counts from `ops::inspect`'s single
+    /// decode (`section`) plus the two raw-scanned fields this command
+    /// still needs (`charts`/`ole_objects` — see [`run`]'s doc).
     ///
-    /// `paragraphs` and the three `has_*` flags read from `ops_section`
-    /// because both decoders compute them identically: `top_level_paragraphs`
-    /// is `section.paragraphs.len()`, exactly what `deep.paragraphs` is too
-    /// (`summarize_hwpx_section` in `analysis/deep_counts.rs`), and
-    /// `has_header`/`has_footer`/`has_page_number` are the same
-    /// `!section.headers.is_empty()`/etc. check in both places.
-    ///
-    /// `deep_paragraphs` reads from `deep`, NOT from `ops_section.paragraphs`
-    /// (also a deep count, confusingly under the same field name) — the two
-    /// are not interchangeable. `ops_section.paragraphs` comes from
-    /// `Section::for_each_paragraph`, whose recursion visits master-page
-    /// paragraphs (`crates/hwpforge-core/src/section.rs`'s
-    /// `walk_paragraphs`/`walk_paragraphs_mut`, and the
-    /// `document_with_all_containers` test fixture that locks it). The
-    /// legacy local scanner's `deep.deep_paragraphs`
-    /// (`count_paragraphs_recursive` over `section.paragraphs` plus headers
-    /// and footers only, `analysis/deep_counts.rs`) never visits master
-    /// pages — no `master_page`/`masterPage` reference exists in that file.
-    /// Any section with paragraphs in a master page would see the two
-    /// diverge, so `deep_paragraphs` keeps its pre-migration source.
-    fn merge(ops_section: &InspectSection, deep: &DeepSectionSummary) -> Self {
+    /// `tables`/`images`/`text_boxes`/`lines`/`rectangles`/`polygons`/
+    /// `non_empty_paragraphs`/`deep_paragraphs`/`deep_non_empty_paragraphs`
+    /// in this CLI's `--json` output read from `ops::InspectSection`'s
+    /// `*_all`/legacy-named fields (added by the W6b audit follow-up), not
+    /// from `ops::InspectSection`'s same-named-but-differently-scoped
+    /// `tables`/`images`/`paragraphs` fields — those stay caption-blind and
+    /// master-page-inclusive for MCP/Python, a third, incompatible scope
+    /// (see `hwpforge::ops::inspect`'s rustdoc).
+    fn from_ops(section: InspectSection, raw: RawScanCounts) -> Self {
         Self {
-            index: ops_section.index,
-            paragraphs: ops_section.top_level_paragraphs,
-            deep_paragraphs: deep.deep_paragraphs,
-            non_empty_paragraphs: deep.non_empty_paragraphs,
-            deep_non_empty_paragraphs: deep.deep_non_empty_paragraphs,
-            tables: deep.tables,
-            images: deep.images,
-            charts: deep.charts,
-            ole_objects: deep.ole_objects,
-            text_boxes: deep.text_boxes,
-            lines: deep.lines,
-            rectangles: deep.rectangles,
-            polygons: deep.polygons,
-            has_header: ops_section.has_header,
-            has_footer: ops_section.has_footer,
-            has_page_number: ops_section.has_page_number,
+            index: section.index,
+            paragraphs: section.top_level_paragraphs,
+            deep_paragraphs: section.deep_paragraphs,
+            non_empty_paragraphs: section.non_empty_paragraphs,
+            deep_non_empty_paragraphs: section.deep_non_empty_paragraphs,
+            tables: section.tables_all,
+            images: section.images_all,
+            charts: raw.charts,
+            ole_objects: raw.ole_objects,
+            text_boxes: section.text_boxes,
+            lines: section.lines,
+            rectangles: section.rectangles,
+            polygons: section.polygons,
+            has_header: section.has_header,
+            has_footer: section.has_footer,
+            has_page_number: section.has_page_number,
         }
     }
 }
