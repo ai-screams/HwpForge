@@ -116,19 +116,21 @@ pub fn run_to_json(
 /// exceeding the real inline ceiling (the file-output branch in
 /// [`run_to_json`] has no such gate — it always writes to disk).
 ///
-/// MEDIUM (audit): [`MAX_INLINE_RESPONSE`] bounds the *response*, not the
-/// document JSON itself, and the two are not the same size. `json_string`
+/// [`MAX_INLINE_RESPONSE`] bounds the serialized `ToJsonData` payload, not
+/// the document JSON itself, and the two are not the same size. `json_string`
 /// (the pretty-printed export) ends up nested as an escaped string value
 /// inside `ToJsonData.json_content` — every `"` and `\` in it becomes `\"`/
-/// `\\`, and every newline from pretty-printing becomes `\n` — which
-/// typically inflates it by 20-30%. So a document whose own JSON is,
+/// `\\`, and every newline from pretty-printing becomes `\n`. How much that
+/// inflates it depends on the content: an export dominated by plain text
+/// grows little, one dense in quotes and backslashes grows more (typical
+/// pretty-printed HWPX exports: 20-30%). So a document whose own JSON is,
 /// say, 900 KB comfortably clears the early `json_string.len()` check below
-/// but can still push the *response* past the 1 MB ceiling once escaped.
+/// but can still push the payload past the 1 MB ceiling once escaped.
 /// The effective ceiling on the document/section JSON a caller can get back
-/// inline is therefore measurably below 1 MB — roughly 750-800 KB for
-/// typical pretty-printed HWPX exports, not the full [`MAX_INLINE_RESPONSE`].
-/// Callers that need more should not treat 1 MB of `size_bytes` as a safe
-/// budget; use `output_path` (or `section` to narrow the export) instead.
+/// inline is therefore content-dependent and below 1 MB — 750-800 KB is an
+/// empirical guideline for typical exports, not a fixed cutoff. Callers that
+/// need more should not treat 1 MB of `size_bytes` as a safe budget; use
+/// `output_path` (or `section` to narrow the export) instead.
 ///
 /// LOW (audit): measuring the complete response used to serialize the whole
 /// [`ToJsonData`] into a second full `String` (`serde_json::to_string`) just

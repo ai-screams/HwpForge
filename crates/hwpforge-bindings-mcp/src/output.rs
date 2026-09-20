@@ -17,11 +17,14 @@ pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
 /// Inline response ceiling shared by `hwpforge_to_json`, `hwpforge_outline`
 /// and `hwpforge_diff` (1 MB) — a different budget from [`MAX_INLINE_SIZE`]
 /// above, and measured differently: each of those three tools' `build_*_data`
-/// gates on the size of the *complete* serialized response (primary payload
-/// plus `warnings`, and for `to_json` the JSON-escaping overhead of
-/// re-wrapping already-serialized document JSON as a string field — see that
-/// module's docs), not on the primary payload alone. W6c audit follow-up:
-/// this used to be three copies of the same literal, one per tool module.
+/// gates on the size of its serialized `data` payload (primary payload plus
+/// `warnings`, and for `to_json` the JSON-escaping overhead of re-wrapping
+/// already-serialized document JSON as a string field — see that module's
+/// docs), not on the primary payload alone. It is a *data* budget, not the
+/// size of the final MCP text: the server wraps `data` in a `ToolOutput`
+/// afterwards, adding `summary` and `next` (which repeats the first warning),
+/// so the text a client receives can exceed this constant by that envelope.
+/// This used to be three copies of the same literal, one per tool module.
 pub const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Read a file as bytes with size check and structured errors.

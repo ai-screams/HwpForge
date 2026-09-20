@@ -9,12 +9,12 @@
 //! `Result<XxxOutput, OpsError>`. **Operation functions never touch the
 //! filesystem**; the one place that does is the `fs` submodule, and it does
 //! so for exactly two reasons: reading a whole input document from a path
-//! under a caller-chosen size cap ([`fs::read_bounded`], feature `ops-hwpx`
-//! — W6b audit follow-up), the one frontend-shared input size gate CLI, MCP
-//! and the Python bindings all read through; and resolving the `file:`
-//! entries of an asset plan a caller already made
-//! ([`fs::resolve_files_from_dir`], feature `ops-md` — it needs the Markdown
-//! smithy's asset plan type).
+//! under a caller-chosen size cap ([`fs::read_bounded`], feature `ops-hwpx`),
+//! the one frontend-shared input size gate CLI, MCP and the Python bindings
+//! all read through; and resolving the `file:` entries of an asset plan a
+//! caller already made (`fs::resolve_files_from_dir`, feature `ops-md` — it
+//! needs the Markdown smithy's asset plan type, so it is not linked here: an
+//! `ops-hwpx`-only build has no such item).
 //!
 //! Output structs are `#[non_exhaustive]` and do **not** derive serde: the
 //! serialisable payload is the wire DTO they carry, and warnings become

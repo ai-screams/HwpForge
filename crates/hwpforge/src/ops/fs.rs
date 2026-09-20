@@ -9,20 +9,22 @@
 //! smithy:
 //!
 //! - [`read_bounded`] (gate `ops-hwpx`, so it is available whenever `ops` is)
-//!   — W6b audit follow-up: reads a whole input document (or a stamp map /
-//!   patch JSON file) from a path, capped at a caller-chosen size regardless
-//!   of what the source's `metadata()` reports. CLI's `error::read_input`,
-//!   MCP's `read_file_bytes` and the Python bindings' `Document.open` all
-//!   read their input through one of this function or [`MAX_FILE_SIZE`], so
-//!   the limit and its off-by-one behaviour cannot drift between frontends.
-//! - [`resolve_files_from_dir`] (gate `ops-md`) — asset (image) resolution:
-//!   reads the `file:` entries of a plan a caller already made. This one
-//!   needs `hwpforge_smithy_md`'s asset plan type, so it stays behind `md`.
+//!   reads a whole input document (or a stamp map / patch JSON file) from a
+//!   path, capped at a caller-chosen size regardless of what the source's
+//!   `metadata()` reports. CLI's `error::read_input`, MCP's `read_file_bytes`
+//!   and the Python bindings' `Document.open` all read their input through
+//!   one of this function or [`MAX_FILE_SIZE`], so the limit and its
+//!   off-by-one behaviour cannot drift between frontends.
+//! - `resolve_files_from_dir` (gate `ops-md`; written as plain code here
+//!   because an `ops-hwpx`-only build has no such item to link) — asset
+//!   (image) resolution: reads the `file:` entries of a plan a caller already
+//!   made. This one needs `hwpforge_smithy_md`'s asset plan type, so it stays
+//!   behind `md`.
 //!
 //! The asset pipeline is three steps, and only the middle one is impure:
 //!
 //! 1. `collect_asset_plan` (pure) — what the document references.
-//! 2. [`resolve_files_from_dir`] (**this module**) — read the files a plan
+//! 2. `resolve_files_from_dir` (**this module**) — read the files a plan
 //!    asks for, with `base_dir` containment enforced by canonicalisation.
 //! 3. `finish_assets` (pure) — embed the bytes and report the outcomes.
 
