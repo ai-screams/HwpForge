@@ -64,7 +64,9 @@ pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 pub fn read_bounded(path: impl AsRef<Path>, max: u64) -> Result<Vec<u8>, OpsError> {
     let file = std::fs::File::open(path.as_ref()).map_err(OpsError::Io)?;
     let mut buf = Vec::new();
-    file.take(max + 1).read_to_end(&mut buf).map_err(OpsError::Io)?;
+    // `saturating_add`: a caller passing `u64::MAX` must still get an
+    // unbounded-but-safe read, not an overflow panic or a wrapped zero cap.
+    file.take(max.saturating_add(1)).read_to_end(&mut buf).map_err(OpsError::Io)?;
     if buf.len() as u64 > max {
         return Err(OpsError::Rejected {
             code: OpsCode::InputTooLarge,
@@ -112,6 +114,16 @@ mod tests {
         let path = tempfile("over", &[7u8; 11]);
         let err = read_bounded(&path, 10).unwrap_err();
         assert_eq!(err.code(), OpsCode::InputTooLarge);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_u64_max_bound_does_not_overflow() {
+        // Review finding: `max + 1` overflowed for `u64::MAX` (panic with
+        // overflow checks, wrapped to a zero cap in release). The bound must
+        // saturate so the read simply behaves as unbounded.
+        let path = tempfile("umax", &[7u8; 5]);
+        assert_eq!(read_bounded(&path, u64::MAX).unwrap(), vec![7u8; 5]);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
