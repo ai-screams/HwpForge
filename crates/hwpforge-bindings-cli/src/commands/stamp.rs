@@ -7,7 +7,9 @@
 
 use std::path::{Path, PathBuf};
 
-use hwpforge::ops::stamp::{stamp as ops_stamp, stamp_plan as ops_stamp_plan, StampOptions};
+use hwpforge::ops::stamp::{
+    default_manifest_path, stamp as ops_stamp, stamp_plan as ops_stamp_plan, StampOptions,
+};
 use hwpforge::ops::{OpsError, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
@@ -135,9 +137,8 @@ pub fn run(
         }
     };
 
-    let manifest_file: PathBuf = manifest_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| output.with_extension("manifest.json"));
+    let manifest_file: PathBuf =
+        manifest_path.map(Path::to_path_buf).unwrap_or_else(|| default_manifest_path(output));
     // R2: identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if output == &manifest_file {

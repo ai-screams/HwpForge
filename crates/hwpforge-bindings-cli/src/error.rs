@@ -6,7 +6,12 @@ use std::io::Read;
 use std::process;
 
 /// Maximum file size: 100 MB.
-pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+///
+/// W6b audit follow-up: re-exported from the shared operation layer
+/// (`hwpforge::ops::fs::MAX_FILE_SIZE`) rather than declared here, so this
+/// crate, the MCP server and the Python bindings all read the one constant
+/// instead of three copies of the same literal.
+pub use hwpforge::ops::fs::MAX_FILE_SIZE;
 /// Maximum stdin size: 50 MB.
 pub const MAX_STDIN_SIZE: usize = 50 * 1024 * 1024;
 
@@ -109,15 +114,19 @@ pub fn check_file_size(path: &std::path::Path, json_mode: bool) {
 
 /// Reads `reader` fully, but never more than `max + 1` bytes.
 ///
-/// Backs [`read_bounded`]/[`read_input`]: [`check_file_size`]'s
-/// `metadata().len()` guard is only accurate for regular files — a FIFO or
-/// process substitution reports `0` and would otherwise be read to
-/// completion by a plain [`std::fs::read`] (measured: an unbounded read of
-/// a 200 MB FIFO drove RSS to 2.8 GB in 20 s). Capping the read itself, not
-/// just the pre-check, is the actual guarantee; `metadata()` is just the
-/// cheap fast path for the common case where it happens to be accurate.
-/// Generic over `impl Read` so unit tests can exercise the cap with a small
-/// `max` against a `Cursor` instead of allocating real megabytes.
+/// Backs [`read_capped_string`]/[`read_bounded_string`]/[`read_input_string`]
+/// — the bytes path ([`read_bounded`]/[`read_input`]) shares
+/// `hwpforge::ops::fs::read_bounded` instead (W6b audit follow-up: one
+/// bounded reader for every frontend), but that function takes a path, not
+/// an arbitrary [`Read`]er, so this generic cap stays here for the string
+/// variants. [`check_file_size`]'s `metadata().len()` guard is only accurate
+/// for regular files — a FIFO or process substitution reports `0` and would
+/// otherwise be read to completion by a plain [`std::fs::read`] (measured: an
+/// unbounded read of a 200 MB FIFO drove RSS to 2.8 GB in 20 s). Capping the
+/// read itself, not just the pre-check, is the actual guarantee; `metadata()`
+/// is just the cheap fast path for the common case where it happens to be
+/// accurate. Generic over `impl Read` so unit tests can exercise the cap with
+/// a small `max` against a `Cursor` instead of allocating real megabytes.
 fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
     let mut buf = Vec::new();
     reader.by_ref().take(max + 1).read_to_end(&mut buf)?;
@@ -131,7 +140,7 @@ fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
 }
 
 /// Reads `path` into memory, bounded by [`MAX_FILE_SIZE`] regardless of what
-/// `metadata()` reports (see [`read_capped`]).
+/// `metadata()` reports.
 ///
 /// A drop-in replacement for `std::fs::read(path)` at call sites that
 /// already build their own [`CliError`] around the read result — their
@@ -142,9 +151,33 @@ fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
 /// `impl AsRef<Path>`, matching `std::fs::read`'s own signature, so callers
 /// that hold a `&PathBuf` keep passing it directly (no `clippy::ptr_arg`
 /// pressure to widen their own parameter to `&Path` just to call this).
+///
+/// W6b audit follow-up: the actual open-and-cap work now happens in
+/// `hwpforge::ops::fs::read_bounded`, the reader every frontend shares; this
+/// function only translates that shared result back onto the
+/// `std::io::Result<Vec<u8>>` shape every caller here already handles, so
+/// none of them had to change.
 pub fn read_bounded(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>> {
-    let file = std::fs::File::open(path.as_ref())?;
-    read_capped(file, MAX_FILE_SIZE)
+    hwpforge::ops::fs::read_bounded(path.as_ref(), MAX_FILE_SIZE).map_err(io_error_from_ops)
+}
+
+/// Translates a [`hwpforge::ops::fs::read_bounded`] failure back onto the
+/// `std::io::Result` shape [`read_bounded`]'s callers already handle.
+///
+/// The size violation becomes [`std::io::ErrorKind::FileTooLarge`] — the same
+/// signal [`read_capped`] itself raises — and an actual I/O failure keeps its
+/// own [`std::io::Error`] verbatim, [`std::io::ErrorKind`] included.
+fn io_error_from_ops(err: hwpforge::ops::OpsError) -> std::io::Error {
+    use hwpforge::ops::OpsError;
+    use hwpforge_foundation::diagnostics::OpsCode;
+    match err {
+        OpsError::Io(io_err) => io_err,
+        OpsError::Rejected { code: OpsCode::InputTooLarge, .. } => std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!("input exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
+        ),
+        other => std::io::Error::other(other.to_string()),
+    }
 }
 
 /// Reads `path` for the common CLI read-command contract: exits with

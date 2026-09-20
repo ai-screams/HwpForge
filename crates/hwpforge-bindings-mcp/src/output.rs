@@ -1,78 +1,61 @@
 //! Shared output types for MCP tool responses.
 
-use std::io::Read;
 use std::path::Path;
 
 use serde::Serialize;
 
 /// Maximum file size: 100 MB.
-pub const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+///
+/// W6b audit follow-up: re-exported from the shared operation layer
+/// (`hwpforge::ops::fs::MAX_FILE_SIZE`) rather than declared here, so this
+/// crate, the CLI and the Python bindings all read the one constant instead
+/// of three copies of the same literal.
+pub use hwpforge::ops::fs::MAX_FILE_SIZE;
 /// Maximum inline content size: 50 MB.
 pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
-
-/// Reads `reader` fully, but never more than `max + 1` bytes.
-///
-/// Backs [`read_file_bytes`]: [`check_file_size`]'s `metadata().len()` guard
-/// is only accurate for regular files — a FIFO or process substitution
-/// reports `0` and would otherwise be read to completion by a plain
-/// `std::fs::read` (measured: an unbounded read of a 200 MB FIFO drove RSS
-/// to 2.8 GB in 20 s). Capping the read itself, not just the pre-check, is
-/// the actual guarantee; `metadata()` is just the cheap fast path for the
-/// common case where it happens to be accurate. Generic over `impl Read` so
-/// unit tests can exercise the cap with a small `max` against a `Cursor`
-/// instead of allocating real megabytes.
-fn read_capped(mut reader: impl Read, max: u64) -> std::io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    reader.by_ref().take(max + 1).read_to_end(&mut buf)?;
-    if buf.len() as u64 > max {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::FileTooLarge,
-            format!("input exceeds {} MB limit", max / 1024 / 1024),
-        ));
-    }
-    Ok(buf)
-}
 
 /// Read a file as bytes with size check and structured errors.
 ///
 /// Uses `metadata()` for size guard (prevents OOM in the common case), then
-/// reads through [`read_capped`] — a hard cap of [`MAX_FILE_SIZE`] bytes
-/// enforced on the read itself, not just on `metadata()` — with
-/// `ErrorKind`-based error mapping. No separate `exists()` call
-/// (TOCTOU-safe).
+/// reads through [`hwpforge::ops::fs::read_bounded`] — a hard cap of
+/// [`MAX_FILE_SIZE`] bytes enforced on the read itself, not just on
+/// `metadata()` (W6b audit follow-up: this is the one bounded reader every
+/// frontend shares) — with `ErrorKind`-based error mapping. No separate
+/// `exists()` call (TOCTOU-safe).
 pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
     let path = Path::new(file_path);
     check_file_size(path)?;
-    // Safety net: if the file disappears between metadata() and read() (TOCTOU),
-    // this match catches NotFound again. In normal flow, check_file_size handles it.
-    // Also the guarantee for a source (FIFO/process substitution) whose
-    // `metadata().len()` under-reports: `read_capped` still caps it here.
-    let file = std::fs::File::open(path).map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("File not found: {file_path}"),
-            "Check the file path and try again.",
+    // Safety net: if the file disappears between metadata() and read()
+    // (TOCTOU), this match catches NotFound again. In normal flow,
+    // check_file_size handles it. Also the guarantee for a source
+    // (FIFO/process substitution) whose `metadata().len()` under-reports:
+    // `read_bounded` still caps it here.
+    hwpforge::ops::fs::read_bounded(path, MAX_FILE_SIZE).map_err(|e| match e {
+        hwpforge::ops::OpsError::Io(io_err) => match io_err.kind() {
+            std::io::ErrorKind::NotFound => ToolErrorInfo::new(
+                "FILE_NOT_FOUND",
+                format!("File not found: {file_path}"),
+                "Check the file path and try again.",
+            ),
+            _ => ToolErrorInfo::new(
+                "READ_ERROR",
+                format!("Failed to read file: {io_err}"),
+                "Check file permissions.",
+            ),
+        },
+        hwpforge::ops::OpsError::Rejected {
+            code: hwpforge_foundation::diagnostics::OpsCode::InputTooLarge,
+            ..
+        } => ToolErrorInfo::new(
+            "INPUT_TOO_LARGE",
+            format!("File '{file_path}' exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
+            "Use a smaller file or split the document into sections.",
         ),
-        _ => ToolErrorInfo::new(
+        other => ToolErrorInfo::new(
             "READ_ERROR",
-            format!("Failed to read file: {e}"),
+            format!("Failed to read file: {other}"),
             "Check file permissions.",
         ),
-    })?;
-    read_capped(file, MAX_FILE_SIZE).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::FileTooLarge {
-            ToolErrorInfo::new(
-                "INPUT_TOO_LARGE",
-                format!("File '{file_path}' exceeds {} MB limit", MAX_FILE_SIZE / 1024 / 1024),
-                "Use a smaller file or split the document into sections.",
-            )
-        } else {
-            ToolErrorInfo::new(
-                "READ_ERROR",
-                format!("Failed to read file: {e}"),
-                "Check file permissions.",
-            )
-        }
     })
 }
 
@@ -270,6 +253,14 @@ impl ToolErrorInfo {
 }
 
 /// Structured non-fatal warning for MCP tool responses.
+///
+/// W6b audit follow-up: this is a structural (field-by-field) twin of
+/// `hwpforge_foundation::diagnostics::WarningInfo` — same `{code, message,
+/// hint}` shape, `hint` omitted the same way when absent. Kept as its own
+/// type rather than replaced outright because every tool file's `warnings`
+/// field is typed on it already (`fields.rs`, `fill.rs`, `stamp.rs`, …), well
+/// outside this lane's scope; the `From<WarningInfo>` impl below is the one
+/// bridge [`crate::compat::warning`] needs.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ToolWarningInfo {
     /// Machine-readable warning code.
@@ -294,39 +285,69 @@ impl ToolWarningInfo {
     }
 }
 
+impl From<hwpforge_foundation::diagnostics::WarningInfo> for ToolWarningInfo {
+    /// A field-by-field copy through this type's own constructor — the two
+    /// types serialise identically, so this is the whole conversion.
+    fn from(info: hwpforge_foundation::diagnostics::WarningInfo) -> Self {
+        match info.hint {
+            Some(hint) => Self::new(info.code, info.message).with_hint(hint),
+            None => Self::new(info.code, info.message),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
-    #[test]
-    fn read_capped_within_limit_returns_all_bytes() {
-        let data = vec![7u8; 5];
-        let out = read_capped(Cursor::new(data.clone()), 10).unwrap();
-        assert_eq!(out, data);
-    }
-
-    #[test]
-    fn read_capped_at_exact_limit_returns_all_bytes() {
-        let data = vec![7u8; 10];
-        let out = read_capped(Cursor::new(data.clone()), 10).unwrap();
-        assert_eq!(out, data);
-    }
-
-    #[test]
-    fn read_capped_over_limit_errors_file_too_large() {
-        // 11 bytes through a 10-byte cap: `take(max + 1)` lets the 11th byte
-        // through so the length check can distinguish "exactly at the limit"
-        // from "over it" — this exercises that off-by-one boundary.
-        let data = vec![7u8; 11];
-        let err = read_capped(Cursor::new(data), 10).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::FileTooLarge);
-    }
+    // The Cursor-based cap-boundary tests that used to live here (a small
+    // `max` against `read_capped`, this file's own private reader) moved
+    // with the reader itself to `hwpforge::ops::fs::tests` — W6b audit
+    // follow-up: one bounded reader, one set of boundary tests, shared by
+    // every frontend. `read_file_bytes_over_the_size_cap_reports_input_too_large`
+    // below is this file's own regression: the *mapping* from the shared
+    // reader's `OpsError` onto this crate's `ToolErrorInfo` shape.
 
     #[test]
     fn read_file_bytes_missing_file() {
         let err = read_file_bytes("/nonexistent/path.hwpx").unwrap_err();
         assert_eq!(err.code, "FILE_NOT_FOUND");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_file_bytes_over_the_size_cap_reports_input_too_large() {
+        // Mirrors the CLI's own FIFO regression
+        // (`fifo_input_over_the_size_cap_reports_input_too_large`): a FIFO's
+        // `metadata().len()` reports `0`, so `check_file_size` lets it
+        // through, and only the shared `ops::fs::read_bounded`'s cap on the
+        // read itself catches it.
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo_path = dir.path().join("oversized.hwpx");
+        let status = std::process::Command::new("mkfifo").arg(&fifo_path).status().unwrap();
+        assert!(status.success(), "mkfifo failed for {}", fifo_path.display());
+
+        let writer_path = fifo_path.clone();
+        let writer = std::thread::spawn(move || {
+            let Ok(mut f) = std::fs::File::create(&writer_path) else { return };
+            let chunk = vec![0u8; 1024 * 1024];
+            // Comfortably over the 100 MB cap; the reader's
+            // `take(MAX_FILE_SIZE + 1)` stops consuming once it has the extra
+            // byte it needs to detect the overflow, so `write_all` reports
+            // `BrokenPipe` on the first write past that point.
+            for _ in 0..150 {
+                if f.write_all(&chunk).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let err = read_file_bytes(fifo_path.to_str().unwrap()).unwrap_err();
+        writer.join().unwrap();
+
+        assert_eq!(err.code, "INPUT_TOO_LARGE");
     }
 
     #[test]

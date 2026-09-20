@@ -259,12 +259,27 @@ class InspectSection(TypedDict):
     # `InspectReport`'s "Counting contract" doc for the decoder limitation
     # this traces to), so `hwpforge`'s CLI keeps that one count a raw scan
     # rather than exposing a value that would silently undercount.
+    #
+    # `tables_all`/`images_all`/`text_boxes`/`lines`/`rectangles`/`polygons`
+    # are DECODED-OBJECT counts, walking the Rust tree `hwpforge` decoded —
+    # NOT a raw XML element scan. `hwpforge`'s own CLI has same-named
+    # `--json` keys (`tables`, `images`, …, without the `_all` suffix on the
+    # first two) that ARE a raw scan and can therefore be LARGER than these
+    # six on a document where the decoder accepts an element it cannot
+    # represent (for example a `<hp:pic>` with no usable image reference,
+    # which decodes to no image at all rather than an error). The two are
+    # not interchangeable; do not assume they agree.
     tables_all: int
     images_all: int
     text_boxes: int
     lines: int
     rectangles: int
     polygons: int
+    # `non_empty_paragraphs`/`deep_paragraphs`/`deep_non_empty_paragraphs`
+    # have no such caveat: paragraph presence is never silently dropped the
+    # way an unrepresentable picture reference is, so these agree with the
+    # CLI's same-named `--json` keys by construction (same decode, same
+    # bytes, same decoder).
     non_empty_paragraphs: int
     deep_paragraphs: int
     deep_non_empty_paragraphs: int
@@ -459,6 +474,9 @@ class StampPlanReport(TypedDict):
     skipped_tables: list[SkippedTable]
     warnings: list[WarningInfo]
 
+# `ok` here; the CLI and the MCP server report this same field as `valid`
+# instead. Left as `ok` (not renamed to match) because that would break the
+# Python API.
 class ValidateReport(TypedDict):
     ok: bool
     sections: int
@@ -477,6 +495,14 @@ class TemplatesReport(TypedDict):
 
 # A JSON Schema document. Its keys are the schema's own, so no key set is pinned.
 SchemaReport: TypeAlias = Json
+
+# ── constants ────────────────────────────────────────────────────
+
+# The shared frontend input size limit (100 MB) that `Document.open` checks
+# a read against — the same cap the CLI and the MCP server enforce on their
+# own file reads. Not one of the 23 operations below: a plain module
+# attribute, not a callable.
+MAX_FILE_SIZE: int
 
 # ── the 23 operations ───────────────────────────────────────────
 

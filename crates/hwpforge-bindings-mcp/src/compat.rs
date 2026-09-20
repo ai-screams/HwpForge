@@ -626,18 +626,16 @@ fn semantic_loss_error(
 /// `{code, message, hint}` triple every tool's `warnings` field carries
 /// (`ToolWarningInfo` and `hwpforge_foundation::diagnostics::WarningInfo`
 /// are structurally the same payload, defined in two crates so `ops` does
-/// not depend on the MCP crate). New canonical warning codes this
+/// not depend on the MCP crate — W6b audit follow-up: `ToolWarningInfo`'s own
+/// `From<WarningInfo>` now does the copy, once, instead of this function
+/// reconstructing it field by field). New canonical warning codes this
 /// migration introduces (`NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`, …, see
 /// `hwpforge::ops::OpsWarning::info` docs) pass through unchanged — whether
 /// a tool's `data` schema has room to carry them without an additive field
 /// is a per-tool decision for W4, per `common.md`'s "Warnings" section.
 #[must_use]
 pub fn warning(w: &OpsWarning) -> ToolWarningInfo {
-    let info = w.info();
-    match info.hint {
-        Some(hint) => ToolWarningInfo::new(info.code, info.message).with_hint(hint),
-        None => ToolWarningInfo::new(info.code, info.message),
-    }
+    w.info().into()
 }
 
 #[cfg(test)]

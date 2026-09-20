@@ -38,6 +38,38 @@ def test_open_and_save_round_trip(tmp_path, table_bytes: bytes) -> None:
     assert Document.open(target) == doc
 
 
+def test_open_reports_the_shared_size_limit() -> None:
+    """The limit `Document.open` enforces is the same one the CLI and the
+    MCP server use, exposed for exactly this comparison."""
+    from hwpforge import _hwpforge
+
+    assert _hwpforge.MAX_FILE_SIZE == 100 * 1024 * 1024
+
+
+def test_open_refuses_a_file_over_the_shared_size_limit(tmp_path, monkeypatch) -> None:
+    """W6b audit follow-up: `Document.open` used to read a whole file with no
+    size gate at all. The real limit is 100 MB, too large to write in a
+    test, so the module constant is patched down to exercise the same code
+    path `Document.open` reads it through."""
+    from hwpforge import _hwpforge
+
+    monkeypatch.setattr(_hwpforge, "MAX_FILE_SIZE", 4)
+    source = tmp_path / "too_big.hwpx"
+    source.write_bytes(b"more than four bytes")
+
+    with pytest.raises(HwpForgeError) as caught:
+        Document.open(source)
+
+    assert caught.value.code == "INPUT_TOO_LARGE"
+
+
+def test_open_accepts_a_file_within_the_shared_size_limit(tmp_path, table_bytes: bytes) -> None:
+    source = tmp_path / "small.hwpx"
+    source.write_bytes(table_bytes)
+
+    assert Document.open(source).to_bytes() == table_bytes
+
+
 def test_a_document_is_a_value(table_bytes: bytes) -> None:
     one = Document.from_bytes(table_bytes)
     same = Document.from_bytes(bytes(table_bytes))

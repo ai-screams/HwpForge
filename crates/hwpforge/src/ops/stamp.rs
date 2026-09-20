@@ -66,6 +66,8 @@
 //! preserve-first editor must never set. It is carried rather than discarded
 //! so a future warning needs no API change.
 
+use std::path::{Path, PathBuf};
+
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{
     CellStampedField, HwpxStamper, StampManifest, StampManifestV2, StampMap, StampPlanV2,
@@ -74,6 +76,29 @@ use hwpforge_smithy_hwpx::stamp::{
 use serde::Serialize;
 
 use super::{OpsError, OpsWarning};
+
+/// The manifest path a stamp writes when the caller supplies none.
+///
+/// Replaces `output`'s extension with `manifest.json` via
+/// [`Path::with_extension`] — `form.hwpx` becomes `form.manifest.json`, and a
+/// path with no extension at all gets one appended (`form` also becomes
+/// `form.manifest.json`).
+///
+/// W6b audit follow-up: this is the CLI's pre-migration rule, now shared with
+/// MCP. The two frontends disagreed on a doubly-suffixed path —
+/// `Path::with_extension` only strips the *last* extension, so `form.hwpx.hwpx`
+/// becomes `form.hwpx.manifest.json` here, while MCP's own pre-migration
+/// version (`format!("{}.manifest.json", output.trim_end_matches(".hwpx"))`)
+/// strips *every* trailing `.hwpx` — `str::trim_end_matches` repeats the
+/// match — and collapsed the same input to `form.manifest.json`. Neither
+/// frontend's audited legacy contract (`tests/data/legacy_codes.txt`; codes
+/// and hints, not path arithmetic) pins either behaviour, and no known caller
+/// passes a doubly-suffixed output path, so this migration keeps the CLI's
+/// `Path`-based rule for both rather than compat-mapping the divergence.
+#[must_use]
+pub fn default_manifest_path(output: &Path) -> PathBuf {
+    output.with_extension("manifest.json")
+}
 
 // ── stamp_plan ──────────────────────────────────────────────────
 
@@ -375,5 +400,28 @@ mod tests {
         assert!(StampOptions::default().manifest, "callers expect a manifest by default");
         assert!(!StampOptions::default().with_manifest(false).manifest);
         assert!(StampOptions::default().with_manifest(false).with_manifest(true).manifest);
+    }
+
+    #[test]
+    fn default_manifest_path_replaces_a_single_extension() {
+        assert_eq!(
+            default_manifest_path(Path::new("form.hwpx")),
+            PathBuf::from("form.manifest.json")
+        );
+    }
+
+    #[test]
+    fn default_manifest_path_strips_only_the_last_extension() {
+        // The divergence the doc comment describes: only the trailing
+        // `.hwpx` is replaced, not every `.hwpx` suffix.
+        assert_eq!(
+            default_manifest_path(Path::new("form.hwpx.hwpx")),
+            PathBuf::from("form.hwpx.manifest.json")
+        );
+    }
+
+    #[test]
+    fn default_manifest_path_appends_when_there_is_no_extension() {
+        assert_eq!(default_manifest_path(Path::new("form")), PathBuf::from("form.manifest.json"));
     }
 }

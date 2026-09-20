@@ -7,8 +7,12 @@
 //! text (`&str` for Markdown and JSON), options are a [`Default`] struct with
 //! consuming `with_*` builders, and the output is
 //! `Result<XxxOutput, OpsError>`. **Operation functions never touch the
-//! filesystem**; the one place that reads files is the `fs` submodule
-//! (feature `ops-md`), and it only resolves assets a caller already planned.
+//! filesystem**; the one place that does is the `fs` submodule (feature
+//! `ops-md`), and it does so for exactly two reasons: resolving the `file:`
+//! entries of an asset plan a caller already made, and — W6b audit follow-up
+//! — reading a whole input document from a path under a caller-chosen size
+//! cap ([`fs::read_bounded`]), the one frontend-shared input size gate CLI,
+//! MCP and the Python bindings all read through.
 //!
 //! Output structs are `#[non_exhaustive]` and do **not** derive serde: the
 //! serialisable payload is the wire DTO they carry, and warnings become
@@ -102,8 +106,8 @@ pub use read::{
 #[cfg(feature = "schemars")]
 pub use schema::{schema, SchemaKind, SchemaOptions, SchemaOutput};
 pub use stamp::{
-    stamp, stamp_plan, StampMeta, StampOptions, StampOutput, StampPlanMeta, StampPlanOutput,
-    StampedManifest,
+    default_manifest_path, stamp, stamp_plan, StampMeta, StampOptions, StampOutput, StampPlanMeta,
+    StampPlanOutput, StampedManifest,
 };
 pub use style::{
     restyle, templates, validate, RestyleMeta, RestyleOptions, RestyleOutput, TemplateList,
@@ -256,6 +260,16 @@ pub enum OpsError {
         /// The remaining, non-semantic warnings of the same encode.
         others: Vec<WarningInfo>,
     },
+
+    /// A read through [`fs::read_bounded`] failed to open or read `path` — the
+    /// wrapped [`std::io::Error`] keeps its own [`std::io::ErrorKind`]
+    /// verbatim so a frontend can still special-case a missing file the way
+    /// it already did before the read moved here (the size violation
+    /// `read_bounded` also guards against is not an I/O failure and reports
+    /// [`OpsCode::InputTooLarge`] through [`OpsError::Rejected`] instead).
+    #[cfg(feature = "ops-md")]
+    #[error(transparent)]
+    Io(std::io::Error),
 }
 
 impl OpsError {
@@ -294,6 +308,13 @@ impl OpsError {
             Self::Rejected { code, .. } => *code,
             Self::NoFonts => OpsCode::NoFonts,
             Self::EncodeSemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
+            // No frontend consults this code today — each keeps its own
+            // legacy string for "the file could not be read" and only
+            // special-cases the wrapped `io::ErrorKind` (see the variant
+            // doc), never `OpsError::code()`. `UpstreamUnmapped` is still the
+            // honest answer: `std::io::Error` has no `OpsCode` of its own.
+            #[cfg(feature = "ops-md")]
+            Self::Io(_) => OpsCode::UpstreamUnmapped,
         }
     }
 

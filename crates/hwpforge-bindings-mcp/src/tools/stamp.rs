@@ -146,9 +146,15 @@ pub fn run_stamp(
     // Review L1: serialize the manifest BEFORE writing anything, and remove
     // the .hwpx if the manifest write fails — a failed call must leave no
     // partial artifact behind (fail-closed).
-    let manifest_file = manifest_path
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("{}.manifest.json", output_path.trim_end_matches(".hwpx")));
+    //
+    // W6b audit follow-up: the default path is now `ops::default_manifest_path`
+    // — the CLI's own pre-migration rule, shared here instead of this file's
+    // separate `trim_end_matches(".hwpx")` version (see that function's doc
+    // for the one input the two disagreed on and why this migrates rather
+    // than compat-maps it).
+    let manifest_file = manifest_path.map(str::to_string).unwrap_or_else(|| {
+        ops::default_manifest_path(std::path::Path::new(output_path)).to_string_lossy().into_owned()
+    });
     // R2: identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {

@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from . import _hwpforge
+from .errors import HwpForgeError
 from .results import BytesResult, DocumentResult, TextResult
 
 if TYPE_CHECKING:
@@ -80,6 +81,14 @@ class Document:
     def open(cls, path: str | os.PathLike[str]) -> Document:
         """Read an HWPX package from a file.
 
+        Bounded by the same input size limit the CLI and the MCP server
+        enforce on their own file reads (`_hwpforge.MAX_FILE_SIZE`, 100 MB) —
+        W6b audit follow-up: before this, `Document.open` was the one
+        frontend entry point that read a whole file with no size gate at all.
+        The cap is on the read itself, not on the file's reported size, so a
+        FIFO or process substitution (whose `stat()` size is `0`) cannot slip
+        an oversized input through either.
+
         Args:
             path: The file to read.
 
@@ -89,13 +98,26 @@ class Document:
 
         Raises:
             OSError: If the file cannot be read.
+            HwpForgeError: If the file exceeds the shared size limit
+                (``INPUT_TOO_LARGE``).
         """
+        max_size = _hwpforge.MAX_FILE_SIZE
         with open(path, "rb") as handle:
-            return cls(handle.read())
+            data = handle.read(max_size + 1)
+        if len(data) > max_size:
+            raise HwpForgeError(
+                "INPUT_TOO_LARGE",
+                f"File '{os.fspath(path)}' exceeds {max_size // (1024 * 1024)} MB limit",
+                "Use a smaller file or split the document into sections.",
+            )
+        return cls(data)
 
     @classmethod
     def from_bytes(cls, data: bytes) -> Document:
         """Take an HWPX package that is already in memory.
+
+        Unlike [`open`][hwpforge.Document.open], this has no size limit: the
+        caller already holds the bytes, so there is no read left to bound.
 
         Args:
             data: The bytes of an HWPX package.
