@@ -28,6 +28,11 @@ assert_fail_grep() { # cmd... -- pattern : expect NON-zero exit AND stderr/out c
 }
 assert_file()      { if [[ -s "$1" ]]; then pass "produced $1"; else fail "missing/empty $1"; fi; }
 assert_grep()      { if grep -qF "$2" "$1"; then pass "$1 contains '$2'"; else fail "$1 missing '$2'"; fi; }
+assert_exit()      { # cmd... -- expected_code : expect that EXACT exit code (not just zero/nonzero)
+  local want="${!#}"; set -- "${@:1:$(($#-2))}"
+  "$@" >/dev/null 2>&1; local rc=$?
+  if [[ $rc -eq $want ]]; then pass "$* (exit $want)"; else fail "$* (expected exit $want; got rc=$rc)"; fi
+}
 
 echo "== Building CLI =="
 cargo build -q -p hwpforge-bindings-cli || { echo "build failed"; exit 1; }
@@ -84,6 +89,22 @@ assert_ok "$BIN" validate tpl.hwpx
 assert_grep validate.json '"valid":true'
 printf 'not a container' > validate_garbage.hwpx
 assert_fail_grep "$BIN" validate validate_garbage.hwpx -- "DECODE_FAILED"
+# Exit 3 for a package that decodes cleanly but fails Document::validate —
+# same recipe as cli_validate.rs's make_decodable_but_invalid_hwpx: the
+# stale-line-cache fixture's own entries plus a second, empty
+# Contents/section1.xml (decodes as two sections, one of them empty).
+command cp "$ROOT/tests/fixtures/layout/stale-line-cache.hwpx" decodable_but_invalid.hwpx
+python3 - <<'PY'
+import zipfile
+with zipfile.ZipFile("decodable_but_invalid.hwpx", "a") as z:
+    z.writestr(
+        "Contents/section1.xml",
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
+        '<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" '
+        'xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"></hs:sec>',
+    )
+PY
+assert_exit "$BIN" validate decodable_but_invalid.hwpx -- 3
 
 echo "== Recipe A: patch (text-only) fills body + POSITIONAL table cells =="
 # Mirrors template-fill.md: body via text map, table via row-label positional fill

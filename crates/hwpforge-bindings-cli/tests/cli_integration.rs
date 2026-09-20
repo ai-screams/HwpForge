@@ -5995,3 +5995,46 @@ fn set_cell_fifo_map_over_the_size_cap_reports_file_read_failed() {
     assert_eq!(val["code"], "FILE_READ_FAILED", "{val}");
     assert!(!out.exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
+    // `convert-hwp5` used to read its input path twice — an unbounded
+    // `std::fs::read` inside the (now removed) `inspect_hwp5_file` call,
+    // then a bounded `read_bounded` for conversion. That let an oversized
+    // FIFO grow memory without limit through the first, unbounded read
+    // (this test's chunk loop is comfortably over the 100 MB cap), and
+    // would have hung a *finite* FIFO on the second `open` once the
+    // original writer had already exited. The command now reads the FIFO
+    // exactly once through `read_bounded`, so this exits promptly with the
+    // command's own `HWP5_DECODE_FAILED`/exit 2 — the code the legacy
+    // first read already produced for an unreadable input — instead of
+    // hanging or growing without bound.
+    let tmp = test_tmp();
+    let out = tmp.join("never.hwpx");
+    let fifo_path = tmp.join("oversized.hwp");
+    create_fifo(&fifo_path);
+
+    let writer_path = fifo_path.clone();
+    let writer = std::thread::spawn(move || {
+        let Ok(mut f) = std::fs::File::create(&writer_path) else { return };
+        let chunk = vec![0u8; 1024 * 1024];
+        // Comfortably over the 100 MB cap; `read_bounded`'s single capped
+        // read stops consuming once it has confirmed the overflow, so
+        // `write_all` reliably reports `BrokenPipe` and this loop breaks —
+        // proving the writer thread does not outlive the reader.
+        for _ in 0..150 {
+            if f.write_all(&chunk).is_err() {
+                break;
+            }
+        }
+    });
+
+    let (val, stderr, code) =
+        run_json(&["convert-hwp5", fifo_path.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    writer.join().expect("writer thread panicked");
+
+    assert_eq!(code, 2, "stderr: {stderr}, value: {val}");
+    assert_eq!(val["code"], "HWP5_DECODE_FAILED", "{val}");
+    assert!(!out.exists());
+}

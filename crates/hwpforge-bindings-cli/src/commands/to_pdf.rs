@@ -373,6 +373,22 @@ mod tests {
     /// — fails here rather than passing silently. `location` keeps its
     /// literal expectation: `render_warning_location`'s per-variant match
     /// is hand-written and still worth checking against real values.
+    ///
+    /// LOW (audit): this list was missing the four image variants
+    /// (`ImageDataMissing`/`UnsupportedImageFormat`/`ImageDecodeFailed`/
+    /// `InvalidImageGeometry`) and never asserted `message`, only `code` and
+    /// `location` — a drift in `.info()`'s message text for any variant
+    /// would have passed silently. `variant_name` below is the
+    /// exhaustiveness guard: it is a second, independent match over every
+    /// `PdfWarning` variant with no wildcard arm reused from production
+    /// code, so a variant *this test's own match forgot* panics instead of
+    /// reporting fewer than 22 cases. `PdfWarning` is `#[non_exhaustive]`
+    /// from this (downstream) crate's point of view, so rustc cannot itself
+    /// refuse to compile when the enum gains a variant upstream — the same
+    /// trade-off `render_warning_dto`/`render_warning_location`'s own
+    /// wildcard arms already accept — but a variant *added to `cases` below
+    /// without a matching arm here* fails at runtime rather than at review
+    /// time.
     #[test]
     fn render_warning_dto_matches_ops_info_for_every_variant() {
         use hwpforge_smithy_pdf::font::FaceStyle;
@@ -384,6 +400,34 @@ mod tests {
                 PdfWarning::FontStyleFallback {
                     face: "f".into(),
                     requested: FaceStyle::Bold,
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::ImageDataMissing { key: "img1".into(), location: loc() },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::UnsupportedImageFormat {
+                    key: "img1".into(),
+                    format: "bmp",
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::ImageDecodeFailed {
+                    key: "img1".into(),
+                    detail: "bad header".into(),
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::InvalidImageGeometry {
+                    key: "img1".into(),
+                    detail: "zero width".into(),
                     location: loc(),
                 },
                 Some("s0/p1/l2"),
@@ -420,11 +464,55 @@ mod tests {
             ),
             (PdfWarning::LineOverflow { location: loc(), excess: 190 }, Some("s0/p1/l2")),
         ];
+
+        /// Names every current `PdfWarning` variant — kept in this test only
+        /// (not reused from production code) so it fails on a variant
+        /// `cases` above forgot instead of quietly agreeing with whatever
+        /// `render_warning_dto`/`render_warning_location` already handle.
+        fn variant_name(w: &PdfWarning) -> &'static str {
+            match w {
+                PdfWarning::ParagraphSkipped { .. } => "ParagraphSkipped",
+                PdfWarning::PageEventLost { .. } => "PageEventLost",
+                PdfWarning::FontStyleFallback { .. } => "FontStyleFallback",
+                PdfWarning::ImageDataMissing { .. } => "ImageDataMissing",
+                PdfWarning::UnsupportedImageFormat { .. } => "UnsupportedImageFormat",
+                PdfWarning::ImageDecodeFailed { .. } => "ImageDecodeFailed",
+                PdfWarning::InvalidImageGeometry { .. } => "InvalidImageGeometry",
+                PdfWarning::FontAxisFallback { .. } => "FontAxisFallback",
+                PdfWarning::FontEmbedPreviewPrint { .. } => "FontEmbedPreviewPrint",
+                PdfWarning::AlignmentApproximated { .. } => "AlignmentApproximated",
+                PdfWarning::NonTextRunDropped { .. } => "NonTextRunDropped",
+                PdfWarning::AnchorMarkerOnLineBoundary { .. } => "AnchorMarkerOnLineBoundary",
+                PdfWarning::TablePaginationComputed { .. } => "TablePaginationComputed",
+                PdfWarning::TableDeficitDistributed { .. } => "TableDeficitDistributed",
+                PdfWarning::UnsupportedTableStyle { .. } => "UnsupportedTableStyle",
+                PdfWarning::BandOverflow { .. } => "BandOverflow",
+                PdfWarning::PageStartsOnFallback { .. } => "PageStartsOnFallback",
+                PdfWarning::VertAlignFallback { .. } => "VertAlignFallback",
+                PdfWarning::PageNumberSkipped { .. } => "PageNumberSkipped",
+                PdfWarning::PageNumberStyleFallback { .. } => "PageNumberStyleFallback",
+                PdfWarning::MissingGlyphs { .. } => "MissingGlyphs",
+                PdfWarning::LineOverflow { .. } => "LineOverflow",
+                // Forced by `#[non_exhaustive]`, not a real "don't care": a
+                // variant reaching this arm is one `cases` above has not
+                // been taught about yet.
+                other => {
+                    panic!("PdfWarning variant not covered by this test's case list: {other:?}")
+                }
+            }
+        }
+
+        let mut seen: Vec<&'static str> = cases.iter().map(|(w, _)| variant_name(w)).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 22, "expected exactly 22 distinct PdfWarning variants in `cases`");
+
         for (w, expected_location) in &cases {
             let dto = render_warning_dto(w);
             let info = ConvertOpsWarning::Render(w.clone()).info();
             assert_eq!(dto.stage, "render");
             assert_eq!(dto.code, info.code, "{w:?}");
+            assert_eq!(dto.message, info.message, "{w:?}");
             assert_eq!(dto.location.as_deref(), *expected_location, "{w:?}");
         }
     }

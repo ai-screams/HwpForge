@@ -192,8 +192,9 @@ hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|han
 
 # Structural validation — decode + Document::validate, no editing
 hwpforge validate doc.hwpx [--json]
-#   exit 0 valid; exit 1 decodes but fails validation (report, not an error —
-#   see --json's errors array); exit 2 the bytes are not decodable HWPX at all
+#   exit 0 valid; exit 1 file/argument error (missing/unreadable file);
+#   exit 2 the bytes are not decodable HWPX at all; exit 3 decodes but fails
+#   validation (report, not an error — see --json's errors array)
 
 # Read out / schema / styles
 hwpforge to-md doc.hwpx -o doc.md

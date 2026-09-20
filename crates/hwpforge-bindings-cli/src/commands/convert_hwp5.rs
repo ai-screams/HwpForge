@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use hwpforge_convert::ops::{convert_hwp5, ConvertHwp5Options, ConvertOpsWarning};
 use hwpforge_convert::ConvertWarning;
-use hwpforge_smithy_hwp5::inspect_hwp5_file;
+use hwpforge_smithy_hwp5::inspect_hwp5;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, read_bounded, CliError};
@@ -33,31 +33,34 @@ struct ConvertHwp5Result {
 pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: bool) {
     check_file_size(input, json_mode);
 
-    // `hwpforge_convert::ops::convert_hwp5` takes bytes and reports no
-    // document summary (version/sections/paragraphs) — `inspect_hwp5_file`
-    // stays for that, unchanged, which also keeps the legacy
-    // `HWP5_DECODE_FAILED` message/hint byte-identical for the most-hit
-    // failure (unreadable/corrupt file).
-    let summary = inspect_hwp5_file(input).unwrap_or_else(|err| {
+    // Read the input once, bounded by `read_bounded`'s cap. This used to be
+    // two reads of the same path — an unbounded `std::fs::read` inside the
+    // now-removed `inspect_hwp5_file` call, followed by a bounded
+    // `read_bounded` for conversion. That let an oversized FIFO grow memory
+    // without limit through the first, unbounded read before the second,
+    // bounded read ever ran (audit finding), and made a *finite* FIFO hang
+    // on the second `open`: a FIFO reader blocks until a new writer shows
+    // up, and the original writer had already exited after the first read
+    // drained it. A read failure here reports the same `HWP5_DECODE_FAILED`
+    // the legacy first read (`inspect_hwp5_file`) always produced for an
+    // unreadable/missing file — it was always the first thing this command
+    // touched on the path.
+    let bytes = read_bounded(input).unwrap_or_else(|err| {
         CliError::new("HWP5_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
             .with_hint("Check that the file is a valid HWP5 document")
             .exit(json_mode, 2)
     });
 
-    // Re-reads the file `inspect_hwp5_file` already read once — the same
-    // double-read the pre-migration code already did (once inside
-    // `inspect_hwp5_file`, once inside `hwp5_to_hwpx_with_options`), not a
-    // new cost. A failure here (the file vanishing between the two reads)
-    // is mapped like the legacy second-read failure was: `HWP5_CONVERT_FAILED`.
-    let bytes = read_bounded(input).unwrap_or_else(|err| {
-        CliError::new(
-            "HWP5_CONVERT_FAILED",
-            format!("Cannot convert '{}' to HWPX: {err}", input.display()),
-        )
-        .with_hint(
-            "Check that the source is a supported HWP5 document and the output path is writable",
-        )
-        .exit(json_mode, 2)
+    // `hwpforge_convert::ops::convert_hwp5` takes bytes and reports no
+    // document summary (version/sections/paragraphs) — `inspect_hwp5` (the
+    // bytes-based twin of the removed `inspect_hwp5_file`) stays for that,
+    // now decoding the bytes already in hand instead of re-opening the
+    // path, which also keeps the legacy `HWP5_DECODE_FAILED` message/hint
+    // byte-identical for the most-hit failure (unreadable/corrupt file).
+    let summary = inspect_hwp5(&bytes).unwrap_or_else(|err| {
+        CliError::new("HWP5_DECODE_FAILED", format!("Cannot decode '{}': {err}", input.display()))
+            .with_hint("Check that the file is a valid HWP5 document")
+            .exit(json_mode, 2)
     });
 
     let opts = ConvertHwp5Options::default().with_carry_layout_cache(carry_layout_cache);

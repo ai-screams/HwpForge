@@ -117,6 +117,16 @@ pub fn run_to_json(
 /// exceeding the real inline ceiling (the file-output branch in
 /// [`run_to_json`] has no such gate — it always writes to disk).
 ///
+/// LOW (audit): measuring the complete response used to serialize the whole
+/// [`ToJsonData`] into a second full `String` (`serde_json::to_string`) just
+/// to read its length, on top of the `json_string` already held in
+/// `json_content` — and the MCP server serializes the returned value a
+/// third time to actually send it. `json_content` alone exceeding the
+/// ceiling is rejected immediately, before `ToJsonData` is even built;
+/// otherwise the total is measured with [`CountingWriter`], a
+/// [`std::io::Write`] sink that only counts bytes, so `serde_json::to_writer`
+/// never allocates the serialized bytes at all.
+///
 /// Split out from [`run_to_json`] so a test can exercise the gate with a
 /// synthetic oversized `warnings` list, without needing a fixture large
 /// enough to trigger it for real.
@@ -125,6 +135,13 @@ fn build_to_json_data(
     section_only: bool,
     warnings: Vec<ToolWarningInfo>,
 ) -> Result<ToJsonData, ToolErrorInfo> {
+    // `json_content` alone already over the ceiling makes the whole
+    // response oversized regardless of `warnings` — reject before copying
+    // it into `ToJsonData` and measuring the rest.
+    if json_string.len() > MAX_INLINE_RESPONSE {
+        return Err(output_too_large_error(json_string.len()));
+    }
+
     let size_bytes = json_string.len() as u64;
     let data = ToJsonData {
         output_path: None,
@@ -134,15 +151,40 @@ fn build_to_json_data(
         warnings,
     };
 
-    let inline_size = serde_json::to_string(&data).map(|s| s.len()).unwrap_or(usize::MAX);
+    let mut counter = CountingWriter::default();
+    let inline_size = match serde_json::to_writer(&mut counter, &data) {
+        Ok(()) => counter.0,
+        Err(_) => usize::MAX,
+    };
     if inline_size > MAX_INLINE_RESPONSE {
-        return Err(ToolErrorInfo::new(
-            "OUTPUT_TOO_LARGE",
-            format!("JSON response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
-            "Use output_path to write to a file, or use section parameter to export a single section.",
-        ));
+        return Err(output_too_large_error(inline_size));
     }
     Ok(data)
+}
+
+fn output_too_large_error(inline_size: usize) -> ToolErrorInfo {
+    ToolErrorInfo::new(
+        "OUTPUT_TOO_LARGE",
+        format!("JSON response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
+        "Use output_path to write to a file, or use section parameter to export a single section.",
+    )
+}
+
+/// A [`std::io::Write`] sink that only counts the bytes written to it —
+/// lets [`build_to_json_data`] learn a `serde_json::to_writer` output's
+/// exact size without allocating the serialized bytes themselves.
+#[derive(Default)]
+struct CountingWriter(usize);
+
+impl std::io::Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn render_pretty_value(value: &serde_json::Value) -> Result<String, ToolErrorInfo> {
@@ -276,5 +318,26 @@ mod tests {
 
         let err = build_to_json_data("{}".to_string(), false, huge).unwrap_err();
         assert_eq!(err.code, "OUTPUT_TOO_LARGE");
+    }
+
+    /// LOW (audit): `json_content` alone over the ceiling must be rejected
+    /// before `ToJsonData` is even built, not measured via a second
+    /// serialization of the whole struct. The reported size proves which
+    /// branch ran: the early return reports exactly `json_string.len()`,
+    /// while going through the later `CountingWriter` measurement would add
+    /// the struct's JSON-wrapper overhead (field names, the surrounding
+    /// quotes) and report a strictly larger number.
+    #[test]
+    fn to_json_content_alone_over_limit_is_rejected_before_building_the_response() {
+        let huge = "x".repeat(MAX_INLINE_RESPONSE + 1);
+        let len = huge.len();
+
+        let err = build_to_json_data(huge, false, Vec::new()).unwrap_err();
+        assert_eq!(err.code, "OUTPUT_TOO_LARGE");
+        assert!(
+            err.message.contains(&format!("{len} bytes")),
+            "expected the early-return branch to report exactly {len} bytes: {}",
+            err.message
+        );
     }
 }
