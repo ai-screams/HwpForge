@@ -173,6 +173,10 @@ use crate::error::{CliError, ErrorCause};
 /// Which of the 20 migratable `hwpforge` subcommands is reporting the
 /// error. `audit-hwp5` and `census-hwp5` are analysis commands with no
 /// `ops` counterpart (`common.md` W3 brief) and are not represented here.
+/// [`Command::Validate`] is a 21st, later addition — not one of the 20
+/// migratable commands (there was no legacy `validate` to migrate; see its
+/// own module docs) — kept in this enum anyway so [`cli_error`]/
+/// [`exit_code`] cover it uniformly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Command {
     /// `convert-hwp5` (`hwpforge_convert::ops::convert_hwp5`).
@@ -219,6 +223,8 @@ pub enum Command {
     Schema,
     /// `to-md`.
     ToMd,
+    /// `validate`. New command, no legacy precedent (module docs).
+    Validate,
 }
 
 /// One static compatibility-table row: for this `(cmd, code)` pair, emit
@@ -450,6 +456,13 @@ const TABLE: &[Row] = &[
     // VALIDATION_FAILED.
     row!(ToMd, ValidationFailed, "VALIDATE_FAILED", 2),
     row!(ToMd, EncodeFailed, "ENCODE_FAILED", 2),
+
+    // ── Validate (ops::validate) — new command, no legacy precedent ───
+    // `ops::validate`'s own `# Errors` doc names only `OpsError::Decode`;
+    // a failed `Document::validate` check is `ValidateOutput::ok == false`,
+    // not an `OpsError`, so it never reaches this table (see validate.rs's
+    // module docs for the exit-1 report-semantics path instead).
+    row!(Validate, DecodeFailed, "DECODE_FAILED", 2),
 ];
 
 /// Maps an [`OpsError`] from calling `cmd`'s underlying `ops` function onto
@@ -779,6 +792,7 @@ mod tests {
             Command::Templates => "templates",
             Command::Schema => "schema",
             Command::ToMd => "to-md",
+            Command::Validate => "validate",
         }
     }
 
@@ -873,6 +887,7 @@ mod tests {
         ("templates", "PRESET_NOT_FOUND"),
         ("schema", "UNKNOWN_SCHEMA_TYPE"),
         ("to-md", "DIR_CREATE_FAILED"), ("to-md", "FILE_WRITE_FAILED"),
+        ("validate", "FILE_READ_FAILED"),
         ("shared", "INPUT_TOO_LARGE"),
     ];
 
@@ -1169,5 +1184,15 @@ mod tests {
             got.hint.as_deref(),
             Some("to-pdf detects the format by content — the extension is only a hint")
         );
+    }
+
+    #[test]
+    fn validate_decode_failed_has_no_hint_and_exits_2() {
+        // `ops::validate`'s only `OpsError` variant (module docs on
+        // `Command::Validate`'s TABLE row) — a failed `Document::validate`
+        // check never reaches `cli_error` at all (it is `ValidateOutput::ok
+        // == false`, handled entirely in `validate.rs`, not this table).
+        let err = OpsError::decode(hwpforge_smithy_hwpx::HwpxError::Zip("not a zip file".into()));
+        assert_code(Command::Validate, err, "DECODE_FAILED", 2);
     }
 }

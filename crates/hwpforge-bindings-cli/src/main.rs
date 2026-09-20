@@ -403,6 +403,15 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = MdMode::Styled)]
         mode: MdMode,
     },
+
+    /// Check that an HWPX document satisfies Core's structural invariants.
+    #[command(
+        long_about = "Check that an HWPX document decodes and satisfies Core's structural invariants (Document::validate), without editing it.\n\nExit 0 when the document is valid; 1 when it decodes but fails validation (a verdict, not an error — see `errors` in --json output); 2 when the bytes are not a decodable HWPX package at all."
+    )]
+    Validate {
+        /// HWPX file to validate.
+        file: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -525,6 +534,9 @@ fn main() {
         }
         Commands::ToMd { input, output, mode } => {
             commands::to_md::run(&input, &output, &mode, cli.json);
+        }
+        Commands::Validate { file } => {
+            commands::validate::run(&file, cli.json);
         }
     }
 }

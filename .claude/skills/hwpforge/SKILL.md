@@ -84,6 +84,9 @@ What does the user want?
 ├─ Render to PDF (한컴과 같은 출력 — layout-cache replay)
 │     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
 │
+├─ Check whether a .hwpx is structurally sound (before further editing)
+│     → validate  (decode + Document::validate; exit 0 valid, 1 invalid, 2 undecodable)
+│
 └─ Need the JSON shape, or the list of styles
       → schema        (JSON Schema for document/section types)
       → templates list (available style presets)
@@ -186,6 +189,11 @@ hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|han
 # macOS + 한컴오피스 설치 시: --discovery hancom 으로 번들 폰트 자동 발견.
 # 실무 문서는 언어축 혼합이 흔해 --degraded 권장 (경고로 표면화됨).
 # 실패는 fail-closed: cacheless → 한컴에서 열어 재저장 후 재시도.
+
+# Structural validation — decode + Document::validate, no editing
+hwpforge validate doc.hwpx [--json]
+#   exit 0 valid; exit 1 decodes but fails validation (report, not an error —
+#   see --json's errors array); exit 2 the bytes are not decodable HWPX at all
 
 # Read out / schema / styles
 hwpforge to-md doc.hwpx -o doc.md

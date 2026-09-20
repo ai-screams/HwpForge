@@ -18,3 +18,4 @@ pub mod templates;
 pub mod to_json;
 pub mod to_md;
 pub mod to_pdf;
+pub mod validate;

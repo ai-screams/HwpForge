@@ -78,6 +78,13 @@ assert_file sec.json
 # documented contract: to-json requires -o (no stdout export)
 assert_fail_grep "$BIN" to-json tpl.hwpx -- "output"
 
+echo "== validate =="
+assert_ok "$BIN" validate tpl.hwpx
+"$BIN" --json validate tpl.hwpx > validate.json 2>/dev/null
+assert_grep validate.json '"valid":true'
+printf 'not a container' > validate_garbage.hwpx
+assert_fail_grep "$BIN" validate validate_garbage.hwpx -- "DECODE_FAILED"
+
 echo "== Recipe A: patch (text-only) fills body + POSITIONAL table cells =="
 # Mirrors template-fill.md: body via text map, table via row-label positional fill
 # (distinct values per column — a text map would write the same value to every cell).
