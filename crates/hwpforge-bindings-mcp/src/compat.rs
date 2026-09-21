@@ -23,10 +23,12 @@
 //! A **hint** is guidance for the agent reading the failure, not something
 //! a client branches on, so a hint that misdirects is corrected rather than
 //! preserved. Each correction is recorded in `mod tests`'
-//! `SUPERSEDED_LEGACY_HINTS` with the reason the old wording was wrong, and
-//! `superseded_hints_are_really_gone` fails if a listed row still emits it
-//! — so the list cannot decay into a dead exemption. Every other hint stays
-//! byte-identical to what the pre-migration tool printed.
+//! `SUPERSEDED_LEGACY_HINTS` — the old wording, the wording that replaced
+//! it, and why the old one was wrong — and
+//! `superseded_hints_match_the_recorded_replacement` fails unless the row
+//! emits that recorded replacement exactly, so neither a revert nor a drift
+//! to some third wording passes. Every other hint stays byte-identical to
+//! what the pre-migration tool printed.
 //! The **message**
 //! is not frozen (`common.md` W2 brief §"Contract that must NOT change"):
 //! this module defaults to [`OpsError`]'s own `Display`, which is usually
@@ -279,7 +281,12 @@ const TABLE: &[Row] = &[
     row!(Fill, NoValues, "NO_VALUES", "Pass at least one name\u{2192}value pair. Use hwpforge_fields to discover names."),
     row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요."),
     row!(Fill, FieldNameAmbiguous, "FIELD_NAME_AMBIGUOUS", "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요."),
-    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", "병합-run 모호 필드 또는 빈 본문이라 이 필드는 채우기 표면이 아닙니다 — 본문을 바꾸려면 hwpforge_to_json 으로 그 섹션을 내보내 편집한 뒤 hwpforge_patch 로 적용하세요."),
+    // 이 오류의 원인 중 하나가 "본문이 비어 patch 슬롯이 없음"이라
+    // (`hwpforge_smithy_hwpx::FillError::UnfillableField`), 섹션 patch 는
+    // 되는 길이 아니다 — 없는 슬롯에 글을 넣으면 슬롯 수가 달라져
+    // preserving patch 가 구조 변경으로 거부한다. 그래서 한컴 재저장을
+    // 먼저 권하고, 서버 안에서 끝내려면 전체 문서 재구성을 가리킨다.
+    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", "병합-run 모호 필드 또는 빈 본문(patch 슬롯 없음)이라 이 필드는 채우기 표면이 아닙니다 — 한컴에서 열어 다시 저장한 뒤 재시도하세요. 서버 안에서 끝내려면 hwpforge_to_json(section 없이 전체 문서) → 편집 → hwpforge_from_json 재구성이 가능하지만 이미지 바이너리는 유지되지 않습니다 (이미지를 지키는 재구성은 CLI hwpforge from-json --base)."),
     row!(Fill, FillFailed, "FILL_ERROR", "Check that the file is valid HWPX."),
     // FieldNotFound: dynamic hint, see tool_error.
 
@@ -777,16 +784,24 @@ mod tests {
         }
     }
 
-    /// Hints this module deliberately no longer emits, each with the exact
-    /// old wording and why it misdirected the caller.
+    /// Hints this module deliberately no longer emits: `(tool, code, old,
+    /// new)` — the exact wording that was replaced, the exact wording that
+    /// replaced it, and above each entry why the old one misdirected the
+    /// caller.
     ///
     /// Codes are the frozen contract; hints are guidance (module docs'
     /// "What is frozen and what is not"), so a hint that sent an agent to a
     /// tool that cannot do the job is corrected, not preserved. This list is
     /// the record of every such correction, and
-    /// [`superseded_hints_are_really_gone`] proves each one really left the
-    /// emitted text — an entry whose row still prints the old wording fails,
-    /// so the list cannot become a dead exemption.
+    /// [`superseded_hints_match_the_recorded_replacement`] holds the mapping
+    /// to it exactly.
+    ///
+    /// `new` is retyped here rather than read from `TABLE`: comparing
+    /// `TABLE`'s string against itself would pass whatever `TABLE` says. The
+    /// cost is that editing one of these hints again means updating this
+    /// record in the same commit — which is the point, since the record is
+    /// what a reader consults to learn what the wording used to be and why
+    /// it changed.
     ///
     /// Keyed on `(Tool, OpsCode)` — the `TABLE` row key — not on the legacy
     /// code string: `insert_para`/`delete_para` report three different
@@ -795,7 +810,7 @@ mod tests {
     /// `UpstreamUnmapped` keep the generic "The structural edit was
     /// refused." because those refusals genuinely have no single cause to
     /// name.
-    const SUPERSEDED_LEGACY_HINTS: &[(Tool, OpsCode, &str)] = &[
+    const SUPERSEDED_LEGACY_HINTS: &[(Tool, OpsCode, &str, &str)] = &[
         // `hwpforge_convert` is Markdown → HWPX (`server.rs`), and no MCP
         // tool converts HWP5 at all, so an agent following this hint spent
         // its next call on a second failure. HWP5 conversion lives in the
@@ -804,21 +819,25 @@ mod tests {
             Tool::Outline,
             OpsCode::DecodeFailed,
             "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
         ),
         (
             Tool::Read,
             OpsCode::DecodeFailed,
             "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
         ),
         (
             Tool::Fields,
             OpsCode::DecodeFailed,
             "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
         ),
         (
             Tool::Diff,
             OpsCode::DecodeFailed,
             "Both inputs must be valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            "Both inputs must be valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
         ),
         // Same wording, reached through `tool_error`'s dedicated
         // `Tool::Validate` arm rather than a `TABLE` row (module docs).
@@ -826,16 +845,24 @@ mod tests {
             Tool::Validate,
             OpsCode::DecodeFailed,
             "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+            "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
         ),
         // `from-json --base` is CLI spelling: `hwpforge_from_json` has no
         // base parameter, so the suggested recovery did not exist on this
-        // frontend. Over MCP the body of an unfillable field is changed by
-        // exporting its section with `hwpforge_to_json` and applying the
-        // edit with `hwpforge_patch`.
+        // frontend. The replacement keeps the Hancom re-save that the old
+        // wording named (it is the one path that restores a patchable body)
+        // and adds the whole-document rebuild that does exist over MCP,
+        // saying what it costs. It deliberately does NOT offer the section
+        // `hwpforge_to_json` → `hwpforge_patch` route the other refusals
+        // point at: `FillError::UnfillableField` means the field has no
+        // patchable body, so there is no text slot to edit, and adding one
+        // changes the slot count that the preserving patcher requires to
+        // stay equal.
         (
             Tool::Fill,
             OpsCode::FieldNotFillable,
             "병합-run 모호 필드 또는 빈 본문 — 한컴 재저장 또는 from-json --base 재생성이 필요합니다.",
+            "병합-run 모호 필드 또는 빈 본문(patch 슬롯 없음)이라 이 필드는 채우기 표면이 아닙니다 — 한컴에서 열어 다시 저장한 뒤 재시도하세요. 서버 안에서 끝내려면 hwpforge_to_json(section 없이 전체 문서) → 편집 → hwpforge_from_json 재구성이 가능하지만 이미지 바이너리는 유지되지 않습니다 (이미지를 지키는 재구성은 CLI hwpforge from-json --base).",
         ),
         // The admission gate's two refusals stated only that they refused.
         // The same document is accepted by `hwpforge_to_json` +
@@ -847,45 +874,69 @@ mod tests {
             Tool::SetCell,
             OpsCode::InputNotRoundtripSafe,
             "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed).",
+            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 — 둘 다 원본 ZIP 엔트리를 보존합니다.",
         ),
         (
             Tool::SetCell,
             OpsCode::InputEntriesNotCarried,
             "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed).",
+            "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요.",
         ),
         (
             Tool::InsertPara,
             OpsCode::InputNotRoundtripSafe,
             "Structural edits require a round-trip-safe input; this document has a codec fidelity gap.",
+            "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries.",
         ),
         (
             Tool::DeletePara,
             OpsCode::InputNotRoundtripSafe,
             "Structural edits require a round-trip-safe input; this document has a codec fidelity gap.",
+            "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries.",
         ),
-        (Tool::InsertPara, OpsCode::InputEntriesNotCarried, "The structural edit was refused."),
-        (Tool::DeletePara, OpsCode::InputEntriesNotCarried, "The structural edit was refused."),
+        (
+            Tool::InsertPara,
+            OpsCode::InputEntriesNotCarried,
+            "The structural edit was refused.",
+            "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries.",
+        ),
+        (
+            Tool::DeletePara,
+            OpsCode::InputEntriesNotCarried,
+            "The structural edit was refused.",
+            "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries.",
+        ),
         (
             Tool::Stamp,
             OpsCode::InputNotRoundtripSafe,
             "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가.",
+            "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가 — 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 (둘 다 원본 ZIP 엔트리를 보존합니다).",
         ),
         (
             Tool::Stamp,
             OpsCode::InputEntriesNotCarried,
             "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed).",
+            "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요.",
         ),
     ];
 
     /// Every [`SUPERSEDED_LEGACY_HINTS`] entry still names a live producer,
-    /// and that producer no longer emits the old wording.
+    /// and that producer emits the recorded replacement exactly.
     ///
     /// Both halves matter: without the first, an entry for a deleted row
     /// would sit there exempting nothing; without the second, a revert to
-    /// the old hint would pass unnoticed.
+    /// the old hint — or a drift to some third wording the record never
+    /// mentions — would pass unnoticed.
+    ///
+    /// What this proves and what it does not: it checks that the
+    /// compatibility mapping answers this `(tool, code)` pair with this
+    /// text. It says nothing about whether the upstream `ops` function can
+    /// still produce that error — reachability is
+    /// [`every_expected_code_is_covered`]'s job, which derives its list from
+    /// the `# Errors` docs instead of from `TABLE`.
     #[test]
-    fn superseded_hints_are_really_gone() {
-        for &(tool, code, old) in SUPERSEDED_LEGACY_HINTS {
+    fn superseded_hints_match_the_recorded_replacement() {
+        for &(tool, code, old, new) in SUPERSEDED_LEGACY_HINTS {
             let current = match TABLE.iter().find(|r| r.tool == tool && r.code == code) {
                 Some(row) => row
                     .hint
@@ -907,10 +958,14 @@ mod tests {
                 }
             };
             assert_ne!(
-                current, old,
-                "{tool:?}/{code:?} is listed as superseded but still emits the old hint"
+                old, new,
+                "{tool:?}/{code:?} records the same text as both old and new wording"
             );
-            assert!(!current.is_empty(), "{tool:?}/{code:?} lost its hint entirely");
+            assert_eq!(
+                current, new,
+                "{tool:?}/{code:?} does not emit the wording this list records as its \
+                 replacement — update the entry in the same commit as the hint"
+            );
         }
     }
 
