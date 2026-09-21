@@ -5,6 +5,11 @@ use std::path::PathBuf;
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, read_bounded, read_input_string, CliError};
 use hwpforge::ops::{self, FromJsonOptions};
+use hwpforge_foundation::diagnostics::OpsCode;
+
+/// Hint for a JSON document that parses but does not match the export schema.
+const SCHEMA_MISMATCH_HINT: &str =
+    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')";
 
 /// Run the from-json command.
 pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode: bool) {
@@ -19,10 +24,9 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // (its own `serde_json::from_str::<Value>` reparse and the
     // `ExportedDocument::deserialize` step share that variant — no way to
     // tell them apart from inside `ops`). This preflight keeps the syntax
-    // case byte-identical and pre-clears it, so any `JSON_PARSE_FAILED`
+    // case byte-identical and pre-clears it, so any `JsonParseFailed`
     // `ops::from_json` still returns below is necessarily the schema case —
-    // `compat.rs`'s `TABLE` row for `(FromJson, JsonParseFailed)` carries
-    // that hint directly (its own module docs).
+    // the hint is attached at that arm, where this preflight makes it true.
     if let Err(e) = serde_json::from_str::<serde_json::Value>(&json_str) {
         CliError::new("JSON_PARSE_FAILED", format!("Invalid JSON: {e}")).exit(json_mode, 2);
     }
@@ -53,7 +57,13 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // this command's pre-migration logic in one call.
     let outcome = match ops::from_json(&json_str, &opts) {
         Ok(o) => o,
-        Err(e) => compat::exit_ops_error(Command::FromJson, e, json_mode),
+        Err(e) => {
+            // Typed check, not a comparison against the resolved wire string:
+            // the syntax case already exited in the preflight above.
+            let schema_hint =
+                (e.code() == OpsCode::JsonParseFailed).then_some(SCHEMA_MISMATCH_HINT);
+            compat::exit_ops_error_with_hint(Command::FromJson, e, schema_hint, json_mode)
+        }
     };
     let bytes = outcome.bytes;
     // 인코드 경고(각주 번호 머리 생략 등)를 무음 폐기하지 않는다.

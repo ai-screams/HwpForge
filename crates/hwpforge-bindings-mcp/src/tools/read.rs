@@ -87,7 +87,7 @@ pub fn run_read(
             Tool::Read,
             OpsError::Rejected {
                 code: OpsCode::ReadTargetRequired,
-                reason: "Pass exactly one of section, table, field".into(),
+                reason: compat::READ_TARGET_REQUIRED_MESSAGE.into(),
             },
         ));
     }
@@ -96,7 +96,7 @@ pub fn run_read(
             Tool::Read,
             OpsError::Rejected {
                 code: OpsCode::ReadParasWithoutSection,
-                reason: "paras requires section".into(),
+                reason: compat::READ_PARAS_WITHOUT_SECTION_MESSAGE.into(),
             },
         ));
     }

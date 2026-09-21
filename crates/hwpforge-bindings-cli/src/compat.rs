@@ -156,12 +156,13 @@
 //!   pre-checks the raw JSON syntax with the identical
 //!   `serde_json::from_str::<Value>` call `ops::from_json` itself makes
 //!   first, and exits there (byte-identical, no hint) on a syntax failure
-//!   before `ops::from_json` is ever called. Any `JSON_PARSE_FAILED` this
-//!   module resolves for `Command::FromJson` is therefore always the
-//!   schema-mismatch case, so `TABLE`'s `(FromJson, JsonParseFailed)` row
-//!   carries the legacy hint directly instead of `from_json.rs` patching it
-//!   in after the fact by re-comparing this module's own resolved code
-//!   string.
+//!   before `ops::from_json` is ever called. That "this is the schema
+//!   case" fact is true only for the caller that ran the preflight, so the
+//!   hint is attached there — `from_json.rs` checks the typed
+//!   [`OpsCode::JsonParseFailed`] (never this module's resolved wire string)
+//!   and passes the hint through [`exit_ops_error_with_hint`]. `TABLE`'s
+//!   `(FromJson, JsonParseFailed)` row stays hint-less: a context-free table
+//!   row cannot know which caller preflighted.
 //! - **`to-json` `SECTION_INDEX_MISMATCH`/`PATCH_FAILED`/`SECTION_WORKFLOW_FAILED`
 //!   — not a gap, a finding.** The legacy `to_json.rs`'s
 //!   `exit_section_workflow_error` shares its match arms verbatim with
@@ -402,10 +403,10 @@ const TABLE: &[Row] = &[
 
     // ── FromJson (ops::from_json) ──────────────────────────────────────
     // JSON_PARSE_FAILED: dual legacy hint, one OpsError::Json variant — see
-    // module docs. `from_json.rs`'s own preflight already excludes the
-    // no-hint (syntax-error) shape before `ops::from_json` runs, so this
-    // row only ever answers the schema-mismatch case and carries its hint.
-    row!(FromJson, JsonParseFailed, "JSON_PARSE_FAILED", 2, "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"),
+    // module docs. The row carries no hint: the schema-mismatch hint is
+    // context-sensitive (true only after `from_json.rs`'s syntax preflight)
+    // and is attached at that call site.
+    row!(FromJson, JsonParseFailed, "JSON_PARSE_FAILED", 2),
     row!(FromJson, GridAddrInvalid, "GRID_ADDR_INVALID", 2, "Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry"),
     row!(FromJson, ValidationFailed, "VALIDATION_FAILED", 2),
     row!(FromJson, DecodeFailed, "DECODE_FAILED", 2),
@@ -800,7 +801,28 @@ pub fn exit_code(cmd: Command, err: &CliError) -> i32 {
 /// ([`cli_error`] → [`exit_code`] → [`CliError::exit`]), promoted here from
 /// six near-identical copies across `commands/*.rs`.
 pub fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = cli_error(cmd, err);
+    exit_ops_error_with_hint(cmd, err, None, json_mode)
+}
+
+/// [`exit_ops_error`] for a caller that knows something the table cannot:
+/// `context_hint` is attached when the resolved error carries no hint of its
+/// own. The exit code is resolved the same way, so the hint never changes it.
+///
+/// Today's one user is `from-json`, whose syntax preflight makes "a
+/// `JsonParseFailed` reaching here is a schema mismatch" true at that call
+/// site only.
+pub fn exit_ops_error_with_hint(
+    cmd: Command,
+    err: OpsError,
+    context_hint: Option<&'static str>,
+    json_mode: bool,
+) -> ! {
+    let mut ce = cli_error(cmd, err);
+    if ce.hint.is_none() {
+        if let Some(hint) = context_hint {
+            ce = ce.with_hint(hint);
+        }
+    }
     let exit = exit_code(cmd, &ce);
     ce.exit(json_mode, exit);
 }

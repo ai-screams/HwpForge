@@ -83,6 +83,16 @@ use hwpforge_smithy_hwpx::{FillError, SectionWorkflowError};
 
 use crate::output::{ToolErrorInfo, ToolWarningInfo};
 
+/// Frozen MCP message for `READ_TARGET_REQUIRED`. `ops::read` produces the
+/// same code with CLI-flag wording (`--section`…); MCP parameters are not
+/// flags, so [`tool_error`] always reports this text whatever the producer's
+/// `reason` says, and `tools/read.rs`'s own guard uses it too.
+pub(crate) const READ_TARGET_REQUIRED_MESSAGE: &str = "Pass exactly one of section, table, field";
+
+/// Frozen MCP message for `READ_PARAS_WITHOUT_SECTION` — same rule as
+/// [`READ_TARGET_REQUIRED_MESSAGE`].
+pub(crate) const READ_PARAS_WITHOUT_SECTION_MESSAGE: &str = "paras requires section";
+
 /// Which MCP tool is reporting the error.
 ///
 /// One variant per `hwpforge_mcp_*` tool registered in `src/server.rs` (19
@@ -517,22 +527,23 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
                 "모든 무가드 셀 후보는 이름 또는 ignore 로 분류해야 합니다.",
             );
         }
-        // `hwpforge_read`'s own local guard (`tools/read.rs::run_read`)
-        // phrases these two argument-shape rejections without `ops`'s
-        // CLI-flag spelling (`--section`/`--paras`) since the MCP tool's
-        // parameters aren't CLI flags — `reason` is that MCP-facing wording
-        // and is what this arm reports, so the two never drift apart again.
-        OpsError::Rejected { code: OpsCode::ReadTargetRequired, reason } => {
+        // These two argument-shape rejections have two producers: the MCP
+        // tool's own guard (`tools/read.rs::run_read`) and `ops::read`, whose
+        // `reason` spells CLI flags (`--section`/`--paras`). The MCP message
+        // is frozen, so it comes from the constants above, never from the
+        // producer's `reason` — a rejection forwarded from `ops::read` cannot
+        // leak CLI wording onto the MCP wire.
+        OpsError::Rejected { code: OpsCode::ReadTargetRequired, .. } => {
             return ToolErrorInfo::new(
                 "READ_TARGET_REQUIRED",
-                reason.as_str(),
+                READ_TARGET_REQUIRED_MESSAGE,
                 "section reads a paragraph range; table reads a grid text matrix; field reads a named click-here field.",
             );
         }
-        OpsError::Rejected { code: OpsCode::ReadParasWithoutSection, reason } => {
+        OpsError::Rejected { code: OpsCode::ReadParasWithoutSection, .. } => {
             return ToolErrorInfo::new(
                 "READ_PARAS_WITHOUT_SECTION",
-                reason.as_str(),
+                READ_PARAS_WITHOUT_SECTION_MESSAGE,
                 "Pass section together with paras.",
             );
         }
@@ -1169,6 +1180,23 @@ mod tests {
             OpsError::Fill(FillError::UnfillableField { name: "x".into(), section: 0 }),
             "FIELD_NOT_FILLABLE",
         );
+    }
+
+    #[test]
+    fn read_shape_rejections_keep_the_mcp_wording_whoever_produced_them() {
+        // `ops::read` words these two with CLI flags; the MCP message is
+        // frozen and must not follow the producer's `reason`.
+        let from_ops = OpsError::Rejected {
+            code: OpsCode::ReadTargetRequired,
+            reason: "Pass exactly one of --section, --table, --field".into(),
+        };
+        assert_eq!(tool_error(Tool::Read, from_ops).message, READ_TARGET_REQUIRED_MESSAGE);
+
+        let from_ops = OpsError::Rejected {
+            code: OpsCode::ReadParasWithoutSection,
+            reason: "--paras requires --section".into(),
+        };
+        assert_eq!(tool_error(Tool::Read, from_ops).message, READ_PARAS_WITHOUT_SECTION_MESSAGE);
     }
 
     #[test]

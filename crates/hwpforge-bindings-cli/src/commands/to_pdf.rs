@@ -592,9 +592,12 @@ mod tests {
         let mut seen: Vec<&'static str> = cases.iter().map(|(w, ..)| variant_name(w)).collect();
         seen.sort_unstable();
         seen.dedup();
-        // Every `cases` entry must name a distinct `PdfWarning` variant —
-        // `variant_name`'s `other => panic!` arm is what guarantees `cases`
-        // covers every variant `PdfWarning` has today, not this count.
+        // Uniqueness only: every `cases` entry names a distinct `PdfWarning`
+        // variant. This does not prove `cases` is complete — a variant
+        // missing from `cases` is invisible here. Completeness of the
+        // code/message mapping itself is checked where `PdfWarning` is
+        // mapped, by `hwpforge-convert/tests/ops_inventory.rs` (it parses the
+        // upstream enum and fails on an unmapped variant).
         assert_eq!(
             seen.len(),
             cases.len(),
