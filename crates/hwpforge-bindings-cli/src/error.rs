@@ -42,6 +42,17 @@
 //! third source, unrelated to either gate above: a dedicated stdin-size
 //! check (`MAX_STDIN_SIZE`) that only exists for `convert -`, the one
 //! command that reads from stdin.
+//!
+//! # `warnings`/`errors` omission convention
+//!
+//! Existing commands (`inspect`, `read`, `fields`, `outline`, `diff`, `fill`,
+//! `patch`, `set-cell`, `stamp`, `stamp-plan`) omit an empty `warnings` key
+//! from `--json` output entirely — required for byte compatibility with the
+//! 0.16.5 wire shape those commands already shipped. A new command emits a
+//! fixed key set instead (`errors`/`warnings` always present, including an
+//! empty array) — `validate` (`commands/validate.rs`) is today's example.
+//! When adding a new command, the default is the latter: there is no legacy
+//! shape to preserve, so there is nothing to omit for.
 
 use serde::Serialize;
 use std::fmt;

@@ -37,10 +37,11 @@ struct ValidateResult {
     valid: bool,
     sections: usize,
     paragraphs: usize,
-    /// The validation errors; empty when `valid` is true. Always
-    /// serialized (no `skip_serializing_if`) — unlike the MCP tool's
-    /// `ValidateData::warnings`, this command's key set stays stable across
-    /// both verdicts for machine consumers that key off a fixed shape.
+    /// The validation errors; empty when `valid` is true. Always serialized
+    /// (no `skip_serializing_if`) — this is a new command, so the
+    /// fixed-key-set convention applies (`error.rs` module docs, "`warnings`
+    /// / `errors` omission convention"), not the omit-if-empty shape
+    /// existing commands keep for 0.16.5 wire compatibility.
     ///
     /// `errors[].code` is `ops::style::validate`'s own `"VALIDATION_FAILED"`
     /// (its rustdoc: "the code the caller asked for"), NOT `to-md`'s legacy
@@ -52,7 +53,7 @@ struct ValidateResult {
     /// verbatim.
     errors: Vec<WarningInfo>,
     /// Decode warnings raised on the way in — present whether the document
-    /// validated or not.
+    /// validated or not (same fixed-key-set convention as `errors` above).
     warnings: Vec<WarningInfo>,
 }
 
@@ -172,11 +173,9 @@ pub fn run(file: &Path, json_mode: bool) {
     }
 
     if !out.ok {
-        // Exit 3, not 1 (audit finding): 1 is the file/argument-error class
-        // every sibling command uses (`FILE_READ_FAILED` above included) —
-        // sharing it with "decoded fine but unsound" made the two
-        // indistinguishable by exit code alone, defeating the doc comment's
-        // own claim above.
+        // Exit 3 — its own class, not shared with exit 1's file/argument-error
+        // class (this function's own "Exit codes are report semantics, not
+        // error semantics" doc above).
         std::process::exit(3);
     }
 }
