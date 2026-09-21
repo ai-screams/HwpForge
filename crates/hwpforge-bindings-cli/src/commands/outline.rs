@@ -19,11 +19,7 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     // `--json`, and one `[outline]`-prefixed stderr line each in text mode.
     let out = match ops::outline(&bytes) {
         Ok(out) => out,
-        Err(e) => {
-            let err = compat::cli_error(Command::Outline, e);
-            let exit = compat::exit_code(Command::Outline, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Outline, e, json_mode),
     };
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let outline = out.outline;

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use hwpforge::ops::exchange::{patch as ops_patch, PatchOptions};
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsWarning;
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
@@ -30,7 +30,7 @@ pub fn run(
     let opts = PatchOptions::default().with_section(section_idx).with_patch(json_str);
     let outcome = match ops_patch(&base_bytes, &opts) {
         Ok(o) => o,
-        Err(e) => exit_ops_error(Command::Patch, e, json_mode),
+        Err(e) => compat::exit_ops_error(Command::Patch, e, json_mode),
     };
     // Decoder warnings for the base package (`PatchOutput::warnings`) were
     // not surfaced pre-W5. W5 follow-up: additive — a new, omit-if-empty
@@ -67,11 +67,4 @@ pub fn run(
             outcome.bytes.len()
         );
     }
-}
-
-/// Maps an `ops::exchange::patch` failure onto the frozen contract and exits.
-fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = compat::cli_error(cmd, err);
-    let exit = compat::exit_code(cmd, &ce);
-    ce.exit(json_mode, exit);
 }

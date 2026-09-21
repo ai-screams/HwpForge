@@ -19,11 +19,7 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     // in `--json`, and one `[fields]`-prefixed stderr line each in text mode.
     let out = match ops::fields(&bytes) {
         Ok(out) => out,
-        Err(e) => {
-            let err = compat::cli_error(Command::Fields, e);
-            let exit = compat::exit_code(Command::Fields, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Fields, e, json_mode),
     };
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let fields = out.fields;

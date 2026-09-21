@@ -118,11 +118,7 @@ pub fn run(file: &Path, json_mode: bool) {
 
     let out = match ops::validate(&bytes) {
         Ok(o) => o,
-        Err(e) => {
-            let err = compat::cli_error(Command::Validate, e);
-            let exit = compat::exit_code(Command::Validate, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Validate, e, json_mode),
     };
 
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();

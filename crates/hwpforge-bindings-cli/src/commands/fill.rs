@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use hwpforge::ops::edit::{fill as ops_fill, FillOptions};
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsWarning;
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
@@ -25,7 +25,7 @@ pub fn run(file: &PathBuf, sets: &[String], output: &PathBuf, json_mode: bool) {
     let values: Vec<(String, String)> = values.into_iter().collect();
     let outcome = match ops_fill(&bytes, &values, &FillOptions::default()) {
         Ok(o) => o,
-        Err(e) => exit_ops_error(Command::Fill, e, json_mode),
+        Err(e) => compat::exit_ops_error(Command::Fill, e, json_mode),
     };
     // Decoder warnings (`FillOutput::warnings`, from the name-resolution
     // decode) were not surfaced pre-W5. W5 follow-up: additive — a new,
@@ -75,11 +75,4 @@ fn parse_sets(sets: &[String], json_mode: bool) -> BTreeMap<String, String> {
         }
     }
     values
-}
-
-/// Maps an `ops::edit::fill` failure onto the frozen contract and exits.
-fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = compat::cli_error(cmd, err);
-    let exit = compat::exit_code(cmd, &ce);
-    ce.exit(json_mode, exit);
 }

@@ -20,8 +20,9 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // `ExportedDocument::deserialize` step share that variant — no way to
     // tell them apart from inside `ops`). This preflight keeps the syntax
     // case byte-identical and pre-clears it, so any `JSON_PARSE_FAILED`
-    // `ops::from_json` still returns below is necessarily the schema case;
-    // the hint is attached there.
+    // `ops::from_json` still returns below is necessarily the schema case —
+    // `compat.rs`'s `TABLE` row for `(FromJson, JsonParseFailed)` carries
+    // that hint directly (its own module docs).
     if let Err(e) = serde_json::from_str::<serde_json::Value>(&json_str) {
         CliError::new("JSON_PARSE_FAILED", format!("Invalid JSON: {e}")).exit(json_mode, 2);
     }
@@ -52,23 +53,7 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // this command's pre-migration logic in one call.
     let outcome = match ops::from_json(&json_str, &opts) {
         Ok(o) => o,
-        Err(e) => {
-            let err = compat::cli_error(Command::FromJson, e);
-            let exit = compat::exit_code(Command::FromJson, &err);
-            // The syntax case already exited above, so a JSON_PARSE_FAILED
-            // reaching here is necessarily the schema-mismatch case —
-            // restores the legacy hint the shared table can't carry (two
-            // call sites, one `OpsError::Json` variant; see the preflight
-            // comment above).
-            let err = if err.code == "JSON_PARSE_FAILED" {
-                err.with_hint(
-                    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')",
-                )
-            } else {
-                err
-            };
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::FromJson, e, json_mode),
     };
     let bytes = outcome.bytes;
     // 인코드 경고(각주 번호 머리 생략 등)를 무음 폐기하지 않는다.

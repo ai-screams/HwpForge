@@ -154,11 +154,8 @@ pub fn run(
         .with_discovery(discovery)
         .with_degraded(degraded)
         .with_partial_cache_reject(partial_cache_reject);
-    let rendered = to_pdf(&bytes, &pdf_options).unwrap_or_else(|err| {
-        let cli_err = compat::convert_error(Command::ToPdf, err);
-        let exit = compat::exit_code(Command::ToPdf, &cli_err);
-        cli_err.exit(json_mode, exit)
-    });
+    let rendered = to_pdf(&bytes, &pdf_options)
+        .unwrap_or_else(|err| compat::exit_convert_error(Command::ToPdf, err, json_mode));
     // 단계별 분기가 없다 — `stage()`/`parts()` 가 변형마다 답을 안다.
     // CLI 가 `match` 를 하면 `ConvertOpsWarning` 이 `#[non_exhaustive]` 라
     // 하류에서 `_` arm 이 강제되고, 그 arm 은 미래의 네 번째 변형에 단계를

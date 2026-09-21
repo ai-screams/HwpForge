@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use hwpforge::ops::edit::{set_cell as ops_set_cell, SetCellOptions};
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsWarning;
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{CellResolution, CellSpec};
 
@@ -46,7 +46,11 @@ pub fn run(
 
     let result = match ops_set_cell(&bytes, &opts) {
         Ok(r) => r,
-        Err(e) => exit_ops_error(Command::SetCell, e, json_mode),
+        // set-cell's legacy exit is 1 for every code it emits (compat.rs
+        // module docs); `TABLE`/`DYNAMIC_EXIT` both record it that way, so
+        // the shared `exit_ops_error` reproduces it without a local
+        // override.
+        Err(e) => compat::exit_ops_error(Command::SetCell, e, json_mode),
     };
     // Decoder warnings, then the successful encode's non-semantic warnings
     // (`SetCellOutput::warnings`) were not surfaced pre-W5. W5 follow-up:
@@ -164,14 +168,4 @@ fn build_options(
         opts = opts.with_specs(specs);
     }
     opts
-}
-
-/// Maps an `ops::edit::set_cell` failure onto the frozen contract and exits.
-fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = compat::cli_error(cmd, err);
-    // set-cell's legacy exit is 1 for every code it emits (compat.rs module
-    // docs); `TABLE` and `DYNAMIC_EXIT` both record it that way, so the
-    // shared lookup reproduces it without a local constant.
-    let exit = compat::exit_code(cmd, &ce);
-    ce.exit(json_mode, exit);
 }

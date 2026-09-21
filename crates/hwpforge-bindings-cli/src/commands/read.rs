@@ -64,11 +64,7 @@ pub fn run(
     // of the three payloads below is the requested target.
     let out = match ops::read(&bytes, &opts) {
         Ok(o) => o,
-        Err(e) => {
-            let err = compat::cli_error(Command::Read, e);
-            let exit = compat::exit_code(Command::Read, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Read, e, json_mode),
     };
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
 

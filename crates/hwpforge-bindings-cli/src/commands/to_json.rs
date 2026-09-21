@@ -34,12 +34,6 @@ fn print_warning(warning: &OpsWarning, json_mode: bool) {
     }
 }
 
-fn exit_ops_error(err: ops::OpsError, json_mode: bool) -> ! {
-    let cli_err = compat::cli_error(Command::ToJson, err);
-    let exit = compat::exit_code(Command::ToJson, &cli_err);
-    cli_err.exit(json_mode, exit);
-}
-
 /// Pretty-prints the annotated export value.
 fn render_pretty(value: &serde_json::Value, json_mode: bool) -> String {
     match serde_json::to_string_pretty(value) {
@@ -75,7 +69,7 @@ pub fn run(
         let opts = ExportSectionOptions::default().with_section(idx).with_styles(!no_styles);
         let out = match ops::export_section(&bytes, &opts) {
             Ok(o) => o,
-            Err(e) => exit_ops_error(e, json_mode),
+            Err(e) => compat::exit_ops_error(Command::ToJson, e, json_mode),
         };
         for warning in &out.warnings {
             print_warning(warning, json_mode);
@@ -85,7 +79,7 @@ pub fn run(
         let opts = ToJsonOptions::default().with_styles(!no_styles);
         let out = match ops::to_json(&bytes, &opts) {
             Ok(o) => o,
-            Err(e) => exit_ops_error(e, json_mode),
+            Err(e) => compat::exit_ops_error(Command::ToJson, e, json_mode),
         };
         for warning in &out.warnings {
             print_warning(warning, json_mode);

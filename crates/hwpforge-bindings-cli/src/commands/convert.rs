@@ -52,10 +52,11 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     // against this same `builtin_presets()` table (`ops/convert.rs`), so
     // this preflight and the one inside `convert_md` can never disagree.
     if !builtin_presets().iter().any(|p| p.name == preset) {
-        let cli_err =
-            compat::cli_error(Command::Convert, OpsError::PresetNotFound { name: preset.into() });
-        let exit = compat::exit_code(Command::Convert, &cli_err);
-        cli_err.exit(json_mode, exit);
+        compat::exit_ops_error(
+            Command::Convert,
+            OpsError::PresetNotFound { name: preset.into() },
+            json_mode,
+        );
     }
 
     // Read input (file or stdin)
@@ -102,11 +103,8 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     };
 
     let opts = ConvertMdOptions::default().with_preset(preset);
-    let output_result = convert_md(&markdown, base_dir, &opts).unwrap_or_else(|err| {
-        let cli_err = compat::cli_error(Command::Convert, err);
-        let exit = compat::exit_code(Command::Convert, &cli_err);
-        cli_err.exit(json_mode, exit)
-    });
+    let output_result = convert_md(&markdown, base_dir, &opts)
+        .unwrap_or_else(|err| compat::exit_ops_error(Command::Convert, err, json_mode));
 
     // 경고 순서는 ops 가 이미 보장: asset(embed) 경고 → encode 경고
     // (`hwpforge::ops::convert::convert_md`). 사람이 읽는 줄과 JSON 배열 둘

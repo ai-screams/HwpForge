@@ -43,11 +43,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     // follow-up: `Decode` now prints through the same shape, additively.
     let out = match ops::to_md(&bytes, &MdExportOptions::default().with_mode(ops_mode)) {
         Ok(o) => o,
-        Err(e) => {
-            let err = compat::cli_error(Command::ToMd, e);
-            let exit = compat::exit_code(Command::ToMd, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::ToMd, e, json_mode),
     };
     for warning in &out.warnings {
         if matches!(warning, OpsWarning::Md(_) | OpsWarning::Decode(_)) {

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use hwpforge::ops::stamp::{
     default_manifest_path, stamp as ops_stamp, stamp_plan as ops_stamp_plan, StampOptions,
 };
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsWarning;
 use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
 
@@ -20,10 +20,10 @@ use crate::error::{check_file_size, read_bounded_string, read_input, CliError};
 /// Run the `stamp-plan` command (candidate discovery, both classes).
 pub fn run_plan(file: &PathBuf, json_mode: bool) {
     check_file_size(file, json_mode);
-    let bytes = read_file(file, json_mode);
+    let bytes = read_input(file, json_mode);
     let out = match ops_stamp_plan(&bytes) {
         Ok(o) => o,
-        Err(e) => exit_ops_error(Command::StampPlan, e, json_mode),
+        Err(e) => compat::exit_ops_error(Command::StampPlan, e, json_mode),
     };
     // Decoder warnings (`StampPlanOutput::warnings`) were not surfaced
     // pre-W5. W5 follow-up: additive — a new, omit-if-empty `warnings` key
@@ -116,7 +116,7 @@ pub fn run(
     json_mode: bool,
 ) {
     check_file_size(file, json_mode);
-    let bytes = read_file(file, json_mode);
+    let bytes = read_input(file, json_mode);
 
     let map_text = match read_bounded_string(map) {
         Ok(t) => t,
@@ -156,7 +156,7 @@ pub fn run(
     // to print.
     let result = match ops_stamp(&bytes, &parsed, &StampOptions::default()) {
         Ok(r) => r,
-        Err(e) => exit_ops_error(Command::Stamp, e, json_mode),
+        Err(e) => compat::exit_ops_error(Command::Stamp, e, json_mode),
     };
     // What decoding the input reported, then the successful encode's
     // non-semantic warnings (`StampOutput::warnings`) were not surfaced
@@ -263,16 +263,4 @@ fn write_artifacts(
         .with_hint("manifest 기록 실패로 산출물을 남기지 않았습니다 (fail-closed)")
         .exit(json_mode, 1);
     }
-}
-
-fn read_file(file: &PathBuf, json_mode: bool) -> Vec<u8> {
-    read_input(file, json_mode)
-}
-
-/// Maps an `ops::stamp::{stamp_plan,stamp}` failure onto the frozen contract
-/// and exits.
-fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = compat::cli_error(cmd, err);
-    let exit = compat::exit_code(cmd, &ce);
-    ce.exit(json_mode, exit);
 }

@@ -6,7 +6,7 @@ use hwpforge::ops::edit::{
     delete_para as ops_delete_para, insert_para as ops_insert_para, DeleteParaOptions,
     InsertParaOptions,
 };
-use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge::ops::OpsWarning;
 
 /// Renders one warning into this file's `Vec<String>` shape: a
 /// [`OpsWarning::Structural`] advisory keeps its own `Display` (unchanged,
@@ -67,7 +67,11 @@ pub fn run_delete(
                 });
             });
         }
-        Err(e) => exit_ops_error(Command::DeletePara, e, json_mode),
+        // No dynamic/dual-source gap applies to `delete-para`/`insert-para`:
+        // every `StructuralEditError` variant they can reach has a static
+        // `TABLE` row for both commands (`compat.rs`), so the shared
+        // `exit_ops_error` is correct as-is.
+        Err(e) => compat::exit_ops_error(Command::DeletePara, e, json_mode),
     }
 }
 
@@ -114,7 +118,7 @@ pub fn run_insert(
                 });
             })
         }
-        Err(e) => exit_ops_error(Command::InsertPara, e, json_mode),
+        Err(e) => compat::exit_ops_error(Command::InsertPara, e, json_mode),
     }
 }
 
@@ -140,15 +144,4 @@ fn write_output(
     } else {
         println!("Wrote {}", output.display());
     }
-}
-
-/// Maps an `ops::edit::{delete_para,insert_para}` failure onto the frozen
-/// contract and exits. No dynamic/dual-source gap applies here: every
-/// `StructuralEditError` variant these two operations can reach has a static
-/// `TABLE` row for both commands (`compat.rs`), so the generic lookup is
-/// correct as-is.
-fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
-    let ce = compat::cli_error(cmd, err);
-    let exit = compat::exit_code(cmd, &ce);
-    ce.exit(json_mode, exit);
 }

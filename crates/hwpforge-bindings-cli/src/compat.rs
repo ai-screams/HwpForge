@@ -147,19 +147,21 @@
 //!   calling `summarize_hwpx_document` alongside `ops::inspect` for this one
 //!   failure mode, or accepts the behaviour loss — this module cannot
 //!   synthesize a code `ops` never returns.
-//! - **`from-json` `JSON_PARSE_FAILED` hint — resolved at the call site, not
-//!   here.** The legacy CLI had two call sites sharing this code: a raw
-//!   `serde_json::from_str` failure (no hint) and a schema-mismatch
-//!   `Deserialize` failure (hint: "Ensure the JSON matches the HwpForge
-//!   document schema…"). `ops::from_json` wraps both in the same
-//!   [`OpsError::Json`] variant (`serde_json::Error`), with no way to tell
-//!   them apart from inside `ops` or from this table alone. `TABLE` keeps
-//!   the no-hint shape; `from_json.rs` restores the classification instead
-//!   by pre-checking the raw JSON syntax before calling `ops::from_json` —
-//!   a syntax failure exits right there (byte-identical), so any
-//!   `JSON_PARSE_FAILED` this module still returns for `Command::FromJson`
-//!   is necessarily the schema case, and `from_json.rs` attaches the legacy
-//!   hint to it before exiting.
+//! - **`from-json` `JSON_PARSE_FAILED` hint.** The legacy CLI had two call
+//!   sites sharing this code: a raw `serde_json::from_str` failure (no
+//!   hint) and a schema-mismatch `Deserialize` failure (hint: "Ensure the
+//!   JSON matches the HwpForge document schema…"). `ops::from_json` wraps
+//!   both in the same [`OpsError::Json`] variant (`serde_json::Error`),
+//!   with no way to tell them apart from inside `ops` — but `from_json.rs`
+//!   pre-checks the raw JSON syntax with the identical
+//!   `serde_json::from_str::<Value>` call `ops::from_json` itself makes
+//!   first, and exits there (byte-identical, no hint) on a syntax failure
+//!   before `ops::from_json` is ever called. Any `JSON_PARSE_FAILED` this
+//!   module resolves for `Command::FromJson` is therefore always the
+//!   schema-mismatch case, so `TABLE`'s `(FromJson, JsonParseFailed)` row
+//!   carries the legacy hint directly instead of `from_json.rs` patching it
+//!   in after the fact by re-comparing this module's own resolved code
+//!   string.
 //! - **`to-json` `SECTION_INDEX_MISMATCH`/`PATCH_FAILED`/`SECTION_WORKFLOW_FAILED`
 //!   — not a gap, a finding.** The legacy `to_json.rs`'s
 //!   `exit_section_workflow_error` shares its match arms verbatim with
@@ -329,6 +331,17 @@ fn resolved_hint(hint: Hint, ops_hint: Option<&'static str>) -> Option<&'static 
     }
 }
 
+/// Scans [`TABLE`] for `cmd`'s row satisfying `matches`. The `row.cmd ==
+/// cmd` half of the filter is common to every lookup this module makes;
+/// [`cli_error`]/[`convert_error`] match the rest by [`OpsCode`] equality,
+/// [`exit_code`] by the already-resolved legacy string — different key
+/// domains, so `matches` stays a closure rather than a single typed
+/// parameter.
+#[must_use]
+fn lookup(cmd: Command, matches: impl Fn(&Row) -> bool) -> Option<&'static Row> {
+    TABLE.iter().find(|row| row.cmd == cmd && matches(row))
+}
+
 /// The compatibility table. See the module docs for why every reachable
 /// `(cmd, code)` pair gets an explicit row (no fallback for legacy-precedent
 /// codes) and why `exit` cannot be derived from `code` alone.
@@ -388,9 +401,11 @@ const TABLE: &[Row] = &[
     // exactly this reason, not because a frontend constructs them).
 
     // ── FromJson (ops::from_json) ──────────────────────────────────────
-    // JSON_PARSE_FAILED: ops gap (dual legacy hint, one OpsError::Json
-    // variant) — see module docs. Keeps the no-hint shape.
-    row!(FromJson, JsonParseFailed, "JSON_PARSE_FAILED", 2),
+    // JSON_PARSE_FAILED: dual legacy hint, one OpsError::Json variant — see
+    // module docs. `from_json.rs`'s own preflight already excludes the
+    // no-hint (syntax-error) shape before `ops::from_json` runs, so this
+    // row only ever answers the schema-mismatch case and carries its hint.
+    row!(FromJson, JsonParseFailed, "JSON_PARSE_FAILED", 2, "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"),
     row!(FromJson, GridAddrInvalid, "GRID_ADDR_INVALID", 2, "Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry"),
     row!(FromJson, ValidationFailed, "VALIDATION_FAILED", 2),
     row!(FromJson, DecodeFailed, "DECODE_FAILED", 2),
@@ -663,7 +678,7 @@ pub fn cli_error(cmd: Command, err: OpsError) -> CliError {
 
     let code = err.code();
     let message = err.to_string();
-    let (legacy, hint) = match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
+    let (legacy, hint) = match lookup(cmd, |row| row.code == code) {
         Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
         // New OpsCode with no legacy precedent for this command (module
         // docs) — `code.as_str()` and `err.hint()` are `ops`'s own,
@@ -721,7 +736,7 @@ fn semantic_loss_error(cmd: Command, warnings: &[WarningInfo]) -> Option<CliErro
 pub fn convert_error(cmd: Command, err: ConvertOpsError) -> CliError {
     let code = err.code();
     let message = err.to_string();
-    let (legacy, hint) = match TABLE.iter().find(|row| row.cmd == cmd && row.code == code) {
+    let (legacy, hint) = match lookup(cmd, |row| row.code == code) {
         Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
         None => (code.as_str(), err.hint()),
     };
@@ -772,14 +787,30 @@ const DYNAMIC_EXIT: &[(Command, &str, i32)] = &[
 /// divergence to preserve" reasoning as [`cli_error`]'s fallback.
 #[must_use]
 pub fn exit_code(cmd: Command, err: &CliError) -> i32 {
-    TABLE
-        .iter()
-        .find(|row| row.cmd == cmd && row.legacy == err.code)
+    lookup(cmd, |row| row.legacy == err.code)
         .map(|row| row.exit)
         .or_else(|| {
             DYNAMIC_EXIT.iter().find(|(c, legacy, _)| *c == cmd && *legacy == err.code).map(|r| r.2)
         })
         .unwrap_or(2)
+}
+
+/// Maps `cmd`'s `ops` failure onto the frozen contract and exits — the
+/// shared tail every migrated command's error arm otherwise repeated
+/// ([`cli_error`] → [`exit_code`] → [`CliError::exit`]), promoted here from
+/// six near-identical copies across `commands/*.rs`.
+pub fn exit_ops_error(cmd: Command, err: OpsError, json_mode: bool) -> ! {
+    let ce = cli_error(cmd, err);
+    let exit = exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
+}
+
+/// The [`convert_error`] twin of [`exit_ops_error`], for `convert-hwp5` and
+/// `to-pdf`'s `hwpforge_convert::ops` calls.
+pub fn exit_convert_error(cmd: Command, err: ConvertOpsError, json_mode: bool) -> ! {
+    let ce = convert_error(cmd, err);
+    let exit = exit_code(cmd, &ce);
+    ce.exit(json_mode, exit);
 }
 
 #[cfg(test)]

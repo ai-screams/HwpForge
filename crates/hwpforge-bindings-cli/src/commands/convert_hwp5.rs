@@ -64,11 +64,8 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
     });
 
     let opts = ConvertHwp5Options::default().with_carry_layout_cache(carry_layout_cache);
-    let converted = convert_hwp5(&bytes, &opts).unwrap_or_else(|err| {
-        let cli_err = compat::convert_error(Command::ConvertHwp5, err);
-        let exit = compat::exit_code(Command::ConvertHwp5, &cli_err);
-        cli_err.exit(json_mode, exit)
-    });
+    let converted = convert_hwp5(&bytes, &opts)
+        .unwrap_or_else(|err| compat::exit_convert_error(Command::ConvertHwp5, err, json_mode));
 
     // Legacy wrote the output *inside* `hwp5_to_hwpx_with_options` itself
     // (`std::fs::write(...).map_err(Hwp5Error::Io)?`,
