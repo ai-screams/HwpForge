@@ -69,7 +69,7 @@ cargo build
 다음과 같이 컴파일이 성공하면 설치가 완료된 것입니다:
 
 ```
-Compiling hwpforge v0.16.4
+Compiling hwpforge v0.16.5
  Finished `dev` profile [unoptimized + debuginfo] target(s) in ...
 ```
 

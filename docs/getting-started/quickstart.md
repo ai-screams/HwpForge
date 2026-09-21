@@ -2,6 +2,8 @@
 
 이 페이지에서는 HwpForge의 세 가지 핵심 사용 패턴을 코드 예제와 함께 설명합니다.
 
+세 예제 모두 `hwpforge` 하나만 의존성으로 두면 그대로 컴파일됩니다 — 오류 타입은 표준 라이브러리의 `Box<dyn std::error::Error>`를 쓰므로 오류 처리 크레이트를 따로 추가할 필요가 없습니다. 예제 3은 `features = ["md"]`가 필요합니다([설치](./installation.md)).
+
 ## 예제 1: 텍스트 문서 생성 후 HWPX로 저장
 
 가장 기본적인 사용 패턴입니다. 문서 구조를 직접 조립하고 HWPX 파일로 출력합니다.
@@ -11,7 +13,7 @@ use hwpforge::core::{Document, Draft, ImageStore, PageSettings, Paragraph, Run, 
 use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
 use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Draft 상태의 문서 생성
     let mut doc = Document::<Draft>::new();
 
@@ -57,7 +59,7 @@ fn main() -> anyhow::Result<()> {
 use hwpforge::hwpx::HwpxDecoder;
 use hwpforge::core::run::RunContent;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 파일 경로를 받아 HWPX를 디코딩
     let result = HwpxDecoder::decode_file("input.hwpx")?;
 
@@ -108,7 +110,7 @@ use hwpforge::core::ImageStore;
 use hwpforge::hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge::md::MdDecoder;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. GFM Markdown 텍스트 (YAML 프론트매터 지원)
     let markdown = r#"---
 title: 보고서 제목

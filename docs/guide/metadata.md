@@ -30,7 +30,7 @@ pub struct Metadata {
 ```rust,no_run
 use hwpforge::hwpx::HwpxDecoder;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = HwpxDecoder::decode_file("document.hwpx")?;
     let meta = result.document.metadata();
 
