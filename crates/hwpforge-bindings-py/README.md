@@ -4,9 +4,10 @@ Read, edit and generate Korean HWP/HWPX documents from Python.
 
 `hwpforge` wraps the [HwpForge](https://github.com/ai-screams/HwpForge) Rust library: a
 document model for the HWPX (OWPML) format, an HWP5 reader, a Markdown bridge and a PDF
-renderer. The Python package is a thin layer over that library, so the operations, their
-option names and their error codes are the same ones the command line tool and the MCP
-server use.
+renderer. The Python package is a thin layer over that library, so it performs the same
+operations, with the same meaning, as the command line tool and the MCP server. What each
+frontend calls them differs: method names, argument spellings and some failure codes are
+Python's own public contract, and the other two keep theirs.
 
 ## What it reads and writes
 
@@ -14,9 +15,14 @@ Reads `.hwpx`, and `.hwp` (HWP5) through `hwpforge.convert_hwp5`. That conversio
 way: the result is an HWPX document, and the original `.hwp` is never written back.
 
 Writes `.hwpx` only. There is no `.hwp` output, and Hancom Office opens `.hwpx` natively.
-Documents also export to Markdown, JSON and PDF. A PDF needs the document's own fonts
-present on the host, passed through `font_dirs`, because nothing is substituted for a font
-that is missing.
+Documents also export to Markdown, JSON and PDF. A PDF needs the document's own fonts present
+on the host and named through `font_dirs` or `discovery`: by default a face that cannot be
+resolved fails the render rather than being guessed at. `to_pdf(degraded=True)` relaxes that
+and renders the missing face with a fallback, which changes how the page looks.
+
+Rendering replays the layout Hancom itself computed, so `to_pdf` needs a document Hancom
+saved. One this library just generated has no such layout and is refused with
+`PDF_RENDER_FAILED`.
 
 ## Install
 
@@ -73,6 +79,57 @@ doc.save("proposal-filled.hwpx")
 `Document` is immutable. Every editing method returns a new document in a result object
 alongside the operation's report, and leaves the receiver unchanged, so the re-assignment
 above is not optional.
+
+## Operations
+
+A failure raises `HwpForgeError`, whose `code` is the stable string to branch on. The codes
+below are the ones each operation raises for its own characteristic failure; any operation
+that has to decode the document first can also raise `DECODE_FAILED`.
+
+### `Document` methods
+
+| Method                                                            | Returns                            | Characteristic failures                                                                            |
+| ----------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `inspect(*, styles=False)`                                        | `InspectReport`                    | `DECODE_FAILED`                                                                                    |
+| `outline()`                                                       | `OutlineReport`                    | `DECODE_FAILED`                                                                                    |
+| `fields()`                                                        | `FieldsReport`                     | `DECODE_FAILED`                                                                                    |
+| `validate()`                                                      | `ValidateReport`                   | `DECODE_FAILED` (an invalid document reports, not raises)                                          |
+| `read(*, section, paras, table, field)`                           | `ReadReport`                       | `READ_TARGET_REQUIRED`, `READ_PARAS_INVALID`, `READ_PARA_RANGE_INVALID`, `READ_TABLE_OUT_OF_RANGE` |
+| `diff(revised)`                                                   | `DiffReport`                       | `DECODE_FAILED`                                                                                    |
+| `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                                    |
+| `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                                    |
+| `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                             |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"` refuses to lose anything)                                       |
+| `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                |
+| `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                       |
+| `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                   |
+| `patch(*, section, patch)`                                        | `DocumentResult[PatchReport]`      | `JSON_PARSE_FAILED`, `PATCH_FAILED`                                                                |
+| `insert_para(*, section, anchor, text, before=False)`             | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
+| `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
+| `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                                |
+| `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                         |
+
+Constructors and accessors beside these: `Document.open(path)` (bounded at 100 MB, raising
+`INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds
+the bytes), `to_bytes()`, `save(path)`, and `len()` / `==` / `hash()` over the bytes.
+
+`set_cell`, `insert_para`, `delete_para` and `stamp` re-encode the whole package, so they
+refuse a document Hancom saved with `INPUT_ENTRIES_NOT_CARRIED` or
+`INPUT_NOT_ROUNDTRIP_SAFE` rather than drop the entries it carries. `fill` and `patch` work on
+such a document.
+
+### Module functions
+
+| Function                                               | Returns                             | Characteristic failures |
+| ------------------------------------------------------ | ----------------------------------- | ----------------------- |
+| `convert_md(text, *, preset="default", base_dir=None)` | `DocumentResult[ConvertMdReport]`   | `PRESET_NOT_FOUND`      |
+| `from_json(text, *, base=None)`                        | `DocumentResult[EncodeReport]`      | `JSON_PARSE_FAILED`     |
+| `convert_hwp5(data, *, carry_layout_cache=False)`      | `DocumentResult[ConvertHwp5Report]` | `HWP5_DECODE_FAILED`    |
+| `templates()`                                          | `TemplatesReport`                   | —                       |
+| `schema(*, kind="document")`                           | `SchemaReport`                      | —                       |
+
+Every report but `templates()` and `schema()` carries a `warnings` key, which is always
+present and worth reading before saving the result.
 
 ## Documentation
 

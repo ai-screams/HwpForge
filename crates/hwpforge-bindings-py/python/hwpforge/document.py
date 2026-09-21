@@ -82,12 +82,12 @@ class Document:
         """Read an HWPX package from a file.
 
         Bounded by the same input size limit the CLI and the MCP server
-        enforce on their own file reads (`_hwpforge.MAX_FILE_SIZE`, 100 MB) —
-        W6b audit follow-up: before this, `Document.open` was the one
-        frontend entry point that read a whole file with no size gate at all.
+        enforce on their own file reads (`_hwpforge.MAX_FILE_SIZE`, 100 MB).
         The cap is on the read itself, not on the file's reported size, so a
         FIFO or process substitution (whose `stat()` size is `0`) cannot slip
-        an oversized input through either.
+        an oversized input through either. To go past it deliberately, read
+        the bytes yourself and pass them to
+        [`from_bytes`][hwpforge.Document.from_bytes], which has no cap.
 
         Args:
             path: The file to read.
@@ -345,6 +345,11 @@ class Document:
     ) -> BytesResult[ToPdfReport]:
         """Render the document to PDF.
 
+        Rendering replays the layout Hancom itself computed and stored in the
+        document, so the document has to be one Hancom saved. One this library
+        generated carries no such layout and is refused with
+        ``PDF_RENDER_FAILED``.
+
         Args:
             font_dirs: Directories to load fonts from. A bare string is
                 refused rather than read as one directory per character.
@@ -405,6 +410,12 @@ class Document:
         `below`, or pass `specs` for several. The two forms are mutually
         exclusive.
 
+        This re-encodes the whole package, so it refuses a document whose
+        entries the encoder would not carry — a document Hancom saved keeps
+        `Preview/*` and `META-INF/container.rdf`, and those are dropped by a
+        re-encode. Use [`patch`][hwpforge.Document.patch] to change such a
+        document's cell text instead.
+
         Args:
             table: The ordinal of the table to edit.
             at: The cell to write, as zero-based ``"row,col"``, for example
@@ -420,7 +431,9 @@ class Document:
 
         Raises:
             HwpForgeError: If the target is missing, ambiguous, or names a cell
-                that does not exist.
+                that does not exist, or if the document carries package entries
+                a re-encode would not keep (``INPUT_ENTRIES_NOT_CARRIED``,
+                ``INPUT_NOT_ROUNDTRIP_SAFE``).
         """
         data, report = _hwpforge.set_cell(
             self._data,
@@ -456,6 +469,10 @@ class Document:
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs removed; the receiver is unchanged.
 
+        Like the other structural edits this re-encodes the whole package, so
+        it refuses a document carrying entries the encoder would not keep —
+        `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
+
         Args:
             section: The index of the section to edit.
             indexes: The paragraphs to delete, by index within the section.
@@ -464,8 +481,10 @@ class Document:
             The edited document, and a report counting what was deleted.
 
         Raises:
-            HwpForgeError: If an index is out of range, or if deleting would
-                leave the section unreadable.
+            HwpForgeError: If an index is out of range, if deleting would
+                leave the section unreadable, or if the document carries
+                package entries a re-encode would not keep
+                (``INPUT_ENTRIES_NOT_CARRIED``).
         """
         data, report = _hwpforge.delete_para(self._data, section=section, indexes=indexes)
         return DocumentResult(Document(data), report)
@@ -474,6 +493,10 @@ class Document:
         self, *, section: int, anchor: int, text: str | Sequence[str], before: bool = False
     ) -> DocumentResult[StructuralReport]:
         """Return a new document with paragraphs inserted; the receiver is unchanged.
+
+        Like the other structural edits this re-encodes the whole package, so
+        it refuses a document carrying entries the encoder would not keep —
+        `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
 
         Args:
             section: The index of the section to edit.
@@ -487,7 +510,9 @@ class Document:
             The edited document, and a report counting what was inserted.
 
         Raises:
-            HwpForgeError: If the anchor is out of range.
+            HwpForgeError: If the anchor is out of range, or if the document
+                carries package entries a re-encode would not keep
+                (``INPUT_ENTRIES_NOT_CARRIED``).
         """
         data, report = _hwpforge.insert_para(
             self._data, section=section, anchor=anchor, text=text, before=before
@@ -499,7 +524,9 @@ class Document:
 
         This operation re-encodes the whole document, so it refuses to produce
         bytes at all if encoding would lose meaning, and raises
-        ``ENCODE_SEMANTIC_LOSS`` instead.
+        ``ENCODE_SEMANTIC_LOSS`` instead. For the same reason it refuses a
+        document carrying package entries the encoder would not keep —
+        `Preview/*` and `META-INF/container.rdf` on anything Hancom saved.
 
         Args:
             request: What to stamp where, either as a list of stamps or as the
@@ -514,8 +541,10 @@ class Document:
             unapproved, and any warnings.
 
         Raises:
-            HwpForgeError: If the request does not match the document, or if
-                encoding would lose meaning.
+            HwpForgeError: If the request does not match the document, if the
+                document carries package entries a re-encode would not keep
+                (``INPUT_ENTRIES_NOT_CARRIED``, ``INPUT_NOT_ROUNDTRIP_SAFE``),
+                or if encoding would lose meaning.
         """
         data, report = _hwpforge.stamp(self._data, request=request, manifest=manifest)
         return DocumentResult(Document(data), report)
