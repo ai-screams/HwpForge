@@ -3882,6 +3882,42 @@ fn read_error_paths_report_stable_codes() {
 }
 
 #[test]
+fn read_shape_rejections_spell_this_frontend_s_flag_names() {
+    // The three rejections `read` makes before it has a document: two are
+    // this command's own pre-read guards (`commands/read.rs`), the third is
+    // `ops::read`'s paras parse, which words the argument the way every
+    // frontend shares (`paras`) and gets the CLI's `--paras` spelling back in
+    // `compat::cli_message`. All three are the CLI's user-facing text, so
+    // they are pinned byte-for-byte here rather than by code alone.
+    let f = fixture("clickhere_named.hwpx");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+    assert_eq!(err["message"], "Pass exactly one of --section, --table, --field");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--paras", "0"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_WITHOUT_SECTION");
+    assert_eq!(err["message"], "--paras requires --section");
+
+    let (err, _, code) =
+        run_json(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "abc"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_INVALID");
+    assert_eq!(
+        err["message"],
+        r#"invalid input: Cannot parse --paras "abc": use "A..B" (inclusive) or a single "N""#
+    );
+
+    // Text mode renders the same message, so the flag spelling is pinned on
+    // both output paths.
+    let (_, stderr, code) = run(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "abc"]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains(r#"Cannot parse --paras "abc""#), "stderr: {stderr}");
+}
+
+#[test]
 fn diff_text_mode_renders_identical_and_delta() {
     let f = fixture("clickhere_named.hwpx");
     let (stdout, _, code) = run(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);

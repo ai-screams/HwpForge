@@ -678,7 +678,7 @@ pub fn cli_error(cmd: Command, err: OpsError) -> CliError {
     }
 
     let code = err.code();
-    let message = err.to_string();
+    let message = cli_message(cmd, code, err.to_string());
     let (legacy, hint) = match lookup(cmd, |row| row.code == code) {
         Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
         // New OpsCode with no legacy precedent for this command (module
@@ -691,6 +691,37 @@ pub fn cli_error(cmd: Command, err: OpsError) -> CliError {
     match hint {
         Some(hint) => CliError::new(legacy, message).with_hint(hint),
         None => CliError::new(legacy, message),
+    }
+}
+
+/// Restores this frontend's own spelling of an argument an `ops` message
+/// names.
+///
+/// `ops::read` words its `paras` rejections with the [`ReadOptions`] argument
+/// names every frontend shares (`section`, `table`, `field`, `paras`); on the
+/// CLI those arguments are flags. Two of `read`'s three shape rejections
+/// never reach here — `commands/read.rs` pre-checks the target count and
+/// `paras`-without-`section` before the file is read and words them itself —
+/// so `READ_PARAS_INVALID`, whose message embeds the caller's own spec, is
+/// the one message that needs its flag spelling put back. Only the leading
+/// argument name is rewritten; the quoted spec that follows is the caller's
+/// text and stays untouched.
+///
+/// `tests/cli_integration.rs`'s `read_shape_rejections_spell_this_frontend_s_flag_names`
+/// pins all three messages end-to-end, so a wording change on either side
+/// fails there rather than silently reaching a user.
+///
+/// [`ReadOptions`]: hwpforge::ops::ReadOptions
+#[must_use]
+fn cli_message(cmd: Command, code: OpsCode, message: String) -> String {
+    match (cmd, code) {
+        (Command::Read, OpsCode::ReadParasInvalid) => {
+            match message.split_once("Cannot parse paras ") {
+                Some((head, spec)) => format!("{head}Cannot parse --paras {spec}"),
+                None => message,
+            }
+        }
+        _ => message,
     }
 }
 
