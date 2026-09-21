@@ -439,6 +439,15 @@ enum Stage {
     Encode,
 }
 
+/// The advice every frontend shares for a code, or `None` where there is
+/// none.
+///
+/// These hints reach the CLI, the MCP server and the Python bindings alike,
+/// so they name operations and their arguments (`from-json`, `base`,
+/// `to-json`, `patch`, `fill`, `templates`) and never one frontend's syntax
+/// for them — a `--flag` here would be wrong advice in the other two. A
+/// frontend that wants its own spelling pins its own literal instead
+/// (`hwpforge-bindings-cli`'s `compat::TABLE`, `hwpforge-bindings-mcp`'s).
 fn hint_for(code: OpsCode) -> Option<&'static str> {
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
@@ -449,9 +458,9 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요"
         }
         OpsCode::FieldNotFillable => {
-            "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요"
+            "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 원본을 base 로 준 `from-json` 으로 재생성하세요"
         }
-        OpsCode::PresetNotFound => "`templates` 로 사용 가능한 프리셋을 확인하세요",
+        OpsCode::PresetNotFound => "사용 가능한 프리셋 목록은 `templates` 연산으로 확인하세요",
         OpsCode::NoFonts => "문서에 글꼴 정의가 없습니다 — `validate` 로 구조를 확인하세요",
         OpsCode::TableGridInvalid => {
             "이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다"
@@ -469,7 +478,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
         }
         OpsCode::InputEntriesNotCarried => {
-            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)"
+            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 엔트리를 보존합니다)"
         }
         OpsCode::StampSourceHashMismatch | OpsCode::StampLabelDrift | OpsCode::StampSpecStale => {
             "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"

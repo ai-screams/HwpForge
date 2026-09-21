@@ -12,18 +12,26 @@
 //!
 //! # What is frozen and what is not
 //!
-//! The **code**, **hint** and **exit code** this module emits are the
-//! frozen contract. `tests/data/legacy_codes.txt` is the hand-audited
-//! snapshot of every `(command, code, exit, hint)` shape
-//! `src/commands/*.rs`/`src/error.rs` produced before this migration, and
-//! this module's `#[cfg(test)]` inventory (`mod tests`) checks every row
-//! [`TABLE`] claims against it. The **message** is not frozen (`common.md`
-//! W3 brief §"Contract that must NOT change" point 3 lists message-body
-//! changes separately) — [`cli_error`]/[`convert_error`] default to the
-//! wrapped error's own `Display`, except the semantic-loss reconstructions
-//! below, which pin the exact legacy wording because a downstream test
+//! The **code** and **exit code** this module emits are the frozen
+//! contract, and a **hint** changes only deliberately, on the record.
+//! `tests/data/legacy_codes.txt` is the hand-audited snapshot of every
+//! `(command, code, exit, hint)` shape `src/commands/*.rs`/`src/error.rs`
+//! produced before this migration, and this module's `#[cfg(test)]`
+//! inventory (`mod tests`) checks every row [`TABLE`] claims against it.
+//! A hint that is wrong is retired rather than edited into that file: the
+//! frozen row stays as the historical record, `tests/data/new_codes.txt`
+//! records what this CLI emits instead, and `SUPERSEDED_LEGACY_HINTS` ties
+//! the two together and fails if anything still emits the retired text.
+//!
+//! The **message** is not frozen (`common.md` W3 brief §"Contract that must
+//! NOT change" point 3 lists message-body changes separately) —
+//! [`cli_error`]/[`convert_error`] default to the wrapped error's own
+//! `Display`, except the semantic-loss reconstructions below, which pin the
+//! exact legacy wording because a downstream test
 //! (`hwpforge-smithy-hwpx`'s R1 F4 regression pins, referenced from
-//! `set_cell.rs`/`stamp.rs`) already depends on it byte-for-byte.
+//! `set_cell.rs`/`stamp.rs`) already depends on it byte-for-byte, and
+//! [`cli_message`], which puts this frontend's flag spelling back into a
+//! message `ops` words for every frontend.
 //!
 //! # Design: no silent fallback
 //!
@@ -286,6 +294,29 @@ struct Row {
     exit: i32,
 }
 
+/// What to do instead when `set-cell`, `insert-para`, `delete-para` or
+/// `stamp` refuses an input over ZIP entries the encoder would drop.
+///
+/// Those four rebuild the package, so a document Hancom saved — which
+/// carries `Preview/PrvText.txt`, `Preview/PrvImage.png` and
+/// `META-INF/container.rdf` — is not editable through them today.
+/// `to-json --section N` → `patch` and `fill` edit the original package
+/// instead and keep every entry, measured on
+/// `tests/fixtures/tables/table_08_nested_table.hwpx`: the three entries
+/// above survive a patch of the very section those four commands refuse.
+/// The error message already names the entries, so this names the way
+/// through.
+const UNCARRIED_ENTRIES_HINT: &str = "한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)";
+
+/// `convert --preset`'s rejection names the presets it does take.
+///
+/// `hwpforge_smithy_hwpx::builtin_presets()` is the list `convert.rs`'s
+/// preflight and `ops::convert_md`'s own check both accept from, so the
+/// hint spells exactly those four names;
+/// [`tests::the_unknown_preset_hint_lists_every_built_in_preset`] fails if
+/// the catalogue and this text ever disagree.
+const UNKNOWN_PRESET_HINT: &str = "Available presets: default, modern, classic, latest";
+
 macro_rules! row {
     ($cmd:ident, $code:ident, $legacy:literal, $exit:literal) => {
         Row {
@@ -306,6 +337,17 @@ macro_rules! row {
         }
     };
     ($cmd:ident, $code:ident, $legacy:literal, $exit:literal, $hint:literal) => {
+        Row {
+            cmd: Command::$cmd,
+            code: OpsCode::$code,
+            legacy: $legacy,
+            hint: Hint::Literal($hint),
+            exit: $exit,
+        }
+    };
+    // Same as the arm above for a hint several rows share, named by a
+    // `const` instead of repeated inline.
+    ($cmd:ident, $code:ident, $legacy:literal, $exit:literal, $hint:expr) => {
         Row {
             cmd: Command::$cmd,
             code: OpsCode::$code,
@@ -373,7 +415,10 @@ const TABLE: &[Row] = &[
     row!(ToPdf, InvalidDiscovery, "INVALID_DISCOVERY", 2),
 
     // ── Convert (Markdown → HWPX, ops::convert_md) ────────────────────
-    row!(Convert, PresetNotFound, "UNKNOWN_PRESET", 1, "Available presets: default"),
+    // `convert` takes every preset `builtin_presets()` publishes (the
+    // preflight in `commands/convert.rs` asks it), so the hint names them
+    // all — see `UNKNOWN_PRESET_HINT`.
+    row!(Convert, PresetNotFound, "UNKNOWN_PRESET", 1, UNKNOWN_PRESET_HINT),
     row!(Convert, MdDecodeFailed, "MD_DECODE_FAILED", 2),
     row!(Convert, StyleStoreFailed, "STYLE_STORE_FAILED", 2),
     row!(Convert, StyleRebindFailed, "STYLE_REBIND_FAILED", 2),
@@ -449,8 +494,10 @@ const TABLE: &[Row] = &[
     row!(InsertPara, ParagraphOutOfRange, "PARAGRAPH_OUT_OF_RANGE", 1),
     row!(DeletePara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1),
     row!(InsertPara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1),
-    row!(DeletePara, InputEntriesNotCarried, "UNCARRIED_ZIP_ENTRIES", 1),
-    row!(InsertPara, InputEntriesNotCarried, "UNCARRIED_ZIP_ENTRIES", 1),
+    // The message names the entries; the hint names the way through — see
+    // `UNCARRIED_ENTRIES_HINT`.
+    row!(DeletePara, InputEntriesNotCarried, "UNCARRIED_ZIP_ENTRIES", 1, UNCARRIED_ENTRIES_HINT),
+    row!(InsertPara, InputEntriesNotCarried, "UNCARRIED_ZIP_ENTRIES", 1, UNCARRIED_ENTRIES_HINT),
     row!(DeletePara, SectionPropertiesParagraph, "SECTION_PROPERTIES_PARAGRAPH", 1),
     row!(InsertPara, SectionPropertiesParagraph, "SECTION_PROPERTIES_PARAGRAPH", 1),
     row!(DeletePara, SpanCountMismatch, "SPAN_COUNT_MISMATCH", 1),
@@ -482,7 +529,9 @@ const TABLE: &[Row] = &[
     row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", 1, ops),
     // FieldNotFound: dynamic hint, see cli_error.
     row!(Fill, FieldNameAmbiguous, "FIELD_NAME_AMBIGUOUS", 1, ops),
-    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", 1, ops),
+    // Literal, not `ops`: `hint_for` words this one for every frontend and
+    // so cannot spell `--base`, which is how this CLI takes that argument.
+    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", 1, "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요"),
     row!(Fill, FillFailed, "FILL_FAILED", 2),
 
     // ── SetCell (ops::edit::set_cell) ──────────────────────────────────
@@ -504,7 +553,7 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellTargetDuplicate, "CELL_TARGET_DUPLICATE", 1),
     row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", 1, ops),
     row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, ops),
-    row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1),
+    row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, UNCARRIED_ENTRIES_HINT),
     row!(SetCell, SetCellCodecFailed, "SET_CELL_CODEC_FAILED", 1),
     row!(SetCell, UpstreamUnmapped, "SET_CELL_FAILED", 1),
     // EncodeSemanticLoss: reconstructed to SET_CELL_CODEC_FAILED/1, see cli_error.
@@ -516,7 +565,9 @@ const TABLE: &[Row] = &[
     // ── Stamp (ops::stamp::stamp) ───────────────────────────────────────
     row!(Stamp, DecodeFailed, "DECODE_FAILED", 2, ops),
     row!(Stamp, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", 1, "이 입력은 무손실 재인코드가 증명되지 않아 스탬핑을 거부합니다 (fail-closed). 코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다"),
-    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, ops),
+    // Literal, not `ops`: this hint spells the flags `to-json --section N`
+    // takes, which `hint_for` cannot (`UNCARRIED_ENTRIES_HINT`).
+    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", 1, UNCARRIED_ENTRIES_HINT),
     row!(Stamp, StampManifestInvariant, "STAMP_MANIFEST_INVARIANT", 2),
     row!(Stamp, StampCodecFailed, "STAMP_CODEC_FAILED", 2),
     row!(Stamp, StampSourceHashMismatch, "STAMP_SOURCE_HASH_MISMATCH", 1, "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵의 source_sha256 을 갱신하세요"),
@@ -926,9 +977,13 @@ mod tests {
     /// directly above some rows) and blank lines are skipped; everything
     /// else must be a 4-column `command\tcode\texit\thint` row.
     fn snapshot_rows() -> Vec<SnapshotRow> {
-        [SNAPSHOT, SNAPSHOT_NEW]
-            .into_iter()
-            .flat_map(str::lines)
+        [SNAPSHOT, SNAPSHOT_NEW].into_iter().flat_map(rows_in).collect()
+    }
+
+    /// [`snapshot_rows`] for one file, for the checks that care which of the
+    /// two a row came from.
+    fn rows_in(text: &'static str) -> Vec<SnapshotRow> {
+        text.lines()
             .filter(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
             .map(|line| {
                 let mut parts = line.splitn(4, '\t');
@@ -1028,6 +1083,52 @@ mod tests {
         ("stamp", "STAMP_NAME_DUPLICATE"),
         ("stamp", "STAMP_NAME_COLLISION"),
         ("stamp", "STAMP_CANDIDATE_UNCOVERED"),
+    ];
+
+    /// `(command, legacy, old hint)` triples this CLI deliberately stopped
+    /// emitting, one entry per superseded wording, with the reason the old
+    /// text was wrong.
+    ///
+    /// `legacy_codes.txt` is a frozen historical record, so a hint that
+    /// turned out to be wrong is retired here rather than edited there:
+    /// `tests/data/new_codes.txt` gains a row carrying today's text for the
+    /// same `(command, code)`, and
+    /// [`superseded_legacy_hints_match_the_recorded_replacement`] checks
+    /// both halves — the old wording really was frozen, and what this CLI
+    /// emits today is exactly the replacement. Without that second half a
+    /// stale entry would be dead weight: (c) resolves a `TABLE` row against
+    /// *both* snapshot files, so either wording would satisfy it.
+    ///
+    /// Codes and exit codes are never superseded — only hints.
+    ///
+    /// [`superseded_legacy_hints_match_the_recorded_replacement`]: tests::superseded_legacy_hints_match_the_recorded_replacement
+    const SUPERSEDED_LEGACY_HINTS: &[(&str, &str, &str)] = &[
+        // Named one of the four presets `builtin_presets()` publishes.
+        ("convert", "UNKNOWN_PRESET", "Available presets: default"),
+        // Pointed at the `Document` schema; `from-json` reads an
+        // `ExportedDocument` (`commands/from_json.rs`).
+        (
+            "from-json",
+            "JSON_PARSE_FAILED",
+            "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')",
+        ),
+        // Restated the refusal the message already carries instead of
+        // naming an edit surface that does work (`UNCARRIED_ENTRIES_HINT`).
+        (
+            "stamp",
+            "INPUT_ENTRIES_NOT_CARRIED",
+            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)",
+        ),
+    ];
+
+    /// `(command, legacy)` pairs that had no hint at all and now carry one.
+    /// Same bookkeeping as [`SUPERSEDED_LEGACY_HINTS`] — a `new_codes.txt`
+    /// row records today's text — but with no old wording to check has
+    /// stopped being emitted, because there was none.
+    const HINT_ADDED_TO_A_HINTLESS_ROW: &[(&str, &str)] = &[
+        ("delete-para", "UNCARRIED_ZIP_ENTRIES"),
+        ("insert-para", "UNCARRIED_ZIP_ENTRIES"),
+        ("set-cell", "INPUT_ENTRIES_NOT_CARRIED"),
     ];
 
     /// `(command, legacy)` pairs with no `OpsCode` equivalent — pure local
@@ -1229,6 +1330,13 @@ mod tests {
     /// site) must not both audit the same `(command, code)` pair — that
     /// would be two conflicting "audited" answers for one call site (both
     /// files' own header notes commit to this).
+    ///
+    /// The one exception is a superseded hint: the legacy row stays as the
+    /// historical record while `new_codes.txt` carries today's wording for
+    /// the same pair. Only the pairs [`SUPERSEDED_LEGACY_HINTS`] and
+    /// [`HINT_ADDED_TO_A_HINTLESS_ROW`] name are excused, and
+    /// [`superseded_legacy_hints_match_the_recorded_replacement`] proves
+    /// each excuse is still doing work.
     #[test]
     fn legacy_and_new_snapshots_stay_disjoint() {
         fn pairs(text: &str) -> BTreeSet<(&str, &str)> {
@@ -1240,14 +1348,120 @@ mod tests {
                 })
                 .collect()
         }
+        let excused: BTreeSet<(&str, &str)> = SUPERSEDED_LEGACY_HINTS
+            .iter()
+            .map(|(cmd, code, _)| (*cmd, *code))
+            .chain(HINT_ADDED_TO_A_HINTLESS_ROW.iter().copied())
+            .collect();
         let legacy = pairs(SNAPSHOT);
         let new = pairs(SNAPSHOT_NEW);
         for pair in &new {
             assert!(
-                !legacy.contains(pair),
-                "{pair:?} is audited in both legacy_codes.txt and new_codes.txt"
+                !legacy.contains(pair) || excused.contains(pair),
+                "{pair:?} is audited in both legacy_codes.txt and new_codes.txt without being \
+                 listed as a superseded or newly hinted row"
             );
         }
+    }
+
+    /// Every hint text this CLI can emit for a `(command, code)` pair today:
+    /// the resolved `TABLE` hint — resolved, so a `Hint::FromOps` row
+    /// reaching the old wording through `hint_for` is caught too — plus the
+    /// hints a command attaches at its own call site. `from-json`'s schema
+    /// hint is the only one of the latter; the dynamic hints
+    /// (`DYNAMIC`/`DUAL_SOURCE`) are built per call in `cli_error` and
+    /// cannot equal a fixed superseded literal.
+    fn live_hints(cmd: &str, code: &str) -> Vec<&'static str> {
+        let mut hints: Vec<&'static str> = TABLE
+            .iter()
+            .filter(|row| cmd_name(row.cmd) == cmd && row.legacy == code)
+            .filter_map(|row| {
+                let ops_hint = OpsError::Rejected { code: row.code, reason: String::new() }.hint();
+                resolved_hint(row.hint, ops_hint)
+            })
+            .collect();
+        if (cmd, code) == ("from-json", "JSON_PARSE_FAILED") {
+            hints.push(crate::commands::from_json::SCHEMA_MISMATCH_HINT);
+        }
+        hints
+    }
+
+    /// Each superseded or newly hinted row is accounted for on both sides:
+    /// the legacy snapshot records the shape it had when it was frozen, and
+    /// what this CLI emits for that pair today is exactly the hint
+    /// `new_codes.txt` records — no more, no less.
+    ///
+    /// Asserting equality, rather than "the old text is gone" or "some hint
+    /// exists", is what keeps either list from becoming a claim nobody
+    /// checks: a third wording, reached through a `TABLE` edit or a
+    /// `hint_for` change, satisfies both weaker forms while leaving
+    /// `new_codes.txt` describing a hint no one emits.
+    #[test]
+    fn superseded_legacy_hints_match_the_recorded_replacement() {
+        let legacy = rows_in(SNAPSHOT);
+        let new = rows_in(SNAPSHOT_NEW);
+
+        /// The hint `new_codes.txt` records for a pair, as the one wording
+        /// this CLI is expected to emit for it.
+        fn recorded_replacement<'a>(
+            new: &'a [SnapshotRow],
+            cmd: &str,
+            code: &str,
+        ) -> &'a SnapshotHint {
+            let rows: Vec<&SnapshotRow> =
+                new.iter().filter(|r| r.cmd == cmd && r.code == code).collect();
+            assert_eq!(
+                rows.len(),
+                1,
+                "({cmd}, {code}) needs exactly one new_codes.txt row carrying today's hint, \
+                 found {}",
+                rows.len()
+            );
+            &rows[0].hint
+        }
+
+        fn assert_emits_exactly(new: &[SnapshotRow], cmd: &str, code: &str) {
+            let SnapshotHint::Literal(expected) = recorded_replacement(new, cmd, code) else {
+                panic!("({cmd}, {code})'s new_codes.txt row must carry a hint, not `-`");
+            };
+            assert_eq!(
+                live_hints(cmd, code),
+                vec![*expected],
+                "({cmd}, {code}) must emit exactly the hint new_codes.txt records"
+            );
+        }
+
+        for (cmd, code, old_hint) in SUPERSEDED_LEGACY_HINTS {
+            assert!(
+                legacy.iter().any(|r| r.cmd == *cmd
+                    && r.code == *code
+                    && r.hint == SnapshotHint::Literal(old_hint)),
+                "({cmd}, {code}) claims to supersede {old_hint:?}, but legacy_codes.txt has no \
+                 row with that hint — the claim is about a wording that was never frozen"
+            );
+            assert_emits_exactly(&new, cmd, code);
+        }
+
+        for (cmd, code) in HINT_ADDED_TO_A_HINTLESS_ROW {
+            assert!(
+                legacy
+                    .iter()
+                    .any(|r| r.cmd == *cmd && r.code == *code && r.hint == SnapshotHint::None),
+                "({cmd}, {code}) claims to add a hint to a hintless row, but legacy_codes.txt \
+                 records a hint for it"
+            );
+            assert_emits_exactly(&new, cmd, code);
+        }
+    }
+
+    /// The `convert --preset` rejection names exactly the presets the
+    /// preflight accepts, so a fifth built-in preset fails here rather than
+    /// shipping advice that omits it.
+    #[test]
+    fn the_unknown_preset_hint_lists_every_built_in_preset() {
+        let names: Vec<String> =
+            hwpforge_smithy_hwpx::builtin_presets().into_iter().map(|preset| preset.name).collect();
+        assert_eq!(UNKNOWN_PRESET_HINT, format!("Available presets: {}", names.join(", ")));
     }
 
     /// Cross-frontend agreement (audit finding: "two snapshots never

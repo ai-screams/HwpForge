@@ -5,13 +5,16 @@
 # argument list, …) keeps this CLI from ever reaching, but which still
 # needs a frozen row for cross-frontend parity (see the
 # `insert-para INSERT_TEXT_REQUIRED` row below — reachable through MCP, not
-# through this CLI at all). `legacy_codes.txt` (same directory) is the
-# pre-W3-migration snapshot; `src/compat.rs`'s `snapshot_rows()` reads both
-# files and keeps them disjoint (see its header note). Same column format
-# as `legacy_codes.txt` (`command<TAB>code<TAB>exit<TAB>hint`); "frozen
-# from the commit that adds it" here means the same thing "frozen from the
-# pre-migration source" means there — once a row lands, `src/compat.rs`'s
-# `TABLE` must keep producing it.
+# through this CLI at all) — plus one more group: a hint this CLI
+# deliberately replaced, recorded under "의도적 안내 개선" at the end of
+# this file. `legacy_codes.txt` (same directory) is the pre-W3-migration
+# snapshot; `src/compat.rs`'s `snapshot_rows()` reads both files, and the
+# two stay disjoint except for the pairs `SUPERSEDED_LEGACY_HINTS` names
+# (see its header note). Same column format as `legacy_codes.txt`
+# (`command<TAB>code<TAB>exit<TAB>hint`); "frozen from the commit that adds
+# it" here means the same thing "frozen from the pre-migration source"
+# means there — once a row lands, `src/compat.rs`'s `TABLE` must keep
+# producing it.
 #
 # ── `validate` — new command, no legacy CLI to audit ────────────────────
 # `validate` did not exist before this migration (W5b); it is wired
@@ -56,3 +59,34 @@ fill	DECODE_FAILED	2	Check that the file is a valid HWPX document
 set-cell	DECODE_FAILED	2	Check that the file is a valid HWPX document
 stamp-plan	DECODE_FAILED	2	Check that the file is a valid HWPX document
 stamp	DECODE_FAILED	2	Check that the file is a valid HWPX document
+#
+# ── 의도적 안내 개선 — `legacy_codes.txt` 의 힌트를 대체한다 ────────────
+# 아래 행들은 `legacy_codes.txt` 에 같은 `(command, code)` 행이 이미 있다.
+# 그쪽은 동결된 과거 기록이라 고치지 않고, 오늘 CLI 가 내는 힌트를 여기에
+# 적는다. `src/compat.rs` 의 `SUPERSEDED_LEGACY_HINTS` 가 짝을 이루며,
+# 옛 문구를 아직도 내보내는 소스가 있으면 그 목록의 검사가 실패한다.
+# code 와 exit 는 그대로다 — 바뀌는 것은 힌트뿐.
+#
+# convert UNKNOWN_PRESET: 옛 힌트 "Available presets: default" 는 넷 중
+# 하나만 말했다. `commands/convert.rs` 의 사전 검사와 `ops::convert_md` 의
+# 검사 모두 `builtin_presets()` 를 쓰므로 default·modern·classic·latest 가
+# 전부 통과한다.
+convert	UNKNOWN_PRESET	1	Available presets: default, modern, classic, latest
+#
+# from-json JSON_PARSE_FAILED (스키마 불일치 쪽 call site): 옛 힌트는
+# `schema document` 를 가리켰지만 `ops::from_json` 이 읽는 것은
+# `ExportedDocument` — `to-json` 이 쓰는 모양 — 이라 `schema
+# exported-document` 가 맞다. 구문 오류 쪽 call site 는 힌트가 없고
+# `legacy_codes.txt` 의 무힌트 행 그대로다.
+from-json	JSON_PARSE_FAILED	2	Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema exported-document')
+#
+# set-cell·insert-para·delete-para·stamp 의 엔트리 미보존 거부: 앞의 셋은
+# 힌트가 아예 없었고 stamp 의 옛 힌트는 message 가 이미 말한 거부 사유를
+# 되풀이했다. 네 명령 모두 패키지를 다시 만들기 때문에 한컴이 저장한 문서
+# (`Preview/*`·`META-INF/container.rdf`)는 대상이 아니며, 통하는 길은
+# `to-json --section N`→`patch` 와 `fill` 이다 (둘 다 원본 엔트리를
+# 보존한다 — `tests/fixtures/tables/table_08_nested_table.hwpx` 실측).
+delete-para	UNCARRIED_ZIP_ENTRIES	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
+insert-para	UNCARRIED_ZIP_ENTRIES	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
+set-cell	INPUT_ENTRIES_NOT_CARRIED	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)
+stamp	INPUT_ENTRIES_NOT_CARRIED	1	한컴이 저장한 문서(`Preview/*`·`META-INF/container.rdf`)는 이 명령의 대상이 아닙니다 — 텍스트는 `to-json --section N` → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 ZIP 엔트리를 보존합니다)

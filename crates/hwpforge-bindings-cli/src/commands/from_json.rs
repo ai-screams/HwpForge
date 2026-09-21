@@ -8,8 +8,14 @@ use hwpforge::ops::{self, FromJsonOptions};
 use hwpforge_foundation::diagnostics::OpsCode;
 
 /// Hint for a JSON document that parses but does not match the export schema.
-const SCHEMA_MISMATCH_HINT: &str =
-    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')";
+///
+/// `ops::from_json` deserializes an `ExportedDocument` — what `to-json`
+/// writes — so `schema exported-document` is the schema to check against;
+/// `schema document` prints the in-memory `Document` instead, which this
+/// command never reads. `pub(crate)` so `compat.rs`'s superseded-hint guard
+/// can prove no source still emits the old text.
+pub(crate) const SCHEMA_MISMATCH_HINT: &str =
+    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema exported-document')";
 
 /// Run the from-json command.
 pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode: bool) {

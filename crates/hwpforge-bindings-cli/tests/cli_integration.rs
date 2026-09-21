@@ -596,7 +596,7 @@ fn convert_unknown_preset_rejected_before_missing_input_is_read() {
     ]);
     assert_eq!(code, 1);
     assert_eq!(err["code"], "UNKNOWN_PRESET");
-    assert_eq!(err["hint"], "Available presets: default");
+    assert_eq!(err["hint"], "Available presets: default, modern, classic, latest");
 }
 
 #[test]
@@ -2682,7 +2682,7 @@ fn from_json_syntax_error_reports_no_hint() {
 }
 
 #[test]
-fn from_json_schema_mismatch_reports_the_legacy_hint() {
+fn from_json_schema_mismatch_points_at_the_exported_document_schema() {
     // Valid JSON, but not an ExportedDocument — the schema-mismatch call
     // site, distinct from the raw-syntax one above.
     let tmp = test_tmp();
@@ -2695,7 +2695,7 @@ fn from_json_schema_mismatch_reports_the_legacy_hint() {
     assert_eq!(err["code"], "JSON_PARSE_FAILED");
     assert_eq!(
         err["hint"],
-        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"
+        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema exported-document')"
     );
 }
 
