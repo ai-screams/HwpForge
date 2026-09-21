@@ -17,13 +17,20 @@
 //! A caller whose images do not live on a filesystem (in memory, in an
 //! object store, on the far side of an FFI boundary) replaces step 2 with
 //! its own and keeps the rest.
+//!
+//! Every preset — `"default"` included — inserts one more step between 1
+//! and 2: swapping the decoded registry's base font for the preset's own
+//! font ([`builtin_presets`]'s declared value, the same one `templates()`
+//! advertises). See [`convert_md`]'s own docs for exactly what that swap
+//! touches.
 
 use std::path::Path;
 
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::document::Document;
 use hwpforge_foundation::diagnostics::WarningInfo;
-use hwpforge_smithy_hwpx::{EncodeOptions, HwpxEncoder, HwpxRegistryBridge};
+use hwpforge_foundation::FontId;
+use hwpforge_smithy_hwpx::{builtin_presets, EncodeOptions, HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::{
     collect_asset_plan, finish_assets, warnings_from, AssetOutcome, AssetPlanEntry, MdDecoder,
 };
@@ -31,21 +38,24 @@ use serde::{Deserialize, Serialize};
 
 use super::{OpsError, OpsWarning};
 
-/// The only preset `convert_md` accepts today.
+/// The preset [`ConvertMdOptions::default`] selects when the caller names
+/// none.
 ///
-/// The Markdown decoder resolves the built-in `default` template, and the
-/// style store is then built from the registry that template produced. No
-/// second template is wired up, so accepting another preset name would
-/// return byte-identical output under a different label — fake support.
-/// The CLI has the same single-preset gate.
+/// [`builtin_presets`] is the contract every frontend's `templates()` call
+/// advertises, so [`convert_md`] applies **this** preset's font too, even
+/// though the Markdown decoder's own `default` template
+/// (`decode_with_default`) may resolve a different base font of its own —
+/// see [`convert_md`]'s `# Presets` section for why the two are allowed to
+/// disagree and what wins.
 const DEFAULT_PRESET: &str = "default";
 
 /// Options for [`decode_md`] and [`convert_md`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ConvertMdOptions {
-    /// Style preset name. Only `"default"` exists today; see
-    /// [`DEFAULT_PRESET`](self).
+    /// Style preset name — any [`builtin_presets`] entry (`default`,
+    /// `modern`, `classic`, `latest`). Every entry's declared font is
+    /// applied, `"default"` included; see [`convert_md`].
     pub preset: String,
 }
 
@@ -63,13 +73,44 @@ impl ConvertMdOptions {
         self
     }
 
-    /// Rejects a preset this operation cannot honour.
+    /// Rejects a preset no built-in style table defines.
     fn check_preset(&self) -> Result<(), OpsError> {
-        if self.preset == DEFAULT_PRESET {
+        if builtin_presets().iter().any(|preset| preset.name == self.preset) {
             return Ok(());
         }
         Err(OpsError::PresetNotFound { name: self.preset.clone() })
     }
+}
+
+/// Swaps a Markdown-decoded registry's base font — the first font
+/// `decode_with_default` resolved — for a preset's font. Any other font
+/// entry (a code-block face that never matched the base) is left alone.
+/// Called for every preset, `"default"` included; a no-op when the base
+/// already equals `new_font`.
+///
+/// [`HwpxStyleStore::replace_font`](hwpforge_smithy_hwpx::HwpxStyleStore::replace_font)
+/// applies the same rule for [`restyle`](super::style::restyle), but on an
+/// already-encoded package's style store rather than a pre-encode
+/// [`StyleRegistry`]. There is no `StyleRegistry` equivalent today, so this
+/// duplicates the *behaviour* privately here instead of adding a public
+/// method to `hwpforge-blueprint` — out of this lane's scope; see the W2
+/// report.
+fn apply_preset_font(registry: &mut StyleRegistry, new_font: &str) -> Result<(), OpsError> {
+    let Some(original_base) = registry.fonts.first().map(|font| font.as_str().to_owned()) else {
+        return Ok(());
+    };
+    let new_font_id = FontId::new(new_font)?;
+    for font in &mut registry.fonts {
+        if font.as_str() == original_base {
+            *font = new_font_id.clone();
+        }
+    }
+    for char_shape in &mut registry.char_shapes {
+        if char_shape.font == original_base {
+            char_shape.font = new_font.to_owned();
+        }
+    }
+    Ok(())
 }
 
 /// What [`decode_md`] returns: the document, the styles it was decoded
@@ -106,6 +147,14 @@ pub struct MdDecoded {
 pub struct ConvertOutput {
     /// The generated HWPX package.
     pub bytes: Vec<u8>,
+    /// Number of sections in the generated document.
+    pub sections: usize,
+    /// Body-flow paragraphs summed over those sections — the same
+    /// definition as [`InspectSection::top_level_paragraphs`](super::inspect::InspectSection::top_level_paragraphs),
+    /// summed. Measured on the document already in hand before encoding,
+    /// so a caller does not have to decode `bytes` again just to report a
+    /// size alongside the generated package.
+    pub paragraphs: usize,
     /// One entry per planned image, in document order: embedded, dropped,
     /// or skipped because it was remote.
     pub assets: Vec<AssetOutcome>,
@@ -118,13 +167,16 @@ impl ConvertOutput {
     #[must_use]
     pub fn meta(&self) -> ConvertMeta {
         ConvertMeta {
+            sections: self.sections,
+            paragraphs: self.paragraphs,
             assets: self.assets.clone(),
             warnings: self.warnings.iter().map(OpsWarning::info).collect(),
         }
     }
 }
 
-/// The `convert_md` wire payload: `{ "assets": [ … ], "warnings": [ … ] }`.
+/// The `convert_md` wire payload:
+/// `{ "sections": …, "paragraphs": …, "assets": [ … ], "warnings": [ … ] }`.
 ///
 /// # Serde
 ///
@@ -134,6 +186,19 @@ impl ConvertOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ConvertMeta {
+    /// Number of sections in the generated document.
+    ///
+    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
+    /// earlier has no `sections` key, from before this field existed.
+    #[serde(default)]
+    pub sections: usize,
+    /// Body-flow paragraphs summed over those sections (top-level only —
+    /// see [`ConvertOutput::paragraphs`]).
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::sections`].
+    #[serde(default)]
+    pub paragraphs: usize,
     /// One entry per planned image, in document order.
     pub assets: Vec<AssetOutcome>,
     /// Asset exclusions and encode diagnostics.
@@ -143,12 +208,15 @@ pub struct ConvertMeta {
 /// Decodes Markdown into a Core document and the asset plan it implies.
 ///
 /// Pure — no file is opened, and a `data:` image is left inline for
-/// `finish_assets` to decode. The preset is checked here so that a typo
-/// costs nothing, the same order the CLI uses.
+/// `finish_assets` to decode. The preset **name** is checked here so that a
+/// typo costs nothing, the same order the CLI uses; the font swap itself
+/// happens later, in [`convert_md`], once there is a document to swap it
+/// into. A caller who only calls `decode_md` gets the registry
+/// `decode_with_default` resolved, unswapped.
 ///
 /// # Errors
 ///
-/// - [`OpsError::PresetNotFound`] — the preset is not `"default"`.
+/// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
 /// - [`OpsError::MdDecode`] (`MD_DECODE_FAILED`) — the Markdown, its
 ///   frontmatter or its note definitions could not be decoded;
 ///   (`INPUT_TOO_LARGE`) — the input exceeds the decoder's size limit.
@@ -187,6 +255,22 @@ pub fn decode_md(markdown: &str, opts: &ConvertMdOptions) -> Result<MdDecoded, O
 /// reported); inline `data:` images still embed, because their bytes are
 /// already in the Markdown.
 ///
+/// # Presets
+///
+/// Every preset — `"default"` included — swaps every font in the decoded
+/// registry that equals its *first* font — the base font
+/// `decode_with_default` produced — for the preset's own declared font
+/// (`builtin_presets()`'s value, the same one every frontend's
+/// `templates()` call advertises). This runs even when `preset` is
+/// `"default"`: the Markdown decoder's own `default` template is not
+/// guaranteed to already use the font `builtin_presets()` names for
+/// `"default"`, and `builtin_presets()` is the contract a caller is told
+/// about, not the template file, so it wins (a preset whose font already
+/// matches the base is simply a no-op). A specialty font that never
+/// matched the base (a code-block face, say) is left alone. Layout, sizes,
+/// colors and every other style property are unaffected; this is a
+/// face-name substitution, not a different template.
+///
 /// # Warnings, not silence
 ///
 /// An image that could not be embedded is **dropped from the document** so
@@ -199,7 +283,7 @@ pub fn decode_md(markdown: &str, opts: &ConvertMdOptions) -> Result<MdDecoded, O
 ///
 /// # Errors
 ///
-/// - [`OpsError::PresetNotFound`] — the preset is not `"default"`.
+/// - [`OpsError::PresetNotFound`] — no built-in preset has that name.
 /// - [`OpsError::MdDecode`] (`MD_DECODE_FAILED`) — the Markdown could not
 ///   be decoded; (`ASSET_PLAN_MISMATCH`, `ASSET_IDENTITY_CONFLICT`) — the
 ///   resolved assets do not line up with the plan, which for this function
@@ -228,7 +312,21 @@ pub fn convert_md(
     base_dir: Option<&Path>,
     opts: &ConvertMdOptions,
 ) -> Result<ConvertOutput, OpsError> {
-    let MdDecoded { document, style_registry, plan, mut warnings } = decode_md(markdown, opts)?;
+    let MdDecoded { document, mut style_registry, plan, mut warnings } = decode_md(markdown, opts)?;
+
+    // Applied for every preset, `"default"` included — `builtin_presets()`
+    // is the font contract `templates()` advertises, not the Markdown
+    // decoder's own template, and the two are not guaranteed to agree (see
+    // `# Presets` above). `decode_md` already proved `opts.preset` names a
+    // real preset — `check_preset` ran first — so this lookup cannot miss;
+    // the fallback still reports the right error rather than panicking if
+    // that invariant is ever broken.
+    let preset_font = builtin_presets()
+        .into_iter()
+        .find(|preset| preset.name == opts.preset)
+        .map(|preset| preset.font)
+        .ok_or_else(|| OpsError::PresetNotFound { name: opts.preset.clone() })?;
+    apply_preset_font(&mut style_registry, &preset_font)?;
 
     let provided = super::fs::resolve_files_from_dir(&plan, base_dir);
     let finished = finish_assets(document, &plan, provided).map_err(OpsError::md_decode)?;
@@ -247,6 +345,8 @@ pub fn convert_md(
     let rebound =
         bridge.rebind_draft_document(finished.document).map_err(OpsError::style_rebind)?;
     let validated = rebound.validate()?;
+    let sections = validated.sections().len();
+    let paragraphs: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
 
     let outcome = HwpxEncoder::encode_with_diagnostics(
         &validated,
@@ -257,7 +357,13 @@ pub fn convert_md(
     .map_err(OpsError::encode)?;
     warnings.extend(outcome.warnings.into_iter().map(OpsWarning::Encode));
 
-    Ok(ConvertOutput { bytes: outcome.bytes, assets: finished.outcomes, warnings })
+    Ok(ConvertOutput {
+        bytes: outcome.bytes,
+        sections,
+        paragraphs,
+        assets: finished.outcomes,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -271,17 +377,74 @@ mod tests {
     }
 
     #[test]
-    fn any_other_preset_is_refused_rather_than_silently_ignored() {
-        // `modern` is a real *restyle* preset, which makes it the most
-        // likely thing a caller passes here by mistake.
-        let err = ConvertMdOptions::default().with_preset("modern").check_preset().unwrap_err();
+    fn every_builtin_preset_name_passes_the_check() {
+        // `modern`/`classic`/`latest` are real *restyle* presets, and this
+        // operation now applies the same font swap `restyle` does — a
+        // caller passing one is not a typo.
+        for preset in builtin_presets() {
+            assert!(
+                ConvertMdOptions::default().with_preset(preset.name.clone()).check_preset().is_ok(),
+                "{}",
+                preset.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_no_builtin_preset_has_is_refused_rather_than_silently_ignored() {
+        let err =
+            ConvertMdOptions::default().with_preset("gov_proposal").check_preset().unwrap_err();
 
         assert_eq!(err.code().as_str(), "PRESET_NOT_FOUND", "{err}");
-        assert!(err.to_string().contains("modern"), "{err}");
+        assert!(err.to_string().contains("gov_proposal"), "{err}");
     }
 
     #[test]
     fn an_empty_preset_is_not_treated_as_unset() {
         assert!(ConvertMdOptions::default().with_preset("").check_preset().is_err());
+    }
+
+    #[test]
+    fn apply_preset_font_only_swaps_entries_matching_the_original_base() {
+        // The default template's `code` style uses D2Coding
+        // (`hwpforge-blueprint/templates/default.yaml`), so decoding a
+        // document with a code block resolves a registry that already
+        // carries a specialty font alongside the base one — real data
+        // instead of a hand-built fixture.
+        let decoded =
+            decode_md("본문입니다.\n\n```rust\nfn main() {}\n```\n", &ConvertMdOptions::default())
+                .expect("decode");
+        let mut registry = decoded.style_registry;
+        let original_base = registry.fonts.first().expect("a base font").as_str().to_owned();
+        assert!(
+            registry.fonts.iter().any(|f| f.as_str() == "D2Coding"),
+            "fixture assumption: the default template's code style resolves D2Coding"
+        );
+        let font_count = registry.fonts.len();
+        let char_shape_count = registry.char_shapes.len();
+
+        apply_preset_font(&mut registry, "맑은 고딕").expect("swap");
+
+        assert_eq!(registry.fonts.len(), font_count, "a swap must not add or drop entries");
+        assert_eq!(registry.char_shapes.len(), char_shape_count);
+        assert!(!registry.fonts.iter().any(|f| f.as_str() == original_base), "{registry:?}");
+        assert!(
+            registry.fonts.iter().any(|f| f.as_str() == "D2Coding"),
+            "a specialty font must survive: {registry:?}"
+        );
+        assert!(!registry.char_shapes.iter().any(|cs| cs.font == original_base), "{registry:?}");
+        assert!(
+            registry.char_shapes.iter().any(|cs| cs.font == "D2Coding"),
+            "a specialty char shape must survive: {registry:?}"
+        );
+    }
+
+    #[test]
+    fn apply_preset_font_on_an_empty_registry_is_a_no_op() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+
+        apply_preset_font(&mut registry, "맑은 고딕").expect("no font to swap, not an error");
+
+        assert!(registry.fonts.is_empty());
     }
 }

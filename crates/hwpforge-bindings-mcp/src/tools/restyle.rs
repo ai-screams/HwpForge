@@ -2,9 +2,10 @@
 
 use serde::Serialize;
 
+use hwpforge::ops::{restyle as ops_restyle, OpsError, RestyleOptions};
 use hwpforge_smithy_hwpx::presets::builtin_presets;
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful restyle operation.
@@ -29,7 +30,7 @@ pub fn run_restyle(
     preset: &str,
     output_path: &str,
 ) -> Result<RestyleData, ToolErrorInfo> {
-    // 1. Validate output extension
+    // 1. Validate output extension (MCP-local — stays outside `ops`).
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
             "INVALID_EXTENSION",
@@ -38,113 +39,39 @@ pub fn run_restyle(
         ));
     }
 
-    // 2. Look up preset font
-    let presets = builtin_presets();
-    let preset_info = presets.iter().find(|p| p.name == preset).ok_or_else(|| {
-        ToolErrorInfo::new(
-            "PRESET_NOT_FOUND",
-            format!("Preset '{preset}' not found"),
-            "Use hwpforge_templates to see available presets.",
-        )
-    })?;
-    let preset_font = preset_info.font.clone();
-
-    // 3. Read and decode source HWPX
-    let bytes = read_file_bytes(file_path)?;
-
-    let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is a valid HWPX document.",
-        )
-    })?;
-
-    // 4. Replace base font in the decoded style store.
-    //    Instead of creating a new preset store (which would lose char/para shape
-    //    definitions the document references), we keep the original style store
-    //    intact and only swap font face names. This preserves all shape indices
-    //    while applying the new font.
-    let mut style_store = hwpx_doc.style_store;
-    // The first font in the store is the base/body font by encoder contract
-    // (HwpxStyleStore::push_font writes base font first). Third-party HWPX
-    // files may have a different ordering — a future improvement could resolve
-    // the base font from the default paragraph style instead.
-    let original_base: Option<String> =
-        style_store.iter_fonts().next().map(|f| f.face_name.clone());
-    match original_base {
-        Some(ref base) => style_store.replace_font(base, &preset_font),
-        None => {
-            return Err(ToolErrorInfo::new(
-                "NO_FONTS",
-                "Document has no fonts to restyle",
-                "The HWPX file may be malformed. Use hwpforge_validate to check.",
-            ));
-        }
-    }
-
-    let validated = hwpx_doc.document.validate().map_err(|e| {
-        ToolErrorInfo::new(
-            "VALIDATION_ERROR",
-            format!("Document validation failed: {e}"),
-            "Check document structure.",
-        )
-    })?;
-
-    let section_count = validated.section_count();
-
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        &style_store,
-        &hwpx_doc.image_store,
-        hwpforge_smithy_hwpx::EncodeOptions::default(),
-    )
-    .map_err(|e| {
-        ToolErrorInfo::new(
-            "ENCODE_ERROR",
-            format!("HWPX encoding failed: {e}"),
-            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-        )
-    })?;
-    // 5. 의미 손상 fail-closed (R1 F2).
-    //
-    // restyle 은 preserve-first 재인코드 편집기다 — 원본을 다시 만들어 내는
-    // 경로라, 인코더가 "각주 번호 머리를 못 넣었다"(`NoteHeadSkipped`) 같은
-    // 의미 손상을 보고하면 그 산출물은 **원본과 뜻이 다르다**. 과거에는 이
-    // 경고를 `warnings` 문자열로만 싣고 파일을 그대로 썼기 때문에, 각주 번호가
-    // 사라진 문서가 조용히 배포됐다 (stamper·cell-edit 는 이미 거부하던 조건).
-    //
-    // 분류의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다.
-    let semantic: Vec<String> = outcome
-        .warnings
-        .iter()
-        .filter(|w| w.is_semantic_loss())
-        .map(std::string::ToString::to_string)
-        .collect();
-    if !semantic.is_empty() {
-        return Err(ToolErrorInfo::new(
-            "ENCODE_SEMANTIC_LOSS",
-            semantic.join("; "),
-            "The restyled document would lose footnote/endnote numbering or TOC marks; fix the \
-             source document or restyle a document without those constructs.",
+    // 2. Preset existence, checked before touching the filesystem: this
+    //    preserves the legacy ordering (`restyle_unknown_preset` must not
+    //    depend on `file_path` existing). `ops::restyle` checks the same
+    //    thing again, authoritatively, once it has bytes to work with.
+    if !builtin_presets().iter().any(|p| p.name == preset) {
+        return Err(compat::tool_error(
+            Tool::Restyle,
+            OpsError::PresetNotFound { name: preset.to_string() },
         ));
     }
 
-    let output_bytes = outcome.bytes;
+    // 3. Read source HWPX bytes.
+    let bytes = read_file_bytes(file_path)?;
+
+    // 4. Delegate decode → font swap → validate → encode → semantic-loss
+    //    fail-closed to `ops::restyle`.
+    let out = ops_restyle(&bytes, &RestyleOptions::default().with_preset(preset))
+        .map_err(|e| compat::tool_error(Tool::Restyle, e))?;
+
     // 비-의미 경고(줄 조판 캐시 드롭 등)는 지금까지처럼 결과에 실어 보낸다.
-    let warnings: Vec<String> =
-        outcome.warnings.iter().map(std::string::ToString::to_string).collect();
+    // (의미 손상 경고는 `ops::restyle` 이 이미 fail-closed 로 거부했다.)
+    let warnings: Vec<String> = out.warnings.iter().map(|w| compat::warning(w).message).collect();
 
-    // 6. Write output
-    write_output_file(output_path, &output_bytes)?;
+    // 5. Write output.
+    write_output_file(output_path, &out.bytes)?;
 
-    let size_bytes = output_bytes.len() as u64;
+    let size_bytes = out.bytes.len() as u64;
 
     Ok(RestyleData {
         output_path: output_path.to_string(),
         applied_preset: preset.to_string(),
         size_bytes,
-        sections: section_count,
+        sections: out.sections,
         warnings,
     })
 }
@@ -214,6 +141,7 @@ mod tests {
         use hwpforge_smithy_hwpx::style_store::{
             HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
         };
+        use hwpforge_smithy_hwpx::HwpxEncoder;
 
         let mut store = HwpxStyleStore::new();
         for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
@@ -276,6 +204,7 @@ mod tests {
         assert!(data.size_bytes > 0);
 
         // Verify the restyled file can be decoded back (not corrupted)
+        use hwpforge_smithy_hwpx::HwpxDecoder;
         let restyled_bytes = std::fs::read(&out_path).unwrap();
         let restyled_doc = HwpxDecoder::decode(&restyled_bytes).unwrap();
         assert!(!restyled_doc.document.sections().is_empty());

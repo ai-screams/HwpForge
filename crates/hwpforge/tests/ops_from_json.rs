@@ -94,15 +94,45 @@ fn corrupt_first_address(value: &mut serde_json::Value, patched: &mut usize) {
     }
 }
 
+/// When the JSON carries no `styles` block, the fallback must be the full
+/// `"default"` preset registry, not just a font list — a paragraph can
+/// reference a char/para shape index, and a fonts-only store has none to
+/// resolve it against.
+///
+/// Before this change, the fallback was
+/// `HwpxStyleStore::with_default_fonts`, which builds seven font entries and
+/// **zero** char shapes and **zero** para shapes (measured directly: see the
+/// module doc rationale in `ops::exchange`). A rebuilt document's
+/// `charPrIDRef`/`paraPrIDRef` attributes would then point at style headers
+/// that do not exist in the output package — a dangling reference the
+/// encoder never checks because it writes the index literally, not by
+/// looking the shape up in the store. This test decodes the rebuilt package
+/// and pins its style store to the shape counts the `"default"` preset
+/// itself reports, which a fonts-only store could never produce.
 #[test]
-fn a_document_exported_without_styles_still_builds() {
+fn a_document_exported_without_styles_falls_back_to_the_full_default_preset() {
     let out = to_json(&fixture("SimpleTable.hwpx"), &ToJsonOptions::default().with_styles(false))
         .expect("to_json");
 
     let built = from_json(&out.document.to_string(), &FromJsonOptions::default())
-        .expect("a default style store fills in");
-
+        .expect("the default preset registry fills in");
     assert!(!built.bytes.is_empty());
+
+    let decoded =
+        hwpforge::hwpx::HwpxDecoder::decode(&built.bytes).expect("decode rebuilt package");
+    let preset = hwpforge::hwpx::style_store_for_preset("default").expect("default preset");
+    assert_eq!(
+        decoded.style_store.char_shape_count(),
+        preset.char_shape_count(),
+        "the rebuilt package's char shapes must match the default preset, not a fonts-only store"
+    );
+    assert_eq!(
+        decoded.style_store.para_shape_count(),
+        preset.para_shape_count(),
+        "the rebuilt package's para shapes must match the default preset, not a fonts-only store"
+    );
+    assert!(decoded.style_store.char_shape_count() > 0, "a fonts-only fallback would report 0");
+    assert!(decoded.style_store.para_shape_count() > 0, "a fonts-only fallback would report 0");
 }
 
 /// JSON carries image references, never image bytes, so a picture document
@@ -150,14 +180,46 @@ fn json_that_is_not_an_exported_document_is_a_parse_failure() {
 }
 
 #[test]
-fn meta_has_only_the_warnings_key() {
+fn meta_carries_paragraphs_beside_the_warnings() {
     let out =
         from_json(&exported_text("SimpleTable.hwpx"), &FromJsonOptions::default()).expect("ok");
 
     let value = serde_json::to_value(out.meta()).expect("serialise meta");
 
-    assert_eq!(keys(&value), ["warnings"].map(String::from).into_iter().collect(), "{value}");
+    assert_eq!(
+        keys(&value),
+        ["paragraphs", "warnings"].map(String::from).into_iter().collect(),
+        "{value}"
+    );
     assert!(value["warnings"].is_array());
+    assert_eq!(value["paragraphs"], out.paragraphs);
+}
+
+/// The count is the whole generated document's paragraphs across every
+/// section, taken before the encode consumes the typed tree — not a count of
+/// what changed or what the JSON's top-level array happened to list.
+#[test]
+fn paragraphs_counts_every_paragraph_in_every_section() {
+    let json = exported_text("SimpleTable.hwpx");
+    let expected: usize = serde_json::from_str::<serde_json::Value>(&json)
+        .expect("parse")
+        .pointer("/document/sections")
+        .and_then(serde_json::Value::as_array)
+        .expect("sections array")
+        .iter()
+        .map(|section| {
+            section
+                .pointer("/paragraphs")
+                .and_then(serde_json::Value::as_array)
+                .expect("paragraphs")
+                .len()
+        })
+        .sum();
+    assert!(expected > 0, "the fixture must have at least one paragraph");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    assert_eq!(out.paragraphs, expected);
 }
 
 /// Generation is **not** fail-closed. The same encode warning that makes a

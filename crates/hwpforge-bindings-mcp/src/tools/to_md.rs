@@ -4,9 +4,9 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
-use hwpforge_smithy_md::MdEncoder;
+use hwpforge::ops::{to_md as ops_to_md, MdExportOptions};
 
+use crate::compat::{self, Tool};
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful HWPX → Markdown conversion.
@@ -25,10 +25,12 @@ pub struct ToMdData {
 /// Execute HWPX → Markdown conversion.
 ///
 /// Decodes an HWPX file and encodes it to style-aware Markdown via
-/// [`HwpxStyleLookup`] + [`MdEncoder::encode_styled`].  Images embedded in
-/// the document are written alongside the Markdown file.
+/// [`hwpforge::ops::to_md`] (`MdMode::Styled` — the only mode that extracts
+/// images). Images embedded in the document are written alongside the
+/// Markdown file.
 pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, ToolErrorInfo> {
-    // 0. Validate input extension (case-insensitive, path-aware)
+    // 0. Validate input extension (case-insensitive, path-aware; MCP-local
+    //    — stays outside `ops`).
     let ext_ok = Path::new(file_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -45,31 +47,13 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
     // 1. Read HWPX bytes
     let bytes = read_file_bytes(file_path)?;
 
-    // 2. Decode HWPX → document + style store + image store
-    let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is a valid HWPX document.",
-        )
-    })?;
+    // 2. Delegate decode → validate → styled-encode to `ops::to_md`.
+    //    Decode warnings ride along in `out.warnings`, but `ToMdData` has no
+    //    warnings field to carry them (schema freeze — see W2 report).
+    let out = ops_to_md(&bytes, &MdExportOptions::default())
+        .map_err(|e| compat::tool_error(Tool::ToMd, e))?;
 
-    // 3. Validate document
-    let validated = hwpx_doc.document.validate().map_err(|e| {
-        ToolErrorInfo::new(
-            "VALIDATION_ERROR",
-            format!("Document validation failed: {e}"),
-            "The HWPX document structure is invalid.",
-        )
-    })?;
-
-    // 4. Build style lookup bridge
-    let lookup = HwpxStyleLookup::new(&hwpx_doc.style_store, &hwpx_doc.image_store);
-
-    // 5. Encode to Markdown (style-aware)
-    let md_output = MdEncoder::encode_styled(&validated, &lookup);
-
-    // 6. Determine output directory
+    // 3. Determine output directory
     let base_stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
 
     let out_dir: String = if let Some(dir) = output_dir {
@@ -79,16 +63,16 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
         Path::new(file_path).parent().and_then(|p| p.to_str()).unwrap_or(".").to_string()
     };
 
-    // 7. Write Markdown file
+    // 4. Write Markdown file
     let md_filename = format!("{base_stem}.md");
     let md_path = Path::new(&out_dir).join(&md_filename).to_string_lossy().into_owned();
-    let md_bytes = md_output.markdown.as_bytes();
+    let md_bytes = out.markdown.as_bytes();
     write_output_file(&md_path, md_bytes)?;
 
-    // 8. Write extracted images into `images/` subdirectory (matches CLI behavior
+    // 5. Write extracted images into `images/` subdirectory (matches CLI behavior
     //    and the `images/{filename}` references generated in the markdown).
     let mut image_paths: Vec<String> = Vec::new();
-    if !md_output.images.is_empty() {
+    if !out.images.is_empty() {
         let images_dir = Path::new(&out_dir).join("images");
         let images_dir_str = images_dir.to_string_lossy().into_owned();
         // Ensure the images directory exists
@@ -99,7 +83,7 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
                 "Check write permissions for the output directory.",
             )
         })?;
-        for (rel_name, data) in &md_output.images {
+        for (rel_name, data) in &out.images {
             let img_filename = Path::new(rel_name.as_str())
                 .file_name()
                 .and_then(|n| n.to_str())

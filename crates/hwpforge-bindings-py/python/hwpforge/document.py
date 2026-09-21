@@ -486,8 +486,10 @@ class Document:
             manifest: Include the manifest of what was stamped in the report.
 
         Returns:
-            The stamped document, and a report holding the manifest and any
-            warnings.
+            The stamped document, and a report holding the manifest (unless
+            `manifest` is false), the fields it named, the count it explicitly
+            ignored, the count it left untouched because they were guarded and
+            unapproved, and any warnings.
 
         Raises:
             HwpForgeError: If the request does not match the document, or if
@@ -508,8 +510,8 @@ class Document:
                 lists them.
 
         Returns:
-            The restyled document, and a report naming the preset and holding
-            any warnings.
+            The restyled document, and a report naming the preset, the section
+            and paragraph counts of the re-encoded document, and any warnings.
 
         Raises:
             HwpForgeError: If the preset does not exist, or if encoding would

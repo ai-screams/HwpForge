@@ -81,8 +81,8 @@ def convert_md(
             this directory is read.
 
     Returns:
-        The document, and a report saying what became of each image and holding
-        any warnings.
+        The document, and a report holding its section and paragraph counts,
+        what became of each image, and any warnings.
 
     Raises:
         HwpForgeError: If the Markdown cannot be parsed, or if the preset does
@@ -101,9 +101,10 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
             JSON that was exported without styles.
 
     Returns:
-        The document, and a report holding any warnings encoding produced.
-        Unlike an edit, generation is not fail-closed: a warning that meaning
-        was lost comes back beside the bytes.
+        The document, and a report holding the paragraph count of the
+        generated document and any warnings encoding produced. Unlike an
+        edit, generation is not fail-closed: a warning that meaning was lost
+        comes back beside the bytes.
 
     Raises:
         HwpForgeError: If the JSON does not describe a document, or if it

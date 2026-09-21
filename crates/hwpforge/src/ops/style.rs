@@ -107,6 +107,14 @@ pub struct RestyleOutput {
     pub bytes: Vec<u8>,
     /// The preset that was applied.
     pub preset: String,
+    /// Number of sections in the re-encoded document.
+    pub sections: usize,
+    /// Body-flow paragraphs summed over those sections — the same
+    /// definition as [`InspectSection::top_level_paragraphs`](super::inspect::InspectSection::top_level_paragraphs),
+    /// summed. Measured on the document already in hand before encoding,
+    /// so a caller does not have to decode `bytes` again just to report a
+    /// size alongside the restyled package.
+    pub paragraphs: usize,
     /// Non-semantic encode warnings (semantic loss is an error, not a
     /// warning — see [`restyle`]).
     pub warnings: Vec<OpsWarning>,
@@ -118,18 +126,34 @@ impl RestyleOutput {
     pub fn meta(&self) -> RestyleMeta {
         RestyleMeta {
             preset: self.preset.clone(),
+            sections: self.sections,
+            paragraphs: self.paragraphs,
             warnings: self.warnings.iter().map(OpsWarning::info).collect(),
         }
     }
 }
 
-/// The `restyle` wire payload: `{ "preset": …, "warnings": [ … ] }`.
+/// The `restyle` wire payload:
+/// `{ "preset": …, "sections": …, "paragraphs": …, "warnings": [ … ] }`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct RestyleMeta {
     /// The preset that was applied.
     pub preset: String,
+    /// Number of sections in the re-encoded document.
+    ///
+    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
+    /// earlier has no `sections` key, from before this field existed.
+    #[serde(default)]
+    pub sections: usize,
+    /// Body-flow paragraphs summed over those sections (top-level only —
+    /// see [`RestyleOutput::paragraphs`]).
+    ///
+    /// `#[serde(default)]` (`0`): same older-writer absence as
+    /// [`Self::sections`].
+    #[serde(default)]
+    pub paragraphs: usize,
     /// Non-semantic encode warnings.
     pub warnings: Vec<WarningInfo>,
 }
@@ -193,6 +217,8 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
     style_store.replace_font(&base, &preset_font);
 
     let validated = decoded.document.validate()?;
+    let sections = validated.sections().len();
+    let paragraphs: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
     let outcome = HwpxEncoder::encode_with_diagnostics(
         &validated,
         &style_store,
@@ -202,7 +228,7 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
     .map_err(OpsError::encode)?;
     let (bytes, warnings) = take_bytes_fail_closed(outcome)?;
 
-    Ok(RestyleOutput { bytes, preset: opts.preset.clone(), warnings })
+    Ok(RestyleOutput { bytes, preset: opts.preset.clone(), sections, paragraphs, warnings })
 }
 
 // ── validate ────────────────────────────────────────────────────
