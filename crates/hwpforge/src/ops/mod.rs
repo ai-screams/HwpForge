@@ -325,8 +325,22 @@ impl OpsError {
     /// The hints reproduce what the CLI prints today. Hints that quote a
     /// value (the list of available field names, for example) are not
     /// static, so they stay with the frontend that formats them.
+    ///
+    /// [`Self::Io`] is excluded from the [`OpsCode::UpstreamUnmapped`] table
+    /// lookup on purpose: `code()` still reports `UpstreamUnmapped` for it
+    /// (an `std::io::Error` has no `OpsCode` of its own — see that variant's
+    /// doc), but that code's hint text ("an upstream error this version
+    /// doesn't know, upgrade or file an issue") is written for a genuinely
+    /// unclassified error, not a missing file or a permission failure. No
+    /// frontend calls this for `Io` today (each special-cases
+    /// `io::ErrorKind` before it would), so this only guards against a
+    /// future caller printing the wrong advice.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
+        #[cfg(feature = "ops-hwpx")]
+        if matches!(self, Self::Io(_)) {
+            return None;
+        }
         hint_for(self.code())
     }
 
@@ -979,6 +993,18 @@ mod tests {
         }
         assert!(hint_for(OpsCode::UpstreamUnmapped).is_some(), "unknown errors need a hint");
         assert!(hint_for(OpsCode::JsonParseFailed).is_none(), "no CLI hint to reproduce");
+    }
+
+    #[cfg(feature = "ops-hwpx")]
+    #[test]
+    fn io_error_hint_does_not_borrow_upstream_unmapped_advice() {
+        // `Io`'s code() is UpstreamUnmapped (no OpsCode fits std::io::Error),
+        // but that code's hint text ("unknown upstream error, upgrade or
+        // file an issue") is wrong advice for a missing file or a
+        // permission error — `hint()` must not surface it here.
+        let error = OpsError::Io(std::io::Error::other("boom"));
+        assert_eq!(error.code(), OpsCode::UpstreamUnmapped);
+        assert!(error.hint().is_none());
     }
 
     #[test]

@@ -171,12 +171,9 @@ macro_rules! row {
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
     // ── ConvertMd (hwpforge_convert) ──────────────────────────────
-    // NOTE (ops gap, see module docs / W2 report): `ops::convert_md` only
-    // accepts preset == "default" (`ConvertMdOptions::check_preset`); the
-    // legacy tool applies modern/classic/latest by swapping the style
-    // registry's fonts after decode. A row exists so the *code* stays
-    // frozen if/when a caller passes an unsupported preset, but the tool
-    // lane cannot delegate preset selection to `ops::convert_md` as-is.
+    // `ops::convert_md` rejects any preset name `builtin_presets()` doesn't
+    // list (`ConvertMdOptions::check_preset`); an unknown name is the only
+    // way to reach this row.
     row!(ConvertMd, PresetNotFound, "PRESET_NOT_FOUND", "Use hwpforge_templates to see available presets."),
     row!(ConvertMd, MdDecodeFailed, "MD_DECODE_ERROR", "Check Markdown syntax. Use GFM (GitHub Flavored Markdown)."),
     row!(ConvertMd, StyleStoreFailed, "STYLE_STORE_ERROR", "Check paragraph list references in the resolved style registry."),
@@ -520,20 +517,22 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
                 "모든 무가드 셀 후보는 이름 또는 ignore 로 분류해야 합니다.",
             );
         }
-        // Fixed-literal legacy messages for the two argument-shape
-        // rejections `hwpforge_read`'s own local guard used to phrase
-        // without `ops`'s CLI-flag spelling (`--section`/`--paras`).
-        OpsError::Rejected { code: OpsCode::ReadTargetRequired, .. } => {
+        // `hwpforge_read`'s own local guard (`tools/read.rs::run_read`)
+        // phrases these two argument-shape rejections without `ops`'s
+        // CLI-flag spelling (`--section`/`--paras`) since the MCP tool's
+        // parameters aren't CLI flags — `reason` is that MCP-facing wording
+        // and is what this arm reports, so the two never drift apart again.
+        OpsError::Rejected { code: OpsCode::ReadTargetRequired, reason } => {
             return ToolErrorInfo::new(
                 "READ_TARGET_REQUIRED",
-                "Pass exactly one of section, table, field",
+                reason.as_str(),
                 "section reads a paragraph range; table reads a grid text matrix; field reads a named click-here field.",
             );
         }
-        OpsError::Rejected { code: OpsCode::ReadParasWithoutSection, .. } => {
+        OpsError::Rejected { code: OpsCode::ReadParasWithoutSection, reason } => {
             return ToolErrorInfo::new(
                 "READ_PARAS_WITHOUT_SECTION",
-                "paras requires section",
+                reason.as_str(),
                 "Pass section together with paras.",
             );
         }

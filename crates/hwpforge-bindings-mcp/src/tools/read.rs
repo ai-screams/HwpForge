@@ -87,7 +87,7 @@ pub fn run_read(
             Tool::Read,
             OpsError::Rejected {
                 code: OpsCode::ReadTargetRequired,
-                reason: "Pass exactly one of --section, --table, --field".into(),
+                reason: "Pass exactly one of section, table, field".into(),
             },
         ));
     }
@@ -96,7 +96,7 @@ pub fn run_read(
             Tool::Read,
             OpsError::Rejected {
                 code: OpsCode::ReadParasWithoutSection,
-                reason: "--paras requires --section".into(),
+                reason: "paras requires section".into(),
             },
         ));
     }
@@ -209,6 +209,7 @@ mod tests {
 
         let err = run_read(&path, None, None, None, None).unwrap_err();
         assert_eq!(err.code, "READ_TARGET_REQUIRED");
+        assert_eq!(err.message, "Pass exactly one of section, table, field");
         let err = run_read(&path, Some(0), None, Some(0), None).unwrap_err();
         assert_eq!(err.code, "READ_TARGET_REQUIRED");
     }
@@ -233,6 +234,7 @@ mod tests {
 
         let err = run_read(&path, None, Some("0..1"), Some(0), None).unwrap_err();
         assert_eq!(err.code, "READ_PARAS_WITHOUT_SECTION");
+        assert_eq!(err.message, "paras requires section");
         let err = run_read(&path, Some(0), Some("abc"), None, None).unwrap_err();
         assert_eq!(err.code, "READ_PARAS_INVALID");
         let err = run_read(&path, Some(0), Some("5..1"), None, None).unwrap_err();
