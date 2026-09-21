@@ -85,7 +85,7 @@ What does the user want?
 │     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
 │
 ├─ Check whether a .hwpx is structurally sound (before further editing)
-│     → validate  (decode + Document::validate; exit 0 valid, 1 invalid, 2 undecodable)
+│     → validate  (decode + Document::validate; exit 0 valid, 1 file/argument error, 2 undecodable, 3 invalid)
 │
 └─ Need the JSON shape, or the list of styles
       → schema        (JSON Schema for document/section types)
@@ -192,8 +192,9 @@ hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|han
 
 # Structural validation — decode + Document::validate, no editing
 hwpforge validate doc.hwpx [--json]
-#   exit 0 valid; exit 1 decodes but fails validation (report, not an error —
-#   see --json's errors array); exit 2 the bytes are not decodable HWPX at all
+#   exit 0 valid; exit 1 file/argument error (missing/unreadable file);
+#   exit 2 the bytes are not decodable HWPX at all; exit 3 decodes but fails
+#   validation (report, not an error — see --json's errors array)
 
 # Read out / schema / styles
 hwpforge to-md doc.hwpx -o doc.md

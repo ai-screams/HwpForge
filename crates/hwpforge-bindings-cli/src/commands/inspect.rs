@@ -14,7 +14,7 @@ use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 #[derive(Serialize)]
 struct InspectResult {
@@ -60,13 +60,7 @@ struct SectionInfo {
 /// Run the inspect command.
 pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = read_input(file, json_mode);
 
     // `ops::inspect` is the canonical report: metadata (title/author) and
     // (with `--styles`) the style summary come from here, plus the

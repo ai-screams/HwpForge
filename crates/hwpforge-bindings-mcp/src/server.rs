@@ -858,7 +858,7 @@ impl HwpForgeServer {
     /// Returns validation status and any issues found.
     #[tool(
         name = "hwpforge_validate",
-        description = "Validate an HWPX file structure and integrity. Returns validation status, section/paragraph counts, any issues found, and any decode warnings (present whether or not the document validated). Use to verify files before editing or after generation."
+        description = "Validate an HWPX file structure and integrity. Returns validation status, section/paragraph counts, any issues found, and any decode warnings (present whether or not the document validated). A file that cannot even be decoded (wrong format, corrupt package — for example a .hwp file) is reported as a DECODE_FAILED error, not as an invalid document. Use to verify files before editing or after generation."
     )]
     async fn hwpforge_validate(
         &self,

@@ -7,7 +7,7 @@ use hwpforge::ops::{OpsError, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, read_input_string, CliError};
 
 /// Run the patch command.
 pub fn run(
@@ -19,25 +19,10 @@ pub fn run(
 ) {
     // Read base HWPX
     check_file_size(base, json_mode);
-    let base_bytes = match std::fs::read(base) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", base.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let base_bytes = read_input(base, json_mode);
     // Read section JSON
     check_file_size(section_json, json_mode);
-    let json_str = match std::fs::read_to_string(section_json) {
-        Ok(s) => s,
-        Err(e) => {
-            CliError::new(
-                "FILE_READ_FAILED",
-                format!("Cannot read '{}': {e}", section_json.display()),
-            )
-            .exit(json_mode, 1);
-        }
-    };
+    let json_str = read_input_string(section_json, json_mode);
 
     // `ops::exchange::patch` reproduces the whole legacy pipeline itself:
     // parse the patch JSON, deserialize it as an `ExportedSection`, verify

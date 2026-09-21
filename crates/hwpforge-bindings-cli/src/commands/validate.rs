@@ -9,7 +9,7 @@
 //! `(code, hint, exit)` shape has no legacy CLI to reproduce; it is frozen
 //! from this commit forward instead (`tests/data/legacy_codes.txt`'s header).
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -77,25 +77,34 @@ struct ValidateResult {
 /// `status: "error"` alongside a genuine decode failure — would leave the
 /// two distinguishable only by `code` inside one shared shape. Splitting
 /// them at the exit-code and envelope level instead means a script can
-/// branch on exit code alone (`0` sound, `1` unsound-but-readable, `2`
-/// unreadable), and in text mode the two also land on different streams
-/// (the summary always to stdout; decode failure prints `Error: …` to
-/// stderr via [`CliError::exit`], same as every other command).
+/// branch on exit code alone, and in text mode the two also land on
+/// different streams (the summary always to stdout; decode failure prints
+/// `Error: …` to stderr via [`CliError::exit`], same as every other
+/// command).
 ///
-/// - decoded and valid → exit 0, `{"status":"ok","valid":true,…}`.
-/// - decoded but invalid → exit 1, `{"status":"ok","valid":false,…}` on
-///   stdout — not routed through [`CliError`] at all.
-/// - undecodable bytes → exit 2, `DECODE_FAILED`, via [`compat::cli_error`]
-///   like every other read command. Unlike the MCP tool (which folds this
-///   into `valid: false` — a pre-migration contract this command has no
-///   obligation to repeat), a decode failure here is a genuine
-///   [`ops::OpsError`] and is not folded into `valid: false`: "the bytes
-///   could not be read" and "the document read fine but is unsound" are
-///   different questions, and only `ops`'s own error variant should decide
-///   which one applies.
-/// - file unreadable → exit 1, `FILE_READ_FAILED`, constructed directly
+/// Every exit code is its own class, not shared with a different kind of
+/// failure (audit finding — exit 1 used to cover both a file/argument
+/// error and a decoded-but-invalid document, so a script could not branch
+/// on exit code alone the way this doc claimed):
+///
+/// - decoded and valid → exit **0**, `{"status":"ok","valid":true,…}`.
+/// - file unreadable → exit **1**, `FILE_READ_FAILED`, constructed directly
 ///   like every sibling read command (`fields.rs`, `inspect.rs`, …) —
-///   `compat.rs`'s `CLI_LOCAL` table carries this pair, not `TABLE`.
+///   `compat.rs`'s `CLI_LOCAL` table carries this pair, not `TABLE`. Every
+///   other sibling command's argument/file-I/O errors are exit 1 too, so
+///   `validate` keeps that class rather than inventing its own.
+/// - undecodable bytes → exit **2**, `DECODE_FAILED`, via
+///   [`compat::cli_error`] like every other read command. Unlike the MCP
+///   tool (which folds this into `valid: false` — a pre-migration contract
+///   this command has no obligation to repeat), a decode failure here is a
+///   genuine [`ops::OpsError`] and is not folded into `valid: false`: "the
+///   bytes could not be read" and "the document read fine but is unsound"
+///   are different questions, and only `ops`'s own error variant should
+///   decide which one applies.
+/// - decoded but invalid → exit **3**, `{"status":"ok","valid":false,…}` on
+///   stdout — not routed through [`CliError`] at all. Its own class,
+///   distinct from both the file/argument-error class (1) and the
+///   codec/decode-failure class (2) every sibling command uses those for.
 ///
 /// Warnings from a successful decode (`ValidateOutput::warnings`) print as
 /// `[validate] <message>` on stderr in text mode only — the `--json` output
@@ -103,15 +112,9 @@ struct ValidateResult {
 /// there would be redundant, unlike `convert`/`from-json`'s unconditional
 /// `[cmd]` lines (those commands' final JSON carries no `warnings` field at
 /// all, so stderr is their only channel in either mode).
-pub fn run(file: &PathBuf, json_mode: bool) {
+pub fn run(file: &Path, json_mode: bool) {
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = crate::error::read_input(file, json_mode);
 
     let out = match ops::validate(&bytes) {
         Ok(o) => o,
@@ -139,7 +142,26 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     };
 
     if json_mode {
-        println!("{}", serde_json::to_string(&result).unwrap());
+        // `to_string`, not `.unwrap()` (audit finding): `ValidateResult`'s
+        // fields are all plain data (`bool`/`usize`/`WarningInfo`s built
+        // from `String`s already round-tripped through JSON once by the
+        // decoder), so this cannot fail today — but a panic path here would
+        // still crash instead of reporting, the one thing every other exit
+        // path in this command avoids. `JSON_SERIALIZE_FAILED`/exit 2
+        // mirrors `to-json`'s own `render_pretty` (`to_json.rs`) for the
+        // same "the result value refused to serialize" condition; unlike
+        // that command's rows, this one has no pre-migration legacy to
+        // audit (module docs) — new code, not a divergence.
+        match serde_json::to_string(&result) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                CliError::new(
+                    "JSON_SERIALIZE_FAILED",
+                    format!("Failed to serialize validate result: {e}"),
+                )
+                .exit(json_mode, 2);
+            }
+        }
     } else {
         println!("Document: {}", file.display());
         println!("  Valid: {}", result.valid);
@@ -154,6 +176,11 @@ pub fn run(file: &PathBuf, json_mode: bool) {
     }
 
     if !out.ok {
-        std::process::exit(1);
+        // Exit 3, not 1 (audit finding): 1 is the file/argument-error class
+        // every sibling command uses (`FILE_READ_FAILED` above included) —
+        // sharing it with "decoded fine but unsound" made the two
+        // indistinguishable by exit code alone, defeating the doc comment's
+        // own claim above.
+        std::process::exit(3);
     }
 }

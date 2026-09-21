@@ -6,18 +6,12 @@ use hwpforge::ops::{self, OpsWarning};
 use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input};
 
 /// Run the outline command.
 pub fn run(file: &PathBuf, json_mode: bool) {
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = read_input(file, json_mode);
 
     // Decoder warnings (`OutlineOutput::warnings`) were not surfaced pre-W5
     // (the pre-migration CLI never captured them; W3 kept that byte-for-byte).

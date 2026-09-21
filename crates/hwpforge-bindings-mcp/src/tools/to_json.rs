@@ -13,7 +13,12 @@ use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarni
 pub struct ToJsonData {
     /// Path to the generated JSON file (if written to file).
     pub output_path: Option<String>,
-    /// Size of the JSON in bytes.
+    /// Size of the exported document/section JSON in bytes — `json_content`'s
+    /// length, not the whole MCP response (`warnings` adds to that but not
+    /// to this field). The `OUTPUT_TOO_LARGE` inline-mode gate below
+    /// measures the complete serialized response, including `warnings`, so
+    /// a response can be rejected as too large even when `size_bytes` alone
+    /// looks small.
     pub size_bytes: u64,
     /// Whether this is a section-only export.
     pub section_only: bool,
@@ -24,6 +29,9 @@ pub struct ToJsonData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
+
+/// Inline response ceiling shared with `hwpforge_outline`/`hwpforge_diff` (1 MB).
+const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Export HWPX to JSON (full document or single section).
 ///
@@ -37,6 +45,14 @@ pub struct ToJsonData {
 /// [`map_section_workflow_warning_for_to_json`]; every other warning goes
 /// through `compat::warning` unchanged from what this file computed by hand
 /// before.
+///
+/// MEDIUM (audit): the inline-mode `OUTPUT_TOO_LARGE` gate used to measure
+/// only the document/section JSON's own length, so a document just under
+/// the ceiling with enough decode warnings attached could still serialize
+/// to an oversized MCP response. [`build_to_json_data`] gates on the
+/// complete serialized [`ToJsonData`] — `warnings` included — exactly as
+/// `hwpforge_outline`'s `build_outline_data` and `hwpforge_diff`'s
+/// `build_diff_data` already do.
 pub fn run_to_json(
     file_path: &str,
     section_idx: Option<usize>,
@@ -90,22 +106,84 @@ pub fn run_to_json(
             warnings,
         })
     } else {
-        // Warn if inline response is very large (> 1 MB)
-        const MAX_INLINE_RESPONSE: u64 = 1024 * 1024;
-        if size_bytes > MAX_INLINE_RESPONSE {
-            return Err(ToolErrorInfo::new(
-                "OUTPUT_TOO_LARGE",
-                format!("JSON output is {} KB, too large for inline response", size_bytes / 1024,),
-                "Use output_path to write to a file, or use section parameter to export a single section.",
-            ));
-        }
-        Ok(ToJsonData {
-            output_path: None,
-            size_bytes,
-            section_only: section_idx.is_some(),
-            json_content: Some(json_string),
-            warnings,
-        })
+        build_to_json_data(json_string, section_idx.is_some(), warnings)
+    }
+}
+
+/// Builds the final inline-mode [`ToJsonData`], gating on the complete
+/// serialized response — including `warnings` — rather than on the
+/// document/section JSON alone: a document with many decode warnings but a
+/// small export could otherwise slip past a narrower check while still
+/// exceeding the real inline ceiling (the file-output branch in
+/// [`run_to_json`] has no such gate — it always writes to disk).
+///
+/// LOW (audit): measuring the complete response used to serialize the whole
+/// [`ToJsonData`] into a second full `String` (`serde_json::to_string`) just
+/// to read its length, on top of the `json_string` already held in
+/// `json_content` — and the MCP server serializes the returned value a
+/// third time to actually send it. `json_content` alone exceeding the
+/// ceiling is rejected immediately, before `ToJsonData` is even built;
+/// otherwise the total is measured with [`CountingWriter`], a
+/// [`std::io::Write`] sink that only counts bytes, so `serde_json::to_writer`
+/// never allocates the serialized bytes at all.
+///
+/// Split out from [`run_to_json`] so a test can exercise the gate with a
+/// synthetic oversized `warnings` list, without needing a fixture large
+/// enough to trigger it for real.
+fn build_to_json_data(
+    json_string: String,
+    section_only: bool,
+    warnings: Vec<ToolWarningInfo>,
+) -> Result<ToJsonData, ToolErrorInfo> {
+    // `json_content` alone already over the ceiling makes the whole
+    // response oversized regardless of `warnings` — reject before copying
+    // it into `ToJsonData` and measuring the rest.
+    if json_string.len() > MAX_INLINE_RESPONSE {
+        return Err(output_too_large_error(json_string.len()));
+    }
+
+    let size_bytes = json_string.len() as u64;
+    let data = ToJsonData {
+        output_path: None,
+        size_bytes,
+        section_only,
+        json_content: Some(json_string),
+        warnings,
+    };
+
+    let mut counter = CountingWriter::default();
+    let inline_size = match serde_json::to_writer(&mut counter, &data) {
+        Ok(()) => counter.0,
+        Err(_) => usize::MAX,
+    };
+    if inline_size > MAX_INLINE_RESPONSE {
+        return Err(output_too_large_error(inline_size));
+    }
+    Ok(data)
+}
+
+fn output_too_large_error(inline_size: usize) -> ToolErrorInfo {
+    ToolErrorInfo::new(
+        "OUTPUT_TOO_LARGE",
+        format!("JSON response is {inline_size} bytes (limit {MAX_INLINE_RESPONSE})"),
+        "Use output_path to write to a file, or use section parameter to export a single section.",
+    )
+}
+
+/// A [`std::io::Write`] sink that only counts the bytes written to it —
+/// lets [`build_to_json_data`] learn a `serde_json::to_writer` output's
+/// exact size without allocating the serialized bytes themselves.
+#[derive(Default)]
+struct CountingWriter(usize);
+
+impl std::io::Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -225,5 +303,41 @@ mod tests {
         let err = run_to_json("/nonexistent/file.hwpx", None, None)
             .expect_err("missing input must still error");
         assert_ne!(err.code, "INVALID_EXTENSION", "inline mode must not hit the extension guard");
+    }
+
+    /// MEDIUM (audit): the document JSON itself is tiny here — the oversized
+    /// total comes entirely from `warnings` — so this exercises the branch
+    /// the whole-payload gate exists for: a small export and a large
+    /// `warnings` list must still report `OUTPUT_TOO_LARGE`, not slip past
+    /// because only `json_string.len()` was checked. Mirrors
+    /// `outline_oversized_warnings_alone_reports_output_too_large`.
+    #[test]
+    fn to_json_oversized_warnings_alone_reports_output_too_large() {
+        let huge =
+            vec![ToolWarningInfo::new("STUB_OVERSIZED", "x".repeat(MAX_INLINE_RESPONSE + 1))];
+
+        let err = build_to_json_data("{}".to_string(), false, huge).unwrap_err();
+        assert_eq!(err.code, "OUTPUT_TOO_LARGE");
+    }
+
+    /// LOW (audit): `json_content` alone over the ceiling must be rejected
+    /// before `ToJsonData` is even built, not measured via a second
+    /// serialization of the whole struct. The reported size proves which
+    /// branch ran: the early return reports exactly `json_string.len()`,
+    /// while going through the later `CountingWriter` measurement would add
+    /// the struct's JSON-wrapper overhead (field names, the surrounding
+    /// quotes) and report a strictly larger number.
+    #[test]
+    fn to_json_content_alone_over_limit_is_rejected_before_building_the_response() {
+        let huge = "x".repeat(MAX_INLINE_RESPONSE + 1);
+        let len = huge.len();
+
+        let err = build_to_json_data(huge, false, Vec::new()).unwrap_err();
+        assert_eq!(err.code, "OUTPUT_TOO_LARGE");
+        assert!(
+            err.message.contains(&format!("{len} bytes")),
+            "expected the early-return branch to report exactly {len} bytes: {}",
+            err.message
+        );
     }
 }

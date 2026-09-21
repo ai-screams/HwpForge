@@ -30,8 +30,10 @@ struct WarningDto {
     /// 발생 단계: `input`(디스패치) | `convert`(HWP5→HWPX) | `decode`(HWPX 해석)
     /// | `render`(PDF).
     stage: &'static str,
-    /// 안정 코드 (variant 유래 — 스크립트 필터링용).
-    code: &'static str,
+    /// 안정 코드 (variant 유래 — 스크립트 필터링용). `render_warning_dto`'s
+    /// 코드는 `ConvertOpsWarning::info()` 에서 오므로 `String` — 나머지
+    /// 생성자는 정적 리터럴을 그대로 담는다.
+    code: String,
     message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     location: Option<String>,
@@ -77,7 +79,7 @@ fn convert_warning_dto(w: &ConvertWarning) -> WarningDto {
         }) => {
             return WarningDto {
                 stage: "convert",
-                code: "LAYOUT_CACHE_DROPPED",
+                code: "LAYOUT_CACHE_DROPPED".to_string(),
                 message: reason.clone(),
                 location: Some(path.to_string()),
             };
@@ -85,7 +87,7 @@ fn convert_warning_dto(w: &ConvertWarning) -> WarningDto {
         other => {
             return WarningDto {
                 stage: "convert",
-                code: "OTHER",
+                code: "OTHER".to_string(),
                 message: format!("{other:?}"),
                 location: None,
             };
@@ -114,7 +116,7 @@ fn convert_warning_dto(w: &ConvertWarning) -> WarningDto {
         }
         other => ("OTHER", format!("{other:?}"), None),
     };
-    WarningDto { stage: "convert", code, message, location }
+    WarningDto { stage: "convert", code: code.to_string(), message, location }
 }
 
 fn decode_warning_dto(w: &DecodeWarning) -> WarningDto {
@@ -126,128 +128,55 @@ fn decode_warning_dto(w: &DecodeWarning) -> WarningDto {
         ),
         other => ("OTHER", format!("{other:?}"), None),
     };
-    WarningDto { stage: "decode", code, message, location }
+    WarningDto { stage: "decode", code: code.to_string(), message, location }
 }
 
+/// `code`/`message` come from [`ConvertOpsWarning::info`] — the ops crate's
+/// own single source of truth for a `PdfWarning`'s wire shape, which the CLI
+/// used to re-derive by hand in a ~118-line match kept in lockstep with it
+/// (audit finding). `location` still needs its own lookup below:
+/// [`hwpforge_foundation::diagnostics::WarningInfo`] has no `location`
+/// field — `info()` folds it into the message text instead — but the CLI
+/// DTO keeps `location` as its own column, unchanged from before.
 fn render_warning_dto(w: &PdfWarning) -> WarningDto {
-    let (code, message, location) = match w {
-        PdfWarning::ParagraphSkipped { location } => (
-            "PARAGRAPH_SKIPPED",
-            "paragraph without layout cache skipped".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::PageEventLost { location } => (
-            "PAGE_EVENT_LOST",
-            "page-number restart/hiding control on a cacheless paragraph — event lost".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::FontStyleFallback { face, requested, location } => (
-            "FONT_STYLE_FALLBACK",
-            format!("{face:?} has no {requested:?} face — rendered regular"),
-            Some(location.clone()),
-        ),
-        PdfWarning::FontAxisFallback { fonts, location } => (
-            "FONT_AXIS_FALLBACK",
-            format!("per-language axis fonts {fonts:?} — rendered with hangul axis"),
-            Some(location.clone()),
-        ),
-        PdfWarning::FontEmbedPreviewPrint { face, path, .. } => (
-            "FONT_EMBED_PREVIEW_PRINT",
-            format!("{face:?} ({}) is Preview & Print licensed", path.display()),
-            None,
-        ),
-        PdfWarning::AlignmentApproximated { location } => (
-            "ALIGNMENT_APPROXIMATED",
-            "distributed alignment approximated".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::NonTextRunDropped { location } => (
-            "NON_TEXT_RUN_DROPPED",
-            "non-text run (control/image) dropped".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::AnchorMarkerOnLineBoundary { location } => (
-            "ANCHOR_MARKER_ON_LINE_BOUNDARY",
-            "anchored-image marker sits exactly on a line boundary — \
-             anchored to the later line"
-                .to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::ImageDataMissing { key, location } => (
-            "IMAGE_DATA_MISSING",
-            format!("image data missing for \"{key}\" — skipped"),
-            Some(location.clone()),
-        ),
-        PdfWarning::UnsupportedImageFormat { key, format, location } => (
-            "UNSUPPORTED_IMAGE_FORMAT",
-            format!("\"{key}\" is {format} — not renderable, skipped"),
-            Some(location.clone()),
-        ),
-        PdfWarning::ImageDecodeFailed { key, detail, location } => (
-            "IMAGE_DECODE_FAILED",
-            format!("\"{key}\": {detail} — skipped"),
-            Some(location.clone()),
-        ),
-        PdfWarning::InvalidImageGeometry { key, detail, location } => (
-            "INVALID_IMAGE_GEOMETRY",
-            format!("\"{key}\": {detail} — skipped"),
-            Some(location.clone()),
-        ),
-        PdfWarning::TablePaginationComputed { location } => (
-            "TABLE_PAGINATION_COMPUTED",
-            "split-table page boundary computed (cache has no signal)".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::TableDeficitDistributed { location } => (
-            "TABLE_DEFICIT_DISTRIBUTED",
-            "merged-cell height deficit redistributed".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::UnsupportedTableStyle { location, what } => (
-            "UNSUPPORTED_TABLE_STYLE",
-            format!("unsupported table style dropped: {what}"),
-            Some(location.clone()),
-        ),
-        PdfWarning::BandOverflow { kind, location } => (
-            "BAND_OVERFLOW",
-            format!("{kind} exceeds its band — replayed unclipped (Hancom behavior)"),
-            Some(location.clone()),
-        ),
-        PdfWarning::PageStartsOnFallback { section } => (
-            "PAGE_STARTS_ON_FALLBACK",
-            "pageStartsOn != BOTH is unmeasured — rendered as BOTH".to_string(),
-            Some(format!("s{section}")),
-        ),
-        PdfWarning::VertAlignFallback { location } => (
-            "VERT_ALIGN_FALLBACK",
-            "header/footer vertAlign != TOP is unmeasured — rendered as TOP".to_string(),
-            Some(location.clone()),
-        ),
-        PdfWarning::PageNumberSkipped { section, what } => (
-            "PAGE_NUMBER_SKIPPED",
-            format!("page number skipped — unmeasured {what}"),
-            Some(format!("s{section}")),
-        ),
-        PdfWarning::PageNumberStyleFallback { section } => (
-            "PAGE_NUMBER_STYLE_FALLBACK",
-            "\"쪽 번호\" CHAR style absent — fell back to default char shape".to_string(),
-            Some(format!("s{section}")),
-        ),
-        PdfWarning::MissingGlyphs { face, count, location } => (
-            "MISSING_GLYPHS",
-            format!("{face:?} lacks glyphs for {count} character(s) — rendered as tofu"),
-            Some(location.clone()),
-        ),
-        PdfWarning::LineOverflow { location, excess } => (
-            "LINE_OVERFLOW",
-            format!(
-                "line exceeds its cached box by {excess} HWPUNIT (char spacing/scale not carried)"
-            ),
-            Some(location.clone()),
-        ),
-        other => ("OTHER", format!("{other:?}"), None),
-    };
-    WarningDto { stage: "render", code, message, location }
+    let info = ConvertOpsWarning::Render(w.clone()).info();
+    WarningDto {
+        stage: "render",
+        code: info.code,
+        message: info.message,
+        location: render_warning_location(w),
+    }
+}
+
+/// The `location` half of [`render_warning_dto`] — every variant that
+/// carries one, grouped by shape (`location: String` vs. `section: usize`
+/// formatted as `"s{n}"`); `FontEmbedPreviewPrint` and any future variant
+/// have none.
+fn render_warning_location(w: &PdfWarning) -> Option<String> {
+    match w {
+        PdfWarning::ParagraphSkipped { location }
+        | PdfWarning::PageEventLost { location }
+        | PdfWarning::FontStyleFallback { location, .. }
+        | PdfWarning::FontAxisFallback { location, .. }
+        | PdfWarning::AlignmentApproximated { location }
+        | PdfWarning::NonTextRunDropped { location }
+        | PdfWarning::AnchorMarkerOnLineBoundary { location }
+        | PdfWarning::ImageDataMissing { location, .. }
+        | PdfWarning::UnsupportedImageFormat { location, .. }
+        | PdfWarning::ImageDecodeFailed { location, .. }
+        | PdfWarning::InvalidImageGeometry { location, .. }
+        | PdfWarning::TablePaginationComputed { location }
+        | PdfWarning::TableDeficitDistributed { location }
+        | PdfWarning::UnsupportedTableStyle { location, .. }
+        | PdfWarning::BandOverflow { location, .. }
+        | PdfWarning::VertAlignFallback { location }
+        | PdfWarning::MissingGlyphs { location, .. }
+        | PdfWarning::LineOverflow { location, .. } => Some(location.clone()),
+        PdfWarning::PageStartsOnFallback { section }
+        | PdfWarning::PageNumberSkipped { section, .. }
+        | PdfWarning::PageNumberStyleFallback { section } => Some(format!("s{section}")),
+        _ => None,
+    }
 }
 
 fn parse_discovery(s: &str, json_mode: bool) -> FontDiscovery {
@@ -277,10 +206,7 @@ pub fn run(
     // 플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지).
     let discovery = parse_discovery(discovery, json_mode);
     check_file_size(input, json_mode);
-    let bytes = std::fs::read(input).unwrap_or_else(|err| {
-        CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {err}", input.display()))
-            .exit(json_mode, 1)
-    });
+    let bytes = crate::error::read_input(input, json_mode);
 
     let Some(detected) = detect_format(&bytes) else {
         CliError::new(
@@ -303,7 +229,7 @@ pub fn run(
         if implied != detected {
             warnings.push(WarningDto {
                 stage: "input",
-                code: "EXTENSION_MISMATCH",
+                code: "EXTENSION_MISMATCH".to_string(),
                 message: format!("extension implies {implied} but content is {detected}"),
                 location: None,
             });
@@ -334,7 +260,7 @@ pub fn run(
             // emits the three staged variants above today.
             _ => WarningDto {
                 stage: "render",
-                code: "OTHER",
+                code: "OTHER".to_string(),
                 message: format!("{w:?}"),
                 location: None,
             },
@@ -433,28 +359,82 @@ mod tests {
             raw: "WEIRD".into(),
             fallback: "BOTH",
         });
-        assert_eq!((dto.stage, dto.code), ("decode", "UNKNOWN_ENUM_VALUE"));
+        assert_eq!((dto.stage, dto.code.as_str()), ("decode", "UNKNOWN_ENUM_VALUE"));
         assert_eq!(dto.location.as_deref(), Some("hp:header@applyPageType"));
     }
 
+    /// Was `render_warning_dto_maps_every_variant`, pinning the DTO's `code`
+    /// against a hardcoded literal per variant — that only proved the CLI's
+    /// own (now-removed) private mapping matched itself, not that it agreed
+    /// with `ConvertOpsWarning::info()`, the ops crate's actual source of
+    /// truth (audit finding). Now that `render_warning_dto` calls `.info()`
+    /// directly, this compares against that call instead, so a future
+    /// regression that reintroduces a separate mapping — and drifts from it
+    /// — fails here rather than passing silently. `location` keeps its
+    /// literal expectation: `render_warning_location`'s per-variant match
+    /// is hand-written and still worth checking against real values.
+    ///
+    /// LOW (audit): this list was missing the four image variants
+    /// (`ImageDataMissing`/`UnsupportedImageFormat`/`ImageDecodeFailed`/
+    /// `InvalidImageGeometry`) and never asserted `message`, only `code` and
+    /// `location` — a drift in `.info()`'s message text for any variant
+    /// would have passed silently. `variant_name` below is the
+    /// exhaustiveness guard: it is a second, independent match over every
+    /// `PdfWarning` variant with no wildcard arm reused from production
+    /// code, so a variant *this test's own match forgot* panics instead of
+    /// reporting fewer than 22 cases. `PdfWarning` is `#[non_exhaustive]`
+    /// from this (downstream) crate's point of view, so rustc cannot itself
+    /// refuse to compile when the enum gains a variant upstream — the same
+    /// trade-off `render_warning_dto`/`render_warning_location`'s own
+    /// wildcard arms already accept — but a variant *added to `cases` below
+    /// without a matching arm here* fails at runtime rather than at review
+    /// time.
     #[test]
-    fn render_warning_dto_maps_every_variant() {
+    fn render_warning_dto_matches_ops_info_for_every_variant() {
         use hwpforge_smithy_pdf::font::FaceStyle;
         let loc = || "s0/p1/l2".to_string();
-        let cases: Vec<(PdfWarning, &str)> = vec![
-            (PdfWarning::ParagraphSkipped { location: loc() }, "PARAGRAPH_SKIPPED"),
-            (PdfWarning::PageEventLost { location: loc() }, "PAGE_EVENT_LOST"),
+        let cases: Vec<(PdfWarning, Option<&str>)> = vec![
+            (PdfWarning::ParagraphSkipped { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::PageEventLost { location: loc() }, Some("s0/p1/l2")),
             (
                 PdfWarning::FontStyleFallback {
                     face: "f".into(),
                     requested: FaceStyle::Bold,
                     location: loc(),
                 },
-                "FONT_STYLE_FALLBACK",
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::ImageDataMissing { key: "img1".into(), location: loc() },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::UnsupportedImageFormat {
+                    key: "img1".into(),
+                    format: "bmp",
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::ImageDecodeFailed {
+                    key: "img1".into(),
+                    detail: "bad header".into(),
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
+            ),
+            (
+                PdfWarning::InvalidImageGeometry {
+                    key: "img1".into(),
+                    detail: "zero width".into(),
+                    location: loc(),
+                },
+                Some("s0/p1/l2"),
             ),
             (
                 PdfWarning::FontAxisFallback { fonts: vec!["a".into()], location: loc() },
-                "FONT_AXIS_FALLBACK",
+                Some("s0/p1/l2"),
             ),
             (
                 PdfWarning::FontEmbedPreviewPrint {
@@ -462,35 +442,78 @@ mod tests {
                     path: "/x".into(),
                     fingerprint: "00".into(),
                 },
-                "FONT_EMBED_PREVIEW_PRINT",
+                None,
             ),
-            (PdfWarning::AlignmentApproximated { location: loc() }, "ALIGNMENT_APPROXIMATED"),
-            (
-                PdfWarning::AnchorMarkerOnLineBoundary { location: loc() },
-                "ANCHOR_MARKER_ON_LINE_BOUNDARY",
-            ),
-            (PdfWarning::NonTextRunDropped { location: loc() }, "NON_TEXT_RUN_DROPPED"),
-            (PdfWarning::TablePaginationComputed { location: loc() }, "TABLE_PAGINATION_COMPUTED"),
-            (PdfWarning::TableDeficitDistributed { location: loc() }, "TABLE_DEFICIT_DISTRIBUTED"),
+            (PdfWarning::AlignmentApproximated { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::AnchorMarkerOnLineBoundary { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::NonTextRunDropped { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::TablePaginationComputed { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::TableDeficitDistributed { location: loc() }, Some("s0/p1/l2")),
             (
                 PdfWarning::UnsupportedTableStyle { location: loc(), what: "cell fill" },
-                "UNSUPPORTED_TABLE_STYLE",
+                Some("s0/p1/l2"),
             ),
-            (PdfWarning::BandOverflow { kind: "header", location: loc() }, "BAND_OVERFLOW"),
-            (PdfWarning::PageStartsOnFallback { section: 0 }, "PAGE_STARTS_ON_FALLBACK"),
-            (PdfWarning::VertAlignFallback { location: loc() }, "VERT_ALIGN_FALLBACK"),
-            (PdfWarning::PageNumberSkipped { section: 0, what: "position" }, "PAGE_NUMBER_SKIPPED"),
-            (PdfWarning::PageNumberStyleFallback { section: 0 }, "PAGE_NUMBER_STYLE_FALLBACK"),
+            (PdfWarning::BandOverflow { kind: "header", location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::PageStartsOnFallback { section: 0 }, Some("s0")),
+            (PdfWarning::VertAlignFallback { location: loc() }, Some("s0/p1/l2")),
+            (PdfWarning::PageNumberSkipped { section: 0, what: "position" }, Some("s0")),
+            (PdfWarning::PageNumberStyleFallback { section: 0 }, Some("s0")),
             (
                 PdfWarning::MissingGlyphs { face: "f".into(), count: 2, location: loc() },
-                "MISSING_GLYPHS",
+                Some("s0/p1/l2"),
             ),
-            (PdfWarning::LineOverflow { location: loc(), excess: 190 }, "LINE_OVERFLOW"),
+            (PdfWarning::LineOverflow { location: loc(), excess: 190 }, Some("s0/p1/l2")),
         ];
-        for (w, code) in &cases {
+
+        /// Names every current `PdfWarning` variant — kept in this test only
+        /// (not reused from production code) so it fails on a variant
+        /// `cases` above forgot instead of quietly agreeing with whatever
+        /// `render_warning_dto`/`render_warning_location` already handle.
+        fn variant_name(w: &PdfWarning) -> &'static str {
+            match w {
+                PdfWarning::ParagraphSkipped { .. } => "ParagraphSkipped",
+                PdfWarning::PageEventLost { .. } => "PageEventLost",
+                PdfWarning::FontStyleFallback { .. } => "FontStyleFallback",
+                PdfWarning::ImageDataMissing { .. } => "ImageDataMissing",
+                PdfWarning::UnsupportedImageFormat { .. } => "UnsupportedImageFormat",
+                PdfWarning::ImageDecodeFailed { .. } => "ImageDecodeFailed",
+                PdfWarning::InvalidImageGeometry { .. } => "InvalidImageGeometry",
+                PdfWarning::FontAxisFallback { .. } => "FontAxisFallback",
+                PdfWarning::FontEmbedPreviewPrint { .. } => "FontEmbedPreviewPrint",
+                PdfWarning::AlignmentApproximated { .. } => "AlignmentApproximated",
+                PdfWarning::NonTextRunDropped { .. } => "NonTextRunDropped",
+                PdfWarning::AnchorMarkerOnLineBoundary { .. } => "AnchorMarkerOnLineBoundary",
+                PdfWarning::TablePaginationComputed { .. } => "TablePaginationComputed",
+                PdfWarning::TableDeficitDistributed { .. } => "TableDeficitDistributed",
+                PdfWarning::UnsupportedTableStyle { .. } => "UnsupportedTableStyle",
+                PdfWarning::BandOverflow { .. } => "BandOverflow",
+                PdfWarning::PageStartsOnFallback { .. } => "PageStartsOnFallback",
+                PdfWarning::VertAlignFallback { .. } => "VertAlignFallback",
+                PdfWarning::PageNumberSkipped { .. } => "PageNumberSkipped",
+                PdfWarning::PageNumberStyleFallback { .. } => "PageNumberStyleFallback",
+                PdfWarning::MissingGlyphs { .. } => "MissingGlyphs",
+                PdfWarning::LineOverflow { .. } => "LineOverflow",
+                // Forced by `#[non_exhaustive]`, not a real "don't care": a
+                // variant reaching this arm is one `cases` above has not
+                // been taught about yet.
+                other => {
+                    panic!("PdfWarning variant not covered by this test's case list: {other:?}")
+                }
+            }
+        }
+
+        let mut seen: Vec<&'static str> = cases.iter().map(|(w, _)| variant_name(w)).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 22, "expected exactly 22 distinct PdfWarning variants in `cases`");
+
+        for (w, expected_location) in &cases {
             let dto = render_warning_dto(w);
+            let info = ConvertOpsWarning::Render(w.clone()).info();
             assert_eq!(dto.stage, "render");
-            assert_eq!(&dto.code, code, "{w:?}");
+            assert_eq!(dto.code, info.code, "{w:?}");
+            assert_eq!(dto.message, info.message, "{w:?}");
+            assert_eq!(dto.location.as_deref(), *expected_location, "{w:?}");
         }
     }
 

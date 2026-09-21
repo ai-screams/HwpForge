@@ -41,7 +41,7 @@ fn run(args: &[&str]) -> (String, String, i32) {
 }
 
 /// Runs with `--json` prepended and parses **stdout** as JSON regardless of
-/// exit code. `validate`'s "decodes but invalid" case exits 1 while still
+/// exit code. `validate`'s "decodes but invalid" case exits 3 while still
 /// printing a full `{"status":"ok",...}` result to stdout (report
 /// semantics, not an error envelope — see `commands/validate.rs`'s module
 /// docs) — gating the parse on `exit == 0`, the way `cli_integration.rs`'s
@@ -160,7 +160,7 @@ fn decodable_but_invalid_package_reports_valid_false_not_an_error_envelope() {
     let path = make_decodable_but_invalid_hwpx(&dir);
 
     let (value, stderr, code) = run_json(&["validate", path.to_str().unwrap()]);
-    assert_eq!(code, 1, "an invalid-but-decoded document is report semantics, exit 1: {value:?}");
+    assert_eq!(code, 3, "an invalid-but-decoded document is report semantics, exit 3: {value:?}");
     assert_eq!(value["status"], "ok", "not an error envelope: {value:?}");
     assert_eq!(value["valid"], false);
     assert_eq!(value["sections"], 2, "the decode itself sees both sections");

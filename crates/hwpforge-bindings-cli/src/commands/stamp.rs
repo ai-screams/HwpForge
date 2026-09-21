@@ -13,7 +13,7 @@ use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_bounded_string, read_input, CliError};
 
 /// Run the `stamp-plan` command (candidate discovery, both classes).
 pub fn run_plan(file: &PathBuf, json_mode: bool) {
@@ -116,7 +116,7 @@ pub fn run(
     check_file_size(file, json_mode);
     let bytes = read_file(file, json_mode);
 
-    let map_text = match std::fs::read_to_string(map) {
+    let map_text = match read_bounded_string(map) {
         Ok(t) => t,
         Err(e) => {
             CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", map.display()))
@@ -265,13 +265,7 @@ fn write_artifacts(
 }
 
 fn read_file(file: &PathBuf, json_mode: bool) -> Vec<u8> {
-    match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    }
+    read_input(file, json_mode)
 }
 
 /// Maps an `ops::stamp::{stamp_plan,stamp}` failure onto the frozen contract

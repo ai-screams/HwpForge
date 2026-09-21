@@ -7,7 +7,7 @@ use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{EmbeddedContent, ParaKindView};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 /// Run the read command.
 #[allow(clippy::too_many_arguments)]
@@ -37,13 +37,7 @@ pub fn run(
     }
 
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = read_input(file, json_mode);
 
     let mut opts = ReadOptions::default();
     if let Some(section) = section {

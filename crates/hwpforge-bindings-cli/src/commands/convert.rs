@@ -9,7 +9,7 @@ use hwpforge::ops::{convert_md, ConvertMdOptions, OpsError, OpsWarning};
 use hwpforge_smithy_hwpx::{builtin_presets, EncodeWarning};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError, MAX_STDIN_SIZE};
+use crate::error::{check_file_size, read_bounded_string, CliError, MAX_STDIN_SIZE};
 
 #[derive(Serialize)]
 struct ConvertResult {
@@ -77,7 +77,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         buf
     } else {
         check_file_size(std::path::Path::new(input), json_mode);
-        match std::fs::read_to_string(input) {
+        match read_bounded_string(input) {
             Ok(s) => s,
             Err(e) => {
                 CliError::new("FILE_READ_FAILED", format!("Cannot read '{input}': {e}"))

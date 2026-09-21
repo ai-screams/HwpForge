@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use hwpforge::ops::{self, ExportSectionOptions, OpsWarning, ToJsonOptions};
 
 use crate::compat::{self, Command};
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, read_input, CliError};
 
 // Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
 pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
@@ -69,13 +69,7 @@ pub fn run(
         .exit(json_mode, 1);
     }
     check_file_size(file, json_mode);
-    let bytes = match std::fs::read(file) {
-        Ok(b) => b,
-        Err(e) => {
-            CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {e}", file.display()))
-                .exit(json_mode, 1);
-        }
-    };
+    let bytes = read_input(file, json_mode);
 
     let json_string = if let Some(idx) = section_idx {
         let opts = ExportSectionOptions::default().with_section(idx).with_styles(!no_styles);
