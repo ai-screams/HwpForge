@@ -15,9 +15,9 @@
 # string, `DECODE_FAILED` — not the `DECODE_ERROR` every *other* MCP tool
 # below uses; this row freezes that deliberate, still-inconsistent choice
 # from the commit that adds it, the same "frozen forward" status
-# `legacy_codes.txt`'s rows have, just without a pre-migration origin. Only
-# the *hint* is legacy-borrowed (verbatim from `outline`/`read`/`fields`'s
-# own rows), which is why `src/compat.rs` reproduces it through that
+# `legacy_codes.txt`'s rows have, just without a pre-migration origin. Its
+# *hint* is the one `outline`/`read`/`fields`'s own rows carry, which is why
+# `src/compat.rs` reproduces it through that
 # dedicated arm rather than a `TABLE` row (a `TABLE` row would need this
 # file to carry a fabricated "pre-migration" entry it never had).
 validate	DECODE_FAILED

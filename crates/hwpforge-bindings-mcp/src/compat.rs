@@ -14,10 +14,19 @@
 //!
 //! # What is frozen and what is not
 //!
-//! The **code** and **hint** strings this module emits are the frozen
-//! contract — `tests/data/legacy_codes.txt` is the audited snapshot of every
-//! code a tool emitted before this migration, and this module's `#[cfg(test)]`
+//! The **code** strings this module emits are the frozen contract —
+//! `tests/data/legacy_codes.txt` is the audited snapshot of every code a
+//! tool emitted before this migration, and this module's `#[cfg(test)]`
 //! inventory (`mod tests`) checks every row it claims to cover against it.
+//! A client branches on the code, so changing one is a wire break.
+//!
+//! A **hint** is guidance for the agent reading the failure, not something
+//! a client branches on, so a hint that misdirects is corrected rather than
+//! preserved. Each correction is recorded in `mod tests`'
+//! `SUPERSEDED_LEGACY_HINTS` with the reason the old wording was wrong, and
+//! `superseded_hints_are_really_gone` fails if a listed row still emits it
+//! — so the list cannot decay into a dead exemption. Every other hint stays
+//! byte-identical to what the pre-migration tool printed.
 //! The **message**
 //! is not frozen (`common.md` W2 brief §"Contract that must NOT change"):
 //! this module defaults to [`OpsError`]'s own `Display`, which is usually
@@ -47,9 +56,10 @@
 //! too, but [`Tool::Validate`] still has no `TABLE` row: the pre-migration
 //! contract never emitted a code for it (there was no error to map), so
 //! there is no frozen legacy string to preserve — `DECODE_FAILED` is a code
-//! this migration is free to introduce, same as any other. What is frozen
-//! is the *hint*, borrowed verbatim from the other decode-gated tools
-//! (`Outline`, `Read`, `Fields`, …); `tool_error` reproduces it through a
+//! this migration is free to introduce, same as any other. Its *hint* is
+//! the one the other decode-gated tools (`Outline`, `Read`, `Fields`, …)
+//! carry, so a `.hwp` file gets the same answer whichever tool rejects it;
+//! `tool_error` reproduces it through a
 //! dedicated match arm rather than a `TABLE` row precisely so
 //! `tests/data/legacy_codes.txt` — an audited snapshot of what the
 //! pre-migration source actually emitted — never needs a fabricated
@@ -83,10 +93,11 @@ use hwpforge_smithy_hwpx::{FillError, SectionWorkflowError};
 
 use crate::output::{ToolErrorInfo, ToolWarningInfo};
 
-/// Frozen MCP message for `READ_TARGET_REQUIRED`. `ops::read` produces the
-/// same code with CLI-flag wording (`--section`…); MCP parameters are not
-/// flags, so [`tool_error`] always reports this text whatever the producer's
-/// `reason` says, and `tools/read.rs`'s own guard uses it too.
+/// Frozen MCP message for `READ_TARGET_REQUIRED`. This code has two
+/// producers — `tools/read.rs`'s own guard and `ops::read` — and the wire
+/// text must not depend on which one fired, so [`tool_error`] always reports
+/// this constant whatever the producer's `reason` says, and the guard uses it
+/// too.
 pub(crate) const READ_TARGET_REQUIRED_MESSAGE: &str = "Pass exactly one of section, table, field";
 
 /// Frozen MCP message for `READ_PARAS_WITHOUT_SECTION` — same rule as
@@ -198,10 +209,10 @@ const TABLE: &[Row] = &[
     row!(Inspect, DecodeFailed, "DECODE_ERROR", "Check that the file is a valid HWPX document."),
 
     // ── Outline ────────────────────────────────────────────────────
-    row!(Outline, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first."),
+    row!(Outline, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."),
 
     // ── Read ───────────────────────────────────────────────────────
-    row!(Read, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first."),
+    row!(Read, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."),
     row!(Read, ReadTargetRequired, "READ_TARGET_REQUIRED", "section reads a paragraph range; table reads a grid text matrix; field reads a named click-here field."),
     row!(Read, ReadParasWithoutSection, "READ_PARAS_WITHOUT_SECTION", "Pass section together with paras."),
     row!(Read, ReadParasInvalid, "READ_PARAS_INVALID", "Use \"A..B\" (inclusive) or a single \"N\"."),
@@ -212,7 +223,7 @@ const TABLE: &[Row] = &[
     row!(Read, ReadFieldNotFound, "READ_FIELD_NOT_FOUND", "Use hwpforge_fields to list available field names."),
 
     // ── Fields ─────────────────────────────────────────────────────
-    row!(Fields, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first."),
+    row!(Fields, DecodeFailed, "DECODE_ERROR", "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."),
 
     // ── ToJson ─────────────────────────────────────────────────────
     row!(ToJson, DecodeFailed, "DECODE_ERROR", "Check that the file is a valid HWPX document."),
@@ -262,13 +273,13 @@ const TABLE: &[Row] = &[
     // `OpsError::SectionWorkflow(_)` fallback arm in tool_error.
 
     // ── Diff ───────────────────────────────────────────────────────
-    row!(Diff, DecodeFailed, "DECODE_ERROR", "Both inputs must be valid HWPX. For .hwp files, convert with hwpforge_convert first."),
+    row!(Diff, DecodeFailed, "DECODE_ERROR", "Both inputs must be valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>."),
 
     // ── Fill ───────────────────────────────────────────────────────
     row!(Fill, NoValues, "NO_VALUES", "Pass at least one name\u{2192}value pair. Use hwpforge_fields to discover names."),
     row!(Fill, EmptyFieldValue, "EMPTY_FIELD_VALUE", "빈 값 채우기는 미지원 — 값을 지우려면 한컴에서 편집하세요."),
     row!(Fill, FieldNameAmbiguous, "FIELD_NAME_AMBIGUOUS", "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요."),
-    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", "병합-run 모호 필드 또는 빈 본문 — 한컴 재저장 또는 from-json --base 재생성이 필요합니다."),
+    row!(Fill, FieldNotFillable, "FIELD_NOT_FILLABLE", "병합-run 모호 필드 또는 빈 본문이라 이 필드는 채우기 표면이 아닙니다 — 본문을 바꾸려면 hwpforge_to_json 으로 그 섹션을 내보내 편집한 뒤 hwpforge_patch 로 적용하세요."),
     row!(Fill, FillFailed, "FILL_ERROR", "Check that the file is valid HWPX."),
     // FieldNotFound: dynamic hint, see tool_error.
 
@@ -281,16 +292,16 @@ const TABLE: &[Row] = &[
     row!(SetCell, CellHasNonTextContent, "CELL_HAS_NON_TEXT_CONTENT", "표/이미지/컨트롤이 든 셀은 파괴 방지를 위해 교체를 거부합니다."),
     row!(SetCell, CellTargetDuplicate, "CELL_TARGET_DUPLICATE", "두 편집이 같은 앵커 셀로 resolve 됐습니다."),
     row!(SetCell, CellTargetConflict, "CELL_TARGET_CONFLICT", "바깥 셀 교체가 다른 편집이 노리는 중첩 표를 파괴합니다."),
-    row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)."),
-    row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed)."),
+    row!(SetCell, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed). 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 — 둘 다 원본 ZIP 엔트리를 보존합니다."),
+    row!(SetCell, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(SetCell, SetCellCodecFailed, "SET_CELL_CODEC_FAILED", "Report this as a bug."),
     row!(SetCell, UpstreamUnmapped, "SET_CELL_FAILED", "Report this as a bug."),
 
     // ── InsertPara / DeletePara (structural.rs, shared map_error) ────
     row!(InsertPara, InsertTextRequired, "INSERT_TEXT_REQUIRED", "Use `text` for a single paragraph or `texts` for a contiguous block."),
     row!(DeletePara, DeleteNoTarget, "DELETE_NO_TARGET", "indices must be a non-empty list of top-level paragraph indices."),
-    row!(InsertPara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "Structural edits require a round-trip-safe input; this document has a codec fidelity gap."),
-    row!(DeletePara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "Structural edits require a round-trip-safe input; this document has a codec fidelity gap."),
+    row!(InsertPara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
+    row!(DeletePara, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "Structural edits require a round-trip-safe input; this document has a codec fidelity gap. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
     row!(DeletePara, ReferenceStranded, "REFERENCE_STRANDED", "This paragraph carries a bookmark/cross-ref/footnote; deleting it could strand a reference."),
     row!(DeletePara, HardBreakLoss, "HARD_BREAK_LOSS", "This paragraph carries a hard page/column break."),
     row!(InsertPara, SectionPropertiesParagraph, "SECTION_PROPERTIES_PARAGRAPH", "The section's first paragraph holds page setup; it cannot be deleted or displaced."),
@@ -324,9 +335,11 @@ const TABLE: &[Row] = &[
     // refusal) has its own `ops` code, `INPUT_ENTRIES_NOT_CARRIED`, but the
     // legacy `map_error` had no arm for it either — it also fell to the
     // wildcard. Without these two rows it would pass through as the *new*
-    // code instead of staying `STRUCTURAL_EDIT_FAILED`.
-    row!(InsertPara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
-    row!(DeletePara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
+    // code instead of staying `STRUCTURAL_EDIT_FAILED`. The code stays the
+    // wildcard's; the hint names the one refusal reason this row can only
+    // ever mean, plus the editing surfaces that do accept such a document.
+    row!(InsertPara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
+    row!(DeletePara, InputEntriesNotCarried, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused: the encoder does not carry every ZIP entry of this document, so a document saved by Hancom (Preview/*, META-INF/container.rdf) is out of scope for this tool today. To change text instead, export the section with hwpforge_to_json and apply it with hwpforge_patch; to fill a click-here field, use hwpforge_fill — both preserve the original ZIP entries."),
     row!(InsertPara, UpstreamUnmapped, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
     row!(DeletePara, UpstreamUnmapped, "STRUCTURAL_EDIT_FAILED", "The structural edit was refused."),
 
@@ -334,8 +347,8 @@ const TABLE: &[Row] = &[
     row!(StampPlan, StampCodecFailed, "STAMP_CODEC_FAILED", "Check that the file is valid HWPX."),
 
     // ── Stamp ──────────────────────────────────────────────────────
-    row!(Stamp, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가."),
-    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed)."),
+    row!(Stamp, InputNotRoundtripSafe, "INPUT_NOT_ROUNDTRIP_SAFE", "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가 — 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요 (둘 다 원본 ZIP 엔트리를 보존합니다)."),
+    row!(Stamp, InputEntriesNotCarried, "INPUT_ENTRIES_NOT_CARRIED", "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed) — 한컴이 저장한 문서(Preview/*·META-INF/container.rdf)는 현재 이 도구의 대상이 아닙니다. 텍스트만 바꾸려면 hwpforge_to_json(section) → hwpforge_patch, 누름틀은 hwpforge_fill 을 쓰세요."),
     row!(Stamp, StampManifestInvariant, "STAMP_MANIFEST_INVARIANT", "Report this as a bug — the output inventory violated an invariant."),
     row!(Stamp, StampCodecFailed, "STAMP_CODEC_FAILED", "Check that the file is valid HWPX."),
     row!(Stamp, StampSourceHashMismatch, "STAMP_SOURCE_HASH_MISMATCH", "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행해 source_sha256 을 갱신하세요."),
@@ -402,14 +415,14 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
     // the `Decode`-stage `OpsCode::DecodeFailed` (`ops/mod.rs`'s `hwpx_code`
     // has no other arm reachable from an actual decode), so `err.code()`
     // here is always `DecodeFailed`; only the *hint* needs reconstructing —
-    // borrowed verbatim from `Outline`/`Read`/`Fields`'s own `TABLE` rows so
-    // a `.hwp` file gets the same "convert first" guidance everywhere.
+    // kept byte-identical to `Outline`/`Read`/`Fields`'s own `TABLE` rows so
+    // a `.hwp` file gets the same HWP5-conversion guidance everywhere.
     if tool == Tool::Validate {
         if let OpsError::Decode(_) = &err {
             return ToolErrorInfo::new(
                 err.code().as_str(),
                 err.to_string(),
-                "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+                "Check that the file is valid HWPX. This server reads HWPX only — convert an HWP5 (.hwp) file first with the CLI: hwpforge convert-hwp5 <in.hwp> -o <out.hwpx>.",
             );
         }
     }
@@ -528,11 +541,10 @@ pub fn tool_error(tool: Tool, err: OpsError) -> ToolErrorInfo {
             );
         }
         // These two argument-shape rejections have two producers: the MCP
-        // tool's own guard (`tools/read.rs::run_read`) and `ops::read`, whose
-        // `reason` spells CLI flags (`--section`/`--paras`). The MCP message
-        // is frozen, so it comes from the constants above, never from the
-        // producer's `reason` — a rejection forwarded from `ops::read` cannot
-        // leak CLI wording onto the MCP wire.
+        // tool's own guard (`tools/read.rs::run_read`) and `ops::read`. The
+        // MCP message is frozen, so it comes from the constants above, never
+        // from the producer's `reason` — rewording `ops::read` cannot change
+        // the MCP wire.
         OpsError::Rejected { code: OpsCode::ReadTargetRequired, .. } => {
             return ToolErrorInfo::new(
                 "READ_TARGET_REQUIRED",
@@ -762,6 +774,143 @@ mod tests {
                  either the row is wrong or the snapshot needs re-auditing",
                 row.legacy
             );
+        }
+    }
+
+    /// Hints this module deliberately no longer emits, each with the exact
+    /// old wording and why it misdirected the caller.
+    ///
+    /// Codes are the frozen contract; hints are guidance (module docs'
+    /// "What is frozen and what is not"), so a hint that sent an agent to a
+    /// tool that cannot do the job is corrected, not preserved. This list is
+    /// the record of every such correction, and
+    /// [`superseded_hints_are_really_gone`] proves each one really left the
+    /// emitted text — an entry whose row still prints the old wording fails,
+    /// so the list cannot become a dead exemption.
+    ///
+    /// Keyed on `(Tool, OpsCode)` — the `TABLE` row key — not on the legacy
+    /// code string: `insert_para`/`delete_para` report three different
+    /// `OpsCode`s as `STRUCTURAL_EDIT_FAILED`, and only the admission-gate
+    /// one (`InputEntriesNotCarried`) changed. `SpanCountMismatch` and
+    /// `UpstreamUnmapped` keep the generic "The structural edit was
+    /// refused." because those refusals genuinely have no single cause to
+    /// name.
+    const SUPERSEDED_LEGACY_HINTS: &[(Tool, OpsCode, &str)] = &[
+        // `hwpforge_convert` is Markdown → HWPX (`server.rs`), and no MCP
+        // tool converts HWP5 at all, so an agent following this hint spent
+        // its next call on a second failure. HWP5 conversion lives in the
+        // CLI (`hwpforge convert-hwp5`), which the new wording names.
+        (
+            Tool::Outline,
+            OpsCode::DecodeFailed,
+            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+        ),
+        (
+            Tool::Read,
+            OpsCode::DecodeFailed,
+            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+        ),
+        (
+            Tool::Fields,
+            OpsCode::DecodeFailed,
+            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+        ),
+        (
+            Tool::Diff,
+            OpsCode::DecodeFailed,
+            "Both inputs must be valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+        ),
+        // Same wording, reached through `tool_error`'s dedicated
+        // `Tool::Validate` arm rather than a `TABLE` row (module docs).
+        (
+            Tool::Validate,
+            OpsCode::DecodeFailed,
+            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first.",
+        ),
+        // `from-json --base` is CLI spelling: `hwpforge_from_json` has no
+        // base parameter, so the suggested recovery did not exist on this
+        // frontend. Over MCP the body of an unfillable field is changed by
+        // exporting its section with `hwpforge_to_json` and applying the
+        // edit with `hwpforge_patch`.
+        (
+            Tool::Fill,
+            OpsCode::FieldNotFillable,
+            "병합-run 모호 필드 또는 빈 본문 — 한컴 재저장 또는 from-json --base 재생성이 필요합니다.",
+        ),
+        // The admission gate's two refusals stated only that they refused.
+        // The same document is accepted by `hwpforge_to_json` +
+        // `hwpforge_patch` (text) and by `hwpforge_fill` (click-here
+        // fields), both of which rewrite the package preserving every
+        // original ZIP entry, so the new wording names that way through and
+        // says which documents are out of scope today.
+        (
+            Tool::SetCell,
+            OpsCode::InputNotRoundtripSafe,
+            "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed).",
+        ),
+        (
+            Tool::SetCell,
+            OpsCode::InputEntriesNotCarried,
+            "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed).",
+        ),
+        (
+            Tool::InsertPara,
+            OpsCode::InputNotRoundtripSafe,
+            "Structural edits require a round-trip-safe input; this document has a codec fidelity gap.",
+        ),
+        (
+            Tool::DeletePara,
+            OpsCode::InputNotRoundtripSafe,
+            "Structural edits require a round-trip-safe input; this document has a codec fidelity gap.",
+        ),
+        (Tool::InsertPara, OpsCode::InputEntriesNotCarried, "The structural edit was refused."),
+        (Tool::DeletePara, OpsCode::InputEntriesNotCarried, "The structural edit was refused."),
+        (
+            Tool::Stamp,
+            OpsCode::InputNotRoundtripSafe,
+            "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가.",
+        ),
+        (
+            Tool::Stamp,
+            OpsCode::InputEntriesNotCarried,
+            "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed).",
+        ),
+    ];
+
+    /// Every [`SUPERSEDED_LEGACY_HINTS`] entry still names a live producer,
+    /// and that producer no longer emits the old wording.
+    ///
+    /// Both halves matter: without the first, an entry for a deleted row
+    /// would sit there exempting nothing; without the second, a revert to
+    /// the old hint would pass unnoticed.
+    #[test]
+    fn superseded_hints_are_really_gone() {
+        for &(tool, code, old) in SUPERSEDED_LEGACY_HINTS {
+            let current = match TABLE.iter().find(|r| r.tool == tool && r.code == code) {
+                Some(row) => row
+                    .hint
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{tool:?}/{code:?} is listed as superseded but its TABLE row asks \
+                             `ops` for the hint — list `ops::hint_for`'s wording there instead"
+                        )
+                    })
+                    .to_string(),
+                // The one producer that is a `tool_error` arm, not a row.
+                None => {
+                    assert!(
+                        tool == Tool::Validate && code == OpsCode::DecodeFailed,
+                        "{tool:?}/{code:?} is listed as superseded but nothing produces it any \
+                         more — drop the entry instead of leaving a dead exemption"
+                    );
+                    tool_error(tool, OpsError::decode(HwpxError::Zip("not a zip file".into()))).hint
+                }
+            };
+            assert_ne!(
+                current, old,
+                "{tool:?}/{code:?} is listed as superseded but still emits the old hint"
+            );
+            assert!(!current.is_empty(), "{tool:?}/{code:?} lost its hint entirely");
         }
     }
 
@@ -1138,17 +1287,22 @@ mod tests {
     /// Pins `tests/data/new_codes.txt`'s only row: `Tool::Validate`'s
     /// dedicated match arm (module docs) reproduces `ops`'s own
     /// `DECODE_FAILED` wire string (not the `DECODE_ERROR` every other
-    /// decode-gated tool below uses) and the hint borrowed from those
-    /// tools' own rows.
+    /// decode-gated tool below uses), and its hint stays byte-identical to
+    /// the one those tools' own rows carry — a `.hwp` file gets the same
+    /// answer whichever tool rejects it.
     #[test]
     fn validate_decode_failure_matches_the_new_codes_snapshot() {
         let err = OpsError::decode(HwpxError::Zip("not a zip file".into()));
         let got = tool_error(Tool::Validate, err);
         assert_eq!(got.code, "DECODE_FAILED");
-        assert_eq!(
-            got.hint,
-            "Check that the file is valid HWPX. For .hwp files, convert with hwpforge_convert first."
-        );
+
+        let shared = TABLE
+            .iter()
+            .find(|r| r.tool == Tool::Outline && r.code == OpsCode::DecodeFailed)
+            .and_then(|r| r.hint)
+            .expect("outline's DecodeFailed row carries the shared decode hint");
+        assert_eq!(got.hint, shared);
+        assert!(got.hint.contains("hwpforge convert-hwp5"), "{got:?}");
     }
 
     #[test]
@@ -1184,17 +1338,17 @@ mod tests {
 
     #[test]
     fn read_shape_rejections_keep_the_mcp_wording_whoever_produced_them() {
-        // `ops::read` words these two with CLI flags; the MCP message is
-        // frozen and must not follow the producer's `reason`.
+        // The MCP message is frozen and must not follow the producer's
+        // `reason` — any wording a producer chooses is replaced.
         let from_ops = OpsError::Rejected {
             code: OpsCode::ReadTargetRequired,
-            reason: "Pass exactly one of --section, --table, --field".into(),
+            reason: "a producer's own wording for the target rule".into(),
         };
         assert_eq!(tool_error(Tool::Read, from_ops).message, READ_TARGET_REQUIRED_MESSAGE);
 
         let from_ops = OpsError::Rejected {
             code: OpsCode::ReadParasWithoutSection,
-            reason: "--paras requires --section".into(),
+            reason: "a producer's own wording for the paras rule".into(),
         };
         assert_eq!(tool_error(Tool::Read, from_ops).message, READ_PARAS_WITHOUT_SECTION_MESSAGE);
     }
@@ -1359,6 +1513,10 @@ mod tests {
     /// for it — it fell to `_ => STRUCTURAL_EDIT_FAILED` like every other
     /// unlisted variant. Both `insert_para` and `delete_para` share the
     /// admission gate, so both need the row.
+    ///
+    /// The row's hint is this refusal's alone (the two other codes sharing
+    /// the legacy string keep the generic wording), so it names both the
+    /// cause and the editing surfaces that do accept the same document.
     #[test]
     fn structural_uncarried_zip_entries_keeps_the_legacy_wildcard_code() {
         for tool in [Tool::InsertPara, Tool::DeletePara] {
@@ -1369,7 +1527,21 @@ mod tests {
                 }),
             );
             assert_eq!(info.code, "STRUCTURAL_EDIT_FAILED", "{tool:?}");
-            assert_eq!(info.hint, "The structural edit was refused.", "{tool:?}");
+            assert!(info.hint.contains("hwpforge_patch"), "{tool:?}: {info:?}");
+            assert!(info.hint.contains("hwpforge_fill"), "{tool:?}: {info:?}");
+
+            // The codes that genuinely have no single cause to name keep the
+            // generic wording under the same legacy string.
+            let generic = tool_error(
+                tool,
+                OpsError::StructuralEdit(StructuralEditError::SpanCountMismatch {
+                    section: 0,
+                    decoded: 2,
+                    wire: 1,
+                }),
+            );
+            assert_eq!(generic.code, "STRUCTURAL_EDIT_FAILED", "{tool:?}");
+            assert_eq!(generic.hint, "The structural edit was refused.", "{tool:?}");
         }
     }
 
