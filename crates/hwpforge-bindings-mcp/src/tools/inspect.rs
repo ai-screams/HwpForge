@@ -27,49 +27,36 @@ pub struct SectionDetail {
     /// Whether page number is present.
     pub has_page_number: bool,
 
-    // ── package-scope + deep counts (W6c audit follow-up, additive) ────
+    // The eight fields above are this struct's original top-level-only
+    // contract; the nine below carry `ops::InspectSection`'s `all_`/`deep_`
+    // counts through under the same names and values. They stay at the end,
+    // after the eight, so a client reading fields positionally is
+    // unaffected — `inspect_section_detail_key_order_is_existing_eight_then_new_nine`
+    // locks that.
     //
-    // The eight fields above are the legacy top-level-only contract this
-    // struct always had. The nine below carry `ops::InspectSection`'s
-    // package-scope and deep counts through unchanged — same name, same
-    // value, same scope as documented on `ops::InspectSection` itself
-    // (`hwpforge::ops::inspect` module) — closing the gap where the Python
-    // bindings already exposed these nine (`InspectSection` in
-    // `hwpforge-bindings-py`'s `.pyi`) but MCP silently dropped them. Added
-    // at the end, after the eight legacy fields, so a client destructuring
-    // this struct's serialized fields positionally is unaffected.
-    /// Tables, captions included, master pages excluded — a decoded-object
-    /// count, not a raw scan. See `ops::InspectSection::tables_all`'s doc for
-    /// the exact scope and the caveat against the CLI's raw-scan `tables`
-    /// value on the same document.
-    pub tables_all: usize,
-    /// Images, same scope and caveat as [`Self::tables_all`]. See
-    /// `ops::InspectSection::images_all`.
-    pub images_all: usize,
-    /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), same
-    /// scope and caveat as [`Self::tables_all`]. See
-    /// `ops::InspectSection::text_boxes`.
-    pub text_boxes: usize,
-    /// Line drawing objects, same scope and caveat as [`Self::tables_all`].
-    /// See `ops::InspectSection::lines`.
-    pub lines: usize,
-    /// Pure rectangles — a text-bearing one counts under
-    /// [`Self::text_boxes`] instead, never both. See
-    /// `ops::InspectSection::rectangles`.
-    pub rectangles: usize,
-    /// Polygon drawing objects, same scope and caveat as
-    /// [`Self::tables_all`]. See `ops::InspectSection::polygons`.
-    pub polygons: usize,
-    /// Body-flow paragraphs with visible text ([`Self::paragraphs`]'s scope,
-    /// each paragraph's visibility probed one recursion step deeper). See
-    /// `ops::InspectSection::non_empty_paragraphs`.
-    pub non_empty_paragraphs: usize,
-    /// Body + header + footer paragraphs, recursing into table cells and
-    /// text boxes/notes/shapes/memos — not captions, group children or
-    /// master pages. See `ops::InspectSection::deep_paragraphs`.
+    // `ops::InspectSection`'s `# Scope table` is the canonical statement of
+    // what each prefix counts; the docs below name a scope rather than
+    // restating it.
+    /// Tables, `all_` scope — a decoded-object count, not a raw scan.
+    pub all_tables: usize,
+    /// Images, `all_` scope.
+    pub all_images: usize,
+    /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), `all_`
+    /// scope.
+    pub all_text_boxes: usize,
+    /// Line drawing objects, `all_` scope.
+    pub all_lines: usize,
+    /// Pure rectangles, `all_` scope — a text-bearing one counts under
+    /// [`Self::all_text_boxes`] instead, never both.
+    pub all_rectangles: usize,
+    /// Polygon drawing objects, `all_` scope.
+    pub all_polygons: usize,
+    /// Body-flow paragraphs carrying visible text — [`Self::paragraphs`]'s
+    /// set, narrowed.
+    pub top_level_non_empty_paragraphs: usize,
+    /// Paragraphs, `deep_` scope.
     pub deep_paragraphs: usize,
-    /// Same recursion as [`Self::deep_paragraphs`], counting only paragraphs
-    /// with visible text. See `ops::InspectSection::deep_non_empty_paragraphs`.
+    /// Paragraphs carrying visible text, `deep_` scope.
     pub deep_non_empty_paragraphs: usize,
 }
 
@@ -173,13 +160,13 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
                 has_header: s.has_header,
                 has_footer: s.has_footer,
                 has_page_number: s.has_page_number,
-                tables_all: s.tables_all,
-                images_all: s.images_all,
-                text_boxes: s.text_boxes,
-                lines: s.lines,
-                rectangles: s.rectangles,
-                polygons: s.polygons,
-                non_empty_paragraphs: s.non_empty_paragraphs,
+                all_tables: s.all_tables,
+                all_images: s.all_images,
+                all_text_boxes: s.all_text_boxes,
+                all_lines: s.all_lines,
+                all_rectangles: s.all_rectangles,
+                all_polygons: s.all_polygons,
+                top_level_non_empty_paragraphs: s.top_level_non_empty_paragraphs,
                 deep_paragraphs: s.deep_paragraphs,
                 deep_non_empty_paragraphs: s.deep_non_empty_paragraphs,
             }
@@ -251,13 +238,11 @@ mod tests {
         assert_eq!(err.code, "FILE_NOT_FOUND");
     }
 
-    /// W6c audit follow-up (C6): `SectionDetail` used to stop at the eight
-    /// legacy fields and drop `ops::InspectSection`'s nine package-scope/deep
-    /// counts on the floor — Python exposed them, MCP did not. This checks
-    /// the nine new fields against a *direct* `ops::inspect` call on the same
-    /// bytes rather than hardcoded numbers, so the assertion tracks whatever
-    /// the decoder actually reports instead of a value copied out of a
-    /// one-off run.
+    /// `SectionDetail` must carry `ops::InspectSection`'s nine `all_`/`deep_`
+    /// counts, not just the eight top-level ones. Checked against a *direct*
+    /// `ops::inspect` call on the same bytes rather than hardcoded numbers,
+    /// so the assertions track whatever the decoder actually reports instead
+    /// of a value copied out of a one-off run.
     #[test]
     fn inspect_section_detail_carries_ops_package_scope_and_deep_counts() {
         let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
@@ -280,13 +265,16 @@ mod tests {
         assert_eq!(detail.has_page_number, ops_section.has_page_number);
 
         // New nine fields: same name, same value, straight from ops.
-        assert_eq!(detail.tables_all, ops_section.tables_all);
-        assert_eq!(detail.images_all, ops_section.images_all);
-        assert_eq!(detail.text_boxes, ops_section.text_boxes);
-        assert_eq!(detail.lines, ops_section.lines);
-        assert_eq!(detail.rectangles, ops_section.rectangles);
-        assert_eq!(detail.polygons, ops_section.polygons);
-        assert_eq!(detail.non_empty_paragraphs, ops_section.non_empty_paragraphs);
+        assert_eq!(detail.all_tables, ops_section.all_tables);
+        assert_eq!(detail.all_images, ops_section.all_images);
+        assert_eq!(detail.all_text_boxes, ops_section.all_text_boxes);
+        assert_eq!(detail.all_lines, ops_section.all_lines);
+        assert_eq!(detail.all_rectangles, ops_section.all_rectangles);
+        assert_eq!(detail.all_polygons, ops_section.all_polygons);
+        assert_eq!(
+            detail.top_level_non_empty_paragraphs,
+            ops_section.top_level_non_empty_paragraphs
+        );
         assert_eq!(detail.deep_paragraphs, ops_section.deep_paragraphs);
         assert_eq!(detail.deep_non_empty_paragraphs, ops_section.deep_non_empty_paragraphs);
 
@@ -294,16 +282,16 @@ mod tests {
         // fixture, or the equality assertions above would pass vacuously
         // (both sides zero) without ever exercising a real decoded count.
         assert!(
-            ops_section.images_all > 0 || ops_section.deep_paragraphs > 0,
+            ops_section.all_images > 0 || ops_section.deep_paragraphs > 0,
             "fixture must exercise at least one non-trivial package-scope/deep count: {ops_section:?}"
         );
     }
 
-    /// W6c audit follow-up (C6): the nine new fields must land *after* the
-    /// eight legacy ones — additive, not reordered — because a client that
-    /// destructures `section_details[i]` positionally (a naive JSON-schema
-    /// consumer, a Python `TypedDict` that iterates `.items()`) would
-    /// otherwise silently pick up the wrong value for an old field.
+    /// The nine `all_`/`deep_` fields must land *after* the eight top-level
+    /// ones — additive, not reordered — because a client that destructures
+    /// `section_details[i]` positionally (a naive JSON-schema consumer, a
+    /// Python `TypedDict` that iterates `.items()`) would otherwise silently
+    /// pick up the wrong value for an older field.
     #[test]
     fn inspect_section_detail_key_order_is_existing_eight_then_new_nine() {
         let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
@@ -320,13 +308,13 @@ mod tests {
             "has_header",
             "has_footer",
             "has_page_number",
-            "tables_all",
-            "images_all",
-            "text_boxes",
-            "lines",
-            "rectangles",
-            "polygons",
-            "non_empty_paragraphs",
+            "all_tables",
+            "all_images",
+            "all_text_boxes",
+            "all_lines",
+            "all_rectangles",
+            "all_polygons",
+            "top_level_non_empty_paragraphs",
             "deep_paragraphs",
             "deep_non_empty_paragraphs",
         ];

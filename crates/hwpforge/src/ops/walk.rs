@@ -90,26 +90,31 @@ use hwpforge_core::table::Table;
 /// `rectangles`/`polygons` fields sourced from exactly such a raw scan
 /// instead of from this module for that reason (see its `commands/
 /// inspect.rs` doc) — this module's counts feed `InspectSection`'s
-/// `tables_all`/`images_all`/… fields, a deliberately distinct scope
-/// (see that struct's doc).
+/// `all_*` fields, a deliberately distinct scope (see that struct's doc).
+///
+/// The `all_` prefix matches the public field names these feed, so a
+/// builder line reads `all_tables: objects.all_tables` and cannot be
+/// mis-wired to one of the two *other* per-section table counts in scope at
+/// that site (`Section::content_counts()`'s top-level one and
+/// `inspect::Counts`' deep one).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ObjectCounts {
     /// Tables, at any nesting depth (cells, captions, shape groups, memos).
-    pub(crate) tables: usize,
+    pub(crate) all_tables: usize,
     /// Images, at any nesting depth.
-    pub(crate) images: usize,
+    pub(crate) all_images: usize,
     /// Text boxes ([`Control::TextBox`] — HWPX `<hp:rect>` with a nested
     /// `<hp:drawText>`).
-    pub(crate) text_boxes: usize,
+    pub(crate) all_text_boxes: usize,
     /// Line drawing objects ([`Control::Line`]).
-    pub(crate) lines: usize,
+    pub(crate) all_lines: usize,
     /// Pure rectangles ([`Control::Rect`] — HWPX `<hp:rect>` *without* a
     /// nested `<hp:drawText>`; a text-bearing `<hp:rect>` decodes to
-    /// [`Control::TextBox`] instead and counts under [`Self::text_boxes`],
+    /// [`Control::TextBox`] instead and counts under [`Self::all_text_boxes`],
     /// never both).
-    pub(crate) rectangles: usize,
+    pub(crate) all_rectangles: usize,
     /// Polygon drawing objects ([`Control::Polygon`]).
-    pub(crate) polygons: usize,
+    pub(crate) all_polygons: usize,
 }
 
 /// Computes [`ObjectCounts`] for `section`.
@@ -137,14 +142,14 @@ fn visit_paragraphs_for_objects(paragraphs: &[Paragraph], counts: &mut ObjectCou
 fn visit_run_for_objects(run: &Run, counts: &mut ObjectCounts) {
     match &run.content {
         RunContent::Table(table) => {
-            counts.tables += 1;
+            counts.all_tables += 1;
             visit_table_for_objects(table, counts);
         }
         // The one gap `Section::for_each_paragraph` has on purpose (Core's
         // `image_caption_paragraphs_are_skipped_documents_known_gap` test) —
         // closing it here, for counting, is this module's reason to exist.
         RunContent::Image(image) => {
-            counts.images += 1;
+            counts.all_images += 1;
             visit_caption_for_objects(image.caption.as_ref(), counts);
         }
         RunContent::Control(control) => visit_control_for_objects(control, counts),
@@ -178,10 +183,10 @@ fn visit_control_for_objects(control: &Control, counts: &mut ObjectCounts) {
     // doc's "Charts are deliberately not one of the counted fields here"
     // paragraph.
     match control {
-        Control::TextBox { .. } => counts.text_boxes += 1,
-        Control::Polygon { .. } => counts.polygons += 1,
-        Control::Line { .. } => counts.lines += 1,
-        Control::Rect { .. } => counts.rectangles += 1,
+        Control::TextBox { .. } => counts.all_text_boxes += 1,
+        Control::Polygon { .. } => counts.all_polygons += 1,
+        Control::Line { .. } => counts.all_lines += 1,
+        Control::Rect { .. } => counts.all_rectangles += 1,
         _ => {}
     }
     match control_descent(control) {
@@ -292,8 +297,12 @@ pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ParagraphCounts {
     /// Body-flow paragraphs (`section.paragraphs`, no recursion) with
-    /// visible text, per [`paragraph_has_visible_text`].
-    pub(crate) non_empty_paragraphs: usize,
+    /// visible text, per [`paragraph_has_visible_text`]. The counted *set*
+    /// is `section.paragraphs` itself, which is what `InspectSection`'s
+    /// `top_level_paragraphs` measures — hence the shared prefix, and hence
+    /// this can never exceed it. Only the per-paragraph visibility *probe*
+    /// looks deeper.
+    pub(crate) top_level_non_empty_paragraphs: usize,
     /// Body + header + footer paragraphs, recursing into table cells and
     /// `TextBox`/`Footnote`/`Endnote`/`Ellipse`/`Polygon`/`Memo` content.
     pub(crate) deep_paragraphs: usize,
@@ -304,7 +313,7 @@ pub(crate) struct ParagraphCounts {
 
 /// Computes [`ParagraphCounts`] for `section`.
 pub(crate) fn paragraph_counts(section: &Section) -> ParagraphCounts {
-    let non_empty_paragraphs: usize =
+    let top_level_non_empty_paragraphs: usize =
         section.paragraphs.iter().filter(|paragraph| paragraph_has_visible_text(paragraph)).count();
 
     let deep_paragraphs: usize = count_paragraphs_narrow(&section.paragraphs)
@@ -331,7 +340,7 @@ pub(crate) fn paragraph_counts(section: &Section) -> ParagraphCounts {
             .map(|footer| count_non_empty_paragraphs_narrow(&footer.paragraphs))
             .sum::<usize>();
 
-    ParagraphCounts { non_empty_paragraphs, deep_paragraphs, deep_non_empty_paragraphs }
+    ParagraphCounts { top_level_non_empty_paragraphs, deep_paragraphs, deep_non_empty_paragraphs }
 }
 
 /// Whether `paragraph` (or content nested one recursion step inside it —
@@ -536,8 +545,8 @@ mod tests {
         // [`chart_nested_in_a_caption_is_a_documented_decoder_gap`] for why
         // a decode-based chart count would be unsafe to offer at all).
         let counts = object_counts(&section);
-        assert_eq!(counts.images, 2, "host image + caption-nested image");
-        assert_eq!(counts.tables, 1);
+        assert_eq!(counts.all_images, 2, "host image + caption-nested image");
+        assert_eq!(counts.all_tables, 1);
 
         let paragraphs = paragraph_counts(&section);
         // The master-page paragraph never enters this scope (headers/footers
@@ -672,12 +681,12 @@ mod tests {
 
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
         let counts = object_counts(&section);
-        assert_eq!(counts.rectangles, 1);
-        assert_eq!(counts.text_boxes, 1);
+        assert_eq!(counts.all_rectangles, 1);
+        assert_eq!(counts.all_text_boxes, 1);
     }
 
     #[test]
-    fn non_empty_paragraphs_is_shallow_but_probes_deep() {
+    fn top_level_non_empty_paragraphs_is_shallow_but_probes_deep() {
         let mut host = Paragraph::new(ParaShapeIndex::new(0));
         let table = Table::new(vec![TableRow::new(vec![TableCell::new(
             vec![text_para("cell text")],
@@ -690,6 +699,11 @@ mod tests {
         let counts = paragraph_counts(&section);
         // The host paragraph has no direct text but its cell does — the
         // deep probe finds it without recursing into the second paragraph.
-        assert_eq!(counts.non_empty_paragraphs, 1);
+        assert_eq!(counts.top_level_non_empty_paragraphs, 1);
+        // What the `top_level_` prefix claims: the counted set is
+        // `section.paragraphs`, the same set `InspectSection`'s
+        // `top_level_paragraphs` measures, so this is a subset count and can
+        // never exceed it. Only the visibility probe reaches deeper.
+        assert!(counts.top_level_non_empty_paragraphs <= section.paragraphs.len());
     }
 }

@@ -963,9 +963,8 @@ fn inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page
 /// (`convert_picture`, `hwpforge-smithy-hwpx/src/decoder/section.rs`), so no
 /// `Control`/`Image` run is ever constructed for it, but the element is
 /// still genuinely present in the section XML. The CLI must keep counting
-/// it (byte-identical to the pre-migration scanner); `ops::InspectSection`'s
-/// `images_all` must not (it is a decoded-object count, not a raw scan —
-/// see its rustdoc).
+/// it; `ops::InspectSection`'s `all_images` must not (it is a decoded-object
+/// count, not a raw scan — see its scope table).
 #[test]
 fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     use hwpforge_core::image::{Image, ImageFormat, ImageStore};
@@ -1047,7 +1046,7 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     let out = hwpforge::ops::inspect(&tampered_bytes, &hwpforge::ops::InspectOptions::default())
         .expect("Ok(None) on one picture is not a decode error");
     assert_eq!(
-        out.report.section_details[0].images_all, 0,
+        out.report.section_details[0].all_images, 0,
         "decoded-object count must not see the dropped picture: {:?}",
         out.report.section_details[0]
     );

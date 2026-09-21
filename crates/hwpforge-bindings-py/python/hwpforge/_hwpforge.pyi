@@ -237,6 +237,34 @@ class InspectMetadata(TypedDict):
     modified: str | None
     keywords: list[str]
 
+# A key's prefix names the set it counts. These are four incomparable
+# recursion sets, not a hierarchy — no row is a wider version of another:
+#
+#   prefix       recurses into                             master pages  captions
+#   top_level_   nothing: the section's own body flow      no            no
+#   (none)       cells, text boxes, notes, memos, hdr/ftr  yes           no
+#   deep_        hdr/ftr, cells, textbox/note/shape/memo   no            no
+#   all_         everything the section's XML holds,       no            yes
+#                group children included
+#
+# `top_level_` and the unprefixed keys carry paragraphs/tables/images/charts;
+# `deep_` carries paragraphs only; `all_` carries the six object counts.
+#
+# A `non_empty_` infix narrows a row to the paragraphs carrying visible text
+# without changing which set is counted, so `top_level_non_empty_paragraphs`
+# never exceeds `top_level_paragraphs`.
+#
+# There is no `all_charts`: the HWPX decoder cannot reconstruct a chart nested
+# anywhere but a section's own top-level paragraphs, so such a key would
+# silently undercount the very documents it would exist for.
+#
+# The `all_` keys count DECODED objects, not raw XML elements. `hwpforge`'s own
+# CLI has same-scoped `--json` keys under older spellings (`tables`, `images`,
+# `text_boxes`, ...) that ARE a raw scan and can therefore be LARGER on a
+# document where the decoder accepts an element it cannot represent (for
+# example a `<hp:pic>` with no usable image reference). The two are not
+# interchangeable. The paragraph keys carry no such caveat — paragraph presence
+# is never silently dropped — and agree with the CLI's by construction.
 class InspectSection(TypedDict):
     index: int
     top_level_paragraphs: int
@@ -250,37 +278,13 @@ class InspectSection(TypedDict):
     has_header: bool
     has_footer: bool
     has_page_number: bool
-    # Package-scope counts (captions included, master pages excluded — a
-    # third scope, distinct from both the `top_level_*` fields above (no
-    # nesting) and `tables`/`images`/`charts` (nested, but caption-blind and
-    # master-page-inclusive). No `charts_all` here — the HWPX decoder cannot
-    # reconstruct a chart nested in anything but a section's own top-level
-    # paragraphs (see the Rust `InspectSection.charts` field doc and
-    # `InspectReport`'s "Counting contract" doc for the decoder limitation
-    # this traces to), so `hwpforge`'s CLI keeps that one count a raw scan
-    # rather than exposing a value that would silently undercount.
-    #
-    # `tables_all`/`images_all`/`text_boxes`/`lines`/`rectangles`/`polygons`
-    # are DECODED-OBJECT counts, walking the Rust tree `hwpforge` decoded —
-    # NOT a raw XML element scan. `hwpforge`'s own CLI has same-named
-    # `--json` keys (`tables`, `images`, …, without the `_all` suffix on the
-    # first two) that ARE a raw scan and can therefore be LARGER than these
-    # six on a document where the decoder accepts an element it cannot
-    # represent (for example a `<hp:pic>` with no usable image reference,
-    # which decodes to no image at all rather than an error). The two are
-    # not interchangeable; do not assume they agree.
-    tables_all: int
-    images_all: int
-    text_boxes: int
-    lines: int
-    rectangles: int
-    polygons: int
-    # `non_empty_paragraphs`/`deep_paragraphs`/`deep_non_empty_paragraphs`
-    # have no such caveat: paragraph presence is never silently dropped the
-    # way an unrepresentable picture reference is, so these agree with the
-    # CLI's same-named `--json` keys by construction (same decode, same
-    # bytes, same decoder).
-    non_empty_paragraphs: int
+    all_tables: int
+    all_images: int
+    all_text_boxes: int
+    all_lines: int
+    all_rectangles: int
+    all_polygons: int
+    top_level_non_empty_paragraphs: int
     deep_paragraphs: int
     deep_non_empty_paragraphs: int
 

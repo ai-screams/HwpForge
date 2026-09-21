@@ -347,7 +347,7 @@ impl HwpForgeServer {
     /// Use to understand document layout before editing.
     #[tool(
         name = "hwpforge_inspect",
-        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, page numbers per section, and any decode warnings. Each section also reports package-scope counts (captions included, master pages excluded, no `_all` suffix on paragraphs) and deep_* paragraph counts (recursing into table cells, text boxes, notes and memos) alongside the top-level-only legacy counts — the two scopes can disagree on documents with nested content."
+        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, page numbers per section, and any decode warnings. A count's prefix names its scope: unprefixed keys are top-level only, `all_*` counts objects anywhere in the section including captions but not master pages, and `deep_*` counts paragraphs recursing into table cells, text boxes, notes and memos. The scopes can disagree on documents with nested content."
     )]
     async fn hwpforge_inspect(
         &self,

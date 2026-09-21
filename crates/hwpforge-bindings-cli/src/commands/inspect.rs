@@ -59,63 +59,31 @@ struct SectionInfo {
 
 /// Run the inspect command.
 ///
-/// # Single-decode-plus-one-raw-scan contract (W6b audit follow-up)
+/// # Why the object counts are a raw XML scan, not the decode
 ///
-/// Only the paragraph-count fields come from the one `ops::inspect` decode:
-/// `deep_paragraphs`/`deep_non_empty_paragraphs`/`non_empty_paragraphs`
-/// (`ops::InspectSection`'s same-named fields — see its rustdoc). Paragraph
-/// presence is not something the decoder ever silently drops, so a decoded
-/// count and a raw-XML count of the same bytes are deterministically
-/// identical, not merely usually so.
-///
-/// Every *object* count — `tables`/`images`/`text_boxes`/`lines`/
-/// `rectangles`/`polygons`/`charts`/`ole_objects` — comes from one raw-XML
-/// element scan instead (`raw_scan_counts_per_section`, built on
-/// `collect_section_path_inventory`), **not** from `ops::InspectSection`'s
-/// decoded-object fields (`tables_all`/`images_all`/`text_boxes`/`lines`/
-/// `rectangles`/`polygons`). An earlier version of this command read those
-/// six from the decode, since captions-included-master-pages-excluded is the
-/// same *scope* the legacy scanner used — but an audit follow-up found that
-/// matching scope does not mean matching values: an `<hp:pic>` with no
-/// usable `binaryItemIDRef`, for example, is genuinely in the section XML
-/// (raw scan sees it) but decodes to `Ok(None)` (`convert_picture`,
-/// `hwpforge-smithy-hwpx/src/decoder/section.rs`) and therefore never
-/// becomes a `Control`/`Image` the decoded-object walk can count. A document
-/// with such a dropped element would have silently reported a smaller
-/// `tables`/`images`/… than the pre-migration CLI ever did — see
+/// This command opens the package twice: one `ops::inspect` decode
+/// (metadata, top-level counts, paragraph counts, styles) plus one
+/// `raw_scan_counts_per_section` text scan that supplies *every* object
+/// count — `tables`/`images`/`charts`/`ole_objects`/`text_boxes`/`lines`/
+/// `rectangles`/`polygons`. `ops::InspectSection`'s `all_*` fields have the
+/// same scope but are a decoded-object count, and matching scope is not
+/// matching values: an element the decoder accepts but cannot represent —
+/// an `<hp:pic>` with no usable `binaryItemIDRef`, which `convert_picture`
+/// (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
+/// rather than an error — is in the section XML but never becomes a
+/// `Control`/`Image`. Reading the decode here would make this command
+/// report fewer objects than its `--json` contract has always reported, on
+/// exactly those documents. The raw scan keeps that contract by
+/// construction rather than by fixture luck; see
 /// `crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence` in
-/// `cli_integration.rs` for the reproduction and
-/// `hwpforge::ops::walk`'s `ObjectCounts` doc for the general note. Routing
-/// these six through the raw scan instead restores byte-identity with the
-/// pre-migration CLI *by construction* (same source, same matching rule),
-/// not by fixture luck.
+/// `cli_integration.rs` for the reproduction. Two of the eight have their
+/// own reasons on top: Core has no HWPX representation for `<hp:ole>` at
+/// all, and it cannot reconstruct a chart nested below a section's own
+/// top-level paragraphs (`ops::InspectSection`'s scope table).
 ///
-/// `charts` and `ole_objects` were already raw-scanned before this
-/// follow-up, for a related but distinct reason each:
-///
-/// - `ole_objects`: Core's HWPX decoder has no representation for
-///   `<hp:ole>` at all — no `Control` variant is ever constructed for it
-///   (verified by grepping the decoder) — so there is no Core-tree count to
-///   read it from, lossy or not.
-/// - `charts`: Core *can* represent a chart (`Control::Chart`), but
-///   `hwpforge-smithy-hwpx`'s decoder only reconstructs one when it is a
-///   section's own top-level paragraph content — chart is not one of the
-///   `HxRunChildKind` variants the recursive per-container dispatch
-///   handles, so a chart nested in a caption, a table cell, a text box or
-///   anywhere else `ops::walk::object_counts` also reaches is silently
-///   invisible on decode (see that module's doc and its
-///   `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
-///   reproduction).
-///
-/// So the command now opens the package twice, not three times: one
-/// `ops::inspect` decode (metadata, top-level counts, paragraph counts,
-/// styles) plus one `raw_scan_counts_per_section` text scan (every object
-/// count) — down from the pre-follow-up three (that one decode, a second
-/// local `HwpxDecoder::decode` for the deep scanner, and a raw scan for
-/// charts/ole_objects alone), and still down from the original
-/// pre-migration-parity baseline of three as well.
-/// `collect_section_path_inventory` reads `section-N.xml` text and matches
-/// element names — no `HwpxDecoder::decode`, no document tree.
+/// The paragraph counts do come from the decode, because paragraph presence
+/// is never silently dropped that way — a decoded count and a raw count of
+/// the same bytes are deterministically identical there.
 pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     check_file_size(file, json_mode);
     let bytes = read_input(file, json_mode);
@@ -268,21 +236,23 @@ impl SectionInfo {
     ///
     /// `tables`/`images`/`charts`/`ole_objects`/`text_boxes`/`lines`/
     /// `rectangles`/`polygons` all come from `raw`, never from
-    /// `ops::InspectSection`'s same-scoped-but-decoded `tables_all`/
-    /// `images_all`/`text_boxes`/`lines`/`rectangles`/`polygons` fields (see
-    /// that struct's rustdoc). `non_empty_paragraphs`/`deep_paragraphs`/
-    /// `deep_non_empty_paragraphs` still come from `section` — paragraph
-    /// presence has no such gap (see `ops::InspectSection::non_empty_paragraphs`'s
-    /// doc) — and are not the same scope as `ops::InspectSection`'s
-    /// same-named-but-differently-scoped `paragraphs` field either, which
-    /// stays caption-blind and master-page-inclusive for MCP/Python, a
-    /// third, incompatible scope (see `hwpforge::ops::inspect`'s rustdoc).
+    /// `ops::InspectSection`'s same-scoped-but-decoded `all_*` fields (see
+    /// that struct's scope table). The three paragraph counts still come
+    /// from `section` — paragraph presence has no such gap.
+    ///
+    /// The CLI's own key spellings are older than the ops ones and stay
+    /// as they are (`--json` is byte-frozen), so two of the three paragraph
+    /// keys are deliberately spelled differently from the ops field they
+    /// read: `non_empty_paragraphs` here is `top_level_non_empty_paragraphs`
+    /// there, and `paragraphs` here is `top_level_paragraphs` there. Neither
+    /// is `ops::InspectSection::paragraphs`, which is a third scope again
+    /// (caption-blind, master-page-inclusive) that this command never emits.
     fn from_ops(section: InspectSection, raw: RawScanCounts) -> Self {
         Self {
             index: section.index,
             paragraphs: section.top_level_paragraphs,
             deep_paragraphs: section.deep_paragraphs,
-            non_empty_paragraphs: section.non_empty_paragraphs,
+            non_empty_paragraphs: section.top_level_non_empty_paragraphs,
             deep_non_empty_paragraphs: section.deep_non_empty_paragraphs,
             tables: raw.tables,
             images: raw.images,

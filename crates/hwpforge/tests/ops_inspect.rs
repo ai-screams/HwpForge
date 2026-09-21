@@ -39,10 +39,10 @@ fn reports_structure_of_a_table_fixture() {
 }
 
 #[test]
-fn section_deserializes_json_written_before_the_top_level_fields_existed() {
-    // The exact key set hwpforge 0.16.5's `InspectSection` wrote (main@350851f
-    // `crates/hwpforge/src/ops/inspect.rs`, before this review fix) — no
-    // `top_level_tables`/`top_level_images`/`top_level_charts`.
+fn section_deserializes_the_key_set_0_16_5_wrote() {
+    // Exactly the nine keys hwpforge 0.16.5's `InspectSection` wrote. Every
+    // field added since carries `#[serde(default)]`, so all twelve of them
+    // must default rather than fail the whole parse.
     let old_json = r#"{
         "index": 0,
         "top_level_paragraphs": 2,
@@ -62,6 +62,25 @@ fn section_deserializes_json_written_before_the_top_level_fields_existed() {
     assert_eq!(section.top_level_tables, 0, "no `top_level_tables` key — must default, not fail");
     assert_eq!(section.top_level_images, 0, "no `top_level_images` key — must default, not fail");
     assert_eq!(section.top_level_charts, 0, "no `top_level_charts` key — must default, not fail");
+    // The `all_`/`deep_` counts and the narrowed top-level one: absent from
+    // that key set too, so each must default. Asserted per field rather than
+    // in bulk so dropping one field's `#[serde(default)]` fails here instead
+    // of turning every older payload into a parse error at a caller.
+    assert_eq!(section.all_tables, 0, "no `all_tables` key — must default, not fail");
+    assert_eq!(section.all_images, 0, "no `all_images` key — must default, not fail");
+    assert_eq!(section.all_text_boxes, 0, "no `all_text_boxes` key — must default, not fail");
+    assert_eq!(section.all_lines, 0, "no `all_lines` key — must default, not fail");
+    assert_eq!(section.all_rectangles, 0, "no `all_rectangles` key — must default, not fail");
+    assert_eq!(section.all_polygons, 0, "no `all_polygons` key — must default, not fail");
+    assert_eq!(
+        section.top_level_non_empty_paragraphs, 0,
+        "no `top_level_non_empty_paragraphs` key — must default, not fail"
+    );
+    assert_eq!(section.deep_paragraphs, 0, "no `deep_paragraphs` key — must default, not fail");
+    assert_eq!(
+        section.deep_non_empty_paragraphs, 0,
+        "no `deep_non_empty_paragraphs` key — must default, not fail"
+    );
 }
 
 #[test]
