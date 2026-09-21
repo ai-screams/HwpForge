@@ -5,7 +5,7 @@ use serde::Serialize;
 use hwpforge::ops::{self, InspectOptions};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Summary of a single section.
 #[derive(Debug, Serialize)]
@@ -66,6 +66,10 @@ pub struct InspectData {
     pub total_charts: usize,
     /// Per-section detail.
     pub section_details: Vec<SectionDetail>,
+    /// Decoder warnings raised while decoding (`ops::InspectOutput::warnings`).
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Inspect an HWPX file and return structural summary.
@@ -82,13 +86,14 @@ pub struct InspectData {
 /// traversal, so this maps from the shallow counterparts
 /// (`InspectSection::top_level_*`) instead — values are byte-identical to
 /// what this file computed by hand before. Decoder warnings
-/// (`ops::InspectOutput::warnings`) are not surfaced: `InspectData` has no
-/// field for them (schema freeze) — see the W2 report.
+/// (`ops::InspectOutput::warnings`) are surfaced through
+/// `InspectData::warnings`.
 pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
     let out = ops::inspect(&bytes, &InspectOptions::default())
         .map_err(|e| compat::tool_error(Tool::Inspect, e))?;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
     let report = out.report;
 
     let metadata = MetadataInfo {
@@ -135,5 +140,60 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
         total_images,
         total_charts,
         section_details,
+        warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn inspect_via_mcp_surface_has_no_warnings_on_a_clean_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("probe.hwpx");
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 문단입니다.",
+            false,
+            path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let data = run_inspect(path.to_str().unwrap(), false).unwrap();
+        assert_eq!(data.sections, 1);
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 inspect 하면, 디코드 경고
+    /// (`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn inspect_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_inspect(&path, false).unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "inspect must surface the decode warning: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn inspect_missing_file_reports_file_not_found() {
+        let err = run_inspect("/nonexistent/inspect-warnings-probe.hwpx", false).unwrap_err();
+        assert_eq!(err.code, "FILE_NOT_FOUND");
+    }
 }

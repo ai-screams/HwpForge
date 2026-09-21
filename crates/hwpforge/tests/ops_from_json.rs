@@ -242,6 +242,323 @@ fn a_semantic_loss_warning_comes_back_with_the_bytes_instead_of_replacing_them()
     assert_eq!(out.sections, 1);
 }
 
+/// `to_json` promotes each paragraph's wire `linesegarray` into
+/// `Paragraph::layout_cache` (W1d), but `from_json` always encodes with
+/// `EncodeOptions::default`, whose `emit_layout_cache` stays off — a cache an
+/// edited document no longer matches would be worse than none. Without a
+/// warning that drop is silent: the round trip decodes fine, but `hwpforge`'s
+/// own PDF path needs the cache and would fail later with no link back here.
+///
+/// `SimpleTable.hwpx` is confirmed (by the guard assertion below) to carry a
+/// non-empty cache on at least one paragraph, so this is not a vacuous test.
+#[test]
+fn from_json_warns_when_the_input_carries_a_layout_cache_it_does_not_re_emit() {
+    let out = to_json(&fixture("SimpleTable.hwpx"), &ToJsonOptions::default()).expect("to_json");
+    assert_eq!(out.exported.document.sections().len(), 1, "fixture has one section");
+    let mut cached_paragraphs = 0usize;
+    out.exported.document.sections()[0].for_each_paragraph(|p| {
+        if p.layout_cache.as_ref().is_some_and(|c| !c.is_empty()) {
+            cached_paragraphs += 1;
+        }
+    });
+    assert!(cached_paragraphs > 0, "guard: the fixture must carry a promoted layout cache");
+
+    let json = serde_json::to_string(&out.document).expect("serialise");
+    let from = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = from.meta().warnings.iter().map(|w| w.code.clone()).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").count(),
+        1,
+        "one warning per cached section, not per paragraph: {codes:?}"
+    );
+    let warning = from
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    // The path names the actual cached paragraph, not just the section —
+    // `SimpleTable.hwpx`'s cache sits on the section's first body paragraph.
+    assert!(warning.message.contains("section[0].para[0]"), "{}", warning.message);
+    assert!(warning.message.contains("not re-emitted"), "{}", warning.message);
+
+    // The drop is real, not just unreported: the rebuilt package carries no
+    // promoted cache once re-decoded.
+    let redecoded = hwpforge::hwpx::HwpxDecoder::decode(&from.bytes).expect("decode rebuilt");
+    let mut redecoded_cached = 0usize;
+    redecoded.document.sections()[0].for_each_paragraph(|p| {
+        if p.layout_cache.as_ref().is_some_and(|c| !c.is_empty()) {
+            redecoded_cached += 1;
+        }
+    });
+    assert_eq!(redecoded_cached, 0, "emit_layout_cache stays off — the cache must not survive");
+}
+
+/// A document with no layout cache to drop must not carry the warning.
+#[test]
+fn from_json_reports_no_layout_cache_warning_when_there_is_none_to_drop() {
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let body = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    assert!(body.layout_cache.is_none(), "hand-built paragraphs carry no cache by construction");
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = out.meta().warnings.into_iter().map(|w| w.code).collect();
+    assert!(!codes.contains(&"LAYOUT_CACHE_DROPPED".to_string()), "{codes:?}");
+}
+
+/// The section's only cached paragraph lives inside an image's caption —
+/// `Section::for_each_paragraph` deliberately does not visit those (a
+/// documented gap on `Document::for_each_paragraph_mut`), so this exercises
+/// `from_json`'s own local traversal rather than that Core walker. The
+/// encoder drops that cache too, so the warning must still fire exactly
+/// once, with a path that reaches into the caption rather than stopping at
+/// the section.
+#[test]
+fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache() {
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{
+        Caption, CaptionSide, Document, Image, ImageFormat, PageSettings, Paragraph, Run, Section,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut caption_para = Paragraph::with_runs(
+        vec![Run::text("caption", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    caption_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let mut image = Image::new(
+        "BinData/image1.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    image.caption = Some(Caption::new(vec![caption_para], CaptionSide::Bottom));
+
+    let host = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0)), Run::image(image, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    assert!(host.layout_cache.is_none(), "the cache sits only on the caption paragraph");
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = out.meta().warnings.iter().map(|w| w.code.clone()).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").count(),
+        1,
+        "exactly one warning even though the cache is nested in an image caption: {codes:?}"
+    );
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].caption.npara[0]"),
+        "path must reach into the image caption, not stop at the section: {}",
+        warning.message
+    );
+}
+
+/// A memo's `anchor_runs` can carry a non-text run — a table, in this
+/// case — that validation permits there. The encoder flattens the anchor
+/// into a single inline `<hp:t>`, keeping only `RunContent::plain_text`
+/// (`build_memo_anchor_xml`), so the table and every paragraph inside it,
+/// cache included, is dropped whole rather than walked. The drop is real
+/// even though the encoder never reaches that far, so the warning must
+/// still fire — with a path that stops at the memo, the nearest container
+/// the encoder's own recursion ever reaches.
+#[test]
+fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{
+        Document, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
+    };
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut cell_para = Paragraph::with_runs(
+        vec![Run::text("anchor cell", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    cell_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let width = HwpUnit::from_mm(20.0).expect("width");
+    let table = Table::new(vec![TableRow::new(vec![TableCell::new(vec![cell_para], width)])]);
+
+    let memo_body = Paragraph::with_runs(
+        vec![Run::text("memo body", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let anchor_runs = vec![Run::table(table, CharShapeIndex::new(0))];
+    let memo = Control::memo_with_anchor(vec![memo_body], anchor_runs);
+
+    let host = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0)), Run::control(memo, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    assert!(host.layout_cache.is_none(), "the cache sits only inside the anchor table's cell");
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let codes: Vec<String> = out.meta().warnings.iter().map(|w| w.code.clone()).collect();
+    assert_eq!(
+        codes.iter().filter(|c| *c == "LAYOUT_CACHE_DROPPED").count(),
+        1,
+        "exactly one warning even though the cache sits inside a dropped anchor run: {codes:?}"
+    );
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].memo"),
+        "path should stop at the memo — the encoder never recurses into a dropped anchor run: {}",
+        warning.message
+    );
+}
+
+/// A group whose first child (`Equation`) the encoder never emits as a
+/// container child (see `encode_group_child_xml`) sits before a text box
+/// that does carry a layout cache. The encoder's own `emitted_idx` counter
+/// only advances for a child it actually serializes, so the real encoder
+/// would number the text box `group[0]`, not the source list's `group[1]` —
+/// `from_json`'s warning must report the same number.
+#[test]
+fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_index() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut boxed_para = Paragraph::with_runs(
+        vec![Run::text("boxed", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    boxed_para.layout_cache = Some(LayoutCache::new(vec![line]));
+
+    let equation = Control::Equation {
+        script: "a over b".to_string(),
+        width: HwpUnit::new(1000).unwrap(),
+        height: HwpUnit::new(1000).unwrap(),
+        base_line: 60,
+        text_color: Color::from_rgb(0, 0, 0),
+        font: "HancomEQN".to_string(),
+        inst_id: None,
+    };
+    let text_box = Control::TextBox {
+        paragraphs: vec![boxed_para],
+        width: HwpUnit::new(2000).unwrap(),
+        height: HwpUnit::new(2000).unwrap(),
+        placement: None,
+        caption: None,
+        style: None,
+        text_vertical_align: Default::default(),
+    };
+    let group = Control::Group {
+        // Source order: the dropped Equation comes first, then the cached
+        // text box — the whole point of this test is that the encoder's
+        // emitted-index counter does not shift with it.
+        children: vec![equation, text_box],
+        width: HwpUnit::new(3000).unwrap(),
+        height: HwpUnit::new(2000).unwrap(),
+        placement: None,
+        inst_id: None,
+    };
+
+    let host = Paragraph::with_runs(
+        vec![Run::control(group, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(
+        warning.message.contains("section[0].para[0].group[0]"),
+        "the dropped Equation must not consume a GroupChild index — the encoder numbers the \
+         text box group[0], not the source list's group[1]: {}",
+        warning.message
+    );
+}
+
 /// An exported document whose only paragraph carries a footnote whose body
 /// is a heading. Built rather than loaded: no committed fixture triggers a
 /// semantic-loss encode warning.

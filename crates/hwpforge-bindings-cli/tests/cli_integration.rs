@@ -2611,6 +2611,34 @@ fn from_json_json_mode() {
     assert!(val["size_bytes"].is_number(), "missing 'size_bytes' field");
 }
 
+/// `rect.hwpx` carries a `linesegarray` layout cache that `to-json` promotes
+/// into the export; `from-json` always re-encodes with the cache emission
+/// off, which must not be a silent drop.
+#[test]
+fn from_json_warns_when_the_json_carries_a_layout_cache_it_drops() {
+    let f = fixture("rect.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("doc.json");
+    let hwpx_out = tmp.join("roundtrip.hwpx");
+
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let (_, stderr, code) =
+        run(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("[from-json] layout cache dropped at section[0]"), "stderr: {stderr}");
+
+    let (val, _, code) =
+        run_json(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let warnings = val["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap_or_default().contains("layout cache dropped")),
+        "{warnings:?}"
+    );
+}
+
 #[test]
 fn from_json_nonexistent_input() {
     let tmp = test_tmp();
@@ -5293,4 +5321,563 @@ fn stamp_semantic_loss_keeps_the_codec_error_contract() {
     );
     assert!(message.contains("note number head skipped"), "{message}");
     assert!(!out.exists(), "fail-closed 인데 산출물이 생성됐다");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// W5 후속: MCP/Python 처럼 ops 디코드 경고(`LAYOUT_CACHE_DROPPED` 등)를
+// CLI 도 노출한다 — `--json`의 `warnings` 키(비었으면 생략) +
+// 텍스트 모드 stderr 한 줄씩. `delete-para`/`insert-para`는 기존
+// `warnings` 관례(항상 존재, 구조적 자문과 같은 배열)를 따른다.
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn inspect_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, stderr, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+    assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
+
+    let (_, text_stderr, code2) = run(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[inspect] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+    let _ = stderr; // --json 모드는 stdout 의 warnings 키만 쓰고 stderr 는 비운다.
+}
+
+#[test]
+fn inspect_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let (value, stderr, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn outline_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, _, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let (_, text_stderr, code2) = run(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[outline] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn outline_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let (value, stderr, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn fields_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, _, code) = run_json(&["fields", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let (_, text_stderr, code2) = run(&["fields", f.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[fields] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn fields_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let (value, stderr, code) = run_json(&["fields", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn read_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, _, code) = run_json(&["read", f.to_str().unwrap(), "--field", "user_email"]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let (_, text_stderr, code2) = run(&["read", f.to_str().unwrap(), "--field", "user_email"]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[read] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn read_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let (value, stderr, code) = run_json(&["read", f.to_str().unwrap(), "--section", "0"]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn fill_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=w5@example.com",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let out2 = tmp.join("filled2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=w5@example.com",
+        "-o",
+        out2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[fill] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn fill_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("fields/clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=w5@example.com",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn to_json_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("out.json");
+    let (_, _, stderr, code) =
+        run_json_with_stdout(&["to-json", f.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("LAYOUT_CACHE_DROPPED"), "{stderr}");
+
+    let out2 = tmp.join("out2.json");
+    let (_, text_stderr, code2) =
+        run(&["to-json", f.to_str().unwrap(), "-o", out2.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    // Text mode keeps this command's pre-existing shape: `Warning: {message}`,
+    // no code (the `--json` assertion above is where the code shows up).
+    assert!(text_stderr.contains("layout cache dropped"), "{text_stderr}");
+}
+
+#[test]
+fn to_json_has_no_warning_stderr_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("out.json");
+    let (_, _, stderr, code) =
+        run_json_with_stdout(&["to-json", f.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn to_md_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let (_, _, stderr, code) =
+        run_json_with_stdout(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("LAYOUT_CACHE_DROPPED"), "{stderr}");
+
+    let tmp2 = test_tmp();
+    let (_, text_stderr, code2) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp2.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    // Text mode keeps this command's pre-existing shape: `Warning: {message}`,
+    // no code (the `--json` assertion above is where the code shows up).
+    assert!(text_stderr.contains("layout cache dropped"), "{text_stderr}");
+}
+
+#[test]
+fn to_md_has_no_warning_stderr_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let tmp = test_tmp();
+    let (_, _, stderr, code) =
+        run_json_with_stdout(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn set_cell_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("sc.hwpx");
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,1",
+        "--text",
+        "값",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let out2 = tmp.join("sc2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,1",
+        "--text",
+        "값",
+        "-o",
+        out2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[set-cell] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn set_cell_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("sc.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,0",
+        "--text",
+        "값",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn patch_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let section_json = tmp.join("section.json");
+    let (_, _, code) = run(&[
+        "to-json",
+        f.to_str().unwrap(),
+        "-o",
+        section_json.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let patched = tmp.join("patched.hwpx");
+    let (value, _, code) = run_json(&[
+        "patch",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        section_json.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let patched2 = tmp.join("patched2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "patch",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        section_json.to_str().unwrap(),
+        "-o",
+        patched2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[patch] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn patch_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("shapes/rect.hwpx");
+    let tmp = test_tmp();
+    let section_json = tmp.join("section.json");
+    let (_, _, code) = run(&[
+        "to-json",
+        f.to_str().unwrap(),
+        "-o",
+        section_json.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let patched = tmp.join("patched.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "patch",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        section_json.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn stamp_plan_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let (_, text_stderr, code2) = run(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[stamp-plan] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn stamp_plan_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let (value, stderr, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn stamp_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (plan, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let tmp = test_tmp();
+    let map = tmp.join("map.json");
+    // Legacy 배열 맵 — 셀 후보는 legacy 스펙이 표현 못 하므로 커버 대상이 아니다
+    // (본문 하나짜리 placeholder 만 커버해도 all-or-nothing 을 만족한다).
+    std::fs::write(&map, stamp_map_from_plan(&plan, false).to_string()).unwrap();
+    let out = tmp.join("stamped.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED", "{value}");
+
+    let out2 = tmp.join("stamped2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("[stamp] LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn stamp_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let (plan, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let tmp = test_tmp();
+    let map = tmp.join("map.json");
+    std::fs::write(&map, stamp_map_from_plan(&plan, false).to_string()).unwrap();
+    let out = tmp.join("stamped.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn insert_para_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("inserted.hwpx");
+    let (value, _, code) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "0",
+        "--text",
+        "새 문단",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().starts_with("LAYOUT_CACHE_DROPPED")),
+        "{value}"
+    );
+
+    let out2 = tmp.join("inserted2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "0",
+        "--text",
+        "새 문단",
+        "-o",
+        out2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("warning: LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn insert_para_has_empty_warnings_on_a_clean_fixture() {
+    let f = fixture("structural/plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("inserted.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "새 문단",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"].as_array().map(Vec::len), Some(0), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn delete_para_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("deleted.hwpx");
+    let (value, _, code) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "3",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert!(
+        value["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().starts_with("LAYOUT_CACHE_DROPPED")),
+        "{value}"
+    );
+
+    let out2 = tmp.join("deleted2.hwpx");
+    let (_, text_stderr, code2) = run(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "3",
+        "-o",
+        out2.to_str().unwrap(),
+    ]);
+    assert_eq!(code2, 0);
+    assert!(text_stderr.contains("warning: LAYOUT_CACHE_DROPPED"), "{text_stderr}");
+}
+
+#[test]
+fn delete_para_has_empty_warnings_on_a_clean_fixture() {
+    let f = fixture("structural/plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("deleted.hwpx");
+    let (value, stderr, code) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["warnings"].as_array().map(Vec::len), Some(0), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn diff_surfaces_layout_cache_dropped_decode_warning() {
+    let f = fixture("layout/stale-line-cache.hwpx");
+    let (value, _, code) = run_json(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    // 자기 자신과의 diff 는 base·revised 양쪽 디코드에서 한 번씩, 두 건이 온다.
+    let warnings = value["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 2, "{value}");
+    assert!(warnings.iter().all(|w| w["code"] == "LAYOUT_CACHE_DROPPED"), "{value}");
+
+    let (_, text_stderr, code2) = run(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert_eq!(text_stderr.matches("[diff] LAYOUT_CACHE_DROPPED").count(), 2, "{text_stderr}");
+}
+
+#[test]
+fn diff_has_no_warnings_key_on_a_clean_fixture() {
+    let f = fixture("tables/table_01_basic_2x2.hwpx");
+    let (value, stderr, code) = run_json(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(!value.as_object().unwrap().contains_key("warnings"), "{value}");
+    assert!(stderr.is_empty(), "{stderr}");
 }

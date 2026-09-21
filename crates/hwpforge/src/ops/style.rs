@@ -188,6 +188,13 @@ pub struct RestyleMeta {
 ///   not validate.
 /// - [`OpsError::EncodeSemanticLoss`] — see **Fail-closed** above.
 ///
+/// # Warnings
+///
+/// Reports both halves of the codec, in [`stamp`](mod@super::stamp)'s
+/// documented order: what decoding the input reported
+/// ([`OpsWarning::Decode`]), then what the successful encode raised
+/// ([`OpsWarning::Encode`]).
+///
 /// # Examples
 ///
 /// ```no_run
@@ -209,6 +216,8 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         .clone();
 
     let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
+    let decode_warnings: Vec<OpsWarning> =
+        decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let mut style_store = decoded.style_store;
 
     let Some(base) = style_store.iter_fonts().next().map(|f| f.face_name.clone()) else {
@@ -226,7 +235,12 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
         EncodeOptions::default(),
     )
     .map_err(OpsError::encode)?;
-    let (bytes, warnings) = take_bytes_fail_closed(outcome)?;
+    let (bytes, encode_warnings) = take_bytes_fail_closed(outcome)?;
+
+    // Documented order above: the input decode first, then the encode that
+    // produced the output (mirrors `stamp`/`set_cell`).
+    let mut warnings = decode_warnings;
+    warnings.extend(encode_warnings);
 
     Ok(RestyleOutput { bytes, preset: opts.preset.clone(), sections, paragraphs, warnings })
 }

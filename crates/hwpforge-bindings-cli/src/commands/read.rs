@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use hwpforge::ops::{self, ReadOptions};
+use hwpforge::ops::{self, OpsWarning, ReadOptions};
+use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::{EmbeddedContent, ParaKindView};
 
 use crate::compat::{self, Command};
@@ -63,8 +64,10 @@ pub fn run(
     // (`READ_PARAS_INVALID`/`READ_PARA_RANGE_INVALID`) still comes from
     // `ops::read` itself (its rules and messages are the CLI's own,
     // reproduced verbatim — `hwpforge/src/ops/read.rs` module docs).
-    // Decoder warnings (`ReadOutput::warnings`) are not surfaced (W3
-    // report).
+    // Decoder warnings (`ReadOutput::warnings`) were not surfaced pre-W5. W5
+    // follow-up: additive — a new, omit-if-empty `warnings` key in `--json`,
+    // and one `[read]`-prefixed stderr line each in text mode, for whichever
+    // of the three payloads below is the requested target.
     let out = match ops::read(&bytes, &opts) {
         Ok(o) => o,
         Err(e) => {
@@ -73,15 +76,19 @@ pub fn run(
             err.exit(json_mode, exit);
         }
     };
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
 
     if let Some(view) = out.paragraphs {
         if json_mode {
-            println!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({ "status": "ok", "paragraphs": view }))
-                    .unwrap()
-            );
+            let mut result = serde_json::json!({ "status": "ok", "paragraphs": view });
+            if !warnings.is_empty() {
+                result["warnings"] = serde_json::to_value(&warnings).unwrap();
+            }
+            println!("{}", serde_json::to_string(&result).unwrap());
             return;
+        }
+        for w in &warnings {
+            eprintln!("[read] {}: {}", w.code, w.message);
         }
         println!("section {}, paragraphs {}..={}:", view.section, view.from, view.to);
         for p in &view.paragraphs {
@@ -101,12 +108,15 @@ pub fn run(
 
     if let Some(view) = out.table {
         if json_mode {
-            println!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({ "status": "ok", "table": view }))
-                    .unwrap()
-            );
+            let mut result = serde_json::json!({ "status": "ok", "table": view });
+            if !warnings.is_empty() {
+                result["warnings"] = serde_json::to_value(&warnings).unwrap();
+            }
+            println!("{}", serde_json::to_string(&result).unwrap());
             return;
+        }
+        for w in &warnings {
+            eprintln!("[read] {}: {}", w.code, w.message);
         }
         println!(
             "table {} ({}x{}) at [s{} p{}]:",
@@ -127,12 +137,15 @@ pub fn run(
     let fields = out.fields.expect("ops::read guarantees exactly one payload is set");
     let name = field.expect("target validation guarantees field");
     if json_mode {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({ "status": "ok", "fields": fields }))
-                .unwrap()
-        );
+        let mut result = serde_json::json!({ "status": "ok", "fields": fields });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
+        println!("{}", serde_json::to_string(&result).unwrap());
         return;
+    }
+    for w in &warnings {
+        eprintln!("[read] {}: {}", w.code, w.message);
     }
     for f in &fields {
         let fillable = if f.fillable { "fillable" } else { "NOT fillable" };

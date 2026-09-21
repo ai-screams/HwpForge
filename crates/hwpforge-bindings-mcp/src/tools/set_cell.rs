@@ -11,7 +11,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::{CellSpec, SetCellResult};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful set-cell operation.
 #[derive(Debug, Serialize)]
@@ -22,6 +22,11 @@ pub struct SetCellData {
     pub cells: Vec<SetCellResult>,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
+    /// What the admission decode reported, then the successful encode's
+    /// non-semantic warnings (`ops::SetCellOutput::warnings`). Omitted when
+    /// empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Apply a batch of cell edits behind the admission gate.
@@ -55,10 +60,12 @@ pub fn run_set_cell(
 
     write_output_file(output_path, &outcome.bytes)?;
 
+    let warnings: Vec<ToolWarningInfo> = outcome.warnings.iter().map(compat::warning).collect();
     Ok(SetCellData {
         output_path: output_path.to_string(),
         cells: outcome.results,
         size_bytes: outcome.bytes.len() as u64,
+        warnings,
     })
 }
 
@@ -134,6 +141,7 @@ mod tests {
         .unwrap();
         assert_eq!(data.cells.len(), 2);
         assert!(std::path::Path::new(&output).exists());
+        assert!(data.warnings.is_empty(), "a clean input must not warn: {:?}", data.warnings);
 
         // 편집 결과가 fill/fields 계열과 동일한 디코드 표면으로 확인 가능.
         let decoded =
@@ -145,6 +153,36 @@ mod tests {
             .unwrap();
         assert_eq!(table.rows[0].cells[1].paragraphs[0].text_content(), "홍길동");
         assert_eq!(table.rows[1].cells[1].paragraphs[0].text_content(), "서울");
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 편집하면, 편집이 규정한 admission 디코드
+    /// 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn set_cell_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx").to_string_lossy().into_owned();
+
+        let data = run_set_cell(&path, &[spec(0, CellTarget::At(GridCoord::new(0, 0)), "x")], &out)
+            .unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "set_cell must surface the admission decode warning: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]

@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use hwpforge::ops;
+use hwpforge::ops::{self, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
@@ -18,22 +19,31 @@ pub fn run(file: &PathBuf, json_mode: bool) {
         }
     };
 
-    // Decoder warnings (`FieldsOutput::warnings`) are not surfaced (W3
-    // report: warnings not surfaced — matches the pre-migration behaviour,
-    // which never captured them either).
-    let fields = match ops::fields(&bytes) {
-        Ok(out) => out.fields,
+    // Decoder warnings (`FieldsOutput::warnings`) were not surfaced pre-W5
+    // (matches the pre-migration behaviour, which never captured them
+    // either). W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // in `--json`, and one `[fields]`-prefixed stderr line each in text mode.
+    let out = match ops::fields(&bytes) {
+        Ok(out) => out,
         Err(e) => {
             let err = compat::cli_error(Command::Fields, e);
             let exit = compat::exit_code(Command::Fields, &err);
             err.exit(json_mode, exit);
         }
     };
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
+    let fields = out.fields;
 
     if json_mode {
-        let result = serde_json::json!({ "status": "ok", "fields": fields });
+        let mut result = serde_json::json!({ "status": "ok", "fields": fields });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
         println!("{}", serde_json::to_string(&result).unwrap());
         return;
+    }
+    for w in &warnings {
+        eprintln!("[fields] {}: {}", w.code, w.message);
     }
 
     if fields.is_empty() {

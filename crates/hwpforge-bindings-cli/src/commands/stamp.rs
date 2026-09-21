@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use hwpforge::ops::stamp::{stamp as ops_stamp, stamp_plan as ops_stamp_plan, StampOptions};
-use hwpforge::ops::OpsError;
+use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 use hwpforge_smithy_hwpx::stamp::{parse_stamp_map, StampMap};
 
 use crate::compat::{self, Command};
@@ -22,10 +23,16 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
         Ok(o) => o,
         Err(e) => exit_ops_error(Command::StampPlan, e, json_mode),
     };
+    // Decoder warnings (`StampPlanOutput::warnings`) were not surfaced
+    // pre-W5. W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // in `--json`, and one `[stamp-plan]`-prefixed stderr line each in text
+    // mode. Unrelated to `plan.skipped_tables`'s own warning print below,
+    // which stays exactly as it was.
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let plan = out.plan;
 
     if json_mode {
-        let result = serde_json::json!({
+        let mut result = serde_json::json!({
             "status": "ok",
             "file": file.display().to_string(),
             "schema_version": plan.schema_version,
@@ -34,8 +41,14 @@ pub fn run_plan(file: &PathBuf, json_mode: bool) {
             "cells": plan.cells,
             "skipped_tables": plan.skipped_tables,
         });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
         println!("{}", serde_json::to_string(&result).unwrap());
         return;
+    }
+    for w in &warnings {
+        eprintln!("[stamp-plan] {}: {}", w.code, w.message);
     }
 
     if plan.text.is_empty() && plan.cells.is_empty() {
@@ -144,6 +157,12 @@ pub fn run(
         Ok(r) => r,
         Err(e) => exit_ops_error(Command::Stamp, e, json_mode),
     };
+    // What decoding the input reported, then the successful encode's
+    // non-semantic warnings (`StampOutput::warnings`) were not surfaced
+    // pre-W5. W5 follow-up: additive — a new, omit-if-empty `warnings` key
+    // in `--json`, and one `[stamp]`-prefixed stderr line each in text mode,
+    // for both the legacy and v2 shapes below.
+    let warnings: Vec<WarningInfo> = result.warnings.iter().map(OpsWarning::info).collect();
     let manifest =
         result.manifest.as_ref().expect("StampOptions::default() always requests a manifest");
     let manifest_json = serde_json::to_string_pretty(manifest).unwrap();
@@ -152,7 +171,7 @@ pub fn run(
     match &parsed {
         StampMap::Legacy(_) => {
             if json_mode {
-                let out = serde_json::json!({
+                let mut out = serde_json::json!({
                     "status": "ok",
                     "output": output.display().to_string(),
                     "manifest": manifest_file.display().to_string(),
@@ -161,8 +180,14 @@ pub fn run(
                     "skipped_guarded": result.skipped_guarded,
                     "size_bytes": result.bytes.len(),
                 });
+                if !warnings.is_empty() {
+                    out["warnings"] = serde_json::to_value(&warnings).unwrap();
+                }
                 println!("{}", serde_json::to_string(&out).unwrap());
             } else {
+                for w in &warnings {
+                    eprintln!("[stamp] {}: {}", w.code, w.message);
+                }
                 println!(
                     "Stamped {} field(s) (ignored {}, guarded-skipped {}) -> {}",
                     result.stamped.len(),
@@ -178,7 +203,7 @@ pub fn run(
         }
         StampMap::V2(_) => {
             if json_mode {
-                let out = serde_json::json!({
+                let mut out = serde_json::json!({
                     "status": "ok",
                     "output": output.display().to_string(),
                     "manifest": manifest_file.display().to_string(),
@@ -188,8 +213,14 @@ pub fn run(
                     "skipped_guarded": result.skipped_guarded,
                     "size_bytes": result.bytes.len(),
                 });
+                if !warnings.is_empty() {
+                    out["warnings"] = serde_json::to_value(&warnings).unwrap();
+                }
                 println!("{}", serde_json::to_string(&out).unwrap());
             } else {
+                for w in &warnings {
+                    eprintln!("[stamp] {}: {}", w.code, w.message);
+                }
                 println!(
                     "Stamped {} text + {} cell field(s) -> {}",
                     result.stamped.len(),

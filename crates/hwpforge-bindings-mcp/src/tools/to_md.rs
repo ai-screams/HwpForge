@@ -7,7 +7,7 @@ use serde::Serialize;
 use hwpforge::ops::{to_md as ops_to_md, MdExportOptions};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful HWPX → Markdown conversion.
 #[derive(Debug, Serialize)]
@@ -20,6 +20,10 @@ pub struct ToMdData {
     pub size_bytes: u64,
     /// Number of images extracted.
     pub image_count: usize,
+    /// Decode warnings from `ops::to_md` (`ops::MdExportOutput::warnings`).
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Execute HWPX → Markdown conversion.
@@ -48,10 +52,11 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
     let bytes = read_file_bytes(file_path)?;
 
     // 2. Delegate decode → validate → styled-encode to `ops::to_md`.
-    //    Decode warnings ride along in `out.warnings`, but `ToMdData` has no
-    //    warnings field to carry them (schema freeze — see W2 report).
+    //    Decode warnings ride along in `out.warnings` and are surfaced
+    //    through `ToMdData::warnings`.
     let out = ops_to_md(&bytes, &MdExportOptions::default())
         .map_err(|e| compat::tool_error(Tool::ToMd, e))?;
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
 
     // 3. Determine output directory
     let base_stem = Path::new(file_path).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
@@ -99,7 +104,7 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
     let size_bytes = md_bytes.len() as u64;
     let image_count = image_paths.len();
 
-    Ok(ToMdData { markdown_path: md_path, image_paths, size_bytes, image_count })
+    Ok(ToMdData { markdown_path: md_path, image_paths, size_bytes, image_count, warnings })
 }
 
 #[cfg(test)]
@@ -163,6 +168,34 @@ mod tests {
         let md = std::fs::read_to_string(&data.markdown_path).unwrap();
         // styled 경로는 병합을 rowspan HTML 로 보존한다.
         assert!(md.contains("rowspan=\"2\""), "{md}");
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 to_md 하면, 디코드 경고
+    /// (`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn to_md_surfaces_decode_warnings() {
+        let dir = temp_dir("warnings");
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let data = run_to_md(&path, Some(dir.to_str().unwrap())).unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "to_md must surface the decode warning: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]

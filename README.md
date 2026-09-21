@@ -122,6 +122,9 @@ hwpforge fill report.hwpx --set 회사명=HwpForge -o filled.hwpx
 # PDF로 내보내기 (한컴 조판 캐시 재생)
 hwpforge to-pdf report.hwpx -o report.pdf
 
+# 문서 구조 검증 (Core 불변조건 통과 여부)
+hwpforge validate report.hwpx
+
 # JSON Schema 출력 (AI agent용)
 hwpforge schema document
 ```
@@ -607,7 +610,7 @@ HwpForge/
 - [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (19개 도구 + 4 리소스 + 3 프롬프트)
-- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (22개 명령어: 19 core + 3 HWP5)
+- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (23개 명령어: 20 core + 3 HWP5)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [x] Python 바인딩 — `pip install hwpforge`로 설치 (PyPI, 0.16.5부터 wheel 배포)
 

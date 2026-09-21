@@ -7,7 +7,7 @@ use hwpforge_foundation::diagnostics::OpsCode;
 use hwpforge_smithy_hwpx::{FieldInfo, ParagraphsView, TableView};
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a targeted read (exactly one member is set).
 #[derive(Debug, Serialize)]
@@ -21,6 +21,10 @@ pub struct ReadData {
     /// Field matches (`field` target).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<FieldInfo>>,
+    /// Decoder warnings for this document (`ops::ReadOutput::warnings`).
+    /// Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 impl ReadData {
@@ -57,8 +61,8 @@ impl ReadData {
 /// error, are `ops::read`'s own (byte-for-byte the same rules this file used
 /// to run locally — see `hwpforge/src/ops/read.rs`'s module docs); only the
 /// legacy `(code, hint)` spelling comes from `compat::tool_error`. Decoder
-/// warnings (`ops::ReadOutput::warnings`) are not surfaced: `ReadData` has no
-/// field for them (schema freeze) — see the W2 report.
+/// warnings (`ops::ReadOutput::warnings`) are surfaced through
+/// `ReadData::warnings`.
 ///
 /// The two argument-shape rejections are re-run here, before the file is
 /// read: `ops::read` performs the same checks, but only after the caller has
@@ -114,7 +118,8 @@ pub fn run_read(
     }
 
     let out = ops::read(&bytes, &opts).map_err(|e| compat::tool_error(Tool::Read, e))?;
-    Ok(ReadData { paragraphs: out.paragraphs, table: out.table, fields: out.fields })
+    let warnings: Vec<ToolWarningInfo> = out.warnings.iter().map(compat::warning).collect();
+    Ok(ReadData { paragraphs: out.paragraphs, table: out.table, fields: out.fields, warnings })
 }
 
 #[cfg(test)]
@@ -139,9 +144,51 @@ mod tests {
         let path = probe_doc(&dir);
 
         let data = run_read(&path, Some(0), None, None, None).unwrap();
+        assert!(data.warnings.is_empty(), "a clean document must not warn: {:?}", data.warnings);
         let view = data.paragraphs.expect("paragraphs target");
         assert!(!view.paragraphs.is_empty());
         assert!(view.paragraphs.iter().any(|p| !p.contains.is_empty()), "table marker expected");
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 읽으면, 세 타깃 모두 같은 디코드를
+    /// 거치므로 그 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn read_surfaces_decode_warnings_for_every_target() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+
+        let section = run_read(&path, Some(0), None, None, None).unwrap();
+        assert!(
+            section.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "section target must surface the decode warning: {:?}",
+            section.warnings
+        );
+
+        let table = run_read(&path, None, None, Some(0), None).unwrap();
+        assert!(
+            table.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "table target must surface the decode warning: {:?}",
+            table.warnings
+        );
+
+        let field = run_read(&path, None, None, None, Some("user_email")).unwrap();
+        assert!(
+            field.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "field target must surface the decode warning: {:?}",
+            field.warnings
+        );
+
+        let value = serde_json::to_value(&section).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -228,9 +275,14 @@ mod tests {
         let s = run_read(&path, None, None, Some(0), None).unwrap().summary();
         assert!(s.starts_with("table 0"), "summary: {s}");
 
-        let empty = ReadData { paragraphs: None, table: None, fields: None };
+        let empty = ReadData { paragraphs: None, table: None, fields: None, warnings: Vec::new() };
         assert_eq!(empty.summary(), "empty read");
-        let fields = ReadData { paragraphs: None, table: None, fields: Some(Vec::new()) };
+        let fields = ReadData {
+            paragraphs: None,
+            table: None,
+            fields: Some(Vec::new()),
+            warnings: Vec::new(),
+        };
         assert_eq!(fields.summary(), "0 field match(es)");
     }
 }

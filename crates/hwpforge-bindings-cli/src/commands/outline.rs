@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use hwpforge::ops;
+use hwpforge::ops::{self, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
@@ -18,23 +19,31 @@ pub fn run(file: &PathBuf, json_mode: bool) {
         }
     };
 
-    // Decoder warnings (`OutlineOutput::warnings`) are not surfaced: the
-    // pre-migration CLI never captured them (it called `HwpxReader::outline`
-    // directly), and this migration does not add a print path for them
-    // (W3 report: warnings not surfaced).
-    let outline = match ops::outline(&bytes) {
-        Ok(out) => out.outline,
+    // Decoder warnings (`OutlineOutput::warnings`) were not surfaced pre-W5
+    // (the pre-migration CLI never captured them; W3 kept that byte-for-byte).
+    // W5 follow-up: additive — a new, omit-if-empty `warnings` key in
+    // `--json`, and one `[outline]`-prefixed stderr line each in text mode.
+    let out = match ops::outline(&bytes) {
+        Ok(out) => out,
         Err(e) => {
             let err = compat::cli_error(Command::Outline, e);
             let exit = compat::exit_code(Command::Outline, &err);
             err.exit(json_mode, exit);
         }
     };
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
+    let outline = out.outline;
 
     if json_mode {
-        let result = serde_json::json!({ "status": "ok", "outline": outline });
+        let mut result = serde_json::json!({ "status": "ok", "outline": outline });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
         println!("{}", serde_json::to_string(&result).unwrap());
         return;
+    }
+    for w in &warnings {
+        eprintln!("[outline] {}: {}", w.code, w.message);
     }
 
     match &outline.title {

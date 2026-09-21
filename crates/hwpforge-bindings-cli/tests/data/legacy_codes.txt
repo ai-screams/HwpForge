@@ -102,6 +102,16 @@
 #   (all others) N/A — no argument validation ahead of file I/O in the
 #                legacy source (diff, outline, fields, inspect, from-json,
 #                patch, convert-hwp5, stamp-plan, templates, schema).
+#
+# ── `validate` is not part of the pre-migration snapshot ────────────────
+# Every other command's rows above come from the pre-W3-migration tree
+# (module header). `validate` did not exist there — it is a new command
+# (W5b), added straight against `hwpforge::ops::validate`, with no legacy
+# CLI to audit. Its two rows below are frozen from the commit that adds
+# them forward, same status as every other row in this file, just without
+# a "pre-migration" origin to point to. READ-FIRST like the "(all others)"
+# group above: `check_file_size`/`std::fs::read` run before `ops::validate`
+# is ever called, and there is no argument to validate ahead of that.
 audit-hwp5	FILE_READ_FAILED	1	-
 audit-hwp5	HWP5_DECODE_FAILED	2	Check that the file is a valid HWP5 document
 audit-hwp5	HWP5_SEMANTIC_FAILED	2	Check that the file is a valid HWP5 document
@@ -305,3 +315,5 @@ to-pdf	INVALID_DISCOVERY	2	-
 to-pdf	PDF_RENDER_FAILED	2	cacheless documents need a Hancom re-save; font errors may need --font-dir/--discovery or --degraded
 to-pdf	UNRECOGNIZED_FORMAT	2	to-pdf detects the format by content — the extension is only a hint
 to-pdf	VALIDATION_FAILED	2	-
+validate	DECODE_FAILED	2	-
+validate	FILE_READ_FAILED	1	-

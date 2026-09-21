@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 
-use hwpforge::ops;
+use hwpforge::ops::{self, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
@@ -23,17 +24,20 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     let base_bytes = read(base);
     let revised_bytes = read(revised);
 
-    // Decoder warnings from both inputs (`DiffOutput::warnings`) are not
-    // surfaced (W3 report: warnings not surfaced — the pre-migration CLI
-    // never captured them either).
-    let diff = match ops::diff(&base_bytes, &revised_bytes) {
-        Ok(out) => out.diff,
+    // Decoder warnings from both inputs (`DiffOutput::warnings`) were not
+    // surfaced pre-W5 (the pre-migration CLI never captured them either). W5
+    // follow-up: additive — a new, omit-if-empty `warnings` key in `--json`,
+    // and one `[diff]`-prefixed stderr line each in text mode.
+    let out = match ops::diff(&base_bytes, &revised_bytes) {
+        Ok(out) => out,
         Err(e) => {
             let err = compat::cli_error(Command::Diff, e);
             let exit = compat::exit_code(Command::Diff, &err);
             err.exit(json_mode, exit);
         }
     };
+    let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
+    let diff = out.diff;
 
     if let Some(path) = output {
         let report = serde_json::to_string_pretty(&diff).unwrap();
@@ -44,11 +48,15 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     }
 
     if json_mode {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({ "status": "ok", "diff": diff })).unwrap()
-        );
+        let mut result = serde_json::json!({ "status": "ok", "diff": diff });
+        if !warnings.is_empty() {
+            result["warnings"] = serde_json::to_value(&warnings).unwrap();
+        }
+        println!("{}", serde_json::to_string(&result).unwrap());
         return;
+    }
+    for w in &warnings {
+        eprintln!("[diff] {}: {}", w.code, w.message);
     }
 
     if diff.identical {

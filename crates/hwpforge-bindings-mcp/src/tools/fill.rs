@@ -12,7 +12,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::FilledField;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful fill operation.
 #[derive(Debug, Serialize)]
@@ -23,6 +23,10 @@ pub struct FillData {
     pub filled: Vec<FilledField>,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
+    /// Decode warnings from resolving the field names (e.g. a dropped
+    /// layout cache) — `ops::FillOutput::warnings`. Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Fill named click-here fields with values.
@@ -57,5 +61,100 @@ pub fn run_fill(
     write_output_file(output_path, &outcome.bytes)?;
 
     let size_bytes = outcome.bytes.len() as u64;
-    Ok(FillData { output_path: output_path.to_string(), filled: outcome.filled, size_bytes })
+    let warnings: Vec<ToolWarningInfo> = outcome.warnings.iter().map(compat::warning).collect();
+    Ok(FillData {
+        output_path: output_path.to_string(),
+        filled: outcome.filled,
+        size_bytes,
+        warnings,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn fill_via_mcp_surface_has_no_warnings_on_a_clean_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("probe.hwpx");
+        crate::tools::convert::run_convert("성명: (   )", false, path.to_str().unwrap(), "default")
+            .unwrap();
+
+        // 클린 문서는 채울 필드가 없으므로 NO_VALUES 인 값 맵이 아니라, 채워질
+        // 필드가 하나도 없는 문서에서도 warnings 만은 확인 가능해야 한다 —
+        // 여기선 실패 경로(FIELD_NOT_FOUND)라도 채우기 전 디코드 자체가
+        // 경고를 내지 않는다는 것만 확인한다.
+        let values = std::collections::BTreeMap::from([("없는이름".to_string(), "x".to_string())]);
+        let out = dir.path().join("out.hwpx");
+        let err = run_fill(path.to_str().unwrap(), &values, out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "FIELD_NOT_FOUND");
+    }
+
+    /// The failure-path check above never actually fills a field. This
+    /// exercises the genuine success path — a field that exists — and
+    /// checks both the typed `warnings` vec and the serialized wire shape:
+    /// `#[serde(skip_serializing_if = "Vec::is_empty")]` must omit the key
+    /// entirely on a clean fill, not emit an empty array. `"성명: (   )"`
+    /// converted markdown is a stamp-plan *text candidate*, not an actual
+    /// click-here field, so this uses the native fixture that already
+    /// carries one (`user_email`, unfilled) instead.
+    #[test]
+    fn fill_via_mcp_surface_reports_no_warnings_on_a_successful_clean_fill() {
+        let path = fixture("fields/clickhere_named.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let values =
+            std::collections::BTreeMap::from([("user_email".to_string(), "a@b.c".to_string())]);
+        let out = dir.path().join("out.hwpx");
+        let data = run_fill(&path, &values, out.to_str().unwrap()).unwrap();
+
+        assert_eq!(
+            data.filled.len(),
+            1,
+            "the one existing field must be filled: {:?}",
+            data.filled
+        );
+        assert!(
+            data.warnings.is_empty(),
+            "a clean successful fill must not warn: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert!(
+            value.get("warnings").is_none(),
+            "empty warnings must be omitted from the wire shape, not an empty array: {value}"
+        );
+    }
+
+    /// 줄 조판 캐시가 낡은 fixture 를 채우면, fill 이 이름 해석을 위해 돌린
+    /// 디코드의 경고(`LAYOUT_CACHE_DROPPED`)가 `warnings` 에 실려야 한다.
+    #[test]
+    fn fill_surfaces_decode_warnings() {
+        let path = fixture("layout/stale-line-cache.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+        let values =
+            std::collections::BTreeMap::from([("user_email".to_string(), "a@b.c".to_string())]);
+
+        let data = run_fill(&path, &values, out.to_str().unwrap()).unwrap();
+        assert!(
+            data.warnings.iter().any(|w| w.code == "LAYOUT_CACHE_DROPPED"),
+            "fill must surface the decode warning: {:?}",
+            data.warnings
+        );
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
+        assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
+    }
 }

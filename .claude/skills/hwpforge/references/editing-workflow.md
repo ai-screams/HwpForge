@@ -94,6 +94,7 @@ Use after adding/removing paragraphs. `--base` inherits images from the original
 ### 5. Verify
 
 ```bash
+hwpforge validate document.hwpx       # still passes Document::validate?
 hwpforge inspect document.hwpx        # paragraph/table counts as expected?
 hwpforge to-md document.hwpx -o check.md   # eyeball the content
 ```

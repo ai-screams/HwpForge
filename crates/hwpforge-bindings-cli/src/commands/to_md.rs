@@ -37,9 +37,10 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     // shared compat table; only the legacy `VALIDATE_FAILED` spelling (this
     // command's own code, not `ops`'s `VALIDATION_FAILED`) differs, and
     // `compat::cli_error`'s `TABLE` already carries that remap. Decode
-    // warnings (`MdExportOutput::warnings`'s `Decode` entries) are not
-    // surfaced (W3 report) — only `Md` (lossy `TABLE_MERGE_FLATTENED`)
-    // warnings were printed pre-migration.
+    // warnings (`MdExportOutput::warnings`'s `Decode` entries, for example
+    // `LAYOUT_CACHE_DROPPED`) were not surfaced pre-W5 — only `Md` (lossy
+    // `TABLE_MERGE_FLATTENED`) warnings were printed pre-migration. W5
+    // follow-up: `Decode` now prints through the same shape, additively.
     let out = match ops::to_md(&bytes, &MdExportOptions::default().with_mode(ops_mode)) {
         Ok(o) => o,
         Err(e) => {
@@ -49,7 +50,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         }
     };
     for warning in &out.warnings {
-        if let OpsWarning::Md(_) = warning {
+        if matches!(warning, OpsWarning::Md(_) | OpsWarning::Decode(_)) {
             let info = warning.info();
             if json_mode {
                 let warn = serde_json::json!({

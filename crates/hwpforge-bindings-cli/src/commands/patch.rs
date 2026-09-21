@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use hwpforge::ops::exchange::{patch as ops_patch, PatchOptions};
-use hwpforge::ops::OpsError;
+use hwpforge::ops::{OpsError, OpsWarning};
+use hwpforge_foundation::diagnostics::WarningInfo;
 
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, CliError};
@@ -46,23 +47,34 @@ pub fn run(
         Ok(o) => o,
         Err(e) => exit_ops_error(Command::Patch, e, json_mode),
     };
+    // Decoder warnings for the base package (`PatchOutput::warnings`) were
+    // not surfaced pre-W5. W5 follow-up: additive — a new, omit-if-empty
+    // `warnings` key in `--json`, and one `[patch]`-prefixed stderr line
+    // each in text mode.
+    let warnings: Vec<WarningInfo> = outcome.warnings.iter().map(OpsWarning::info).collect();
 
     if let Err(e) = std::fs::write(output, &outcome.bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
             .exit(json_mode, 1);
     }
 
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "status": "ok",
         "output": output.display().to_string(),
         "patched_section": outcome.section,
         "sections": outcome.sections,
         "size_bytes": outcome.bytes.len(),
     });
+    if !warnings.is_empty() {
+        result["warnings"] = serde_json::to_value(&warnings).unwrap();
+    }
 
     if json_mode {
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
+        for w in &warnings {
+            eprintln!("[patch] {}: {}", w.code, w.message);
+        }
         println!(
             "Patched section {} -> {} ({} bytes)",
             outcome.section,
