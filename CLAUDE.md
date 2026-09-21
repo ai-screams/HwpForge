@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-현재 crates.io published = **0.16.4** (2026-08-28, 각주/미주 MD 브리지). 상태 스냅샷·에픽 이력 = `.claude/guides/status.md`.
+현재 crates.io published = **0.16.5** (2026-09-18, Python 바인딩 첫 wheel). 상태 스냅샷·에픽 이력 = `.claude/guides/status.md`.
 
 ---
 
