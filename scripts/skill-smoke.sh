@@ -57,12 +57,14 @@ cat > tpl.md <<'MD'
 MD
 assert_ok "$BIN" convert tpl.md -o tpl.hwpx
 assert_file tpl.hwpx
-# Documented reality: convert --preset resolves only `default` today; the other catalogued
-# presets (modern/classic/latest) return UNKNOWN_PRESET. Lock both facts.
-assert_ok "$BIN" convert tpl.md -o p_default.hwpx --preset default
-for p in modern classic latest; do
-  assert_fail_grep "$BIN" convert tpl.md -o "p_$p.hwpx" --preset "$p" -- "UNKNOWN_PRESET"
+# W3 (CLI -> hwpforge::ops migration, decision I17): `convert` now resolves
+# every catalogued preset (default/modern/classic/latest), not just
+# `default` — `ops::convert_md` applies each preset's font uniformly.
+# UNKNOWN_PRESET still fires for a name no built-in preset has at all.
+for p in default modern classic latest; do
+  assert_ok "$BIN" convert tpl.md -o "p_$p.hwpx" --preset "$p"
 done
+assert_fail_grep "$BIN" convert tpl.md -o p_bogus.hwpx --preset bogus -- "UNKNOWN_PRESET"
 printf '# stdin\n\n본문.\n' | "$BIN" convert - -o stdin.hwpx >/dev/null 2>&1 && assert_file stdin.hwpx || fail "stdin convert"
 
 echo "== inspect / to-md / to-json =="

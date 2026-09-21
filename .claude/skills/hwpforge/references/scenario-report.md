@@ -1,6 +1,6 @@
 # 보고서 (Report) 시나리오
 
-> **참고**: `report` 프리셋은 `presets.rs`의 4종 카탈로그(`default`/`modern`/`classic`/`latest`)에 없습니다 — CLI `convert --preset`는 현재 `default`만 허용합니다. 다른 세 카탈로그 이름은 `templates list`/`show`로 조회할 수 있고, CLI `convert`에는 `default`만 연결돼 있습니다(MCP `hwpforge_convert`/`hwpforge_restyle`은 4종 모두 받습니다). 자세한 내용은 [templates.md](templates.md).
+> **참고**: `report` 프리셋은 `presets.rs`의 4종 카탈로그(`default`/`modern`/`classic`/`latest`)에 없습니다 — CLI `convert --preset`는 이 네 카탈로그 이름을 모두 받아들이므로, 문서 성격에 맞는 이름을 고르면 됩니다. 자세한 내용은 [templates.md](templates.md).
 
 ## 표준 구조
 
@@ -43,7 +43,7 @@
 hwpforge convert report.md -o report.hwpx --preset default
 ```
 
-CLI `convert`는 현재 `default` 프리셋만 허용합니다(함초롬돋움 10pt, A4). `templates list`/`show`로 조회되는 `modern`/`classic`/`latest`는 CLI `convert`에는 연결돼 있지 않지만, MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`은 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
+CLI `convert`는 `default`(함초롬돋움 10pt, A4)/`modern`/`classic`/`latest` 네 프리셋을 모두 받아들이고, 각각 카탈로그에 정의된 글꼴을 적용합니다. MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`도 동일하게 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
 
 ## YAML 프론트매터
 
