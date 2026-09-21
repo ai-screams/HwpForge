@@ -159,4 +159,55 @@ mod tests {
         let result = get_prompt("generate_proposal", Some(&args)).unwrap();
         assert!(!result.messages.is_empty());
     }
+
+    /// The rendered text of a prompt, with every message concatenated.
+    fn rendered(name: &str, args: &[(&str, &str)]) -> String {
+        let mut map = serde_json::Map::new();
+        for (k, v) in args {
+            map.insert((*k).into(), serde_json::Value::String((*v).into()));
+        }
+        get_prompt(name, Some(&map))
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
+            .messages
+            .iter()
+            .map(|m| {
+                m.content
+                    .as_text()
+                    .unwrap_or_else(|| panic!("{name}: prompt message is not text"))
+                    .text
+                    .clone()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A thematic break decodes to a literal `"---"` paragraph
+    /// (`hwpforge-smithy-md`'s decoder); only the `<!-- hwpforge:section -->`
+    /// comment starts a new HWPX section. A prompt that teaches `---` as a
+    /// page break produces a document whose chapters never split.
+    #[test]
+    fn generation_prompts_teach_the_section_marker_not_a_thematic_break() {
+        for (name, args) in [
+            ("generate_proposal", &[("topic", "t")][..]),
+            ("generate_report", &[("topic", "t")][..]),
+        ] {
+            let text = rendered(name, args);
+            assert!(text.contains("<!-- hwpforge:section -->"), "{name}: {text}");
+            assert!(!text.contains("`---`(수평선)으로 장 구분"), "{name}: {text}");
+        }
+    }
+
+    /// `hwpforge_patch` replaces a section's text slots in place and refuses
+    /// a replacement whose slot count or path differs
+    /// (`hwpforge-smithy-hwpx`'s preserving patcher), so the editing prompt
+    /// must not send paragraph additions or deletions down that route.
+    #[test]
+    fn convert_review_keeps_patch_to_text_only_edits() {
+        let text = rendered("convert_and_review", &[("file_path", "/tmp/doc.hwpx")]);
+        assert!(!text.contains("문단 텍스트 변경, 추가, 삭제"), "{text}");
+        assert!(text.contains("텍스트만"), "{text}");
+        for tool in ["hwpforge_insert_para", "hwpforge_delete_para", "hwpforge_set_cell"] {
+            assert!(text.contains(tool), "{tool} missing: {text}");
+        }
+    }
 }
