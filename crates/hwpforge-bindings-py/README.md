@@ -22,9 +22,9 @@ and renders the missing face with a fallback, which changes how the page looks.
 
 Rendering replays a layout stored in the document, so `to_pdf` needs a document that carries
 one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5 with the layout carried
-across — `convert_hwp5(data, carry_layout_cache=True)`, or simply handing `to_pdf` the `.hwp`
-bytes, which converts them the same way. A document this library generated from Markdown or
-JSON carries no layout and is refused with `PDF_RENDER_FAILED`.
+across — `hwpforge.convert_hwp5(data, carry_layout_cache=True).document.to_pdf(...)`. A document
+this library generated from Markdown or JSON carries no layout and is refused with
+`PDF_RENDER_FAILED`.
 
 A layout carried over from HWP5 is for PDF replay and comparison only; do not treat such an
 HWPX as one to reopen in Hancom.
