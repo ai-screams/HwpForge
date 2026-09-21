@@ -15,6 +15,12 @@ submissions.
 **Prefer `patch`.** It preserves the template byte-for-byte and only swaps text. Use the rebuild
 path only when you genuinely need new paragraphs, and verify the result (see Fidelity).
 
+A template 한컴 itself saved is accepted by `fill` and `patch` only. `set-cell`, `insert-para`,
+`delete-para` and `stamp` refuse it fail-closed, because 한컴 leaves package entries the encoder
+cannot reproduce (`Preview/*`, `META-INF/container.rdf`) and those surfaces re-encode the whole
+package. The full surface table is in [editing-workflow.md](editing-workflow.md), under "Which
+surface a 한컴-saved document accepts".
+
 ## If the template is a legacy `.hwp`
 
 There is no `.hwp` writer. Convert first, then fill the `.hwpx`:
