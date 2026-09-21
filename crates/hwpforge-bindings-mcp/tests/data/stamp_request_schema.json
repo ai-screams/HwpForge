@@ -7,7 +7,7 @@
       "type": "string"
     },
     "specs": {
-      "description": "Approved text specs: one per candidate from hwpforge_stamp_plan,\neach with an action ({\"field\":{\"name\":\"…\"}} or \"ignore\"). Every\nunguarded candidate must be covered (all-or-nothing).",
+      "description": "Approved text specs: one per candidate from hwpforge_stamp_plan.\nCopy the candidate object unchanged — `section`, `path`, `span` and\n`marker` are its identity and are re-verified against the document —\nand add `action` ({\"field\":{\"name\":\"…\"}} or \"ignore\"). Every\nunguarded candidate must be covered (all-or-nothing).",
       "type": "array",
       "items": {
         "$ref": "#/$defs/StampSpec"
@@ -15,7 +15,7 @@
       "default": []
     },
     "cells": {
-      "description": "Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).\nField actions REQUIRE a non-blank hint; presence of any cell spec\nrequires `source_sha256`.",
+      "description": "Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).\nBuild each one from the candidate's `table` and `at` plus `action`;\noptionally add `label` {at, text} to re-claim one of the candidate's\nlabels. No other candidate field is accepted here. Field actions\nREQUIRE a non-blank hint; presence of any cell spec requires\n`source_sha256`.",
       "type": "array",
       "items": {
         "$ref": "#/$defs/CellStampSpec"

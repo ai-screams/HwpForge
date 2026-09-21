@@ -82,7 +82,7 @@ Add to `.claude/settings.json`:
 | `hwpforge_inspect`     | HWPX document structure analysis                       |
 | `hwpforge_to_json`     | HWPX → JSON export (full or section)                   |
 | `hwpforge_from_json`   | Build an HWPX document directly from JSON              |
-| `hwpforge_patch`       | Replace a section with edited JSON                     |
+| `hwpforge_patch`       | Replace a section's paragraph text with edited JSON    |
 | `hwpforge_outline`     | Navigation map: headings, tables, fields, bookmarks    |
 | `hwpforge_diff`        | Compare two HWPX files (semantic + package channels)   |
 | `hwpforge_delete_para` | Delete top-level paragraphs by index                   |
@@ -115,9 +115,11 @@ hwpforge_inspect(file_path: "report.hwpx")
 # 2. Export section to JSON
 hwpforge_to_json(file_path: "report.hwpx", section: 0, output_path: "section0.json")
 
-# 3. Edit the JSON, then patch back
+# 3. Edit the paragraph text (keep the paragraph count and structure), then patch back
 hwpforge_patch(base_path: "report.hwpx", section: 0, section_json_path: "section0.json", output_path: "report_edited.hwpx")
 ```
+
+`hwpforge_patch` is text-only: it refuses a replacement whose semantic text slots differ in count or path. Add or remove paragraphs with `hwpforge_insert_para` / `hwpforge_delete_para`, change table cells with `hwpforge_set_cell`, and rebuild a restructured document with `hwpforge_from_json`.
 
 ## Transport
 
