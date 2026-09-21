@@ -133,11 +133,14 @@ hwpforge fields form.hwpx                                    # 채울 수 있는
 hwpforge fill form.hwpx --set 회사명=HwpForge -o filled.hwpx   # 나머지 패키지는 바이트 그대로
 ```
 
-**PDF 내보내기**는 한컴이 저장하며 남긴 조판 캐시를 재생하는 방식입니다. 그래서 한컴에서 열어 저장한 문서만 렌더할 수 있고, `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`).
+**PDF 내보내기**는 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`).
 
 ```bash
-hwpforge to-pdf hancom-saved.hwpx -o report.pdf
+hwpforge to-pdf hancom-saved.hwpx -o report.pdf     # 한컴이 저장한 문서
+hwpforge to-pdf legacy.hwp -o legacy.pdf            # HWP5 — 캐시를 실어 변환한 뒤 렌더
 ```
+
+HWP5에서 실어 온 캐시는 **PDF 재생·대조 전용**입니다. 그렇게 만든 `.hwpx`를 한컴에서 다시 열 용도로 쓰지 마세요.
 
 > **AI-first 설계**: CLI는 AI agent(Claude Code 등)가 주 사용자입니다.
 > Markdown으로 문서를 생성한 뒤, JSON round-trip으로 기존 스타일을 보존하면서

@@ -84,7 +84,8 @@ What does the user want?
 │     → to-json (whole document JSON, for machine editing ONLY)
 │
 ├─ Render to PDF (한컴과 같은 출력 — layout-cache replay)
-│     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
+│     → to-pdf  (needs a layout cache: 한컴-saved .hwpx, or .hwp / HWP5 converted
+│               with --carry-layout-cache. Cacheless files are rejected)
 │
 ├─ Check whether a .hwpx is structurally sound (before further editing)
 │     → validate  (decode + Document::validate; exit 0 valid, 1 file/argument error, 2 undecodable, 3 invalid)
@@ -193,12 +194,16 @@ hwpforge to-json doc.hwpx --section 0 --no-styles -o sec.json
 hwpforge patch doc.hwpx --section 0 sec.json -o doc.hwpx          # text-only
 hwpforge from-json full.json -o doc.hwpx --base doc.hwpx          # rebuild (inherit images)
 
-# Render to PDF (layout-cache replay — 한컴 재저장본만; format detected by content)
+# Render to PDF (layout-cache replay; format detected by content — .hwp 도 직접 받는다)
 hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|hancom|platform] \
     [--degraded] [--partial-cache-reject] [--json]
+#   캐시가 있는 문서만 렌더된다. 출처 둘: 한컴이 저장한 .hwpx, 그리고 HWP5 에서 캐시를
+#   실어 변환한 .hwpx (convert-hwp5 --carry-layout-cache). .hwp 를 그대로 주면 to-pdf 가
+#   그 변환을 대신한다 — 실어 온 캐시는 PDF 재생·대조 전용(한컴 재열기용 아님).
 # macOS + 한컴오피스 설치 시: --discovery hancom 으로 번들 폰트 자동 발견.
 # 실무 문서는 언어축 혼합이 흔해 --degraded 권장 (경고로 표면화됨).
-# 실패는 fail-closed: cacheless → 한컴에서 열어 재저장 후 재시도.
+# 실패는 fail-closed: cacheless(convert·from-json 산출물) → 한컴에서 열어 재저장하거나,
+#   원본이 HWP5 면 --carry-layout-cache 로 다시 변환.
 
 # Structural validation — decode + Document::validate, no editing
 hwpforge validate doc.hwpx [--json]

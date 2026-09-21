@@ -345,10 +345,13 @@ class Document:
     ) -> BytesResult[ToPdfReport]:
         """Render the document to PDF.
 
-        Rendering replays the layout Hancom itself computed and stored in the
-        document, so the document has to be one Hancom saved. One this library
-        generated carries no such layout and is refused with
-        ``PDF_RENDER_FAILED``.
+        Rendering replays a layout stored in the document, so the document has
+        to carry one. An HWPX Hancom saved does, and so does one converted from
+        HWP5 with the layout carried across —
+        [`convert_hwp5`][hwpforge.convert_hwp5] with `carry_layout_cache`, or
+        handing this method a document holding `.hwp` bytes, which converts
+        them the same way. A document generated from Markdown or JSON carries
+        no layout and is refused with ``PDF_RENDER_FAILED``.
 
         Args:
             font_dirs: Directories to load fonts from. A bare string is

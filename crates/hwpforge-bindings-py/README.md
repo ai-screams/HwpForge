@@ -20,9 +20,14 @@ on the host and named through `font_dirs` or `discovery`: by default a face that
 resolved fails the render rather than being guessed at. `to_pdf(degraded=True)` relaxes that
 and renders the missing face with a fallback, which changes how the page looks.
 
-Rendering replays the layout Hancom itself computed, so `to_pdf` needs a document Hancom
-saved. One this library just generated has no such layout and is refused with
-`PDF_RENDER_FAILED`.
+Rendering replays a layout stored in the document, so `to_pdf` needs a document that carries
+one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5 with the layout carried
+across — `convert_hwp5(data, carry_layout_cache=True)`, or simply handing `to_pdf` the `.hwp`
+bytes, which converts them the same way. A document this library generated from Markdown or
+JSON carries no layout and is refused with `PDF_RENDER_FAILED`.
+
+A layout carried over from HWP5 is for PDF replay and comparison only; do not treat such an
+HWPX as one to reopen in Hancom.
 
 ## Install
 
