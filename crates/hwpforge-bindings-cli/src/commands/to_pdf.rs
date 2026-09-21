@@ -592,7 +592,14 @@ mod tests {
         let mut seen: Vec<&'static str> = cases.iter().map(|(w, ..)| variant_name(w)).collect();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), 22, "expected exactly 22 distinct PdfWarning variants in `cases`");
+        // Every `cases` entry must name a distinct `PdfWarning` variant —
+        // `variant_name`'s `other => panic!` arm is what guarantees `cases`
+        // covers every variant `PdfWarning` has today, not this count.
+        assert_eq!(
+            seen.len(),
+            cases.len(),
+            "two or more `cases` entries map to the same PdfWarning variant name"
+        );
 
         for (warning, code, message, location) in &cases {
             let wrapped = ConvertOpsWarning::Render(warning.clone());
