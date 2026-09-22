@@ -87,8 +87,8 @@ CHANGELOG 그룹 매핑 (`commit_parsers`):
 | `hwpforge-smithy-hwp5`  | ❌        | ❌             | `release=false, publish=false`                                |
 | `hwpforge-bindings-cli` | ❌        | ❌             | `release=false, publish=false`                                |
 | `hwpforge-bindings-py`  | ❌        | ❌             | `release=false, publish=false` — 배포는 PyPI (§9)             |
-| `hwpforge-smithy-pdf`   | ❌        | 미확인         | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
-| `hwpforge-convert`      | ❌        | 미확인         | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
+| `hwpforge-smithy-pdf`   | ❌        | ❌             | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
+| `hwpforge-convert`      | ❌        | ❌             | Cargo.toml `publish = false`, `release-plz.toml` 에 항목 없음 |
 
 - **npm**: umbrella의 GitHub Release `published` → `npm-publish.yml` 가 `hwpforge-mcp` 5타깃
   바이너리 + 플랫폼 패키지 + base `@hwpforge/mcp`(optionalDependencies) 배포.
@@ -97,11 +97,10 @@ CHANGELOG 그룹 매핑 (`commit_parsers`):
   채널은 PyPI 하나뿐이다.
 - **문서**: 실제 릴리스가 생겼을 때만(`releases_created == true`) `pages.yml` 가 mdBook 배포.
 
-> 표 마지막 두 행의 태그 열이 **미확인**인 이유: 앞의 세 크레이트는 `release-plz.toml` 에
-> `release = false` 가 명시돼 태그까지 생기지 않는 것이 확정이지만, `hwpforge-smithy-pdf` 와
-> `hwpforge-convert` 는 `release-plz.toml` 에 항목이 없다. `publish = false` 라 crates.io 게시가
-> 없는 것은 확정이고, release-plz 가 이 둘에 태그를 찍는지는 저장소 설정만으로 단정할 수 없다 —
-> 다음 릴리스에서 태그 목록으로 확인하고 이 행을 확정할 것.
+> 표 마지막 두 행은 `release-plz.toml` 에 항목이 없어 설정만으로는 태그 여부를 단정할 수 없었는데,
+> `0.16.5`·`0.16.6` 두 릴리스의 태그 목록(`git ls-remote --tags origin | grep 'v0.16.6$'`)에
+> 둘 다 없고 umbrella `v{version}` + 위 여섯 크레이트 태그만 있었다 — Cargo.toml `publish = false`
+> 인 크레이트는 release-plz 가 태그도 만들지 않는다.
 
 ---
 
