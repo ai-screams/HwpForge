@@ -596,7 +596,7 @@ fn convert_unknown_preset_rejected_before_missing_input_is_read() {
     ]);
     assert_eq!(code, 1);
     assert_eq!(err["code"], "UNKNOWN_PRESET");
-    assert_eq!(err["hint"], "Available presets: default");
+    assert_eq!(err["hint"], "Available presets: default, modern, classic, latest");
 }
 
 #[test]
@@ -954,6 +954,112 @@ fn inspect_deep_counts_table_image_chart_nested_in_image_caption_and_master_page
     assert_eq!(sec0["tables"], 1, "{val}");
     assert_eq!(sec0["charts"], 1, "{val}");
     assert_eq!(sec0["deep_paragraphs"], 1, "{val}");
+}
+
+/// Audit follow-up regression: `ops::InspectSection`'s decoded-object counts
+/// and the CLI's raw-XML-scan counts of the same scope can genuinely
+/// disagree on a document with an accepted-but-dropped element — a
+/// `<hp:pic>` with no usable `binaryItemIDRef` decodes to `Ok(None)`
+/// (`convert_picture`, `hwpforge-smithy-hwpx/src/decoder/section.rs`), so no
+/// `Control`/`Image` run is ever constructed for it, but the element is
+/// still genuinely present in the section XML. The CLI must keep counting
+/// it; `ops::InspectSection`'s `all_images` must not (it is a decoded-object
+/// count, not a raw scan — see its scope table).
+#[test]
+fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
+    use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+    use hwpforge_core::page::PageSettings;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::Section;
+    use hwpforge_core::{Document, Paragraph};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+    use hwpforge_smithy_hwpx::HwpxEncoder;
+
+    fn text_para(text: &str) -> Paragraph {
+        Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    }
+
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    let image = Image::new(
+        "BinData/host.png",
+        HwpUnit::from_pt(10.0).unwrap(),
+        HwpUnit::from_pt(10.0).unwrap(),
+        ImageFormat::Png,
+    );
+    let mut host = text_para("host");
+    host.add_run(Run::image(image, CharShapeIndex::new(0)));
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let validated = doc.validate().expect("validate");
+    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+
+    // Tamper: strip the picture's `binaryItemIDRef` so a re-decode hits
+    // `convert_picture`'s `Ok(None)` arm instead of constructing an
+    // `Image` — the `<hp:pic>` element itself stays exactly where the
+    // encoder put it.
+    let mut archive = ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+    let mut section_xml = String::new();
+    archive
+        .by_name("Contents/section0.xml")
+        .expect("section0")
+        .read_to_string(&mut section_xml)
+        .expect("read section0");
+    assert!(
+        section_xml.contains(r#"binaryItemIDRef="host""#),
+        "encoder must have written the reference to tamper with: {section_xml}"
+    );
+    let tampered_xml = section_xml.replace(r#"binaryItemIDRef="host""#, r#"binaryItemIDRef="""#);
+
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).expect("entry").name().to_string())
+        .collect();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (index, name) in names.iter().enumerate() {
+        if name == "Contents/section0.xml" {
+            continue;
+        }
+        let entry = archive.by_index_raw(index).expect("raw entry");
+        writer.raw_copy_file(entry).expect("copy entry");
+    }
+    writer
+        .start_file("Contents/section0.xml", zip::write::SimpleFileOptions::default())
+        .expect("start section0");
+    writer.write_all(tampered_xml.as_bytes()).expect("write section0");
+    let tampered_bytes = writer.finish().expect("finish zip").into_inner();
+
+    let dir = test_tmp();
+    let path = dir.join("crafted-pic-no-binary-ref.hwpx");
+    std::fs::write(&path, &tampered_bytes).expect("write fixture");
+
+    // `ops::inspect`: decoded-object count sees no image at all — the run
+    // was never constructed, so there is nothing for the walk to visit.
+    let out = hwpforge::ops::inspect(&tampered_bytes, &hwpforge::ops::InspectOptions::default())
+        .expect("Ok(None) on one picture is not a decode error");
+    assert_eq!(
+        out.report.section_details[0].all_images, 0,
+        "decoded-object count must not see the dropped picture: {:?}",
+        out.report.section_details[0]
+    );
+
+    // CLI `--json`: the raw scan still sees the `<hp:pic>` element, exactly
+    // as the pre-migration scanner would have.
+    let (val, _, code) = run_json(&["inspect", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "{val}");
+    assert_eq!(
+        val["sections"][0]["images"], 1,
+        "CLI's raw scan must still count the element even though the \
+         decoder could not represent it: {val}"
+    );
 }
 
 #[test]
@@ -2576,7 +2682,7 @@ fn from_json_syntax_error_reports_no_hint() {
 }
 
 #[test]
-fn from_json_schema_mismatch_reports_the_legacy_hint() {
+fn from_json_schema_mismatch_points_at_the_exported_document_schema() {
     // Valid JSON, but not an ExportedDocument — the schema-mismatch call
     // site, distinct from the raw-syntax one above.
     let tmp = test_tmp();
@@ -2589,7 +2695,7 @@ fn from_json_schema_mismatch_reports_the_legacy_hint() {
     assert_eq!(err["code"], "JSON_PARSE_FAILED");
     assert_eq!(
         err["hint"],
-        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')"
+        "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema exported-document')"
     );
 }
 
@@ -3773,6 +3879,42 @@ fn read_error_paths_report_stable_codes() {
     let (_, stderr, code) = run(&["read", f.to_str().unwrap(), "--field", "없는이름"]);
     assert_eq!(code, 1);
     assert!(stderr.contains("READ_FIELD_NOT_FOUND"), "stderr: {stderr}");
+}
+
+#[test]
+fn read_shape_rejections_spell_this_frontend_s_flag_names() {
+    // The three rejections `read` makes before it has a document: two are
+    // this command's own pre-read guards (`commands/read.rs`), the third is
+    // `ops::read`'s paras parse, which words the argument the way every
+    // frontend shares (`paras`) and gets the CLI's `--paras` spelling back in
+    // `compat::cli_message`. All three are the CLI's user-facing text, so
+    // they are pinned byte-for-byte here rather than by code alone.
+    let f = fixture("clickhere_named.hwpx");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap()]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+    assert_eq!(err["message"], "Pass exactly one of --section, --table, --field");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--paras", "0"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_WITHOUT_SECTION");
+    assert_eq!(err["message"], "--paras requires --section");
+
+    let (err, _, code) =
+        run_json(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "abc"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_INVALID");
+    assert_eq!(
+        err["message"],
+        r#"invalid input: Cannot parse --paras "abc": use "A..B" (inclusive) or a single "N""#
+    );
+
+    // Text mode renders the same message, so the flag spelling is pinned on
+    // both output paths.
+    let (_, stderr, code) = run(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "abc"]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains(r#"Cannot parse --paras "abc""#), "stderr: {stderr}");
 }
 
 #[test]

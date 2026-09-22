@@ -50,12 +50,28 @@ use std::collections::BTreeMap;
 use hwpforge_core::table::grid::GridCoord;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
 use hwpforge_smithy_hwpx::{
-    scan_delete_warnings, CellSpec, CellTarget, FilledField, HwpxCellEditor, HwpxFiller,
+    scan_delete_warnings, CellTarget, FilledField, HwpxCellEditor, HwpxFiller,
     HwpxStructuralEditor, InsertPosition, ParagraphLocator, SetCellResult,
 };
 use serde::{Deserialize, Serialize};
 
 use super::{OpsError, OpsWarning};
+
+/// One requested cell edit — the request DTO `set_cell` takes and every
+/// frontend's wire schema is built from.
+///
+/// W6b audit follow-up: this is a re-export of `smithy-hwpx`'s own type, not
+/// an `ops`-owned mirror. `ops::set_cell` consumes it as a plain Rust value
+/// (`SetCellOptions::with_specs`) rather than deserializing it from JSON
+/// itself, so there is no ops-side parsing step for a mirror struct to
+/// front — the frontends' `#[derive(Deserialize)]` request structs decode
+/// straight into this type today, and re-exporting it here just gives them
+/// one name to import (`hwpforge::ops::CellSpec`) instead of reaching past
+/// `ops` into `smithy-hwpx` directly. If `smithy-hwpx` ever renames or
+/// reshapes this type, fix the break here; a schema snapshot test in
+/// `hwpforge-bindings-mcp` pins the JSON shape so an incompatible change
+/// fails loudly there.
+pub use hwpforge_smithy_hwpx::CellSpec;
 
 /// Builds the rejection for an argument the library never gets to see.
 ///

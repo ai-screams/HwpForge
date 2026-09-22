@@ -1,8 +1,8 @@
 //! `ops::read` — one addressable part of a document at a time.
 //!
-//! The target rules are the CLI's, so they are tested as rules rather than as
-//! happy paths: how many targets, in which order the checks fire, and which
-//! code each violation reports.
+//! The target rules are shared by every frontend, so they are tested as rules
+//! rather than as happy paths: how many targets, in which order the checks
+//! fire, and which code each violation reports.
 #![cfg(feature = "ops-hwpx")]
 
 use std::collections::BTreeSet;
@@ -38,7 +38,7 @@ fn no_target_is_rejected() {
 
     assert_eq!(err.code(), OpsCode::ReadTargetRequired, "{err}");
     assert_eq!(err.code().as_str(), "READ_TARGET_REQUIRED");
-    assert!(err.to_string().contains("Pass exactly one of --section, --table, --field"), "{err}");
+    assert!(err.to_string().contains("Pass exactly one of section, table, field"), "{err}");
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn a_range_without_a_section_is_rejected() {
 
     assert_eq!(err.code(), OpsCode::ReadParasWithoutSection, "{err}");
     assert_eq!(err.code().as_str(), "READ_PARAS_WITHOUT_SECTION");
-    assert!(err.to_string().contains("--paras requires --section"), "{err}");
+    assert!(err.to_string().contains("paras requires section"), "{err}");
 }
 
 /// Check order matters: a caller who gets both rules wrong must see the
@@ -86,14 +86,14 @@ fn the_target_rule_fires_before_the_range_rules() {
 }
 
 #[test]
-fn a_malformed_range_is_rejected_with_the_cli_message() {
+fn a_malformed_range_is_rejected_by_the_parser() {
     let opts = ReadOptions::default().with_section(0).with_paras("1..2..3");
 
     let err = read(&hwpx_fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::ReadParasInvalid, "{err}");
     assert_eq!(err.code().as_str(), "READ_PARAS_INVALID");
-    assert!(err.to_string().contains("Cannot parse --paras"), "{err}");
+    assert!(err.to_string().contains("Cannot parse paras"), "{err}");
 }
 
 /// Argument rules are checked before the document is read, so bytes that are
@@ -161,7 +161,7 @@ fn a_reversed_range_is_rejected_by_the_library_not_the_parser() {
     let err = read(&hwpx_fixture("SimpleTable.hwpx"), &opts).expect_err("must reject");
 
     assert_eq!(err.code(), OpsCode::ReadParaRangeInvalid, "{err}");
-    assert!(!err.to_string().contains("Cannot parse --paras"), "{err}");
+    assert!(!err.to_string().contains("Cannot parse paras"), "{err}");
 }
 
 // ── table reads ─────────────────────────────────────────────────

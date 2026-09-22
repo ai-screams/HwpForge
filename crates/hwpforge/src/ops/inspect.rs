@@ -11,6 +11,7 @@ use hwpforge_foundation::{CharShapeIndex, FieldType, FontIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
 use serde::{Deserialize, Serialize};
 
+use super::walk;
 use super::{OpsError, OpsWarning};
 
 /// Options for [`inspect`].
@@ -48,22 +49,9 @@ pub struct InspectOutput {
 
 /// Structural summary of a document — the `inspect` wire payload.
 ///
-/// # Counting contract
-///
-/// `paragraphs`, `tables`, `images` and `charts` are **deep** counts: they
-/// use Core's shared paragraph traversal, which visits body paragraphs,
-/// table cells, text boxes, notes, memos, headers, footers and master
-/// pages, and therefore counts content nested inside a table cell too. The
-/// traversal deliberately does not descend into image captions. Per-section
-/// `top_level_paragraphs` is the body-flow paragraph count of that section,
-/// which is what the CLI and the MCP server report as `paragraphs` today;
-/// [`InspectSection::top_level_tables`], `top_level_images` and
-/// `top_level_charts` are the same top-level rule applied to tables,
-/// images and charts — `Section::content_counts()`, matching what the CLI
-/// and the pre-migration MCP server report as `tables`/`images`/`charts`
-/// today. A table containing an image, or a footnote containing a table,
-/// is where the two disagree: the deep fields see it, the top-level ones
-/// do not.
+/// Every count here is the [`InspectSection`] field of the same name, summed
+/// over all sections. That struct's `# Scope table` says what each of the
+/// four counting scopes visits; all four fields below are the unprefixed one.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -72,13 +60,14 @@ pub struct InspectReport {
     pub metadata: InspectMetadata,
     /// Number of sections.
     pub sections: usize,
-    /// Paragraphs the shared traversal visits, across the whole document.
+    /// Paragraphs, unprefixed scope.
     pub paragraphs: usize,
-    /// Tables, nested ones included.
+    /// Tables, unprefixed scope.
     pub tables: usize,
-    /// Images, nested ones included.
+    /// Images, unprefixed scope.
     pub images: usize,
-    /// Charts, nested ones included.
+    /// Charts, unprefixed scope — subject to the nested-chart decoder gap
+    /// [`InspectSection`]'s scope table records.
     pub charts: usize,
     /// Names of the click-here fields, in document order, duplicates kept.
     pub fields: Vec<String>,
@@ -114,6 +103,60 @@ pub struct InspectMetadata {
 }
 
 /// One section's contribution to [`InspectReport`].
+///
+/// # Scope table
+///
+/// A field's prefix names the *set* it counts. Four scopes share this
+/// struct, and they are four incomparable recursion sets rather than a
+/// hierarchy — no row is simply a wider version of another.
+///
+/// | Prefix | Fields | Recurses into | Master pages | Captions |
+/// | -- | -- | -- | -- | -- |
+/// | `top_level_` | paragraphs, tables, images, charts | nothing: the section's own body-flow runs (`Section::paragraphs`, `Section::content_counts()`) | no | no |
+/// | *(none)* | paragraphs, tables, images, charts | `Section::for_each_paragraph` — table cells, text boxes, notes, memos, headers, footers | yes | no |
+/// | `deep_` | paragraphs | headers, footers, table cells, and `TextBox`/`Footnote`/`Endnote`/`Ellipse`/`Polygon`/`Memo` bodies | no | no |
+/// | `all_` | tables, images, text boxes, lines, rectangles, polygons | everything the section's own XML part physically holds, group children and a memo's anchor run included | no | yes |
+///
+/// `hwpforge::ops::walk`'s module doc is the canonical detail for the last
+/// two rows, which it computes.
+///
+/// A `non_empty_` infix narrows a row to the paragraphs carrying visible
+/// text. It never changes *which* set is counted, so
+/// [`Self::top_level_non_empty_paragraphs`] can never exceed
+/// [`Self::top_level_paragraphs`]; only the visibility test probes one
+/// recursion step deeper than its row (a paragraph with no text of its own
+/// but a text-bearing table counts).
+///
+/// Three facts the table cannot show:
+///
+/// - **There is no `all_charts`.** `hwpforge-smithy-hwpx`'s decoder
+///   reconstructs a `Control::Chart` only for a section's own top-level
+///   paragraphs — the `<hp:switch>`/`<hp:chart>` extraction lives in
+///   `decode_section`'s top-level loop, not in the recursive per-container
+///   dispatch every other nested content type goes through. A chart nested
+///   in a table cell, a caption or a text box never becomes a
+///   `Control::Chart` at all, so an `all_charts` would silently undercount
+///   exactly the documents it would exist for. The same gap makes `charts`
+///   and [`Self::top_level_charts`] read alike on every input today. See
+///   `hwpforge::ops::walk`'s
+///   `chart_nested_in_a_caption_is_a_documented_decoder_gap` test for the
+///   reproduction.
+/// - **The `all_` row counts decoded objects, not XML elements.** An element
+///   the decoder accepts but cannot represent — an `<hp:pic>` with no usable
+///   `binaryItemIDRef`, which `convert_picture`
+///   (`hwpforge-smithy-hwpx/src/decoder/section.rs`) turns into `Ok(None)`
+///   rather than an error — is genuinely in the section XML yet invisible
+///   here. `hwpforge-bindings-cli`'s `inspect --json` carries same-scoped
+///   keys under its own legacy spelling (`tables`, `images`, `text_boxes`,
+///   …) sourced from a raw XML scan, which has no such gap; the two can
+///   disagree on such a document, and that CLI deliberately does not read
+///   these six. The paragraph rows carry no equivalent caveat: paragraph
+///   presence is never silently dropped, so those do agree with the CLI's
+///   by construction.
+/// - **`#[serde(default)]` marks the twelve fields 0.16.5 never wrote.**
+///   JSON from that release or earlier has none of those keys, so they
+///   deserialize to `0` — an absent value, not a measured "none". The nine
+///   unmarked fields are the whole of what 0.16.5 emitted.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -122,40 +165,24 @@ pub struct InspectSection {
     pub index: usize,
     /// Body-flow paragraphs of this section.
     pub top_level_paragraphs: usize,
-    /// Top-level tables in this section — `Section::content_counts()`,
-    /// matching the CLI/MCP `inspect` contract (a table nested inside a
-    /// table cell, note, header/footer or master page is not counted).
-    /// Deep counts, nested ones included, are [`Self::tables`].
-    ///
-    /// `#[serde(default)]` (`0`): JSON written by hwpforge 0.16.5 or
-    /// earlier has no `top_level_tables` key, from before this field
-    /// existed. A defaulted `0` on such input is not a real "no tables"
-    /// answer — [`Self::tables`] is the field that input still carries.
+    /// Tables, `top_level_` scope (`Section::content_counts()`).
     #[serde(default)]
     pub top_level_tables: usize,
-    /// Top-level images in this section — top-level only, the same rule
-    /// [`Self::top_level_tables`] documents. Deep counts are
-    /// [`Self::images`].
-    ///
-    /// `#[serde(default)]` (`0`): same older-writer absence as
-    /// [`Self::top_level_tables`].
+    /// Images, `top_level_` scope.
     #[serde(default)]
     pub top_level_images: usize,
-    /// Top-level charts in this section — top-level only, the same rule
-    /// [`Self::top_level_tables`] documents. Deep counts are
-    /// [`Self::charts`].
-    ///
-    /// `#[serde(default)]` (`0`): same older-writer absence as
-    /// [`Self::top_level_tables`].
+    /// Charts, `top_level_` scope — reads the same as [`Self::charts`] on
+    /// every input today, per the scope table's nested-chart decoder gap.
     #[serde(default)]
     pub top_level_charts: usize,
-    /// Paragraphs the shared traversal visits inside this section.
+    /// Paragraphs, unprefixed scope.
     pub paragraphs: usize,
-    /// Tables in this section, nested ones included.
+    /// Tables, unprefixed scope.
     pub tables: usize,
-    /// Images in this section, nested ones included.
+    /// Images, unprefixed scope.
     pub images: usize,
-    /// Charts in this section, nested ones included.
+    /// Charts, unprefixed scope — subject to the scope table's
+    /// nested-chart decoder gap.
     pub charts: usize,
     /// Whether the section defines a header.
     pub has_header: bool,
@@ -163,6 +190,41 @@ pub struct InspectSection {
     pub has_footer: bool,
     /// Whether the section defines a page number control.
     pub has_page_number: bool,
+
+    // The nine below stay appended after the twelve above, in the order they
+    // were added; MCP's `SectionDetail` mirrors that and pins it with a
+    // key-order test.
+    /// Tables, `all_` scope.
+    #[serde(default)]
+    pub all_tables: usize,
+    /// Images, `all_` scope.
+    #[serde(default)]
+    pub all_images: usize,
+    /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), `all_`
+    /// scope.
+    #[serde(default)]
+    pub all_text_boxes: usize,
+    /// Line drawing objects, `all_` scope.
+    #[serde(default)]
+    pub all_lines: usize,
+    /// Pure rectangles (HWPX `<hp:rect>` *without* a nested `<hp:drawText>`
+    /// — a text-bearing one counts under [`Self::all_text_boxes`] instead,
+    /// never both), `all_` scope.
+    #[serde(default)]
+    pub all_rectangles: usize,
+    /// Polygon drawing objects, `all_` scope.
+    #[serde(default)]
+    pub all_polygons: usize,
+    /// Body-flow paragraphs carrying visible text — [`Self::top_level_paragraphs`]'s
+    /// set, narrowed by the scope table's `non_empty_` rule.
+    #[serde(default)]
+    pub top_level_non_empty_paragraphs: usize,
+    /// Paragraphs, `deep_` scope.
+    #[serde(default)]
+    pub deep_paragraphs: usize,
+    /// Paragraphs carrying visible text, `deep_` scope.
+    #[serde(default)]
+    pub deep_non_empty_paragraphs: usize,
 }
 
 /// Style summary of the document's header definitions.
@@ -255,6 +317,8 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
         let mut counts = Counts::default();
         section.for_each_paragraph(|paragraph| counts.visit(paragraph, &mut fields));
         let top_level = section.content_counts();
+        let objects = walk::object_counts(section);
+        let paragraphs = walk::paragraph_counts(section);
         section_details.push(InspectSection {
             index,
             top_level_paragraphs: section.paragraphs.len(),
@@ -268,6 +332,15 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
             has_header: !section.headers.is_empty(),
             has_footer: !section.footers.is_empty(),
             has_page_number: section.page_number.is_some(),
+            all_tables: objects.all_tables,
+            all_images: objects.all_images,
+            all_text_boxes: objects.all_text_boxes,
+            all_lines: objects.all_lines,
+            all_rectangles: objects.all_rectangles,
+            all_polygons: objects.all_polygons,
+            top_level_non_empty_paragraphs: paragraphs.top_level_non_empty_paragraphs,
+            deep_paragraphs: paragraphs.deep_paragraphs,
+            deep_non_empty_paragraphs: paragraphs.deep_non_empty_paragraphs,
         });
     }
 

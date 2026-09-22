@@ -5,6 +5,17 @@ use std::path::PathBuf;
 use crate::compat::{self, Command};
 use crate::error::{check_file_size, read_bounded, read_input_string, CliError};
 use hwpforge::ops::{self, FromJsonOptions};
+use hwpforge_foundation::diagnostics::OpsCode;
+
+/// Hint for a JSON document that parses but does not match the export schema.
+///
+/// `ops::from_json` deserializes an `ExportedDocument` — what `to-json`
+/// writes — so `schema exported-document` is the schema to check against;
+/// `schema document` prints the in-memory `Document` instead, which this
+/// command never reads. `pub(crate)` so `compat.rs`'s superseded-hint guard
+/// can prove no source still emits the old text.
+pub(crate) const SCHEMA_MISMATCH_HINT: &str =
+    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema exported-document')";
 
 /// Run the from-json command.
 pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode: bool) {
@@ -19,9 +30,9 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     // (its own `serde_json::from_str::<Value>` reparse and the
     // `ExportedDocument::deserialize` step share that variant — no way to
     // tell them apart from inside `ops`). This preflight keeps the syntax
-    // case byte-identical and pre-clears it, so any `JSON_PARSE_FAILED`
-    // `ops::from_json` still returns below is necessarily the schema case;
-    // the hint is attached there.
+    // case byte-identical and pre-clears it, so any `JsonParseFailed`
+    // `ops::from_json` still returns below is necessarily the schema case —
+    // the hint is attached at that arm, where this preflight makes it true.
     if let Err(e) = serde_json::from_str::<serde_json::Value>(&json_str) {
         CliError::new("JSON_PARSE_FAILED", format!("Invalid JSON: {e}")).exit(json_mode, 2);
     }
@@ -53,21 +64,11 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
     let outcome = match ops::from_json(&json_str, &opts) {
         Ok(o) => o,
         Err(e) => {
-            let err = compat::cli_error(Command::FromJson, e);
-            let exit = compat::exit_code(Command::FromJson, &err);
-            // The syntax case already exited above, so a JSON_PARSE_FAILED
-            // reaching here is necessarily the schema-mismatch case —
-            // restores the legacy hint the shared table can't carry (two
-            // call sites, one `OpsError::Json` variant; see the preflight
-            // comment above).
-            let err = if err.code == "JSON_PARSE_FAILED" {
-                err.with_hint(
-                    "Ensure the JSON matches the HwpForge document schema (run 'hwpforge schema document')",
-                )
-            } else {
-                err
-            };
-            err.exit(json_mode, exit);
+            // Typed check, not a comparison against the resolved wire string:
+            // the syntax case already exited in the preflight above.
+            let schema_hint =
+                (e.code() == OpsCode::JsonParseFailed).then_some(SCHEMA_MISMATCH_HINT);
+            compat::exit_ops_error_with_hint(Command::FromJson, e, schema_hint, json_mode)
         }
     };
     let bytes = outcome.bytes;

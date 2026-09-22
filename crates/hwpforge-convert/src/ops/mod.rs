@@ -515,6 +515,33 @@ pub enum ConvertOpsWarning {
     Render(PdfWarning),
 }
 
+/// The three columns a frontend shows for a warning: a stable `code`, the
+/// `message` on its own, and the `location` it points at when it has one.
+///
+/// This is what [`ConvertOpsWarning::info`] is built from.
+/// [`WarningInfo`] has only `code` and `message`, so `info()` folds the
+/// location into the message as `"{location}: {message}"` rather than drop
+/// it. A frontend that keeps a `location` column of its own — the CLI's
+/// `to-pdf` warning DTO does — must take [`parts`](ConvertOpsWarning::parts)
+/// instead, or it prints the location in both columns.
+///
+/// `#[non_exhaustive]`: the fields are stable to read, but a fourth column
+/// should not break the build of anything downstream. Nothing outside this
+/// crate constructs one.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WarningParts {
+    /// Stable code, the same string [`WarningInfo::code`] carries — `OTHER`
+    /// for a variant this crate has no dedicated wording for.
+    pub code: &'static str,
+    /// Human-readable text, **without** the location folded in.
+    pub message: String,
+    /// Where the warning points, for the variants that say: a paragraph path
+    /// (`"s0/p1/l2"`), a section (`"s0"`), a record offset (`"offset 12"`) or
+    /// an attribute path (`"hp:header@applyPageType"`). `None` otherwise.
+    pub location: Option<String>,
+}
+
 impl ConvertOpsWarning {
     /// Which pipeline stage raised this warning: `"convert"`, `"decode"` or
     /// `"render"`.
@@ -544,14 +571,53 @@ impl ConvertOpsWarning {
         }
     }
 
+    /// This warning's three columns — stable code, message, optional
+    /// location — with the location kept **out** of the message.
+    ///
+    /// Take this over [`info`](Self::info) whenever the frontend has a
+    /// `location` field of its own: `info()` folds the location into the
+    /// message because [`WarningInfo`] has nowhere else to put it, so a
+    /// frontend that does both shows the same value twice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_convert::ops::ConvertOpsWarning;
+    /// use hwpforge_smithy_pdf::PdfWarning;
+    ///
+    /// let warning = ConvertOpsWarning::Render(PdfWarning::ParagraphSkipped {
+    ///     location: "s0/p1".into(),
+    /// });
+    /// let parts = warning.parts();
+    /// assert_eq!(parts.code, "PARAGRAPH_SKIPPED");
+    /// assert_eq!(parts.message, "paragraph without layout cache skipped");
+    /// assert_eq!(parts.location.as_deref(), Some("s0/p1"));
+    ///
+    /// // `info()` is exactly these parts with the location folded in.
+    /// assert_eq!(
+    ///     warning.info().message,
+    ///     format!("{}: {}", parts.location.unwrap(), parts.message),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn parts(&self) -> WarningParts {
+        let (code, message, location) = match self {
+            Self::Convert(w) => convert_warning_parts(w),
+            Self::Decode(w) => decode_warning_parts(w),
+            Self::Render(w) => render_warning_parts(w),
+        };
+        WarningParts { code, message, location }
+    }
+
     /// The wire shape of this warning: stable code, message, optional hint.
     ///
     /// The codes are exactly the strings the CLI's `to-pdf` warning DTOs
     /// emit, `OTHER` included, so a frontend that filters on them keeps
-    /// working. The messages are the CLI's messages with one change:
-    /// [`WarningInfo`] has no `location` field, so a warning that carried one
-    /// gets it prefixed as `"{location}: {message}"` rather than dropped.
-    /// That is the same convention `hwpforge::ops` uses.
+    /// working. The messages are [`parts`](Self::parts)'s messages with one
+    /// change: [`WarningInfo`] has no `location` field, so a warning that
+    /// carried one gets it prefixed as `"{location}: {message}"` rather than
+    /// dropped. That is the same convention `hwpforge::ops` uses — and the
+    /// reason a frontend with its own `location` column takes `parts()`.
     ///
     /// # Examples
     ///
@@ -568,12 +634,8 @@ impl ConvertOpsWarning {
     /// ```
     #[must_use]
     pub fn info(&self) -> WarningInfo {
-        let (code, message, location) = match self {
-            Self::Convert(w) => convert_warning_parts(w),
-            Self::Decode(w) => decode_warning_parts(w),
-            Self::Render(w) => render_warning_parts(w),
-        };
-        WarningInfo::new(code, locate(message, location))
+        let parts = self.parts();
+        WarningInfo::new(parts.code, locate(parts.message, parts.location))
     }
 }
 

@@ -6,10 +6,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::DocumentDiff;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
-
-/// Inline response ceiling shared with `hwpforge_to_json` (1 MB).
-const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo, MAX_INLINE_RESPONSE};
 
 /// Output data from a diff.
 #[derive(Debug, Serialize)]

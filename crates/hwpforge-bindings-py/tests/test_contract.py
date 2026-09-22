@@ -471,6 +471,18 @@ def test_inspect_reports_shallow_and_deep_table_counts_separately(
     assert section["top_level_charts"] == 0
 
 
+def test_inspect_section_matches_its_stub(table_bytes: bytes) -> None:
+    """`InspectSection` carries nine `all_`/`deep_`/`top_level_non_empty_`
+    counts beside the top-level ones — the runtime dict's key set must match
+    the stub exactly, so a rename on the Rust side cannot land without the
+    stub following it."""
+    sections = _hwpforge.inspect(table_bytes)["section_details"]
+
+    assert sections, "the fixture must have at least one section"
+    for section in sections:
+        _keys_match_stub(section, "InspectSection")
+
+
 # ── from_json ───────────────────────────────────────────────────
 
 

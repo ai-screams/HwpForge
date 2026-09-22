@@ -13,6 +13,38 @@ Use this (NOT Markdown conversion) when you must preserve images, styles, tables
 If you only change existing text → `patch` (safest, preserves everything exactly).
 If you add or remove paragraphs → `from-json --base`.
 
+## Which surface a 한컴-saved document accepts
+
+This is the table to check before picking an edit surface for a real government form.
+
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce —
+`Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Practically every
+`.hwpx` that has ever been opened and saved in 한컴 has them. The four surfaces that re-encode
+the whole package refuse such a document **fail-closed** instead of dropping those entries.
+
+| Surface            | 한컴-saved document | What happens                                                                                         |
+| ------------------ | ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `fill`             | works               | preserve-first: writes the named 누름틀, keeps every other entry byte for byte                       |
+| `patch`            | works               | text-only inside existing paragraphs and cells; the package is preserved                             |
+| `set-cell`         | refused             | `INPUT_ENTRIES_NOT_CARRIED`, or `INPUT_NOT_ROUNDTRIP_SAFE` when round-trip is unprovable             |
+| `insert-para`      | refused             | `UNCARRIED_ZIP_ENTRIES`                                                                              |
+| `delete-para`      | refused             | `UNCARRIED_ZIP_ENTRIES`                                                                              |
+| `stamp`            | refused             | `INPUT_ENTRIES_NOT_CARRIED` / `INPUT_NOT_ROUNDTRIP_SAFE`                                             |
+| `from-json --base` | lossy               | rebuilds; `--base` inherits images, but the entries above are dropped without a warning of their own |
+
+**The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, and change any other
+text with `to-json --section N` → edit `content.Text` → `patch`. Both preserve the package.
+Reach for `from-json --base` only when you genuinely must change structure, and open the result
+in 한컴 before submitting it.
+
+`stamp` and the grid/structural surfaces are for templates HwpForge itself produced, or for
+documents whose lossless round-trip it can prove. Run the surface once on a copy to find out —
+the refusal is immediate and writes nothing.
+
+Python (`fill`/`patch` vs `set_cell`/`insert_para`/`delete_para`/`stamp`) and the MCP tools of
+the same names inherit exactly this table; Python reports every refusal as
+`INPUT_ENTRIES_NOT_CARRIED` or `INPUT_NOT_ROUNDTRIP_SAFE`.
+
 ## Step-by-step
 
 ### 1. Inspect — understand structure (always first)

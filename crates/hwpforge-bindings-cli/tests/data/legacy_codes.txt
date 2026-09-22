@@ -13,6 +13,10 @@
 # file except `templates.rs` and `schema.rs`), so `INPUT_TOO_LARGE` is not
 # attributed to one command.
 #
+# This file is a frozen historical snapshot, not a live map of today's
+# call sites — for which command reports what on an *oversized* input
+# today, see `src/error.rs`'s module docs.
+#
 # hint column (exact, not a category — `src/compat.rs`'s inventory test
 # compares `TABLE`'s hint field against this text byte-for-byte, per the W3
 # adversarial-review addendum: a prior lane's snapshot recorded only code
@@ -63,6 +67,14 @@
 # re-auditing `src/commands/*.rs` and `src/error.rs`, never by copying
 # `compat.rs`'s own table (that would make the check circular).
 #
+# ── This file holds only pre-W3-migration rows ──────────────────────────
+# `new_codes.txt` (same directory) holds every `(command, code, exit, hint)`
+# shape with no pre-migration call site to audit (a command or a code the
+# migration itself introduced) — `validate` and `insert-para
+# INSERT_TEXT_REQUIRED` today. `src/compat.rs`'s `snapshot_rows()` reads
+# both files; keep them disjoint (a pair in both would be two conflicting
+# "audited" answers for the same call site).
+#
 # ── Validation precedence (cheap argument guards vs. file I/O) ──────────
 # Where a command's legacy `run()` validated an argument *before* touching
 # the filesystem, a caller who passes both a bad argument and a missing/
@@ -103,31 +115,6 @@
 #                legacy source (diff, outline, fields, inspect, from-json,
 #                patch, convert-hwp5, stamp-plan, templates, schema).
 #
-# ── `validate` is not part of the pre-migration snapshot ────────────────
-# Every other command's rows above come from the pre-W3-migration tree
-# (module header). `validate` did not exist there — it is a new command
-# (W5b), added straight against `hwpforge::ops::validate`, with no legacy
-# CLI to audit. Its two rows below are frozen from the commit that adds
-# them forward, same status as every other row in this file, just without
-# a "pre-migration" origin to point to. READ-FIRST like the "(all others)"
-# group above: `check_file_size`/`std::fs::read` run before `ops::validate`
-# is ever called, and there is no argument to validate ahead of that.
-#
-# ── `insert-para INSERT_TEXT_REQUIRED` is not part of the pre-migration
-#    snapshot either ─────────────────────────────────────────────────────
-# The bullet above records that clap's `--text` `required = true` guard
-# already refuses an empty list before `run_insert` runs, so the
-# pre-migration CLI never had a call site for `ops::edit::insert_para`'s
-# own `InsertTextRequired` rejection (reachable only through a frontend
-# with no equivalent guard, e.g. MCP) — audit finding: an unrouted new
-# code silently took `exit_code`'s fallback (2, the codec-failure class)
-# instead of 1. This one row is frozen from the commit that adds it
-# forward — same status as every other row here, just without a
-# pre-migration origin — exit 1, the argument-error class every other
-# `insert-para`/`delete-para` row in this file uses. Its data row sits with
-# the rest of `insert-para`'s block below, in the same sorted-by-command
-# order as every other row (this note lives here, next to `validate`'s, so
-# both "not pre-migration" exceptions are documented together).
 audit-hwp5	FILE_READ_FAILED	1	-
 audit-hwp5	HWP5_DECODE_FAILED	2	Check that the file is a valid HWP5 document
 audit-hwp5	HWP5_SEMANTIC_FAILED	2	Check that the file is a valid HWP5 document
@@ -203,7 +190,6 @@ insert-para	FILE_READ_FAILED	1	-
 insert-para	FILE_WRITE_FAILED	2	-
 insert-para	INPUT_NOT_ROUNDTRIP_SAFE	1	-
 insert-para	INSERT_BEFORE_SECTION_PROPERTIES	1	-
-insert-para	INSERT_TEXT_REQUIRED	1	-
 insert-para	MULTI_PARAGRAPH_TEXT	1	-
 insert-para	PARAGRAPH_OUT_OF_RANGE	1	-
 insert-para	SECTION_OUT_OF_RANGE	1	-
@@ -332,6 +318,3 @@ to-pdf	INVALID_DISCOVERY	2	-
 to-pdf	PDF_RENDER_FAILED	2	cacheless documents need a Hancom re-save; font errors may need --font-dir/--discovery or --degraded
 to-pdf	UNRECOGNIZED_FORMAT	2	to-pdf detects the format by content — the extension is only a hint
 to-pdf	VALIDATION_FAILED	2	-
-validate	DECODE_FAILED	2	-
-validate	FILE_READ_FAILED	1	-
-validate	JSON_SERIALIZE_FAILED	2	-

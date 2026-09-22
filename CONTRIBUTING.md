@@ -54,17 +54,26 @@ This prevents duplicated effort and ensures the change aligns with the project d
 ### Essential commands
 
 ```bash
-make ci          # Full CI pipeline: fmt + clippy + test + deny + lint
+make ci          # Fast local check: fmt + clippy + test + deny + lint-md (alias of ci-fast)
+make ci-full     # The above plus coverage and MSRV
+make py-all      # Python bindings: lint + types + Rust/Python tests + coverage
 make test        # cargo nextest run (parallel, all features)
 make clippy      # cargo clippy (all targets, all features, -D warnings)
 make fmt-fix     # Auto-format with rustfmt
 make doc         # Generate rustdoc (opens in browser)
 make cov         # Coverage report with 90% gate (llvm-cov)
-mdbook build     # Build the project book
+mdbook build     # Build the project book (mdBook 0.4 line — see below)
 ```
 
-**Always run `make ci` before pushing.** It matches CI flags exactly.
-Bare `cargo clippy` or `cargo fmt --check` will miss workspace-level checks.
+**Always run `make ci` before pushing.** It uses the same flags CI does, so it catches what
+bare `cargo clippy` or `cargo fmt --check` would miss. It is not, however, the whole pipeline:
+`make ci` is the five fast lanes, and CI additionally runs Coverage, MSRV, the HWP5 Audit Gate,
+Docs Build, Python and Workflow Lint. Before a release or a large change run `make ci-full` and
+`make py-all` as well, and `mdbook build` if you touched docs.
+
+`mdbook build` needs the **mdBook 0.4 line**: CI pins mdBook 0.4.52 with mdbook-admonish 1.20.0
+and mdbook-mermaid 0.16.2, because the two preprocessors have not converged on the mdBook 0.5
+API. `make install-tools` installs exactly those pinned versions.
 
 ### Watch mode
 
@@ -112,8 +121,8 @@ Keep it minimal.
 
 ### Before submitting
 
-1. Run `make ci` — it must pass.
-2. If you changed docs, verify with `mdbook build`.
+1. Run `make ci` — it must pass. For a large change, `make ci-full` and `make py-all` too.
+2. If you changed docs, verify with `mdbook build` (mdBook 0.4 line — `make install-tools`).
 3. If you added a public API, ensure rustdoc is complete.
 4. If your change affects roundtrip (decode/encode), add a golden test with a real HWPX file.
 
@@ -237,7 +246,7 @@ Documentation changes follow the same review bar as code changes.
 
 ## MSRV Policy
 
-The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). `hwpforge-bindings-cli` and `hwpforge-smithy-pdf` require **Rust 1.92+** (krilla dependency) and set their own crate-level `rust-version`; the `Verify › MSRV (1.88)` CI job excludes both crates from the 1.88 pass, then checks them separately in the same job with `cargo +1.92 check`.
+The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). Four crates require **Rust 1.92+** along the krilla dependency path — `hwpforge-smithy-pdf`, `hwpforge-convert`, `hwpforge-bindings-cli` and `hwpforge-bindings-py` — and set their own crate-level `rust-version`; the `Verify › MSRV (1.88)` CI job excludes them from the 1.88 pass, then checks them separately in the same job with `cargo +1.92 check`.
 
 Rules:
 

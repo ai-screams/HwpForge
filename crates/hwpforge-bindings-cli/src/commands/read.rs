@@ -22,8 +22,9 @@ pub fn run(
     // Legacy guards (5ff81af `run`): checked before the file is even read,
     // so a bad target/`--paras` combination fails fast without touching the
     // filesystem. `ops::read` keeps its own copies of both rules for the
-    // in-document path (module docs, `hwpforge/src/ops/read.rs`) — these
-    // reproduce the identical code/message/exit for the pre-read path.
+    // in-document path (module docs, `hwpforge/src/ops/read.rs`), worded for
+    // every frontend; these two are where this CLI's flag spelling lives, so
+    // they are written out here rather than taken from there.
     let targets = usize::from(section.is_some())
         + usize::from(table.is_some())
         + usize::from(field.is_some());
@@ -56,19 +57,16 @@ pub fn run(
     // Target-count / paras-without-section are pre-checked above, matching
     // the legacy pre-read guards byte-for-byte; a paras-parse rejection
     // (`READ_PARAS_INVALID`/`READ_PARA_RANGE_INVALID`) still comes from
-    // `ops::read` itself (its rules and messages are the CLI's own,
-    // reproduced verbatim — `hwpforge/src/ops/read.rs` module docs).
+    // `ops::read` itself, which owns the rule. `compat::cli_message` puts
+    // the `--paras` spelling back into the one message that names the
+    // argument.
     // Decoder warnings (`ReadOutput::warnings`) were not surfaced pre-W5. W5
     // follow-up: additive — a new, omit-if-empty `warnings` key in `--json`,
     // and one `[read]`-prefixed stderr line each in text mode, for whichever
     // of the three payloads below is the requested target.
     let out = match ops::read(&bytes, &opts) {
         Ok(o) => o,
-        Err(e) => {
-            let err = compat::cli_error(Command::Read, e);
-            let exit = compat::exit_code(Command::Read, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Read, e, json_mode),
     };
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
 

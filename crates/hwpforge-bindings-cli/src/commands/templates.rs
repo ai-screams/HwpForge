@@ -46,13 +46,10 @@ pub fn run_show(name: &str, json_mode: bool) {
                 println!("  Page: {}", p.page_size);
             }
         }
-        None => {
-            let err = compat::cli_error(
-                Command::Templates,
-                OpsError::PresetNotFound { name: name.to_string() },
-            );
-            let exit = compat::exit_code(Command::Templates, &err);
-            err.exit(json_mode, exit);
-        }
+        None => compat::exit_ops_error(
+            Command::Templates,
+            OpsError::PresetNotFound { name: name.to_string() },
+            json_mode,
+        ),
     }
 }

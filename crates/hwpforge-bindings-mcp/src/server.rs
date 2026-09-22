@@ -1,5 +1,6 @@
 //! MCP server definition and handler implementation.
 
+use hwpforge::ops;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -187,16 +188,21 @@ pub struct StampPlanRequest {
 pub struct StampRequest {
     /// Path to the HWPX file to stamp.
     pub file_path: String,
-    /// Approved text specs: one per candidate from hwpforge_stamp_plan,
-    /// each with an action ({"field":{"name":"…"}} or "ignore"). Every
+    /// Approved text specs: one per candidate from hwpforge_stamp_plan.
+    /// Copy the candidate object unchanged — `section`, `path`, `span` and
+    /// `marker` are its identity and are re-verified against the document —
+    /// and add `action` ({"field":{"name":"…"}} or "ignore"). Every
     /// unguarded candidate must be covered (all-or-nothing).
     #[serde(default)]
-    pub specs: Vec<hwpforge_smithy_hwpx::stamp::StampSpec>,
+    pub specs: Vec<ops::StampSpec>,
     /// Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).
-    /// Field actions REQUIRE a non-blank hint; presence of any cell spec
-    /// requires `source_sha256`.
+    /// Build each one from the candidate's `table` and `at` plus `action`;
+    /// optionally add `label` {at, text} to re-claim one of the candidate's
+    /// labels. No other candidate field is accepted here. Field actions
+    /// REQUIRE a non-blank hint; presence of any cell spec requires
+    /// `source_sha256`.
     #[serde(default)]
-    pub cells: Vec<hwpforge_smithy_hwpx::stamp::CellStampSpec>,
+    pub cells: Vec<ops::CellStampSpec>,
     /// SHA-256 of the input from hwpforge_stamp_plan — mandatory with
     /// `cells` (drift pinning); selects the v2 pipeline when present.
     pub source_sha256: Option<String>,
@@ -215,7 +221,7 @@ pub struct SetCellRequest {
     /// order) plus one of `at` {row,col} (covered positions resolve to their
     /// merge anchor), `right_of` LABEL, or `below` LABEL (normalized exact
     /// match). `text` "" clears the cell. All-or-nothing.
-    pub specs: Vec<hwpforge_smithy_hwpx::CellSpec>,
+    pub specs: Vec<ops::CellSpec>,
     /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
 }
@@ -270,6 +276,39 @@ fn default_preset() -> String {
 /// Convert a `ToolErrorInfo` into an MCP error response (non-fatal, returns content).
 fn tool_error_response(err: ToolErrorInfo) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(err.to_json_string())])
+}
+
+/// The `next` steps for a successful `hwpforge_to_json` export.
+///
+/// The two exports have different follow-ups: `hwpforge_patch` consumes one
+/// section's `ExportedSection` and replaces that section in the base package
+/// (so it keeps the base's images and every other ZIP entry), while a
+/// whole-document export is an `ExportedDocument` that only
+/// `hwpforge_from_json` accepts — and that rebuild starts from JSON alone,
+/// so image binaries do not survive it. Pointing a full export at
+/// `hwpforge_patch` costs the caller a round trip on a schema mismatch, so
+/// the branch is on `section_only`.
+fn to_json_next(data: &to_json::ToJsonData) -> Vec<String> {
+    let mut next = if data.section_only {
+        vec![
+            "Edit the JSON and use hwpforge_patch to apply changes".to_string(),
+            "Use hwpforge_inspect to understand structure first".to_string(),
+        ]
+    } else {
+        vec![
+            "Edit the JSON and use hwpforge_from_json to rebuild the whole document".to_string(),
+            "hwpforge_patch takes one section's JSON, not this full export — re-export with the \
+             section parameter to patch instead of rebuild"
+                .to_string(),
+            "Rebuilding from JSON alone drops image binaries; the section + hwpforge_patch route \
+             keeps them"
+                .to_string(),
+        ]
+    };
+    if let Some(warning) = data.warnings.first() {
+        next.insert(0, format!("Warning: {}", warning.message));
+    }
+    next
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -346,7 +385,7 @@ impl HwpForgeServer {
     /// Use to understand document layout before editing.
     #[tool(
         name = "hwpforge_inspect",
-        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, page numbers per section, and any decode warnings."
+        description = "Inspect an HWPX document structure. Returns section count, paragraph counts, tables, images, charts, headers, footers, page numbers per section, and any decode warnings. A count's prefix names its scope: unprefixed keys are top-level only, `all_*` counts objects anywhere in the section including captions but not master pages, and `deep_*` counts paragraphs recursing into table cells, text boxes, notes and memos. The scopes can disagree on documents with nested content."
     )]
     async fn hwpforge_inspect(
         &self,
@@ -385,7 +424,7 @@ impl HwpForgeServer {
     /// Use `section` parameter to extract a single section (token-efficient).
     #[tool(
         name = "hwpforge_to_json",
-        description = "Export HWPX to JSON for editing. Use section parameter (0-based) to extract a single section for token efficiency. Returns JSON inline or writes to file."
+        description = "Export HWPX to JSON for editing. Use section parameter (0-based) to extract a single section for token efficiency. Returns JSON inline while the serialized response stays under 1 MB — the document JSON is escaped into a string field, so the effective document-JSON limit is content-dependent and below 1 MB (typically ~750-800 KB); larger exports are rejected with OUTPUT_TOO_LARGE — or writes to file with output_path."
     )]
     async fn hwpforge_to_json(
         &self,
@@ -418,14 +457,7 @@ impl HwpForgeServer {
                 } else {
                     format!("{summary}, {} warning(s)", data.warnings.len())
                 };
-                let mut next = vec![
-                    "Edit the JSON and use hwpforge_patch to apply changes".to_string(),
-                    "Use hwpforge_inspect to understand structure first".to_string(),
-                ];
-                if let Some(warning) = data.warnings.first() {
-                    next.insert(0, format!("Warning: {}", warning.message));
-                }
-                let output = ToolOutput { data: &data, summary, next };
+                let output = ToolOutput { data: &data, summary, next: to_json_next(&data) };
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
@@ -472,7 +504,7 @@ impl HwpForgeServer {
     /// Preserves images, styles, and binary content from the base file.
     #[tool(
         name = "hwpforge_patch",
-        description = "Replace a section in an existing HWPX file with edited JSON data. Preserves images and styles from the base file. Use after hwpforge_to_json for surgical edits."
+        description = "Replace a section in an existing HWPX file with edited JSON data. Preserves images and styles from the base file. Use after hwpforge_to_json for surgical edits. Text-only: the edited JSON must keep the section's paragraph structure — a replacement whose semantic text slots differ in count or path is refused. Add or remove paragraphs with hwpforge_insert_para / hwpforge_delete_para, change table cells with hwpforge_set_cell, and rebuild a restructured document with hwpforge_from_json."
     )]
     async fn hwpforge_patch(
         &self,
@@ -571,7 +603,7 @@ impl HwpForgeServer {
     /// Delete top-level paragraphs (structural edit).
     #[tool(
         name = "hwpforge_delete_para",
-        description = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify the result with hwpforge_diff."
+        description = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify the result with hwpforge_diff."
     )]
     async fn hwpforge_delete_para(
         &self,
@@ -599,7 +631,7 @@ impl HwpForgeServer {
     /// Insert a new paragraph relative to an anchor (structural edit).
     #[tool(
         name = "hwpforge_insert_para",
-        description = "Insert one new top-level paragraph before or after an anchor paragraph, preserving every other byte. The new paragraph inherits the anchor's paragraph and character shape (no style is invented); text is a single line of plain text. Insert-before the section's first paragraph is refused. Only round-trip-safe inputs are editable. Verify with hwpforge_diff."
+        description = "Insert new top-level paragraphs before or after an anchor paragraph, preserving every other byte: text for one paragraph, or texts for a contiguous block inserted in order in one verified edit. Each new paragraph inherits the anchor's paragraph and character shape (no style is invented); every entry is a single line of plain text. Insert-before the section's first paragraph is refused. Only round-trip-safe inputs are editable: a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — is refused here, while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. Verify with hwpforge_diff."
     )]
     async fn hwpforge_insert_para(
         &self,
@@ -754,8 +786,8 @@ impl HwpForgeServer {
                         data.cells.len()
                     ),
                     vec![
-                        "Author one spec per candidate: {\"field\":{\"name\":\"…\"}} or \"ignore\"",
-                        "Cell specs need a non-blank hint and the plan's source_sha256",
+                        "Author one text spec per candidate: copy the candidate object unchanged (section, path, span, marker) and add action: {\"field\":{\"name\":\"…\"}} or \"ignore\"",
+                        "Author one cell spec per cells entry: take its table and at, add action ({\"field\":{\"name\":\"…\",\"hint\":\"…\"}} with a non-blank hint, or \"ignore\"), and pass the plan's source_sha256 — a cell spec rejects any other candidate field",
                         "Then call hwpforge_stamp with the full spec list (all-or-nothing)",
                     ],
                 );
@@ -768,7 +800,7 @@ impl HwpForgeServer {
     /// Promote placeholders to named click-here fields (E6 stamping).
     #[tool(
         name = "hwpforge_stamp",
-        description = "Promote prose placeholders to named click-here fields (누름틀) using the approved spec list from hwpforge_stamp_plan. Fail-closed admission gate (lossless round-trip + ZIP closed-world) + all-or-nothing preflight; writes the stamped HWPX and a manifest. The output is immediately usable with hwpforge_fields/hwpforge_fill."
+        description = "Promote prose placeholders to named click-here fields (누름틀) using the approved spec list from hwpforge_stamp_plan. Fail-closed admission gate (lossless round-trip + ZIP closed-world) + all-or-nothing preflight; writes the stamped HWPX and a manifest. The gate refuses a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it. The output is immediately usable with hwpforge_fields/hwpforge_fill."
     )]
     async fn hwpforge_stamp(
         &self,
@@ -814,7 +846,7 @@ impl HwpForgeServer {
     /// Edit table cells by logical grid address (E3).
     #[tool(
         name = "hwpforge_set_cell",
-        description = "Edit table cells by logical grid address in an HWPX file. Address a cell with a table ordinal (to-json export order) plus at {row,col} (covered positions resolve to their merge anchor), right_of LABEL, or below LABEL (normalized exact match). Empty text clears the cell. All-or-nothing behind the fail-closed admission gate; cells containing tables/images/controls are rejected."
+        description = "Edit table cells by logical grid address in an HWPX file. Address a cell with a table ordinal (to-json export order) plus at {row,col} (covered positions resolve to their merge anchor), right_of LABEL, or below LABEL (normalized exact match). Empty text clears the cell. All-or-nothing behind the fail-closed admission gate; cells containing tables/images/controls are rejected. The gate also refuses a document whose ZIP entries the encoder cannot all carry — a document saved by Hancom, which adds Preview/* and META-INF/container.rdf — while hwpforge_to_json + hwpforge_patch (text) and hwpforge_fill (click-here fields) still accept it."
     )]
     async fn hwpforge_set_cell(
         &self,
@@ -1060,5 +1092,136 @@ impl ServerHandler for HwpForgeServer {
     ) -> Result<GetPromptResponse, McpError> {
         // rmcp 3.x MRTR(SEP-2322): 항상 완결 응답 — Complete 로 승격.
         prompts::get_prompt(&request.name, request.arguments.as_ref()).map(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod next_step_tests {
+    //! [`to_json_next`] is the one `next` list that branches on the data it
+    //! describes, so it is built here rather than inline in the handler and
+    //! checked directly.
+
+    use super::*;
+    use crate::output::ToolWarningInfo;
+
+    fn data(section_only: bool, warnings: Vec<ToolWarningInfo>) -> to_json::ToJsonData {
+        to_json::ToJsonData {
+            output_path: None,
+            size_bytes: 10,
+            section_only,
+            json_content: None,
+            warnings,
+        }
+    }
+
+    #[test]
+    fn a_section_export_is_sent_to_patch() {
+        let next = to_json_next(&data(true, vec![]));
+        assert!(next.iter().any(|s| s.contains("hwpforge_patch")), "{next:?}");
+        assert!(!next.iter().any(|s| s.contains("hwpforge_from_json")), "{next:?}");
+    }
+
+    #[test]
+    fn a_full_document_export_is_sent_to_from_json() {
+        let next = to_json_next(&data(false, vec![]));
+        assert!(next.iter().any(|s| s.contains("hwpforge_from_json")), "{next:?}");
+        // patch is still named — as the route that keeps images, reached by
+        // re-exporting one section, not as the next step for this JSON.
+        assert!(
+            next.iter().any(|s| s.contains("section parameter") && s.contains("hwpforge_patch")),
+            "{next:?}"
+        );
+        assert!(next.iter().any(|s| s.contains("image")), "{next:?}");
+    }
+
+    #[test]
+    fn the_first_warning_stays_at_the_head_of_both_branches() {
+        for section_only in [true, false] {
+            let warning = ToolWarningInfo::new("LAYOUT_CACHE_DROPPED", "layout cache");
+            let next = to_json_next(&data(section_only, vec![warning]));
+            assert_eq!(next[0], "Warning: layout cache", "section_only={section_only}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_schema_tests {
+    //! W6b audit follow-up: `StampRequest.{specs,cells}` and
+    //! `SetCellRequest.specs` are `hwpforge::ops` re-exports of
+    //! `smithy-hwpx`'s own serde types (see `ops::stamp` / `ops::edit` doc
+    //! comments for why a re-export and not a mirror struct), so the
+    //! published MCP tool input schema is still that crate's wire shape by
+    //! a different name. These tests pin the JSON Schema *structurally*
+    //! (`serde_json::Value` equality — key order is not part of what a JSON
+    //! Schema consumer reads, and a byte comparison would couple the test to
+    //! serde_json/schemars serialization order instead) so an upstream rename
+    //! or reshape fails loudly here instead of silently changing the wire
+    //! contract.
+    //!
+    //! W6c audit follow-up: these tests used to compare against
+    //! `schemars::schema_for!(StampRequest)` directly — the schemars type's
+    //! own raw output, complete with a top-level `title`/`description` for
+    //! the wrapper type. But that is not what the server actually sends: the
+    //! `#[tool(...)]` macro derives each tool's `inputSchema` via
+    //! `rmcp::handler::server::common::schema_for_input`, which strips
+    //! top-level `title`/`description` before caching it (see that
+    //! function's doc in the `rmcp` crate — "the wrapper type name and doc,
+    //! which are noise to the LLM"). The fixtures below were frozen from the
+    //! `schema_for!` shape and never had those two keys removed, so the
+    //! baseline this test locked was never the wire contract the client
+    //! actually receives over `tools/list`. [`server_input_schema`] fixes
+    //! that by asking the same [`ToolRouter`] the running server uses for its
+    //! tool list — `HwpForgeServer::tool_router()` — for the tool's
+    //! [`Tool::input_schema`] directly, so a mismatch here means the wire
+    //! contract itself changed, not merely that `schema_for!`'s raw output
+    //! did.
+
+    use super::*;
+
+    /// The `inputSchema` the server would actually publish for `tool_name`
+    /// over `tools/list` — built the same way `HwpForgeServer::new` builds
+    /// its own router, so this reads the live wire shape rather than
+    /// reconstructing it by hand.
+    fn server_input_schema(tool_name: &str) -> serde_json::Value {
+        let tools = HwpForgeServer::tool_router().list_all();
+        let tool = tools
+            .into_iter()
+            .find(|t| t.name.as_ref() == tool_name)
+            .unwrap_or_else(|| panic!("tool `{tool_name}` not found in the router's tool list"));
+        serde_json::Value::Object((*tool.input_schema).clone())
+    }
+
+    fn baseline(rel: &str) -> serde_json::Value {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(rel),
+        )
+        .unwrap_or_else(|e| panic!("reading tests/data/{rel}: {e}"));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parsing tests/data/{rel}: {e}"))
+    }
+
+    #[test]
+    fn stamp_request_schema_matches_baseline() {
+        let actual = server_input_schema("hwpforge_stamp");
+        assert_eq!(
+            actual,
+            baseline("stamp_request_schema.json"),
+            "hwpforge_stamp's published input schema changed — if this is an \
+             intentional, additive wire change, update \
+             tests/data/stamp_request_schema.json; if it came from an \
+             upstream smithy-hwpx rename, fix it in ops::stamp instead"
+        );
+    }
+
+    #[test]
+    fn set_cell_request_schema_matches_baseline() {
+        let actual = server_input_schema("hwpforge_set_cell");
+        assert_eq!(
+            actual,
+            baseline("set_cell_request_schema.json"),
+            "hwpforge_set_cell's published input schema changed — if this is \
+             an intentional, additive wire change, update \
+             tests/data/set_cell_request_schema.json; if it came from an \
+             upstream smithy-hwpx rename, fix it in ops::edit instead"
+        );
     }
 }

@@ -42,6 +42,7 @@ use hwpforge_smithy_hwpx::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::walk::{self, ControlDescent};
 use super::{OpsError, OpsWarning};
 
 // ── to_json ─────────────────────────────────────────────────────
@@ -652,32 +653,37 @@ fn first_in_caption(caption: Option<&Caption>, path: &[PathSeg]) -> Option<Parag
 /// Recurses into the paragraph-bearing [`Control`] variants — shape body
 /// text and captions, footnotes/endnotes, group children, and a memo's
 /// visible body content and anchor.
+///
+/// The *recursion structure* — which nested paragraph lists each variant
+/// exposes — comes from [`walk::control_descent`], the same policy
+/// [`walk::object_counts`] builds on, so the two cannot drift into two
+/// independently hand-maintained copies of the same "which containers does
+/// this walk reach" answer. This function still supplies its own `PathSeg`
+/// tag per arm (`control_descent` erases which concrete variant it came
+/// from, since counting does not need to know) and its own group-child
+/// `emitted_idx` skip logic (deliberately *not* shared — see
+/// [`ControlDescent::Group`]'s doc for why the two callers' policies there
+/// genuinely differ).
 fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath> {
-    match control {
-        Control::TextBox { paragraphs, caption, .. }
-        | Control::Ellipse { paragraphs, caption, .. }
-        | Control::Polygon { paragraphs, caption, .. } => {
+    match walk::control_descent(control) {
+        ControlDescent::Body { paragraphs, caption } => {
             let mut tb_path = path.to_vec();
             tb_path.push(PathSeg::TextBox);
             first_in_paragraphs(paragraphs, &tb_path, PathSeg::NestedParagraph)
-                .or_else(|| first_in_caption(caption.as_ref(), path))
+                .or_else(|| first_in_caption(caption, path))
         }
-        Control::Footnote { paragraphs, .. } => {
+        ControlDescent::Footnote(paragraphs) => {
             let mut note_path = path.to_vec();
             note_path.push(PathSeg::Footnote);
             first_in_paragraphs(paragraphs, &note_path, PathSeg::NestedParagraph)
         }
-        Control::Endnote { paragraphs, .. } => {
+        ControlDescent::Endnote(paragraphs) => {
             let mut note_path = path.to_vec();
             note_path.push(PathSeg::Endnote);
             first_in_paragraphs(paragraphs, &note_path, PathSeg::NestedParagraph)
         }
-        Control::Line { caption, .. }
-        | Control::Rect { caption, .. }
-        | Control::Arc { caption, .. }
-        | Control::Curve { caption, .. }
-        | Control::ConnectLine { caption, .. } => first_in_caption(caption.as_ref(), path),
-        Control::Group { children, .. } => {
+        ControlDescent::CaptionOnly(caption) => first_in_caption(caption, path),
+        ControlDescent::Group(children) => {
             // `emitted_idx` mirrors `encode_group_child_xml`'s own counter
             // exactly (`hwpforge-smithy-hwpx::encoder::shapes`): it advances
             // only for a child that counter actually serializes, so a
@@ -697,7 +703,7 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
                 found
             })
         }
-        Control::Memo { content, anchor_runs, .. } => {
+        ControlDescent::Memo { content, anchor_runs } => {
             let mut memo_path = path.to_vec();
             memo_path.push(PathSeg::Memo);
             first_in_paragraphs(content, &memo_path, PathSeg::NestedParagraph).or_else(|| {
@@ -718,14 +724,7 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
                     .then(|| ParagraphPath(memo_path.clone()))
             })
         }
-        // Core's own `Control::walk_paragraphs` has no wildcard here on
-        // purpose, so a new paragraph-bearing variant fails *that* match at
-        // compile time. This copy cannot get the same guarantee — `Control`
-        // is `#[non_exhaustive]`, so a match from this crate needs a
-        // wildcard regardless — so a future paragraph-bearing variant would
-        // silently fall into this arm instead of failing to build. Any new
-        // variant added to Core's match must be added here by hand too.
-        _ => None,
+        ControlDescent::None => None,
     }
 }
 

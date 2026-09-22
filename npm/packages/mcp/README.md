@@ -20,7 +20,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 | `hwpforge_inspect`     | Inspect HWPX document structure                        |
 | `hwpforge_to_json`     | Export HWPX to JSON for editing                        |
 | `hwpforge_from_json`   | Build an HWPX document directly from JSON              |
-| `hwpforge_patch`       | Apply JSON patches to HWPX                             |
+| `hwpforge_patch`       | Replace a section's paragraph text with edited JSON    |
 | `hwpforge_outline`     | Navigation map: headings, tables, fields, bookmarks    |
 | `hwpforge_diff`        | Compare two HWPX files (semantic + package channels)   |
 | `hwpforge_delete_para` | Delete top-level paragraphs by index                   |

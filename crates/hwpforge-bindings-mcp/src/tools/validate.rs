@@ -118,8 +118,8 @@ mod tests {
             .expect_err("an undecodable package must be an error, not a valid:false payload");
         assert_eq!(err.code, "DECODE_FAILED");
         assert!(
-            err.hint.contains("hwpforge_convert"),
-            "hint must point at converting a .hwp file first: {:?}",
+            err.hint.contains("hwpforge convert-hwp5"),
+            "hint must name the CLI command that converts an HWP5 file: {:?}",
             err.hint
         );
 
@@ -128,8 +128,8 @@ mod tests {
             .expect_err("a real .hwp file must be an error, not a valid:false payload");
         assert_eq!(err.code, "DECODE_FAILED");
         assert!(
-            err.hint.contains("hwpforge_convert"),
-            "hint must point at converting a .hwp file first: {:?}",
+            err.hint.contains("hwpforge convert-hwp5"),
+            "hint must name the CLI command that converts an HWP5 file: {:?}",
             err.hint
         );
     }

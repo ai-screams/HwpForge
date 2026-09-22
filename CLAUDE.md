@@ -59,14 +59,16 @@ This enables:
 ## Development Commands
 
 ```bash
-make ci-fast          # 빠른 로컬 검증
-make ci               # push 전 필수 (CI 플래그 일치: --all-targets --all-features)
+make ci               # push 전 필수 — ci-fast 별칭 (fmt·clippy·test·deny·lint-md, CI 플래그 일치)
+make ci-full          # 위 + coverage + MSRV (릴리스·큰 변경 전)
+make py-all           # Python 바인딩 (lint·타입·Rust/Python 테스트·coverage)
+mdbook build          # 문서 변경 시 — mdBook 0.4 라인 필수 (`make install-tools`)
 cargo nextest run -p <crate>          # 크레이트 한정 (전 워크스페이스 cold 15분+ 금지)
 cargo clippy -p <crate> --all-targets -- -D warnings   # 커밋 전 touched 크레이트 사전 점검
 bacon / bacon test    # watch 모드
 ```
 
-상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
+`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·HWP5 Audit Gate·Docs Build·Python·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
 
 ---
 

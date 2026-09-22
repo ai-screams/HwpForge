@@ -33,10 +33,15 @@ hwpforge_inspect({{ file_path: "{file_path}" }})
 hwpforge_to_json({{ file_path: "{file_path}", section: 0 }})
 → 편집할 섹션을 JSON으로 추출 (section 번호는 Step 1 결과 참고)
 
-### Step 3: JSON 편집
-→ 추출된 JSON에서 필요한 수정 수행
-→ 문단 텍스트 변경, 추가, 삭제 등
+### Step 3: JSON 편집 (문단 텍스트만)
+→ 추출된 JSON에서 문단 **텍스트만** 수정 — 문단 수와 구조는 그대로 둔다
+→ hwpforge_patch는 텍스트 슬롯의 개수나 경로가 달라지면 거부한다 (구조 변경 불가)
 → 편집 완료 후 JSON을 파일로 저장 (예: edited.json)
+
+**구조를 바꿔야 한다면 Step 3과 4 대신:**
+- 문단 추가·삭제 → hwpforge_insert_para / hwpforge_delete_para
+- 표 셀 내용 → hwpforge_set_cell
+- 대규모 재구성 → hwpforge_from_json (전체 문서 JSON으로 재생성, 이미지는 승계되지 않음)
 
 ### Step 4: 변경 적용
 hwpforge_patch({{ base_path: "{file_path}", section: 0, section_json_path: "edited.json", output_path: "result.hwpx" }})

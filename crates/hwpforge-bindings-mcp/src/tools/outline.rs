@@ -6,7 +6,7 @@ use hwpforge::ops;
 use hwpforge_smithy_hwpx::DocumentOutline;
 
 use crate::compat::{self, Tool};
-use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo, ToolWarningInfo, MAX_INLINE_RESPONSE};
 
 /// Output data from an outline projection.
 #[derive(Debug, Serialize)]
@@ -19,9 +19,6 @@ pub struct OutlineData {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
-
-/// Inline response ceiling shared with `hwpforge_to_json` (1 MB).
-const MAX_INLINE_RESPONSE: usize = 1024 * 1024;
 
 /// Build the document navigation map for an HWPX file.
 pub fn run_outline(file_path: &str) -> Result<OutlineData, ToolErrorInfo> {

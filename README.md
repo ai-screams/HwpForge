@@ -105,22 +105,17 @@ hwpforge inspect report.hwpx
 hwpforge outline report.hwpx
 
 # HWPX → Markdown 변환 (AI가 한글 문서 읽기)
-hwpforge to-md report.hwpx -o report.md
+hwpforge to-md report.hwpx -o report.out.md
 
-# HWPX → JSON 추출 (AI 편집용)
-hwpforge to-json report.hwpx --section 0 > section0.json
+# HWPX → JSON 추출 (AI 편집용) — -o 는 필수, stdout 내보내기는 없습니다
+hwpforge to-json report.hwpx --section 0 -o section0.json   # 섹션 하나 (patch 용)
+hwpforge to-json report.hwpx -o full.json                   # 문서 전체 (from-json 용)
 
-# JSON → HWPX 직접 생성
-hwpforge from-json section0.json -o new.hwpx
+# 섹션 JSON을 원본에 되쓰기 (텍스트만 바뀜, 원본이 base)
+hwpforge patch report.hwpx --section 0 section0.json -o updated.hwpx
 
-# JSON으로 섹션 교체
-hwpforge patch report.hwpx --section 0 < modified.json -o updated.hwpx
-
-# 누름틀 필드 채우기 (기존 내용은 그대로 보존)
-hwpforge fill report.hwpx --set 회사명=HwpForge -o filled.hwpx
-
-# PDF로 내보내기 (한컴 조판 캐시 재생)
-hwpforge to-pdf report.hwpx -o report.pdf
+# 문서 전체 JSON으로 새 문서 만들기 (구조 변경까지 가능)
+hwpforge from-json full.json -o new.hwpx
 
 # 문서 구조 검증 (Core 불변조건 통과 여부)
 hwpforge validate report.hwpx
@@ -128,6 +123,24 @@ hwpforge validate report.hwpx
 # JSON Schema 출력 (AI agent용)
 hwpforge schema document
 ```
+
+두 JSON은 서로 다른 형식입니다. `--section` 없이 뽑은 **문서 전체 JSON**은 `from-json`이 읽고, `--section N`으로 뽑은 **섹션 JSON**은 `patch`가 원본 문서를 base로 삼아 되씁니다. 서로 바꿔 넣으면 스키마 불일치로 거부됩니다.
+
+**누름틀 채우기**는 누름틀(click-here field)이 들어 있는 서식 문서에서만 동작합니다. 방금 `convert`로 만든 문서에는 누름틀이 없어 `FIELD_NOT_FOUND`가 납니다 — `fields`로 이름을 먼저 확인하세요.
+
+```bash
+hwpforge fields form.hwpx                                    # 채울 수 있는 필드 이름
+hwpforge fill form.hwpx --set 회사명=HwpForge -o filled.hwpx   # 나머지 패키지는 바이트 그대로
+```
+
+**PDF 내보내기**는 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`).
+
+```bash
+hwpforge to-pdf hancom-saved.hwpx -o report.pdf     # 한컴이 저장한 문서
+hwpforge to-pdf legacy.hwp -o legacy.pdf            # HWP5 — 캐시를 실어 변환한 뒤 렌더
+```
+
+HWP5에서 실어 온 캐시는 **PDF 재생·대조 전용**입니다. 그렇게 만든 `.hwpx`를 한컴에서 다시 열 용도로 쓰지 마세요.
 
 > **AI-first 설계**: CLI는 AI agent(Claude Code 등)가 주 사용자입니다.
 > Markdown으로 문서를 생성한 뒤, JSON round-trip으로 기존 스타일을 보존하면서
@@ -548,7 +561,7 @@ flowchart LR
 ### MSRV 정책
 
 - 워크스페이스 기본 MSRV는 **Rust 1.88이며**, **stable에서 4 릴리스 뒤처진 버전을** 기본 정책으로 유지합니다.
-- `hwpforge-bindings-cli`와 `hwpforge-smithy-pdf`는 krilla 의존으로 **Rust 1.92+가** 필요합니다(`rust-version`을 크레이트별로 상향 지정). CI의 `Verify › MSRV (1.88)` job은 이 두 크레이트를 1.88 검증 패스에서는 제외하지만, 같은 job 안에서 `cargo +1.92 check`로 따로 검증합니다 — 검증 대상에서 빠지는 것이 아닙니다.
+- krilla 의존 경로에 있는 네 크레이트(`hwpforge-smithy-pdf`·`hwpforge-convert`·`hwpforge-bindings-cli`·`hwpforge-bindings-py`)는 **Rust 1.92+가** 필요합니다(`rust-version`을 크레이트별로 상향 지정). CI의 `Verify › MSRV (1.88)` job은 이 넷을 1.88 검증 패스에서는 제외하지만, 같은 job 안에서 `cargo +1.92 check`로 따로 검증합니다 — 검증 대상에서 빠지는 것이 아닙니다.
 - 각 크레이트의 `Cargo.toml`의 `rust-version`이 그 크레이트의 실제 MSRV이며, CI의 `Verify › MSRV` job이 워크스페이스 기본값(1.88)을 검증합니다.
 - MSRV 상향이 필요하면 PR에서 이유를 명시하고, `Cargo.toml`, CI, CHANGELOG를 함께 갱신합니다.
 - 개발용 기본 툴체인은 더 최신일 수 있습니다. 호환성 판단 기준은 최신 stable이 아니라 **MSRV + CI 통과 여부입니다**.
@@ -556,13 +569,17 @@ flowchart LR
 ### ⚒️ 명령어
 
 ```bash
-make ci          # fmt + clippy + test + deny + lint (CI와 동일)
+make ci          # 빠른 로컬 검증 — fmt + clippy + test + deny + lint-md (ci-fast 별칭)
+make ci-full     # 위에 coverage + MSRV 추가 (릴리스·큰 변경 전)
+make py-all      # Python 바인딩 검사 (lint + 타입 + Rust/Python 테스트 + coverage)
 make test        # cargo nextest run
 make clippy      # cargo clippy (모든 target, 모든 feature, -D warnings)
 make fmt-fix     # rustfmt 자동 포맷
 make doc         # rustdoc 생성 (브라우저에서 열림)
 make cov         # coverage 리포트 (90% gate)
 ```
+
+`make ci`는 CI 전체가 아니라 그중 빠른 다섯 레인입니다. CI는 여기에 Coverage·MSRV·HWP5 Audit Gate·Docs Build·Python·Workflow Lint를 더 돌립니다. 릴리스나 큰 변경 전에는 `make ci-full`과 `make py-all`을, 문서를 고쳤다면 `mdbook build`를 함께 돌리세요.
 
 > **빌드 가속 (선택)**: `sccache`가 PATH에 있으면 `make` 타깃이 자동으로 컴파일
 > 캐시로 사용합니다(없으면 그대로 동작 — 아무것도 깨지지 않음). 반복 `make ci`가
@@ -610,7 +627,7 @@ HwpForge/
 - [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (19개 도구 + 4 리소스 + 3 프롬프트)
-- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (23개 명령어: 20 core + 3 HWP5)
+- [x] CLI 도구 — `hwpforge convert doc.md -o doc.hwpx` 한 줄 변환 (23개 명령어: 20 core + 3 HWP5)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [x] Python 바인딩 — `pip install hwpforge`로 설치 (PyPI, 0.16.5부터 wheel 배포)
 

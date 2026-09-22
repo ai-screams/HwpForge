@@ -1,8 +1,10 @@
 r"""Read, edit and generate Korean HWP/HWPX documents.
 
-The package is a thin layer over the HwpForge Rust library. Operations carry
-the same names, options and error codes as the command line tool and the MCP
-server, so what you learn in one place holds in the others.
+The package is a thin layer over the HwpForge Rust library, so it performs the
+same operations, with the same meaning, as the command line tool and the MCP
+server. What each frontend calls them differs: method names, argument spellings
+and some failure codes are this package's own public contract, and the other two
+keep theirs.
 
 Documents are immutable values: an editing method returns a new
 [`Document`][hwpforge.Document] in a result object next to the operation's

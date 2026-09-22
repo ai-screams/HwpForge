@@ -21,11 +21,7 @@ pub fn run(base: &PathBuf, revised: &PathBuf, output: Option<&PathBuf>, json_mod
     // and one `[diff]`-prefixed stderr line each in text mode.
     let out = match ops::diff(&base_bytes, &revised_bytes) {
         Ok(out) => out,
-        Err(e) => {
-            let err = compat::cli_error(Command::Diff, e);
-            let exit = compat::exit_code(Command::Diff, &err);
-            err.exit(json_mode, exit);
-        }
+        Err(e) => compat::exit_ops_error(Command::Diff, e, json_mode),
     };
     let warnings: Vec<WarningInfo> = out.warnings.iter().map(OpsWarning::info).collect();
     let diff = out.diff;

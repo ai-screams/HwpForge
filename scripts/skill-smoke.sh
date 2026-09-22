@@ -34,9 +34,18 @@ assert_exit()      { # cmd... -- expected_code : expect that EXACT exit code (no
   if [[ $rc -eq $want ]]; then pass "$* (exit $want)"; else fail "$* (expected exit $want; got rc=$rc)"; fi
 }
 
-echo "== Building CLI =="
-cargo build -q -p hwpforge-bindings-cli || { echo "build failed"; exit 1; }
-BIN="$ROOT/target/debug/hwpforge"
+# A prebuilt binary can be supplied as HWPFORGE_BIN, which skips the build —
+# useful when the workspace is mid-edit or the caller already has the binary
+# under test. The name is specific on purpose: `make` exports its environment
+# into this script, so a generic one would silently skip the build.
+if [[ -n "${HWPFORGE_BIN:-}" ]]; then
+  echo "== Using prebuilt CLI: $HWPFORGE_BIN =="
+  BIN="$HWPFORGE_BIN"
+else
+  echo "== Building CLI =="
+  cargo build -q -p hwpforge-bindings-cli || { echo "build failed"; exit 1; }
+  BIN="$ROOT/target/debug/hwpforge"
+fi
 [[ -x "$BIN" ]] || { echo "binary not found at $BIN"; exit 1; }
 cd "$WORK"
 
@@ -82,6 +91,22 @@ assert_ok "$BIN" to-json tpl.hwpx --section 0 -o sec.json
 assert_file sec.json
 # documented contract: to-json requires -o (no stdout export)
 assert_fail_grep "$BIN" to-json tpl.hwpx -- "output"
+
+echo "== error envelope (SKILL.md 'Error Handling') =="
+# The skill tells agents to parse a FLAT {"status":"error","code",...} object off
+# stderr and to branch on `code`, not on the exit code. Lock all three.
+"$BIN" --json inspect no_such_file.hwpx >env_stdout.txt 2>env_stderr.txt
+rc=$?
+[[ $rc -eq 1 ]] && pass "missing file exits 1" || fail "missing file exit (want 1, got $rc)"
+[[ -s env_stdout.txt ]] && fail "error wrote to stdout" || pass "error keeps stdout empty"
+assert_grep env_stderr.txt '"status":"error"'
+assert_grep env_stderr.txt '"code":"FILE_READ_FAILED"'
+if grep -qF '"error":{' env_stderr.txt; then fail "envelope is nested, not flat"; else pass "envelope is flat"; fi
+printf 'not a container' > validate_nonhwpx.bin
+"$BIN" --json inspect validate_nonhwpx.bin >/dev/null 2>env_decode.txt
+rc=$?
+[[ $rc -eq 2 ]] && pass "undecodable input exits 2" || fail "undecodable exit (want 2, got $rc)"
+assert_grep env_decode.txt '"code":"DECODE_FAILED"'
 
 echo "== validate =="
 assert_ok "$BIN" validate tpl.hwpx

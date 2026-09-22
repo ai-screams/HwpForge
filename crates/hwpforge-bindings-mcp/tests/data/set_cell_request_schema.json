@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "description": "Path to the HWPX file to edit.",
+      "type": "string"
+    },
+    "specs": {
+      "description": "Cell edits: each spec addresses a table by ordinal (to-json export\norder) plus one of `at` {row,col} (covered positions resolve to their\nmerge anchor), `right_of` LABEL, or `below` LABEL (normalized exact\nmatch). `text` \"\" clears the cell. All-or-nothing.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CellSpec"
+      }
+    },
+    "output_path": {
+      "description": "Output HWPX file path. Must end with `.hwpx`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "file_path",
+    "specs",
+    "output_path"
+  ],
+  "$defs": {
+    "CellSpec": {
+      "description": "One requested cell edit.",
+      "type": "object",
+      "properties": {
+        "table": {
+          "description": "Table ordinal in the shared traversal order (see `to-json` export).",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "text": {
+          "description": "Replacement text; the empty string clears the cell.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table",
+        "text"
+      ],
+      "oneOf": [
+        {
+          "description": "A logical grid coordinate (covered positions resolve to their anchor).",
+          "type": "object",
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/GridCoord"
+            }
+          },
+          "required": [
+            "at"
+          ]
+        },
+        {
+          "description": "The cell immediately right of the uniquely labeled cell.",
+          "type": "object",
+          "properties": {
+            "right_of": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "right_of"
+          ]
+        },
+        {
+          "description": "The cell immediately below the uniquely labeled cell.",
+          "type": "object",
+          "properties": {
+            "below": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "below"
+          ]
+        }
+      ]
+    },
+    "GridCoord": {
+      "description": "Absolute position on the pre-merge logical grid, zero-based.",
+      "type": "object",
+      "properties": {
+        "row": {
+          "description": "Zero-based logical row.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "col": {
+          "description": "Zero-based logical column.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "row",
+        "col"
+      ]
+    }
+  }
+}

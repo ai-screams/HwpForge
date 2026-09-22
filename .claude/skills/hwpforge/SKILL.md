@@ -47,6 +47,7 @@ What does the user want?
 │   ├─ Template has NO 누름틀, only prose placeholders (□, (   ), 년 월 일, (인), @)
 │   │     → stamp-plan (discover) → author spec map → stamp --map  [STAMP, one-time]
 │   │       then the stamped output is a form template: use fields/fill above
+│   │       admission-gated: a 한컴-saved document is refused (Editing surfaces below)
 │   │
 │   ├─ Fill a TABLE CELL by position or label (병합셀 표 서식)
 │   │     → to-json (cells carry addr {row,col}) → set-cell     [GRID, admission-gated]
@@ -59,6 +60,7 @@ What does the user want?
 │   │
 │   ├─ ADD or REMOVE a top-level paragraph (structural edit, byte-preserving)
 │   │     → outline/read to find the index → insert-para / delete-para [E4]
+│   │       admission-gated like set-cell/stamp (Editing surfaces below)
 │   │       insert-para --section N --anchor I [--before] --text "…"  (shape inherited;
 │   │         --text 반복 = 연속 블록 batch 삽입)
 │   │       delete-para --section N --index I [--index J …]           (batch)
@@ -82,7 +84,8 @@ What does the user want?
 │     → to-json (whole document JSON, for machine editing ONLY)
 │
 ├─ Render to PDF (한컴과 같은 출력 — layout-cache replay)
-│     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
+│     → to-pdf  (needs a layout cache: 한컴-saved .hwpx, or .hwp / HWP5 converted
+│               with --carry-layout-cache. Cacheless files are rejected)
 │
 ├─ Check whether a .hwpx is structurally sound (before further editing)
 │     → validate  (decode + Document::validate; exit 0 valid, 1 file/argument error, 2 undecodable, 3 invalid)
@@ -141,10 +144,18 @@ hwpforge fill doc.hwpx --set 과제명="AI 문서 자동화" --set 기관명="Ai
 hwpforge stamp-plan template.hwpx --json                 # candidates(text) + cells + source_sha256
 #   → author a spec map: EVERY unguarded candidate gets {"action":{"field":{"name":"…"}}}
 #     or {"action":"ignore"}; guarded ones (※/【작성방법】/(예시) context) may be omitted
+#   ⚠ 두 spec 의 작성법이 다르다 — 섞으면 역직렬화에서 막힌다:
+#   • text spec = plan 의 candidates[] 항목을 **그대로 복사**하고 action 만 더한다
+#     (section·path·span·marker 가 신원이라 빠지면 "missing field `section`";
+#      pattern·guard 같은 여분 키는 무시되므로 통째 복사가 가장 안전)
+#   • cell spec = **새로 구성한다** (table·at·label?·action 네 키만 허용).
+#     plan 의 cells[] 항목을 통째로 복사하면 "unknown field `section`" 으로 거부된다
 #   text-only 는 legacy 배열 맵 그대로; 셀이 있으면 v2 객체 맵:
 #   {"schema_version":2, "source_sha256":"<plan 값 그대로>",
 #    "text":[…], "cells":[{"table":0,"at":{"row":5,"col":3},
-#      "label":{"at":{"row":5,"col":2},"text":"성 명"},      ← detected 후보 드리프트 재검증 (orphan 명시 스펙은 생략)
+#      "label":{"at":{"row":5,"col":2},"text":"성 명"},      ← detected 후보 드리프트 재검증
+#                                                            (plan 의 labels[].normalized;
+#                                                             orphan 명시 스펙은 생략)
 #      "action":{"field":{"name":"성명","hint":"성명 입력"}}}]}   ← 셀 hint 는 필수 (빈 셀엔 마커가 없음)
 #   suggested_name/suggested_hint 는 제안일 뿐 — 그대로 복사 시 중복 이름은 거부됨
 hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.json (v2: origin text|cell)
@@ -183,12 +194,16 @@ hwpforge to-json doc.hwpx --section 0 --no-styles -o sec.json
 hwpforge patch doc.hwpx --section 0 sec.json -o doc.hwpx          # text-only
 hwpforge from-json full.json -o doc.hwpx --base doc.hwpx          # rebuild (inherit images)
 
-# Render to PDF (layout-cache replay — 한컴 재저장본만; format detected by content)
+# Render to PDF (layout-cache replay; format detected by content — .hwp 도 직접 받는다)
 hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|hancom|platform] \
     [--degraded] [--partial-cache-reject] [--json]
+#   캐시가 있는 문서만 렌더된다. 출처 둘: 한컴이 저장한 .hwpx, 그리고 HWP5 에서 캐시를
+#   실어 변환한 .hwpx (convert-hwp5 --carry-layout-cache). .hwp 를 그대로 주면 to-pdf 가
+#   그 변환을 대신한다 — 실어 온 캐시는 PDF 재생·대조 전용(한컴 재열기용 아님).
 # macOS + 한컴오피스 설치 시: --discovery hancom 으로 번들 폰트 자동 발견.
 # 실무 문서는 언어축 혼합이 흔해 --degraded 권장 (경고로 표면화됨).
-# 실패는 fail-closed: cacheless → 한컴에서 열어 재저장 후 재시도.
+# 실패는 fail-closed: cacheless(convert·from-json 산출물) → 한컴에서 열어 재저장하거나,
+#   원본이 HWP5 면 --carry-layout-cache 로 다시 변환.
 
 # Structural validation — decode + Document::validate, no editing
 hwpforge validate doc.hwpx [--json]
@@ -300,14 +315,50 @@ not ship.
 
 ## Error Handling
 
-With `--json`, all commands return structured errors:
+With `--json`, a failure prints ONE FLAT object on **stderr** (stdout stays empty):
 
 ```json
-{ "error": { "code": "PATCH_FAILED", "message": "...", "hint": "..." } }
+{ "status": "error", "code": "DECODE_FAILED", "message": "...", "hint": "..." }
 ```
 
-Common: `FILE_NOT_FOUND` (bad path), `PATCH_FAILED` with "structural change detected"
-(you added/removed paragraphs in a `patch` — use `from-json --base` instead).
+`hint` is present only when the command has something actionable to say, so treat it as optional
+and read `code` first. Without `--json` the same failure prints `Error [CODE]: message` on
+stderr, with `Hint: …` on the next line when there is one.
 
-Exit codes: `1` user error (bad input/missing file), `2` internal error (encode/corrupt).
-Use `--json` in all agent workflows to parse errors programmatically.
+Common codes: `FILE_READ_FAILED` (path missing or unreadable), `DECODE_FAILED` (the bytes are
+not readable HWPX), `PATCH_FAILED` with "structural change detected" (you added/removed
+paragraphs in a `patch` — use `from-json --base` instead), `INPUT_ENTRIES_NOT_CARRIED` /
+`UNCARRIED_ZIP_ENTRIES` / `INPUT_NOT_ROUNDTRIP_SAFE` (the re-encoding edit surfaces refusing a
+한컴-saved document — see Editing surfaces below).
+
+**Branch on `code`, never on the exit code.** Which of `1` and `2` a failure uses is fixed per
+(command, code) pair, not derived from a taxonomy:
+
+| Exit | Means                                                                                                          |
+| ---- | -------------------------------------------------------------------------------------------------------------- |
+| `0`  | success                                                                                                        |
+| `1`  | as a rule a refused input: `FILE_READ_FAILED`, `FIELD_NOT_FOUND`, `UNKNOWN_PRESET`, the admission refusals     |
+| `2`  | as a rule a codec/schema failure: `DECODE_FAILED`, `JSON_PARSE_FAILED`, `PATCH_FAILED`, and a bad command line |
+| `3`  | **`validate` only** — decoded but failed validation                                                            |
+
+Exit `3` is a report, not an error envelope: stdout carries
+`{"status":"ok","valid":false,…,"errors":[…]}`. Use `--json` in all agent workflows to parse
+errors programmatically.
+
+## Editing surfaces — what a 한컴-saved document accepts
+
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce
+(`Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`). The four surfaces
+that re-encode the whole package refuse such a document **fail-closed** rather than drop them:
+
+| Surface                                              | On a 한컴-saved document                                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `fill`                                               | works — preserve-first, every other entry kept byte for byte                                  |
+| `patch`                                              | works — text-only, preserves the package                                                      |
+| `set-cell` · `insert-para` · `delete-para` · `stamp` | refused: `INPUT_ENTRIES_NOT_CARRIED` / `UNCARRIED_ZIP_ENTRIES`, or `INPUT_NOT_ROUNDTRIP_SAFE` |
+| `from-json --base`                                   | succeeds, but inherits images only — the entries above are dropped                            |
+
+So on a real government form: fill 누름틀 with `fill`, change text with
+`to-json --section N` → edit → `patch`. Reach for `from-json --base` only when you must change
+structure, and check the result in 한컴. Full table and recipes:
+[editing-workflow.md](references/editing-workflow.md).

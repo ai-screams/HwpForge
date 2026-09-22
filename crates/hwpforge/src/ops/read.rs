@@ -22,9 +22,10 @@
 //! # Argument validation
 //!
 //! [`read`] is the only operation here that can fail before the library is
-//! reached: it takes four optional targets and the CLI's rules decide which
-//! combinations are addressable. The rules and their messages are reproduced
-//! verbatim from `hwpforge-bindings-cli/src/commands/read.rs`.
+//! reached: it takes four optional targets and only some combinations are
+//! addressable. The rules live here, shared by every frontend, and their
+//! messages name the arguments rather than any one frontend's spelling of
+//! them ([`read`]'s own docs).
 
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
 use hwpforge_smithy_hwpx::{
@@ -299,10 +300,15 @@ impl ReadOutput {
 /// Reads one addressable part of a document.
 ///
 /// Reproduces `hwpforge read` minus the file I/O. The target rules are
-/// checked before the document is decoded, in the CLI's order: the target
-/// count first, then `paras` without `section`. A caller who passes two
-/// targets *and* an unparsable range therefore sees the target error, not the
-/// range error.
+/// checked before the document is decoded, in this order: the target count
+/// first, then `paras` without `section`. A caller who passes two targets
+/// *and* an unparsable range therefore sees the target error, not the range
+/// error.
+///
+/// The rejection messages name the arguments of [`ReadOptions`] (`section`,
+/// `table`, `field`, `paras`), which every frontend shares. A frontend that
+/// spells them differently — the CLI's `--section`/`--paras` flags, say —
+/// restores its own spelling on the way out.
 ///
 /// `field` returns **every** field carrying that name, not the first one, so
 /// that a duplicate name is visible rather than silently resolved.
@@ -335,11 +341,11 @@ pub fn read(hwpx: &[u8], opts: &ReadOptions) -> Result<ReadOutput, OpsError> {
     if opts.target_count() != 1 {
         return Err(rejected(
             OpsCode::ReadTargetRequired,
-            "Pass exactly one of --section, --table, --field",
+            "Pass exactly one of section, table, field",
         ));
     }
     if opts.paras.is_some() && opts.section.is_none() {
-        return Err(rejected(OpsCode::ReadParasWithoutSection, "--paras requires --section"));
+        return Err(rejected(OpsCode::ReadParasWithoutSection, "paras requires section"));
     }
 
     if let Some(section) = opts.section {
@@ -380,8 +386,8 @@ fn decode_warnings(warnings: Vec<DecodeWarning>) -> Vec<OpsWarning> {
 
 /// Parses `"A..B"` (inclusive) or a single `"N"` into an inclusive pair.
 ///
-/// `split_once("..")` is what the CLI uses, so `"1..2..3"` and `"..5"` are
-/// rejected while surrounding whitespace is tolerated.
+/// `split_once("..")` rejects `"1..2..3"` and `"..5"` while surrounding
+/// whitespace is tolerated.
 fn parse_paras(spec: &str) -> Result<(usize, usize), OpsError> {
     let parsed = match spec.split_once("..") {
         Some((from, to)) => from
@@ -394,15 +400,15 @@ fn parse_paras(spec: &str) -> Result<(usize, usize), OpsError> {
     parsed.ok_or_else(|| {
         rejected(
             OpsCode::ReadParasInvalid,
-            format!("Cannot parse --paras {spec:?}: use \"A..B\" (inclusive) or a single \"N\""),
+            format!("Cannot parse paras {spec:?}: use \"A..B\" (inclusive) or a single \"N\""),
         )
     })
 }
 
 /// Rejects caller arguments that the library never sees.
 ///
-/// Every rejection here keeps the CLI's wording as well as its code, so a
-/// frontend built on this operation prints what it prints today.
+/// `reason` names the [`ReadOptions`] argument at fault, not any one
+/// frontend's spelling of it ([`read`]'s own docs).
 fn rejected(code: OpsCode, reason: impl Into<String>) -> OpsError {
     OpsError::Rejected { code, reason: reason.into() }
 }
@@ -425,8 +431,8 @@ mod tests {
 
     #[test]
     fn a_reversed_range_parses_and_is_the_library_s_problem() {
-        // The CLI does not order-check either; `read_paragraphs` rejects it
-        // with `READ_PARA_RANGE_INVALID`, which keeps one owner for the rule.
+        // `read_paragraphs` rejects it with `READ_PARA_RANGE_INVALID`, which
+        // keeps one owner for the rule.
         assert_eq!(parse_paras("4..0").expect("parses"), (4, 0));
     }
 

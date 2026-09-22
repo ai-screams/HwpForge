@@ -26,6 +26,38 @@ pub struct SectionDetail {
     pub has_footer: bool,
     /// Whether page number is present.
     pub has_page_number: bool,
+
+    // The eight fields above are this struct's original top-level-only
+    // contract; the nine below carry `ops::InspectSection`'s `all_`/`deep_`
+    // counts through under the same names and values. They stay at the end,
+    // after the eight, so a client reading fields positionally is
+    // unaffected — `inspect_section_detail_key_order_is_existing_eight_then_new_nine`
+    // locks that.
+    //
+    // `ops::InspectSection`'s `# Scope table` is the canonical statement of
+    // what each prefix counts; the docs below name a scope rather than
+    // restating it.
+    /// Tables, `all_` scope — a decoded-object count, not a raw scan.
+    pub all_tables: usize,
+    /// Images, `all_` scope.
+    pub all_images: usize,
+    /// Text boxes (HWPX `<hp:rect>` with a nested `<hp:drawText>`), `all_`
+    /// scope.
+    pub all_text_boxes: usize,
+    /// Line drawing objects, `all_` scope.
+    pub all_lines: usize,
+    /// Pure rectangles, `all_` scope — a text-bearing one counts under
+    /// [`Self::all_text_boxes`] instead, never both.
+    pub all_rectangles: usize,
+    /// Polygon drawing objects, `all_` scope.
+    pub all_polygons: usize,
+    /// Body-flow paragraphs carrying visible text — [`Self::paragraphs`]'s
+    /// set, narrowed.
+    pub top_level_non_empty_paragraphs: usize,
+    /// Paragraphs, `deep_` scope.
+    pub deep_paragraphs: usize,
+    /// Paragraphs carrying visible text, `deep_` scope.
+    pub deep_non_empty_paragraphs: usize,
 }
 
 /// Document metadata summary.
@@ -128,6 +160,15 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
                 has_header: s.has_header,
                 has_footer: s.has_footer,
                 has_page_number: s.has_page_number,
+                all_tables: s.all_tables,
+                all_images: s.all_images,
+                all_text_boxes: s.all_text_boxes,
+                all_lines: s.all_lines,
+                all_rectangles: s.all_rectangles,
+                all_polygons: s.all_polygons,
+                top_level_non_empty_paragraphs: s.top_level_non_empty_paragraphs,
+                deep_paragraphs: s.deep_paragraphs,
+                deep_non_empty_paragraphs: s.deep_non_empty_paragraphs,
             }
         })
         .collect();
@@ -195,5 +236,108 @@ mod tests {
     fn inspect_missing_file_reports_file_not_found() {
         let err = run_inspect("/nonexistent/inspect-warnings-probe.hwpx", false).unwrap_err();
         assert_eq!(err.code, "FILE_NOT_FOUND");
+    }
+
+    /// `SectionDetail` must carry `ops::InspectSection`'s nine `all_`/`deep_`
+    /// counts, not just the eight top-level ones. Checked against a *direct*
+    /// `ops::inspect` call on the same bytes rather than hardcoded numbers,
+    /// so the assertions track whatever the decoder actually reports instead
+    /// of a value copied out of a one-off run.
+    #[test]
+    fn inspect_section_detail_carries_ops_package_scope_and_deep_counts() {
+        let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
+        let bytes = std::fs::read(&path).unwrap();
+        let ops_out = ops::inspect(&bytes, &InspectOptions::default()).unwrap();
+        let ops_section =
+            ops_out.report.section_details.first().expect("fixture has at least one section");
+
+        let data = run_inspect(&path, false).unwrap();
+        let detail = data.section_details.first().expect("mcp inspect must report the section too");
+
+        // Existing eight fields: unchanged mapping (top-level scope).
+        assert_eq!(detail.index, ops_section.index);
+        assert_eq!(detail.paragraphs, ops_section.top_level_paragraphs);
+        assert_eq!(detail.tables, ops_section.top_level_tables);
+        assert_eq!(detail.images, ops_section.top_level_images);
+        assert_eq!(detail.charts, ops_section.top_level_charts);
+        assert_eq!(detail.has_header, ops_section.has_header);
+        assert_eq!(detail.has_footer, ops_section.has_footer);
+        assert_eq!(detail.has_page_number, ops_section.has_page_number);
+
+        // New nine fields: same name, same value, straight from ops.
+        assert_eq!(detail.all_tables, ops_section.all_tables);
+        assert_eq!(detail.all_images, ops_section.all_images);
+        assert_eq!(detail.all_text_boxes, ops_section.all_text_boxes);
+        assert_eq!(detail.all_lines, ops_section.all_lines);
+        assert_eq!(detail.all_rectangles, ops_section.all_rectangles);
+        assert_eq!(detail.all_polygons, ops_section.all_polygons);
+        assert_eq!(
+            detail.top_level_non_empty_paragraphs,
+            ops_section.top_level_non_empty_paragraphs
+        );
+        assert_eq!(detail.deep_paragraphs, ops_section.deep_paragraphs);
+        assert_eq!(detail.deep_non_empty_paragraphs, ops_section.deep_non_empty_paragraphs);
+
+        // At least one of the newly-exposed counts must be non-zero on this
+        // fixture, or the equality assertions above would pass vacuously
+        // (both sides zero) without ever exercising a real decoded count.
+        assert!(
+            ops_section.all_images > 0 || ops_section.deep_paragraphs > 0,
+            "fixture must exercise at least one non-trivial package-scope/deep count: {ops_section:?}"
+        );
+    }
+
+    /// The nine `all_`/`deep_` fields must land *after* the eight top-level
+    /// ones — additive, not reordered — because a client that destructures
+    /// `section_details[i]` positionally (a naive JSON-schema consumer, a
+    /// Python `TypedDict` that iterates `.items()`) would otherwise silently
+    /// pick up the wrong value for an older field.
+    #[test]
+    fn inspect_section_detail_key_order_is_existing_eight_then_new_nine() {
+        let path = fixture("mixed/mixed_01_image_and_chart_same_doc.hwpx");
+        let data = run_inspect(&path, false).unwrap();
+        let detail = data.section_details.first().expect("fixture has at least one section");
+
+        let json = serde_json::to_string(detail).unwrap();
+        let expected_order = [
+            "index",
+            "paragraphs",
+            "tables",
+            "images",
+            "charts",
+            "has_header",
+            "has_footer",
+            "has_page_number",
+            "all_tables",
+            "all_images",
+            "all_text_boxes",
+            "all_lines",
+            "all_rectangles",
+            "all_polygons",
+            "top_level_non_empty_paragraphs",
+            "deep_paragraphs",
+            "deep_non_empty_paragraphs",
+        ];
+
+        let mut last_pos = 0;
+        for key in expected_order {
+            let needle = format!("\"{key}\":");
+            let pos = json
+                .find(&needle)
+                .unwrap_or_else(|| panic!("key {key} missing from serialized section: {json}"));
+            assert!(pos >= last_pos, "key {key} out of order in serialized section: {json}");
+            last_pos = pos;
+        }
+
+        // Exactly this key set — no stray extras, nothing missing — checked
+        // independently of order (serde_json's `Value::Object` may not
+        // preserve insertion order without the `preserve_order` feature, so
+        // this only asserts the *set*; the loop above already asserts order
+        // straight from the serialized struct).
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let keys: std::collections::BTreeSet<&str> =
+            value.as_object().unwrap().keys().map(String::as_str).collect();
+        let expected_set: std::collections::BTreeSet<&str> = expected_order.into_iter().collect();
+        assert_eq!(keys, expected_set);
     }
 }

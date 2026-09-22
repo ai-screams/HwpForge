@@ -7,8 +7,14 @@
 //! text (`&str` for Markdown and JSON), options are a [`Default`] struct with
 //! consuming `with_*` builders, and the output is
 //! `Result<XxxOutput, OpsError>`. **Operation functions never touch the
-//! filesystem**; the one place that reads files is the `fs` submodule
-//! (feature `ops-md`), and it only resolves assets a caller already planned.
+//! filesystem**; the one place that does is the `fs` submodule, and it does
+//! so for exactly two reasons: reading a whole input document from a path
+//! under a caller-chosen size cap ([`fs::read_bounded`], feature `ops-hwpx`),
+//! the one frontend-shared input size gate CLI, MCP and the Python bindings
+//! all read through; and resolving the `file:` entries of an asset plan a
+//! caller already made (`fs::resolve_files_from_dir`, feature `ops-md` — it
+//! needs the Markdown smithy's asset plan type, so it is not linked here: an
+//! `ops-hwpx`-only build has no such item).
 //!
 //! Output structs are `#[non_exhaustive]` and do **not** derive serde: the
 //! serialisable payload is the wire DTO they carry, and warnings become
@@ -49,7 +55,7 @@ pub mod convert;
 pub mod diff;
 pub mod edit;
 pub mod exchange;
-#[cfg(feature = "ops-md")]
+#[cfg(feature = "ops-hwpx")]
 pub mod fs;
 pub mod inspect;
 pub mod inspect_meta;
@@ -60,6 +66,7 @@ pub mod read;
 pub mod schema;
 pub mod stamp;
 pub mod style;
+mod walk;
 
 use hwpforge_core::CoreError;
 use hwpforge_foundation::diagnostics::{OpsCode, WarningInfo};
@@ -83,8 +90,8 @@ pub use inspect_meta::InspectMeta;
 pub use convert::{convert_md, decode_md, ConvertMdOptions, ConvertMeta, ConvertOutput, MdDecoded};
 pub use diff::{diff, DiffMeta, DiffOutput};
 pub use edit::{
-    delete_para, fill, insert_para, set_cell, DeleteParaOptions, FillMeta, FillOptions, FillOutput,
-    InsertParaOptions, SetCellMeta, SetCellOptions, SetCellOutput, StructuralMeta,
+    delete_para, fill, insert_para, set_cell, CellSpec, DeleteParaOptions, FillMeta, FillOptions,
+    FillOutput, InsertParaOptions, SetCellMeta, SetCellOptions, SetCellOutput, StructuralMeta,
     StructuralOutput,
 };
 pub use exchange::{
@@ -101,8 +108,8 @@ pub use read::{
 #[cfg(feature = "schemars")]
 pub use schema::{schema, SchemaKind, SchemaOptions, SchemaOutput};
 pub use stamp::{
-    stamp, stamp_plan, StampMeta, StampOptions, StampOutput, StampPlanMeta, StampPlanOutput,
-    StampedManifest,
+    default_manifest_path, stamp, stamp_plan, CellStampSpec, StampMeta, StampOptions, StampOutput,
+    StampPlanMeta, StampPlanOutput, StampSpec, StampedManifest,
 };
 pub use style::{
     restyle, templates, validate, RestyleMeta, RestyleOptions, RestyleOutput, TemplateList,
@@ -255,6 +262,16 @@ pub enum OpsError {
         /// The remaining, non-semantic warnings of the same encode.
         others: Vec<WarningInfo>,
     },
+
+    /// A read through [`fs::read_bounded`] failed to open or read `path` — the
+    /// wrapped [`std::io::Error`] keeps its own [`std::io::ErrorKind`]
+    /// verbatim so a frontend can still special-case a missing file the way
+    /// it already did before the read moved here (the size violation
+    /// `read_bounded` also guards against is not an I/O failure and reports
+    /// [`OpsCode::InputTooLarge`] through [`OpsError::Rejected`] instead).
+    #[cfg(feature = "ops-hwpx")]
+    #[error(transparent)]
+    Io(std::io::Error),
 }
 
 impl OpsError {
@@ -293,6 +310,13 @@ impl OpsError {
             Self::Rejected { code, .. } => *code,
             Self::NoFonts => OpsCode::NoFonts,
             Self::EncodeSemanticLoss { .. } => OpsCode::EncodeSemanticLoss,
+            // No frontend consults this code today — each keeps its own
+            // legacy string for "the file could not be read" and only
+            // special-cases the wrapped `io::ErrorKind` (see the variant
+            // doc), never `OpsError::code()`. `UpstreamUnmapped` is still the
+            // honest answer: `std::io::Error` has no `OpsCode` of its own.
+            #[cfg(feature = "ops-hwpx")]
+            Self::Io(_) => OpsCode::UpstreamUnmapped,
         }
     }
 
@@ -301,8 +325,22 @@ impl OpsError {
     /// The hints reproduce what the CLI prints today. Hints that quote a
     /// value (the list of available field names, for example) are not
     /// static, so they stay with the frontend that formats them.
+    ///
+    /// [`Self::Io`] is excluded from the [`OpsCode::UpstreamUnmapped`] table
+    /// lookup on purpose: `code()` still reports `UpstreamUnmapped` for it
+    /// (an `std::io::Error` has no `OpsCode` of its own — see that variant's
+    /// doc), but that code's hint text ("an upstream error this version
+    /// doesn't know, upgrade or file an issue") is written for a genuinely
+    /// unclassified error, not a missing file or a permission failure. No
+    /// frontend calls this for `Io` today (each special-cases
+    /// `io::ErrorKind` before it would), so this only guards against a
+    /// future caller printing the wrong advice.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
+        #[cfg(feature = "ops-hwpx")]
+        if matches!(self, Self::Io(_)) {
+            return None;
+        }
         hint_for(self.code())
     }
 
@@ -401,6 +439,15 @@ enum Stage {
     Encode,
 }
 
+/// The advice every frontend shares for a code, or `None` where there is
+/// none.
+///
+/// These hints reach the CLI, the MCP server and the Python bindings alike,
+/// so they name operations and their arguments (`from-json`, `base`,
+/// `to-json`, `patch`, `fill`, `templates`) and never one frontend's syntax
+/// for them — a `--flag` here would be wrong advice in the other two. A
+/// frontend that wants its own spelling pins its own literal instead
+/// (`hwpforge-bindings-cli`'s `compat::TABLE`, `hwpforge-bindings-mcp`'s).
 fn hint_for(code: OpsCode) -> Option<&'static str> {
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
@@ -411,9 +458,9 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "같은 이름의 누름틀이 여러 개라 대상이 모호합니다 — 문서에서 이름을 유일하게 하세요"
         }
         OpsCode::FieldNotFillable => {
-            "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 from-json --base 로 재생성하세요"
+            "병합-run 모호 필드 또는 빈 본문 — 한컴에서 재저장하거나 원본을 base 로 준 `from-json` 으로 재생성하세요"
         }
-        OpsCode::PresetNotFound => "`templates` 로 사용 가능한 프리셋을 확인하세요",
+        OpsCode::PresetNotFound => "사용 가능한 프리셋 목록은 `templates` 연산으로 확인하세요",
         OpsCode::NoFonts => "문서에 글꼴 정의가 없습니다 — `validate` 로 구조를 확인하세요",
         OpsCode::TableGridInvalid => {
             "이 표는 셀 span 이 well-formed 격자를 이루지 않아 주소 지정이 불가합니다"
@@ -431,7 +478,7 @@ fn hint_for(code: OpsCode) -> Option<&'static str> {
             "이 입력은 무손실 재인코드가 증명되지 않아 편집을 거부합니다 (fail-closed)"
         }
         OpsCode::InputEntriesNotCarried => {
-            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)"
+            "재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed) — 텍스트는 `to-json`(section) → 편집 → `patch`, 누름틀은 `fill` 로 바꾸세요 (둘 다 원본 엔트리를 보존합니다)"
         }
         OpsCode::StampSourceHashMismatch | OpsCode::StampLabelDrift | OpsCode::StampSpecStale => {
             "문서가 변경됐습니다 — `stamp-plan` 을 다시 실행해 맵을 갱신하세요"
@@ -955,6 +1002,18 @@ mod tests {
         }
         assert!(hint_for(OpsCode::UpstreamUnmapped).is_some(), "unknown errors need a hint");
         assert!(hint_for(OpsCode::JsonParseFailed).is_none(), "no CLI hint to reproduce");
+    }
+
+    #[cfg(feature = "ops-hwpx")]
+    #[test]
+    fn io_error_hint_does_not_borrow_upstream_unmapped_advice() {
+        // `Io`'s code() is UpstreamUnmapped (no OpsCode fits std::io::Error),
+        // but that code's hint text ("unknown upstream error, upgrade or
+        // file an issue") is wrong advice for a missing file or a
+        // permission error — `hint()` must not surface it here.
+        let error = OpsError::Io(std::io::Error::other("boom"));
+        assert_eq!(error.code(), OpsCode::UpstreamUnmapped);
+        assert!(error.hint().is_none());
     }
 
     #[test]
