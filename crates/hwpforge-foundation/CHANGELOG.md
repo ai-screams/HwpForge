@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.5...hwpforge-foundation-v0.16.6) - 2026-09-22
+
+### Added
+
+- *(bindings-cli)* `validate` 명령 신설 — MCP·Python 에만 있던 검증 연산을 CLI 에도
+
+
+### Documentation
+
+- PDF 렌더의 전제를 "한컴 저장본" 이 아니라 "조판 캐시" 로 적는다
+
+- README 퀵스타트와 Rust 예시가 적힌 그대로 실행되게 한다
+
+- *(python)* Python 바인딩 0.16.5 첫 wheel 배포를 문서에 반영
+
+
 ## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.4...hwpforge-foundation-v0.16.5) - 2026-09-17
 
 ### Added

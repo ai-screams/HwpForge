@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6](https://github.com/ai-screams/HwpForge/compare/v0.16.5...v0.16.6) - 2026-09-22
+
+### Added
+
+- *(bindings-cli)* `validate` 명령 신설 — MCP·Python 에만 있던 검증 연산을 CLI 에도
+
+- *(hwpforge)* from_json 이 입력 JSON 의 layout_cache 를 버릴 때 LAYOUT_CACHE_DROPPED 경고를 낸다
+
+- *(hwpforge)* ops 가 세 창구의 정보를 전부 담도록 — 프리셋 균일 적용, inspect 얕은 계수, from_json 기본 레지스트리, stamp·restyle·convert 상세
+
+
+### Changed
+
+- *(hwpforge,bindings-mcp,bindings-py,bindings-cli)* InspectSection 의 미릴리스 계수 필드 이름이 스코프를 말하게 한다
+
+- *(bindings-mcp,hwpforge)* MCP 요청 스키마가 smithy-hwpx 의 serde 타입을 직접 노출하지 않는다
+
+- *(hwpforge,bindings-cli,bindings-mcp,bindings-py)* 세 창구가 각자 갖던 크기 게이트·경고 DTO·매니페스트 경로 규칙을 ops 로 올린다
+
+- *(hwpforge,bindings-cli)* inspect 가 디코드를 한 번만 한다 — CLI 전용 심층 계수를 ops 로 올린다
+
+
+### Documentation
+
+- PDF 렌더의 전제를 "한컴 저장본" 이 아니라 "조판 캐시" 로 적는다
+
+- README 퀵스타트와 Rust 예시가 적힌 그대로 실행되게 한다
+
+- *(hwpforge,bindings-cli,bindings-mcp)* 리뷰 상환 — 문서가 재는 것과 한도를 정확히 말한다
+
+- *(python)* Python 바인딩 0.16.5 첫 wheel 배포를 문서에 반영
+
+
+### Fixed
+
+- *(hwpforge,bindings-cli)* 힌트가 실제로 되는 길을 말하게 하고 대체 기록 체계를 둔다
+
+- *(hwpforge,bindings-cli)* read 거부 문구가 창구 공통 인자 이름을 쓰게 한다
+
+- *(hwpforge,bindings-mcp)* 진단 정확화 — 거짓 NOTE 제거, Io 힌트 함정 수리, read 죽은 reason 단일화
+
+- *(hwpforge)* 공유 입력 게이트 fs·OpsError::Io 를 ops-hwpx 에서 쓸 수 있게
+
+- *(hwpforge)* read_bounded 의 상한 덧셈을 포화시켜 u64::MAX 상한에서 오버플로하지 않는다
+
+- *(hwpforge,bindings-cli)* 리뷰 상환 — CLI 심층 계수는 raw 스캔으로 통일, 창구 합의 테스트를 도구별로, 순회 하나로
+
+- *(bindings-cli)* validate 의 무효 문서를 종료코드 3 으로 분리, to_pdf 경고 렌더를 ops 에서 가져오고, 남은 감사 지적을 정리한다
+
+- *(hwpforge,bindings-mcp)* restyle 가 디코드 경고를 잇고, MCP 구조 편집 도구가 디코드 경고를 걸러내지 않는다
+
+- *(hwpforge,bindings-mcp)* 재평결 상환 — 메모 anchor_runs 캐시 탐지 복원, 그룹 자식 번호를 인코더 기준으로, 테스트 잠금
+
+- *(hwpforge,bindings-mcp)* 리뷰 상환 — 캡션 캐시 탐지, 경고 경로 모양, 인라인 크기 게이트, 직렬화 단언
+
+- *(hwpforge)* W2 에서 더한 Meta 필드에 serde 기본값 — 0.16.5 가 쓴 JSON 을 계속 읽는다
+
+
 ## [0.16.5](https://github.com/ai-screams/HwpForge/compare/v0.16.4...v0.16.5) - 2026-09-17
 
 ### Added

@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.5...hwpforge-bindings-mcp-v0.16.6) - 2026-09-22
+
+### Added
+
+- *(bindings-mcp)* inspect 가 ops 의 객체·문단 계수 9 필드를 섹션마다 낸다
+
+- *(bindings-mcp)* 경고 채널이 없던 11 도구 응답에 warnings 배열을 additive 로 더한다
+
+- *(hwpforge)* from_json 이 입력 JSON 의 layout_cache 를 버릴 때 LAYOUT_CACHE_DROPPED 경고를 낸다
+
+
+### Changed
+
+- *(hwpforge,bindings-mcp,bindings-py,bindings-cli)* InspectSection 의 미릴리스 계수 필드 이름이 스코프를 말하게 한다
+
+- *(bindings-mcp)* 인라인 응답 상한을 output.rs 상수 하나로
+
+- *(bindings-mcp,hwpforge)* MCP 요청 스키마가 smithy-hwpx 의 serde 타입을 직접 노출하지 않는다
+
+- *(hwpforge,bindings-cli,bindings-mcp,bindings-py)* 세 창구가 각자 갖던 크기 게이트·경고 DTO·매니페스트 경로 규칙을 ops 로 올린다
+
+- *(bindings-cli,bindings-mcp)* 힌트 해석을 한 경로로, 두 창구의 코드 합의 테스트, 스냅샷을 동결/신규로 분리
+
+- *(bindings-mcp)* 19 도구를 `hwpforge::ops` 호출로 이전, 레거시 코드·힌트는 호환 층으로 고정
+
+
+### Documentation
+
+- *(hwpforge,bindings-cli,bindings-mcp)* 리뷰 상환 — 문서가 재는 것과 한도를 정확히 말한다
+
+- *(bindings-mcp)* to_json 인라인 게이트가 재는 것과 실효 상한
+
+
+### Fixed
+
+- *(bindings-mcp)* 채울 수 없는 필드의 힌트를 실제로 되는 길로, 대체 문구 기록을 등식으로
+
+- *(bindings-mcp)* 생성·편집 프롬프트의 잘못된 안내를 고친다
+
+- *(bindings-mcp)* next·도구 설명이 실제로 되는 호출을 가리키게 한다
+
+- *(bindings-mcp)* 거부 힌트가 통하는 길을 말하게 한다
+
+- *(bindings-mcp,bindings-cli)* 리뷰 상환 — 동결 문구와 문맥 의존 힌트를 제자리에
+
+- *(hwpforge,bindings-mcp)* 진단 정확화 — 거짓 NOTE 제거, Io 힌트 함정 수리, read 죽은 reason 단일화
+
+- *(bindings-cli,bindings-mcp)* 리뷰 상환 — convert-hwp5 단일 유계 읽기, to_json 게이트 무할당 측정, validate 종료코드 문구 통일, to_pdf 변형 전수 테스트
+
+- *(bindings-mcp)* validate 가 디코드 실패를 오류로 보고하고, to_json 게이트가 warnings 를 포함해 재며, 이전으로 은퇴한 코드를 분리한다
+
+- *(bindings-cli,bindings-mcp)* 입력을 상한까지만 읽는다 — metadata 길이만 믿던 100MB 게이트를 우회하는 FIFO·파이프 입력 차단
+
+- *(hwpforge,bindings-mcp)* restyle 가 디코드 경고를 잇고, MCP 구조 편집 도구가 디코드 경고를 걸러내지 않는다
+
+- *(hwpforge,bindings-mcp)* 재평결 상환 — 메모 anchor_runs 캐시 탐지 복원, 그룹 자식 번호를 인코더 기준으로, 테스트 잠금
+
+- *(hwpforge,bindings-mcp)* 리뷰 상환 — 캡션 캐시 탐지, 경고 경로 모양, 인라인 크기 게이트, 직렬화 단언
+
+- *(bindings-mcp)* 호환 표 정정 — 결합 arm 복원, admission 오류 행, 힌트 오타, to_json 디코드 경고, read 검증 순서
+
+
 ## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.4...hwpforge-bindings-mcp-v0.16.5) - 2026-09-17
 
 ### Documentation
