@@ -2,7 +2,7 @@
 
 > 이 파일은 CLAUDE.md 로딩 맵에서 필요 시 로드된다 (자동 로드 아님).
 
-**Current Status** (snapshot — 2026-09-18):
+**Current Status** (snapshot — 2026-09-22):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
@@ -15,10 +15,10 @@
 - **PDF Export 에픽 배포** (2026-07-26~08-12, `0.12.0`→`0.13.1`): smithy-pdf 신설 — 조판 캐시 **재생**(계산 금지) 렌더: 표·머리말/꼬리말·쪽번호·폰트 파이프라인(face 축·fsType)·CLI `to-pdf`(스니핑·3채널 경고 DTO). 에픽 canonical = `.docs/planning/2026-07-26-pdf-export-epic.md`.
 - **이미지/글상자 렌더 에픽 W1b\~W5 배포** (2026-08-14\~25, `0.14.0`→**`0.16.0`**): W1b 좌표 ledger(가시 textpos 통일, `0.15.0`) · W2 인라인 이미지(`0.15.1`) · W3 표 셀 이미지+축약점 earliest-preimage(`0.15.2`) · W4 글상자 렌더+**ObjectPlacement 공용화(breaking — 도형 11종 hp:pos 캐리)** · W5 글상자 내부 인라인+body 앵커 렌더+HWP5 앵커 비트 byte-ground → **`0.16.0`** (트리거 3막 사고 — `RELEASING.md` §8 필수 조건 2건 참조). 에픽 canonical = `.docs/planning/2026-08-13-image-textbox-epic.md` (잔여: sub-line-height 인라인 이미지 · W6 마감 · CI 다이어트 제안 `.docs/planning/2026-08-25-ci-diet-proposal.md`).
 - **각주/미주 MD 브리지 에픽 완주** (2026-08-27\~28, **`0.16.4`**): `[^N]`/`[^eN]` 양방향 왕복 (다문단·명명 라벨·표 셀·인라인 서식) + autoNum 번호 머리(**대칭 쌍 계약** — WG#34) + 편집 표면 fail-closed. 한컴 native fixture F1\~F7 게이트 · 시각 게이트 3회 · 적대 리뷰 8라운드 수렴. 에픽 canonical = `.docs/planning/2026-08-27-footnote-endnote-md-bridge.md` (HITL 4건 백로그: ON_SECTION 정책·note format 승격·validate 값 범위·편집기 warning API).
-- **Python 바인딩 에픽 — 첫 wheel 배포** (2026-09-18, **`0.16.5`**): PyPI `hwpforge` 게시(5 wheel + sdist, cp39-abi3 Linux/macOS/Windows) — crates.io·npm과 함께 3채널 실측 확인. 세 바인딩이 공유하는 연산 계층 `hwpforge::ops`/`hwpforge-convert::ops`로 MCP(W2)·Python·CLI(W3) 전환 완료. 에픽 canonical = `.docs/planning/2026-09-16-python-bindings-epic.md`.
+- **Python 바인딩 에픽 완주** (2026-09-16\~22, **`0.16.5`**→**`0.16.6`**): W1 PyPI `hwpforge` 첫 wheel(5 wheel + sdist, cp39-abi3 Linux/macOS/Windows, `0.16.5`) → 세 창구(CLI 20 명령·MCP 19 도구·Python)를 공유 연산 계층 `hwpforge::ops`/`hwpforge_convert::ops` 위로 이전(W2\~W3 — 릴리스된 code·hint·종료코드는 호환 층의 동결 스냅샷으로 고정) · 디코더 경고 채널 + CLI `validate`(W5) · 감사 상환 — 유계 입력 읽기·MCP `validate` 오류화·`inspect` 단일 디코드·힌트 단일 경로·요청 DTO 재노출(W6) · 사용 흐름 안내 정합(W7) → **`0.16.6`** (crates.io·npm·PyPI 3채널 실측). 에픽 canonical = `.docs/planning/2026-09-16-python-bindings-epic.md` (후속은 `.docs/followups.md`: 한컴 저장 HWPX 의 구조 편집 4종 거부(#143 후반부)·힌트 문구 창구 합의·주석 이력 서술 정리 등).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
-> Wave별 상세 이력 + breaking change: [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) + 커밋이 귀속된 크레이트별 `crates/*/CHANGELOG.md`(canonical — `hwpforge-core`·`hwpforge-smithy-hwpx`·`hwpforge-smithy-md`·`hwpforge-bindings-mcp` 등, release-plz 는 커밋 없는 크레이트는 건너뛴다) 와 Claude auto-memory `MEMORY.md` / `phase11_wave_history.md`. umbrella `crates/hwpforge/CHANGELOG.md` 는 `0.5.0`(2026-03-22) 이후 갱신이 없다 — 참조하지 말 것 (루트 `CHANGELOG.md` 도 0.9.0 이후 정지).
+> Wave별 상세 이력 + breaking change: [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) + 커밋이 귀속된 크레이트별 `crates/*/CHANGELOG.md`(canonical — `hwpforge-core`·`hwpforge-smithy-hwpx`·`hwpforge-smithy-md`·`hwpforge-bindings-mcp` 등, release-plz 는 커밋 없는 크레이트는 건너뛴다) 와 Claude auto-memory `MEMORY.md` / `phase11_wave_history.md`. umbrella `crates/hwpforge/CHANGELOG.md` 는 `0.5.0`(2026-03-22) 뒤 공백이 있다가 `0.16.5` 부터 release-plz 가 다시 채운다 — `0.6.0`\~`0.16.4` 구간은 크레이트별 CHANGELOG·GitHub Releases 로 (루트 `CHANGELOG.md` 는 0.9.0 이후 정지).
 > Enum/wire 레이아웃 표 (번호·쪽번호·이미지채우기·대각선 등): **`crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md`** (특히 §22).
 
 **Still-deferred (Windows 한컴 fixture 대기)**:
@@ -32,8 +32,8 @@
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.5` (Python 바인딩 첫 wheel, 2026-09-18) · MSRV `1.88` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
-- `crates/` 추적 src 파일 \~`228` · nextest(make ci) \~`3,476` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
+- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.6` (Python 바인딩 에픽 완주, 2026-09-22) · MSRV `1.88` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 \~`228` · nextest(make ci) \~`4,042` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
 
