@@ -1,6 +1,6 @@
 # Python
 
-`hwpforge` 패키지는 HwpForge Rust 라이브러리를 얇게 감싼 Python 바인딩입니다. HWPX 문서를 읽고, 검사하고, 편집하고, Markdown·JSON·PDF 로 내보내며, 옛 HWP5(`.hwp`)를 HWPX 로 변환합니다. 연산의 의미는 CLI·MCP 서버와 같은 연산 계층(`hwpforge::ops`)에서 오므로 세 창구가 같은 문서에 같은 결과를 내고, 메서드 이름·인자 표기·일부 실패 코드만 Python 의 공개 계약으로 따로 정해져 있습니다.
+`hwpforge` 패키지는 HwpForge Rust 라이브러리를 얇게 감싼 Python 바인딩입니다. HWPX 문서를 읽고, 검사하고, 편집하고, Markdown·JSON·PDF로 내보내며, 옛 HWP5(`.hwp`)를 HWPX로 변환합니다. 연산의 의미는 CLI·MCP 서버와 같은 연산 계층(`hwpforge::ops`)에서 오므로 세 창구가 같은 문서에 같은 결과를 내고, 메서드 이름·인자 표기·일부 실패 코드만 Python의 공개 계약으로 따로 정해져 있습니다.
 
 이 페이지는 설치와 핵심 개념을 다루고, 세부는 하위 페이지로 나뉩니다.
 
@@ -9,8 +9,8 @@
 | [문서 읽기와 검사](python/reading.md)          | `open`·`inspect`·`outline`·`fields`·`read`·`validate`·`diff`·`stamp_plan`                                        |
 | [편집](python/editing.md)                      | `fill`·`patch`·`set_cell`·`insert_para`/`delete_para`·`stamp`·`restyle`, 한컴 저장 문서에서 되는 것과 안 되는 것 |
 | [변환과 내보내기](python/converting.md)        | `convert_md`·`from_json`·`convert_hwp5`·`to_md`·`to_json`·`to_pdf`                                               |
-| [결과·경고·오류](python/results-and-errors.md) | 결과 객체, 보고서의 `warnings`, `HwpForgeError` 의 다섯 속성, 코드 표                                            |
-| [레시피](python/recipes.md)                    | 양식 채우기 파이프라인, 표를 CSV 로, 배치 처리, HWP → PDF, pip 없는 호스트                                       |
+| [결과·경고·오류](python/results-and-errors.md) | 결과 객체, 보고서의 `warnings`, `HwpForgeError`의 다섯 속성, 코드 표                                             |
+| [레시피](python/recipes.md)                    | 양식 채우기 파이프라인, 표를 CSV로, 배치 처리, HWP → PDF, pip 없는 호스트                                        |
 | [API 요약](python/api.md)                      | 모든 메서드·함수의 시그니처와 반환형 한 표                                                                       |
 
 ## 설치
@@ -23,7 +23,7 @@ pip install hwpforge
 
 정확 핀(`==X.Y.Z`)보다 `~=X.Y.Z`를 권장합니다. Python 전용 수정은 `X.Y.Z.N` 형태로 나가는데, 정확 핀은 그 수정을 받지 못합니다.
 
-CPython 3.9+를 커버하는 `abi3` wheel을 다섯 플랫폼(Linux manylinux_2_28 x86_64/aarch64, macOS 11+ arm64, macOS 10.12+ x86_64, Windows x64)에 배포하며, sdist(소스 배포)는 Rust 1.92+와 maturin이 필요합니다. 런타임 의존성은 0개입니다. 자유 스레드(free-threaded) 빌드는 stable ABI 가 다루지 않아 지원하지 않습니다.
+CPython 3.9+를 커버하는 `abi3` wheel을 다섯 플랫폼(Linux manylinux_2_28 x86_64/aarch64, macOS 11+ arm64, macOS 10.12+ x86_64, Windows x64)에 배포하며, sdist(소스 배포)는 Rust 1.92+와 maturin이 필요합니다. 런타임 의존성은 0개입니다. 자유 스레드(free-threaded) 빌드는 stable ABI가 다루지 않아 지원하지 않습니다.
 
 ### pip 없는 호스트
 
@@ -51,17 +51,25 @@ for warning in result.report["warnings"]:
 result.document.save("form-filled.hwpx")
 ```
 
-`doc` 은 그대로이고, 채워진 문서는 `result.document` 입니다. 이 재대입 구조가 이 패키지의 전부라고 해도 지나치지 않습니다 — 아래 네 개념이 그 이유입니다.
+`doc`은 그대로이고, 채워진 문서는 `result.document`입니다. 이 재대입 구조가 이 패키지의 전부라고 해도 지나치지 않습니다 — 아래 네 개념이 그 이유입니다.
 
 ## 핵심 개념 네 가지
 
-**1. `Document` 는 불변 값입니다.** HWPX 패키지의 바이트를 들고 있는 값 객체로, 두 문서는 바이트가 같으면 같고(`==`, `hash`), 어떤 메서드도 받은 문서를 바꾸지 않습니다. 속성 대입은 `AttributeError` 입니다. 편집 메서드는 새 문서를 돌려주므로, 결과를 변수에 다시 받아야 합니다.
+### 불변 값 `Document`
 
-**2. 연산은 값과 보고서를 함께 돌려줍니다.** 편집은 `DocumentResult(document, report)`, 텍스트 내보내기는 `TextResult(text, report)`, 바이트 내보내기는 `BytesResult(data, report)` 입니다. 셋 다 frozen dataclass 라 보고서를 따로 조회할 필요도, 잃어버릴 일도 없습니다. 검사 연산(`inspect`·`outline` 등)은 보고서(`dict`)만 돌려줍니다.
+`Document`는 불변 값입니다. HWPX 패키지의 바이트를 들고 있는 값 객체로, 두 문서는 바이트가 같으면 같고(`==`, `hash`), 어떤 메서드도 받은 문서를 바꾸지 않습니다. 속성 대입은 `AttributeError`입니다. 편집 메서드는 새 문서를 돌려주므로, 결과를 변수에 다시 받아야 합니다.
 
-**3. 보고서의 `warnings` 는 항상 있고, 저장 전에 봐야 합니다.** 실패하지 않은 연산도 조용히 성공하지 않습니다. `templates()`·`schema()` 를 뺀 모든 보고서에 `warnings: [{code, message, hint?}]` 가 있으며, 비어 있을 수는 있어도 빠지지는 않습니다. 문서가 완전히 보존되지 않은 곳(예: 재인코드가 조판 캐시를 버림)을 여기서 알려줍니다.
+### 값과 보고서를 함께 담는 결과
 
-**4. 실패는 `HwpForgeError` 하나이고, `code` 로 분기합니다.** 입력을 받아들인 뒤 연산이 거부하면 `HwpForgeError` 를 던지며 `code`·`message`·`hint`·`cause`·`details` 다섯 속성을 가집니다. 인자 형이 틀리면 `TypeError`/`ValueError`, 파일 I/O 는 `OSError` 입니다. 예외 메시지 문자열이 아니라 `exc.code` 문자열로 분기하세요.
+연산은 값과 보고서를 함께 돌려줍니다. 편집은 `DocumentResult(document, report)`, 텍스트 내보내기는 `TextResult(text, report)`, 바이트 내보내기는 `BytesResult(data, report)`입니다. 셋 다 frozen dataclass라 보고서를 따로 조회할 필요도, 잃어버릴 일도 없습니다. 검사 연산(`inspect`·`outline` 등)은 보고서(`dict`)만 돌려줍니다.
+
+### 항상 있는 `warnings`
+
+보고서의 `warnings`는 항상 있고, 저장 전에 봐야 합니다. 실패하지 않은 연산도 조용히 성공하지 않습니다. `templates()`·`schema()`를 뺀 모든 보고서에 `warnings: [{code, message, hint?}]`가 있으며, 비어 있을 수는 있어도 빠지지는 않습니다. 문서가 완전히 보존되지 않은 곳(예: 재인코드가 조판 캐시를 버림)을 여기서 알려줍니다.
+
+### 하나뿐인 예외 `HwpForgeError`
+
+실패는 `HwpForgeError` 하나이고, `code`로 분기합니다. 입력을 받아들인 뒤 연산이 거부하면 `HwpForgeError`를 던지며 `code`·`message`·`hint`·`cause`·`details` 다섯 속성을 가집니다. 인자 형이 틀리면 `TypeError`/`ValueError`, 파일 I/O는 `OSError`입니다. 예외 메시지 문자열이 아니라 `exc.code` 문자열로 분기하세요.
 
 ```python
 try:
@@ -71,13 +79,25 @@ except hwpforge.HwpForgeError as exc:
     print(exc.hint)      # 연산이 아는 되는 길, 없으면 None
 ```
 
+## 자주 나오는 용어
+
+하위 페이지는 아래 용어를 설명 없이 씁니다.
+
+| 용어                           | 뜻                                                                                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 누름틀                         | 한컴 문서의 입력 칸. 이름과 안내문을 가지며, `fill`이 이름으로 값을 채웁니다                                                                            |
+| 조판 캐시                      | 한컴이 저장할 때 계산해 둔 줄 나눔·줄 위치. PDF 렌더는 이것을 재생하고, 한컴은 다시 저장할 때 새로 계산합니다                                           |
+| 보존 우선(preserve-first) 편집 | 바꿀 XML 조각만 고치고 패키지의 나머지 바이트는 그대로 두는 편집(`fill`·`patch`)                                                                        |
+| 재인코드                       | 문서를 모델로 디코드해 고친 뒤 패키지를 새로 쓰는 것. 모델이 담지 않는 것(조판 캐시, 모르는 엔트리)은 사라집니다. 무엇을 경고하는지는 연산마다 다릅니다 |
+| fail-closed                    | 결과가 손상될 것 같으면 손상된 결과를 내는 대신 거부하는 정책                                                                                           |
+
 ## 입력 크기 상한
 
-`Document.open` 은 파일을 읽을 때 CLI·MCP 와 같은 상한(`hwpforge._hwpforge.MAX_FILE_SIZE`, 100 MB)을 적용하고, 넘으면 `HwpForgeError(INPUT_TOO_LARGE)` 를 던집니다. 상한은 파일이 보고하는 크기가 아니라 **읽은 바이트 수**에 걸리므로, `stat()` 크기가 0 으로 보이는 FIFO 나 프로세스 치환으로도 더 큰 입력을 밀어 넣을 수 없습니다. `Document.from_bytes` 에는 상한이 없습니다 — 호출자가 이미 바이트를 들고 있어 더 제한할 읽기가 남아 있지 않기 때문입니다. 100 MB 보다 큰 문서를 다뤄야 한다면 직접 읽어서 `from_bytes` 로 넘기면 됩니다.
+`Document.open`은 파일을 읽을 때 CLI·MCP와 같은 상한(`hwpforge._hwpforge.MAX_FILE_SIZE`, 100 MB)을 적용하고, 넘으면 `HwpForgeError(INPUT_TOO_LARGE)`를 던집니다. 상한은 파일이 보고하는 크기가 아니라 **읽은 바이트 수**에 걸리므로, `stat()` 크기가 0으로 보이는 FIFO나 프로세스 치환으로도 더 큰 입력을 밀어 넣을 수 없습니다. `Document.from_bytes`에는 상한이 없습니다 — 호출자가 이미 바이트를 들고 있어 더 제한할 읽기가 남아 있지 않기 때문입니다. 100 MB보다 큰 문서를 다뤄야 한다면 직접 읽어서 `from_bytes`로 넘기면 됩니다.
 
-## 포맷은 한 방향입니다
+## 읽기와 쓰기 포맷
 
-읽기는 `.hwpx`, 그리고 `hwpforge.convert_hwp5` 를 거친 `.hwp`(HWP5) 입니다. 변환은 HWPX 로 가는 한 방향이라 원본 `.hwp` 로 되돌아가는 길은 없습니다. 쓰기는 `.hwpx` 뿐이며(`save` 는 무엇을 읽었든 HWPX 패키지를 씁니다), 한컴 오피스는 `.hwpx` 를 그대로 엽니다.
+읽기는 `.hwpx`, 그리고 `hwpforge.convert_hwp5`를 거친 `.hwp`(HWP5)입니다. 변환은 HWPX로 가는 한 방향이라 원본 `.hwp`로 되돌아가는 길은 없습니다. 쓰기는 `.hwpx`뿐이며(`save`는 무엇을 읽었든 HWPX 패키지를 씁니다), 한컴 오피스는 `.hwpx`를 그대로 엽니다.
 
 ## 예제에 쓰인 파일
 
@@ -95,4 +115,4 @@ except hwpforge.HwpForgeError as exc:
 ## 다음 단계
 
 - 패키지 README: [crates/hwpforge-bindings-py/README.md](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-bindings-py/README.md) — 플랫폼별 wheel 표
-- [아키텍처 개요](../getting-started/architecture.md) — Python 이 CLI·MCP 와 공유하는 연산 계층
+- [아키텍처 개요](../getting-started/architecture.md) — Python이 CLI·MCP와 공유하는 연산 계층

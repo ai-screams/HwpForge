@@ -1,6 +1,6 @@
 # API 요약
 
-패키지의 공개 표면은 `hwpforge.__all__` 의 열한 이름입니다: `Document` · `DocumentResult` · `TextResult` · `BytesResult` · `HwpForgeError` · `convert_md` · `from_json` · `convert_hwp5` · `templates` · `schema` · `__version__`. 그 밖의 모듈(`hwpforge._hwpforge` 등)은 비공개이며 릴리스 사이에 바뀔 수 있습니다.
+패키지의 공개 표면은 `hwpforge.__all__`의 열한 이름입니다: `Document` · `DocumentResult` · `TextResult` · `BytesResult` · `HwpForgeError` · `convert_md` · `from_json` · `convert_hwp5` · `templates` · `schema` · `__version__`. 그 밖의 모듈(`hwpforge._hwpforge` 등)은 비공개이며 릴리스 사이에 바뀔 수 있습니다.
 
 ## `Document`
 
@@ -12,8 +12,8 @@
 | `Document.from_bytes`                              | `(data: bytes) -> Document` | 메모리의 바이트에서. 상한 없음                                        |
 | `Document(data)`                                   | `(data: bytes)`             | 생성자. `bytes` 아니면 `TypeError`                                    |
 | `to_bytes`                                         | `() -> bytes`               | HWPX 패키지 바이트 그대로                                             |
-| `save`                                             | `(path) -> None`            | 항상 HWPX 로 씀. 기존 파일은 교체                                     |
-| `bytes(doc)` · `len(doc)` · `==` · `hash` · `repr` |                             | 바이트 기준 값 의미. `repr` 은 `Document(<n> bytes)`                  |
+| `save`                                             | `(path) -> None`            | 항상 HWPX로 씀. 기존 파일은 교체                                      |
+| `bytes(doc)` · `len(doc)` · `==` · `hash` · `repr` |                             | 바이트 기준 값 의미. `repr`은 `Document(<n> bytes)`                   |
 
 ### 검사 (보고서 `dict` 반환)
 
@@ -69,17 +69,17 @@
 
 ## 입력 형태
 
-| 이름               | 모양                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `CellSpec`         | `{"table": int, "text": str}` + `at: {"row", "col"}` \| `right_of: str` \| `below: str` 중 하나                                 |
-| `StampSpec`        | `{"section", "path", "span": {"start", "end"}, "marker", "action"}` — `action` 은 `"ignore"` 또는 `{"field": {"name", "hint"}}` |
-| `StampRequest`     | `Sequence[StampSpec]` 또는 `{"schema_version", "source_sha256", "text"?: [...], "cells"?: [...]}`                               |
-| `paras`            | `"시작..끝"`, 양끝 포함                                                                                                         |
-| `at` (메서드 인자) | `"row,col"` 문자열, 0 부터                                                                                                      |
+| 이름               | 모양                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `CellSpec`         | `{"table": int, "text": str}` + `at: {"row", "col"}` \| `right_of: str` \| `below: str` 중 하나                                |
+| `StampSpec`        | `{"section", "path", "span": {"start", "end"}, "marker", "action"}` — `action`은 `"ignore"` 또는 `{"field": {"name", "hint"}}` |
+| `StampRequest`     | `Sequence[StampSpec]` 또는 `{"schema_version", "source_sha256", "text"?: [...], "cells"?: [...]}`                              |
+| `paras`            | `"시작..끝"`, 양끝 포함                                                                                                        |
+| `at` (메서드 인자) | `"row,col"` 문자열, 0부터                                                                                                      |
 
 ## 상수
 
-| 이름                               | 값                                          |
-| ---------------------------------- | ------------------------------------------- |
-| `hwpforge.__version__`             | 설치된 패키지 버전                          |
-| `hwpforge._hwpforge.MAX_FILE_SIZE` | `Document.open` 의 상한, 104857600 (100 MB) |
+| 이름                               | 값                                         |
+| ---------------------------------- | ------------------------------------------ |
+| `hwpforge.__version__`             | 설치된 패키지 버전                         |
+| `hwpforge._hwpforge.MAX_FILE_SIZE` | `Document.open`의 상한, 104857600 (100 MB) |
