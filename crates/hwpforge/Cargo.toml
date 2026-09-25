@@ -47,4 +47,4 @@ thiserror = { workspace = true, optional = true }
 # 파서로 상류 enum 을 읽는다 (`tests/support/error_inventory.rs`).
 quote = "1"
 serde_json = { workspace = true }
-syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+syn = { version = "3", features = ["full", "extra-traits", "visit"] }

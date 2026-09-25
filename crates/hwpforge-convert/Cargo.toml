@@ -46,4 +46,4 @@ serde_json = { workspace = true }
 # `tests/ops_inventory.rs` parses the upstream error/warning enums to prove no
 # variant goes unclassified. `visit` walks inline modules; `full` is what lets
 # `syn` parse a whole source file rather than just an expression.
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
