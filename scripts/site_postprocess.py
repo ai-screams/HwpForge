@@ -8,7 +8,7 @@ home link at the end of each page's ``<main>``. Python 3 standard library only.
 Usage:
     python3 scripts/site_postprocess.py book            # postprocess in place
     python3 scripts/site_postprocess.py --verify book   # check a processed tree
-    python3 scripts/site_postprocess.py --self-check    # synthetic-tree tests
+    python3 scripts/site_postprocess.py --self-check    # run scripts/test_site_postprocess.py
 
 Page classes (plan 2026-09-26-issue-190-seo §2):
 
@@ -32,10 +32,10 @@ import argparse
 import json
 import os
 import re
-import shutil
 import sys
 import tempfile
-from collections.abc import Callable
+import unittest
+from collections import Counter
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
@@ -46,8 +46,9 @@ HOME_URL = "https://ai-scream.ai/"
 HOME_TEXT = "by Ai-Scream"
 FOOTER = f'<p class="ai-scream-home"><a href="{HOME_URL}">{HOME_TEXT}</a></p>'
 FOOTER_CLASS = "ai-scream-home"
-MARKER = "<!-- ai-scream-postprocess v1 -->"
-MARKER_PREFIX = "<!-- ai-scream-postprocess"
+MARKER_BODY = " ai-scream-postprocess v1 "
+MARKER = f"<!--{MARKER_BODY}-->"
+MARKER_PREFIX = "ai-scream-postprocess"
 NOINDEX_TAG = '<meta name="robots" content="noindex">'
 # rustdoc does not load theme/custom.css, so its pages carry one inline rule.
 RUSTDOC_STYLE = (
@@ -60,7 +61,6 @@ DEFAULT_SUMMARY = Path(__file__).resolve().parent.parent / "docs" / "SUMMARY.md"
 MDBOOK_FIXED = ("404.html", "print.html", "toc.html")
 RUSTDOC_AUX_FILES = ("help.html", "settings.html")
 RUSTDOC_NO_HTML_DIRS = ("trait.impl", "type.impl")
-SAFE_SEGMENT = re.compile(r"[A-Za-z0-9._-]+")
 CRATE_NAME = re.compile(r"[a-z0-9_]+")
 CRATES_JS = re.compile(
     r'window\.ALL_CRATES = (\[[^\]\n]*\]);\n//\{"start":\d+,"fragment_lengths":\[[0-9,]*\]\}\n?'
@@ -93,22 +93,35 @@ class PagePlan:
 
 
 class PageScan(HTMLParser):
-    """One pass over a page, collecting everything the checks need."""
+    """One pass over a page, collecting everything the checks need.
 
-    def __init__(self) -> None:
+    Insertion points come from parser events (``</head>`` and ``</main>`` end
+    tags as HTMLParser sees them), so the same text inside a comment or a
+    script, or an upper-case end tag, is handled like a browser would.
+    """
+
+    def __init__(self, text: str) -> None:
         super().__init__(convert_charrefs=True)
+        self._text = text
+        self._line_starts = [0] + [m.end() for m in re.finditer("\n", text)]
         self.stack: list[str] = []
         self.in_head = False
         self.tags: set[str] = set()
-        self.canonicals: list[str] = []
-        self.robots: list[str] = []
+        self.tag_counts: Counter[str] = Counter()
+        self.head_ends: list[int] = []  # offsets of real </head> end tags
+        self.main_ends: list[int] = []  # offsets of real </main> end tags
+        self.comments: list[tuple[int, int, str]] = []  # (start, end, data)
+        self.canonicals: list[str] = []  # inside <head>
+        self.robots: list[str] = []  # inside <head>
+        self.canonicals_elsewhere: list[str] = []
+        self.robots_elsewhere: list[str] = []
         self.refresh_in_head: list[str] = []
         self.refresh_total = 0
         self.generators: list[str] = []
         self.rustdoc_vars_in_head: list[dict[str, str]] = []
         self.body_classes: list[set[str]] = []
         self.main_count = 0
-        self.title = ""
+        self.titles: list[str] = []
         self._in_title = False
         self.anchors: list[tuple[str, str]] = []  # (href, text)
         self._anchor: list[str] | None = None
@@ -129,6 +142,16 @@ class PageScan(HTMLParser):
         self.footer_last_child: bool | None = None
 
     # -- helpers ----------------------------------------------------------
+
+    def _offset(self) -> int:
+        line, col = self.getpos()
+        return self._line_starts[line - 1] + col
+
+    def _end_tag_offset(self, tag: str) -> int:
+        at = self._offset()
+        if self._text[at:at + len(tag) + 2].lower() != f"</{tag}":
+            raise SiteError(f"parser position drift at </{tag}> (offset {at})")
+        return at
 
     def _close_to(self, tag: str) -> None:
         if tag in self.stack:
@@ -153,6 +176,7 @@ class PageScan(HTMLParser):
         a = {k.lower(): (v or "") for k, v in attrs}
         classes = set(a.get("class", "").split())
         self.tags.add(tag)
+        self.tag_counts[tag] += 1
         self._leave_footer_tail(False)
 
         if self._in_footer:
@@ -175,6 +199,7 @@ class PageScan(HTMLParser):
             self.main_count += 1
         elif tag == "title":
             self._in_title = True
+            self.titles.append("")
         elif tag == "script":
             self._in_script = True
             self.scripts.append("")
@@ -186,11 +211,11 @@ class PageScan(HTMLParser):
             self._p_text = []
         elif tag == "link":
             if "canonical" in a.get("rel", "").lower().split():
-                self.canonicals.append(a.get("href", ""))
+                (self.canonicals if self.in_head else self.canonicals_elsewhere).append(a.get("href", ""))
         elif tag == "meta":
             name = a.get("name", "").lower()
             if name == "robots":
-                self.robots.append(a.get("content", ""))
+                (self.robots if self.in_head else self.robots_elsewhere).append(a.get("content", ""))
             elif name == "generator":
                 self.generators.append(a.get("content", ""))
             elif name == "rustdoc-vars" and self.in_head:
@@ -218,7 +243,10 @@ class PageScan(HTMLParser):
             return
         self._leave_footer_tail(tag == "main")
         if tag == "head":
+            self.head_ends.append(self._end_tag_offset(tag))
             self.in_head = False
+        elif tag == "main":
+            self.main_ends.append(self._end_tag_offset(tag))
         elif tag == "title":
             self._in_title = False
         elif tag == "script":
@@ -236,7 +264,7 @@ class PageScan(HTMLParser):
             self.scripts[-1] += data
             return
         if self._in_title:
-            self.title += data
+            self.titles[-1] += data
         if self._anchor is not None:
             self._anchor.append(data)
         if self._p_depth:
@@ -246,8 +274,16 @@ class PageScan(HTMLParser):
         self.data_text.append(data)
 
 
+    def handle_comment(self, data: str) -> None:
+        start = self._offset()
+        self.comments.append((start, start + len(data) + 7, data))
+
+    def handle_decl(self, decl: str) -> None:
+        self._leave_footer_tail(False)
+
+
 def scan(text: str) -> PageScan:
-    parser = PageScan()
+    parser = PageScan(text)
     parser.feed(text)
     parser.close()
     return parser
@@ -262,8 +298,8 @@ def url_for(rel: str) -> str:
     """Canonical URL for a path relative to the book root (rule 6)."""
     segments = rel.split("/")
     for seg in segments:
-        if not SAFE_SEGMENT.fullmatch(seg) or seg in (".", ".."):
-            raise SiteError(f"{rel}: path segment {seg!r} is outside [A-Za-z0-9._-]")
+        if seg in ("", ".", ".."):
+            raise SiteError(f"{rel}: empty or dot path segment")
     return BASE_URL + "/".join(quote(seg, safe="") for seg in segments)
 
 
@@ -361,7 +397,7 @@ def redirect_target(page: PageScan) -> str | None:
     """
     hinted = (
         page.refresh_total > 0
-        or page.title.strip() == "Redirection"
+        or any(t.strip() == "Redirection" for t in page.titles)
         or any("location.replace" in s for s in page.scripts)
         or "Redirecting to" in "".join(page.data_text)
     )
@@ -377,8 +413,10 @@ def redirect_target(page: PageScan) -> str | None:
             problems.append("refresh content is not 0;URL=T")
         else:
             target = m.group(1)
-    if page.title != "Redirection":
-        problems.append("title is not Redirection")
+    if page.titles != ["Redirection"]:
+        problems.append("needs exactly one <title> whose text is Redirection")
+    if page.tag_counts["head"] != 1 or page.tag_counts["body"] != 1:
+        problems.append("needs exactly one <head> and one <body>")
     if page.anchors != [(target, target)]:
         problems.append("needs one <a href=T>T</a>")
     if page.paragraphs != [f"Redirecting to {target}..."]:
@@ -469,31 +507,36 @@ def classify(book: Path, summary: str) -> tuple[dict[str, str], dict[str, PagePl
 # --------------------------------------------------------------------------
 
 
-def marker_state(rel: str, text: str) -> bool:
+def only(rel: str, offsets: list[int], what: str) -> int:
+    if len(offsets) != 1:
+        raise SiteError(f"{rel}: expected exactly one {what}, found {len(offsets)}")
+    return offsets[0]
+
+
+def marker_state(rel: str, page: PageScan, head_end: int) -> bool:
     """True when the page is already processed (rule 4)."""
-    count = text.count(MARKER_PREFIX)
-    if count == 0:
+    markers = [c for c in page.comments if c[2].strip().startswith(MARKER_PREFIX)]
+    if not markers:
         return False
-    head_end = text.find("</head>")
-    if count == 1 and head_end >= 0 and text[head_end - len(MARKER):head_end] == MARKER:
+    if len(markers) == 1 and markers[0][2] == MARKER_BODY and markers[0][1] == head_end:
         return True
     raise SiteError(f"{rel}: postprocess marker has another version or position")
 
 
-def single(rel: str, text: str, needle: str) -> int:
-    if text.count(needle) != 1:
-        raise SiteError(f"{rel}: expected exactly one {needle}, found {text.count(needle)}")
-    return text.index(needle)
+def check_head_tags(rel: str, page: PageScan) -> None:
+    if page.canonicals_elsewhere or page.robots_elsewhere:
+        raise SiteError(f"{rel}: canonical or robots tag outside <head>")
 
 
 def transform(plan: PagePlan, text: str) -> str:
     """Return the processed text, or the input unchanged when already processed."""
     rel = plan.rel
-    head_end = single(rel, text, "</head>")
-    if marker_state(rel, text):
+    page = scan(text)
+    head_end = only(rel, page.head_ends, "</head>")
+    if marker_state(rel, page, head_end):
         verify_page(plan, text)
         return text
-    page = scan(text)
+    check_head_tags(rel, page)
     head_tags = ""
     if plan.canonical is not None:
         if page.robots:
@@ -516,19 +559,22 @@ def transform(plan: PagePlan, text: str) -> str:
     head_tags += MARKER
 
     if plan.footer:
-        main_end = single(rel, text, "</main>")
         if page.main_count != 1:
             raise SiteError(f"{rel}: expected one <main>, found {page.main_count}")
+        main_end = only(rel, page.main_ends, "</main>")
+        if main_end < head_end:
+            raise SiteError(f"{rel}: </main> comes before </head>")
         text = text[:main_end] + FOOTER + text[main_end:]
     return text[:head_end] + head_tags + text[head_end:]
 
 
 def verify_page(plan: PagePlan, text: str) -> None:
     rel = plan.rel
-    single(rel, text, "</head>")
-    if not marker_state(rel, text):
-        raise SiteError(f"{rel}: not processed (marker missing)")
     page = scan(text)
+    head_end = only(rel, page.head_ends, "</head>")
+    if not marker_state(rel, page, head_end):
+        raise SiteError(f"{rel}: not processed (marker missing)")
+    check_head_tags(rel, page)
     if plan.canonical is not None:
         if page.canonicals != [plan.canonical] or page.robots:
             raise SiteError(f"{rel}: want canonical {plan.canonical} and no robots, "
@@ -596,478 +642,16 @@ def verify(book: Path, summary: str) -> dict[str, int]:
     return counts
 
 
-# --------------------------------------------------------------------------
-# Self-check: synthetic trees for every table row and rule
-# --------------------------------------------------------------------------
-
-
-# The stray </span></a> make the element stack tolerate unmatched end tags.
-def md_page(extra_head: str = "", body: str = "<h1>T</h1>\n<p>body</p></span></a>", main: bool = True) -> str:
-    content = f"<main>\n{body}\n</main>" if main else body
-    return (
-        '<!DOCTYPE HTML>\n<html lang="ko" class="light">\n    <head>\n'
-        f'        <meta charset="UTF-8">\n        <title>t</title>{extra_head}\n    </head>\n'
-        '    <body>\n    <div class="page"><div id="content" class="content">\n'
-        f"                    {content}\n"
-        '                    <nav class="nav-wrapper"></nav>\n    </div></div>\n    </body>\n</html>\n'
-    )
-
-
-def rd_page(crate: str, body_class: str, vars_tag: str | None = None, root: str = "../") -> str:
-    if vars_tag is None:
-        vars_tag = f'<meta name="rustdoc-vars" data-root-path="{root}" data-current-crate="{crate}" >'
-    return (
-        '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="generator" content="rustdoc"><title>x - Rust</title>'
-        f'{vars_tag}<script defer src="{root}crates.js"></script></head>'
-        f'<body class="{body_class}"><nav class="sidebar"><a href="#">x</a></nav>'
-        '<main><div class="width-limiter"><section id="main-content" class="content">'
-        "<p>doc <wbr>text</p><ul><li>one</li></ul></section></div></main></body></html>"
-    )
-
-
-def rd_redirect(target: str, *, href: str | None = None, text: str | None = None,
-                js: str | None = None, title: str = "Redirection", script: bool = True) -> str:
-    js_line = (
-        f'    <script>location.replace("{js if js is not None else target}"'
-        " + location.search + location.hash);</script>\n" if script else ""
-    )
-    return (
-        '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
-        f'    <meta http-equiv="refresh" content="0;URL={target}">\n'
-        f"    <title>{title}</title>\n</head>\n<body>\n"
-        f'    <p>Redirecting to <a href="{href if href is not None else target}">'
-        f"{text if text is not None else target}</a>...</p>\n{js_line}</body>\n</html>"
-    )
-
-
-STANDARD_SUMMARY = (
-    "# Summary\n\n[소개](README.md)\n\n---\n\n# 시작하기\n\n"
-    "- [A](guide/a.md)\n  - [B](guide/b/README.md)\n\n---\n\n[변경 이력](CHANGELOG.md)\n"
-)
-
-
-def crates_js(names: list[str]) -> str:
-    listing = json.dumps(names, separators=(",", ":"))
-    lengths = ",".join(str(len(n) + 3) for n in names)
-    return f'window.ALL_CRATES = {listing};\n//{{"start":21,"fragment_lengths":[{lengths}]}}'
-
-
-def build_tree(root: Path, summary: str = STANDARD_SUMMARY,
-               md_files: dict[str, str] | None = None, api: bool = True) -> Path:
-    book = root / "book"
-    if md_files is None:
-        md_files = {
-            "index.html": md_page(),
-            "guide/a.html": md_page(),
-            "guide/b/index.html": md_page(),
-            "CHANGELOG.html": md_page(),
-        }
-    files = dict(md_files)
-    files.setdefault("404.html", md_page('\n        <base href="/HwpForge/">'))
-    files.setdefault("print.html", md_page('\n        <meta name="robots" content="noindex">'))
-    files.setdefault("toc.html", md_page('\n        <meta name="robots" content="noindex">',
-                                         body="<ol><li>x</li></ol>", main=False))
-    if api:
-        files.update({
-            "api/crates.js": crates_js(["alpha", "beta_two"]),
-            "api/alpha/index.html": rd_page("alpha", "rustdoc mod crate"),
-            "api/alpha/struct.X.html": rd_page("alpha", "rustdoc struct"),
-            "api/alpha/old/struct.X.html": rd_redirect("../../alpha/struct.X.html"),
-            "api/beta_two/index.html": rd_page("beta_two", "rustdoc mod crate"),
-            "api/help.html": rd_page("beta_two", "rustdoc mod sys", root="./"),
-            "api/settings.html": rd_page("beta_two", "rustdoc mod sys", root="./"),
-            "api/src/alpha/lib.rs.html": rd_page("alpha", "rustdoc src", root="../../"),
-            "api/static.files/rustdoc.css": "main{}",
-            "api/trait.impl/alpha/trait.T.js": "x",
-        })
-    for rel, text in files.items():
-        path = book / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(text.encode("utf-8"))
-    (root / "SUMMARY.md").write_text(summary, encoding="utf-8")
-    return book
-
-
-def snapshot(book: Path) -> dict[str, tuple[bytes, int]]:
-    return {
-        p.relative_to(book).as_posix(): (p.read_bytes(), p.stat().st_mode)
-        for p in sorted(book.rglob("*")) if p.is_file()
-    }
-
-
-CheckFn = Callable[[Path], None]
-CASES: list[tuple[str, CheckFn]] = []
-
-
-def case(name: str) -> Callable[[CheckFn], CheckFn]:
-    """Register a self-check case under ``name``."""
-
-    def register(fn: CheckFn) -> CheckFn:
-        CASES.append((name, fn))
-        return fn
-
-    return register
-
-
-def expect_error(fn: Callable[[], object], fragment: str) -> None:
-    try:
-        fn()
-    except SiteError as err:
-        if fragment not in str(err):
-            raise AssertionError(f"error {str(err)!r} lacks {fragment!r}") from None
-        return
-    raise AssertionError(f"expected SiteError containing {fragment!r}")
-
-
-def run_ok(root: Path, summary: str = STANDARD_SUMMARY,
-           md_files: dict[str, str] | None = None) -> tuple[Path, dict[str, str]]:
-    book = build_tree(root, summary, md_files)
-    postprocess(book, summary)
-    verify(book, summary)
-    return book, read_tree(book)
-
-
-def run_err(root: Path, fragment: str, summary: str = STANDARD_SUMMARY,
-            md_files: dict[str, str] | None = None, api: bool = True) -> None:
-    book = build_tree(root, summary, md_files, api)
-    expect_error(lambda: postprocess(book, summary), fragment)
-
-
-def canon(text: str) -> list[str]:
-    """Independent of PageScan: plain-string view of the inserted head tags."""
-    return re.findall(r'<link rel="canonical" href="([^"]*)">', text)
-
-
-def footer_is_last_in_main(text: str) -> bool:
-    i = text.find(FOOTER)
-    return text.count(FOOTER) == 1 and text[i + len(FOOTER):].lstrip().startswith("</main>")
-
-
-def assert_row(text: str, canonical: str | None, footer: bool) -> None:
-    if canonical is None:
-        assert canon(text) == [], canon(text)
-        assert text.count(NOINDEX_TAG) == 1, "noindex count"
-    else:
-        assert canon(text) == [canonical], canon(text)
-        assert "robots" not in text, "robots on canonical page"
-    assert footer_is_last_in_main(text) if footer else FOOTER_CLASS not in text.split("</head>")[1]
-    head = text.split("</head>")[0]
-    assert head.endswith(MARKER), "marker not directly before </head>"
-
-
-# §2.1 rows ------------------------------------------------------------------
-# 이것을 실패시키는 것: mdbook_plans 의 canonical·footer 값, transform 의 삽입 위치
-@case("mdbook_rows")
-def mdbook_rows(tmp: Path) -> None:
-    _, t = run_ok(tmp)
-    assert_row(t["index.html"], BASE_URL, footer=True)
-    assert_row(t["guide/a.html"], BASE_URL + "guide/a.html", footer=True)
-    assert_row(t["guide/b/index.html"], BASE_URL + "guide/b/index.html", footer=True)
-    assert_row(t["CHANGELOG.html"], BASE_URL + "CHANGELOG.html", footer=True)
-    assert_row(t["404.html"], None, footer=True)
-    assert_row(t["print.html"], None, footer=True)  # existing noindex kept, not doubled
-    assert_row(t["toc.html"], None, footer=False)
-    assert "api/" not in t["index.html"]
-
-
-# 이것을 실패시키는 것: 첫 장 원본의 canonical 을 자기 주소로 두는 것
-@case("mdbook_first_chapter_not_readme")
-def mdbook_first_chapter_not_readme(tmp: Path) -> None:
-    summary = "# Summary\n\n[Intro](intro.md)\n\n- [A](a.md)\n"
-    files = {"index.html": md_page(), "intro.html": md_page(), "a.html": md_page()}
-    _, t = run_ok(tmp, summary=summary, md_files=files)
-    assert_row(t["intro.html"], BASE_URL, footer=True)
-    assert_row(t["index.html"], BASE_URL, footer=True)
-    assert_row(t["a.html"], BASE_URL + "a.html", footer=True)
-
-
-# §2.2 rows ------------------------------------------------------------------
-# 이것을 실패시키는 것: rustdoc_plans 의 분류(콘텐츠·리다이렉트·보조)
-@case("rustdoc_rows")
-def rustdoc_rows(tmp: Path) -> None:
-    _, t = run_ok(tmp)
-    for rel in ("api/alpha/index.html", "api/alpha/struct.X.html", "api/beta_two/index.html"):
-        assert_row(t[rel], BASE_URL + rel, footer=True)
-        assert t[rel].count(RUSTDOC_STYLE) == 1
-    for rel in ("api/help.html", "api/settings.html", "api/src/alpha/lib.rs.html"):
-        assert_row(t[rel], None, footer=True)
-        assert t[rel].count(RUSTDOC_STYLE) == 1
-    red = t["api/alpha/old/struct.X.html"]
-    assert_row(red, None, footer=False)
-    assert RUSTDOC_STYLE not in red
-
-
-# §2.3-1 SUMMARY traversal (expected lists = real mdBook 0.4.52 output) ------
-# 이것을 실패시키는 것: 초안·구분선·part title 처리, README→index.html 규칙
-@case("summary_traversal")
-def summary_traversal(tmp: Path) -> None:
-    cases = {
-        "# S\n\n[Draft]()\n\n- [A](a.md)\n- [B](b.md)": ["a.html", "b.html"],
-        "# S\n\n---\n\n- [A](a.md)": ["a.html"],
-        "# S\n\n[I](intro.md)\n\n- [G](g/README.md)\n  - [H](g/h.md)":
-            ["intro.html", "g/index.html", "g/h.html"],
-        "# S\n\n- [G](nested/README.md)\n- [A](a.md)": ["nested/index.html", "a.html"],
-        "# S\n\n[I](intro.md)\n\n- [A](a.md)": ["intro.html", "a.html"],
-        "# S\n\n[I](intro.md)\n\n- [R](sub/README)": ["intro.html", "sub/index.html"],
-        "# S\n\n[I](intro.md)\n\n- [R](sub/readme.md)": ["intro.html", "sub/index.html"],
-        "# S\n\n# Part\n\n- [A](a.md)\n\n---\n\n[S](s.md)": ["a.html", "s.html"],
-        "# S\n\n- [D]()\n  - [A](a.md)": ["a.html"],
-        "# S\n\n[R](README)": ["index.html"],
-    }
-    for text, want in cases.items():
-        got = summary_chapters(text)
-        assert got == want, (text, got)
-    expect_error(lambda: summary_chapters("# S\n\n* weird line"), "unsupported line")
-    expect_error(lambda: summary_chapters("# S\n\n- [A](../a.md)"), "unsupported target")
-    expect_error(lambda: summary_chapters("# S\n\n- [A](a.md)\n- [A2](a.md)"), "twice")
-
-
-# 이것을 실패시키는 것: 첫 non-draft 장이 nested/README.md 일 때 원본 canonical 을 루트로
-@case("mdbook_first_chapter_nested_readme")
-def mdbook_first_chapter_nested_readme(tmp: Path) -> None:
-    summary = "# S\n\n[D]()\n\n- [G](nested/README.md)\n- [A](a.md)\n"
-    files = {"index.html": md_page(), "nested/index.html": md_page(), "a.html": md_page()}
-    _, t = run_ok(tmp, summary=summary, md_files=files)
-    assert_row(t["nested/index.html"], BASE_URL, footer=True)
-    assert_row(t["index.html"], BASE_URL, footer=True)
-
-
-# 이것을 실패시키는 것: 닫힌 분류(목록 밖 HTML·빠진 장·기대 밖 페이지)
-@case("closed_classification")
-def closed_classification(tmp: Path) -> None:
-    extra = {"index.html": md_page(), "guide/a.html": md_page(), "guide/b/index.html": md_page(),
-             "CHANGELOG.html": md_page(), "stray.html": md_page()}
-    run_err(tmp / "stray", "outside the page classification", md_files=extra)
-    missing = {"index.html": md_page(), "guide/a.html": md_page(), "CHANGELOG.html": md_page()}
-    run_err(tmp / "missing", "guide/b/index.html: expected mdBook output is missing", md_files=missing)
-    run_err(tmp / "noapi", "api/: rustdoc output is missing", api=False)
-
-
-def mutate(root: Path, rel: str, text: str | None) -> Path:
-    book = build_tree(root)
-    path = book / rel
-    if text is None:
-        path.unlink()
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    return book
-
-
-def err_after(root: Path, rel: str, text: str | None, fragment: str) -> None:
-    book = mutate(root, rel, text)
-    expect_error(lambda: postprocess(book, STANDARD_SUMMARY), fragment)
-
-
-# 이것을 실패시키는 것: crates.js exact-match 파싱, 이름 문법·중복 검사, 집합 동등성
-@case("crates_js_contract")
-def crates_js_contract(tmp: Path) -> None:
-    assert parse_crates_js(crates_js(["a", "b_c"])) == ["a", "b_c"]
-    assert parse_crates_js(crates_js(["a"]) + "\n") == ["a"]
-    expect_error(lambda: parse_crates_js('var ALL_CRATES = ["a"];'), "unknown format")
-    expect_error(lambda: parse_crates_js('window.ALL_CRATES = ["a"];'), "unknown format")
-    expect_error(lambda: parse_crates_js(crates_js(["Alpha"])), "bad crate name")
-    expect_error(lambda: parse_crates_js(crates_js(["a", "a"])), "duplicate")
-    err_after(tmp / "extra", "api/crates.js", crates_js(["alpha", "beta_two", "gamma"]), "!= crate-root")
-    err_after(tmp / "less", "api/crates.js", crates_js(["alpha"]), "!= crate-root")
-
-
-# 이것을 실패시키는 것: crate-root 서명의 각 조건(generator·body class·head 안 meta name·값)
-@case("crate_root_signature")
-def crate_root_signature(tmp: Path) -> None:
-    rel = "api/beta_two/index.html"
-    bad = {
-        "id_form": rd_page("beta_two", "rustdoc mod crate",
-                           vars_tag='<div id="rustdoc-vars" data-current-crate="beta_two"></div>'),
-        "no_name": rd_page("beta_two", "rustdoc mod crate",
-                           vars_tag='<meta data-current-crate="beta_two">'),
-        "two_vars": rd_page("beta_two", "rustdoc mod crate",
-                            vars_tag='<meta name="rustdoc-vars" data-current-crate="beta_two">' * 2),
-        "wrong_crate": rd_page("alpha", "rustdoc mod crate"),
-        "no_crate_class": rd_page("beta_two", "rustdoc mod"),
-        "no_generator": rd_page("beta_two", "rustdoc mod crate").replace(
-            '<meta name="generator" content="rustdoc">', ""),
-        "vars_in_body": rd_page("beta_two", "rustdoc mod crate", vars_tag="").replace(
-            "<main>", '<main><meta name="rustdoc-vars" data-current-crate="beta_two">'),
-    }
-    for name, text in bad.items():
-        err_after(tmp / name, rel, text, "!= crate-root")
-
-
-# 이것을 실패시키는 것: trait.impl/type.impl HTML 금지, api/index.html 금지, 모르는 최상위 HTML
-@case("rustdoc_forbidden")
-def rustdoc_forbidden(tmp: Path) -> None:
-    err_after(tmp / "ti", "api/trait.impl/alpha/x.html", md_page(), "must not contain HTML")
-    err_after(tmp / "ty", "api/type.impl/alpha/x.html", md_page(), "must not contain HTML")
-    err_after(tmp / "idx", "api/index.html", md_page(), "api/index.html exists")
-    err_after(tmp / "top", "api/all.html", md_page(), "unknown top-level rustdoc page")
-    err_after(tmp / "dir", "api/static.files/x.html", md_page(), "outside every known rustdoc")
-    err_after(tmp / "nomain", "api/alpha/fn.f.html", md_page(main=False), "neither a redirect")
-
-
-# 이것을 실패시키는 것: 리다이렉트 서명의 네 목적지 일치·title·script·허용 요소 검사
-@case("redirect_signature")
-def redirect_signature(tmp: Path) -> None:
-    rel = "api/alpha/old/struct.X.html"
-    t = "../../alpha/struct.X.html"
-    bad = {
-        "href": rd_redirect(t, href="../other.html"),
-        "text": rd_redirect(t, text="elsewhere"),
-        "js": rd_redirect(t, js="../other.html"),
-        "no_script": rd_redirect(t, script=False),
-        "title": rd_redirect(t, title="Moved"),
-        "extra": rd_redirect(t).replace("</body>", "<div>x</div></body>"),
-        "main": rd_redirect(t).replace("</body>", "<main></main></body>"),  # caught by allowed tags
-        "only_title": md_page(main=False).replace("<title>t</title>", "<title>Redirection</title>"),
-        "refresh_in_body": rd_redirect(t).replace(
-            f'    <meta http-equiv="refresh" content="0;URL={t}">\n', "").replace(
-            "<body>", f'<body><meta http-equiv="Refresh" content="0;URL={t}">'),
-    }
-    for name, text in bad.items():
-        err_after(tmp / name, rel, text, "partial redirect signature")
-    # http-equiv is matched case-insensitively
-    book = mutate(tmp / "case", rel, rd_redirect(t).replace('http-equiv="refresh"', 'http-equiv="REFRESH"'))
-    postprocess(book, STANDARD_SUMMARY)
-    verify(book, STANDARD_SUMMARY)
-
-
-# 이것을 실패시키는 것: 같은 태그 no-op, 다른 값·중복·반대 태그 충돌 실패(rule 3)
-@case("tag_cardinality")
-def tag_cardinality(tmp: Path) -> None:
-    same = md_page(f'<link rel="canonical" href="{BASE_URL}guide/a.html">')
-    book = mutate(tmp / "same", "guide/a.html", same)
-    postprocess(book, STANDARD_SUMMARY)
-    assert canon((book / "guide/a.html").read_text(encoding="utf-8")) == [BASE_URL + "guide/a.html"]
-    err_after(tmp / "diff", "guide/a.html", md_page('<link rel="canonical" href="https://x/">'),
-              "conflicting canonical")
-    err_after(tmp / "dup", "guide/a.html", md_page(f'<link rel="canonical" href="{BASE_URL}guide/a.html">' * 2),
-              "conflicting canonical")
-    err_after(tmp / "robots", "guide/a.html", md_page(NOINDEX_TAG), "already has a robots tag")
-    err_after(tmp / "nofollow", "404.html", md_page('<meta name="robots" content="noindex, nofollow">'),
-              "conflicting robots")
-    err_after(tmp / "dup_robots", "print.html", md_page(NOINDEX_TAG * 2), "conflicting robots")
-    err_after(tmp / "canon_on_noindex", "toc.html",
-              md_page(f'<link rel="canonical" href="{BASE_URL}">', main=False), "already has a canonical")
-
-
-# 이것을 실패시키는 것: 삽입 지점 단일성 검사(</head>·</main> 개수)
-@case("insertion_points")
-def insertion_points(tmp: Path) -> None:
-    err_after(tmp / "mains", "guide/a.html", md_page(body="<p>a</p></main><main><p>b</p>"),
-              "expected exactly one </main>")
-    err_after(tmp / "heads", "guide/a.html", md_page("</head><head>"), "expected exactly one </head>")
-    # transform itself must refuse, not only the verify pass that follows it
-    plan = PagePlan("x.html", "t", BASE_URL, footer=False)
-    expect_error(lambda: transform(plan, md_page("</head><head>")), "expected exactly one </head>")
-    err_after(tmp / "nomain", "guide/a.html", md_page(main=False), "expected exactly one </main>")
-    err_after(tmp / "prefooter", "guide/a.html", md_page(body=FOOTER), "already has a home link")
-
-
-# 이것을 실패시키는 것: 표지 위치·버전 검사(rule 4)
-@case("marker_rules")
-def marker_rules(tmp: Path) -> None:
-    err_after(tmp / "v2", "guide/a.html",
-              md_page().replace("</head>", "<!-- ai-scream-postprocess v2 --></head>"), "another version")
-    err_after(tmp / "moved", "guide/a.html",
-              md_page().replace("<title>", MARKER + "<title>"), "another version")
-    expect_error(lambda: verify(build_tree(tmp / "raw"), STANDARD_SUMMARY), "not processed")
-
-
-# 이것을 실패시키는 것: 쓰기 전에 모든 파일을 검증하지 않고 파일마다 바로 쓰는 것(rule 2)
-@case("preflight_then_write")
-def preflight_then_write(tmp: Path) -> None:
-    # CHANGELOG.html sorts before the broken guide/a.html, so a write-as-you-go
-    # implementation would already have modified it.
-    book = mutate(tmp, "guide/a.html", md_page(body="</main><main>"))
-    before = snapshot(book)
-    expect_error(lambda: postprocess(book, STANDARD_SUMMARY), "exactly one </main>")
-    assert snapshot(book) == before, "a file was written before validation finished"
-
-
-# 이것을 실패시키는 것: 표지 no-op 가 없어 두 번째 실행이 다시 삽입하는 것, 파일 모드 유실(rule 5)
-@case("idempotent_and_mode")
-def idempotent_and_mode(tmp: Path) -> None:
-    book = build_tree(tmp)
-    os.chmod(book / "guide/a.html", 0o644)
-    before = snapshot(book)
-    assert postprocess(book, STANDARD_SUMMARY) > 0
-    once = snapshot(book)
-    assert once != before
-    assert postprocess(book, STANDARD_SUMMARY) == 0
-    assert snapshot(book) == once, "second run changed bytes"
-    assert once["guide/a.html"][1] & 0o777 == 0o644, "mode changed"
-    assert not [p for p in book.rglob(".*") if p.is_file()], "temp file left behind"
-
-
-# 이것을 실패시키는 것: 경로 세그먼트 문자 집합 단언(rule 6)
-@case("url_rules")
-def url_rules(tmp: Path) -> None:
-    assert url_for("guide/HwpForge_x.html") == BASE_URL + "guide/HwpForge_x.html"
-    expect_error(lambda: url_for("가이드/a.html"), "outside [A-Za-z0-9._-]")
-    expect_error(lambda: url_for("a b.html"), "outside [A-Za-z0-9._-]")
-    summary = "# S\n\n[I](README.md)\n\n- [G](가이드.md)\n"
-    run_err(tmp, "outside [A-Za-z0-9._-]", summary=summary,
-            md_files={"index.html": md_page(), "가이드.html": md_page()})
-
-
-# 이것을 실패시키는 것: --verify 의 DOM 단언(개수·부모·마지막 자식·href·text·금지 클래스)
-@case("dom_assertion")
-def dom_assertion(tmp: Path) -> None:
-    book, texts = run_ok(tmp)
-    good = texts["guide/a.html"]
-    good_rd = texts["api/alpha/struct.X.html"]
-    bad = {
-        "duplicate": ("guide/a.html", good.replace(FOOTER, FOOTER * 2), "2 home links"),
-        "not_last": ("guide/a.html", good.replace(FOOTER + "</main>", "</main>").replace(
-            "<h1>T</h1>", "<h1>T</h1>" + FOOTER), "not the last element"),
-        "text_after": ("guide/a.html", good.replace(FOOTER, FOOTER + "tail"), "not the last element"),
-        "outside_main": ("guide/a.html", good.replace(FOOTER + "</main>", "</main>" + FOOTER),
-                         "not a <p> child"),
-        "nested": ("api/alpha/struct.X.html", good_rd.replace(FOOTER + "</main>", "</main>").replace(
-            "</section>", FOOTER + "</section>"), "not a <p> child"),
-        "href": ("guide/a.html", good.replace(f'href="{HOME_URL}"', 'href="https://x/"'), "exactly one <a"),
-        "text": ("guide/a.html", good.replace(f">{HOME_TEXT}<", ">by someone<"), "exactly one <a"),
-        "two_a": ("guide/a.html", good.replace(f"{HOME_TEXT}</a>", f"{HOME_TEXT}</a><a href=\"#\">x</a>"),
-                  "exactly one <a"),
-        "wrapped_text": ("guide/a.html", good.replace("<p class=\"ai-scream-home\">",
-                                                      "<p class=\"ai-scream-home\">x"), "text differs"),
-        "div_class": ("guide/a.html", good.replace('<p class="ai-scream-home">', '<div class="ai-scream-home">')
-                      .replace("</a></p>", "</a></div>"), "not a <p> child"),
-        "two_mains": ("guide/a.html", good.replace("<h1>T</h1>", "<main></main>"), "2 <main>"),
-        "on_toc": ("toc.html", texts["toc.html"].replace("<ol>", FOOTER + "<ol>"), "must not carry"),
-        "on_redirect": ("api/alpha/old/struct.X.html",
-                        texts["api/alpha/old/struct.X.html"].replace("</body>", FOOTER + "</body>"),
-                        "partial redirect signature"),
-        "no_style": ("api/alpha/struct.X.html", good_rd.replace(RUSTDOC_STYLE, ""), "style missing"),
-        "canonical_changed": ("guide/a.html", good.replace(BASE_URL + "guide/a.html", BASE_URL),
-                              "want canonical"),
-    }
-    for name, (rel, text, fragment) in bad.items():
-        case_book = tmp / name / "book"
-        shutil.copytree(book, case_book)
-        (case_book / rel).write_text(text, encoding="utf-8")
-        try:
-            expect_error(lambda b=case_book: verify(b, STANDARD_SUMMARY), fragment)
-        except AssertionError as err:
-            raise AssertionError(f"{name}: {err}") from None
-
-
 def self_check() -> int:
-    failures = 0
-    with tempfile.TemporaryDirectory(prefix="site-postprocess-") as tmpdir:
-        for name, fn in CASES:
-            case_dir = Path(tmpdir) / name
-            case_dir.mkdir()
-            try:
-                fn(case_dir)
-            except Exception as err:  # noqa: BLE001 — report every case
-                failures += 1
-                print(f"FAIL {name}: {type(err).__name__}: {err}")
-            else:
-                print(f"ok   {name}")
-    print(f"{len(CASES) - failures}/{len(CASES)} self-check cases passed")
-    return 1 if failures else 0
+    """Run the unittest suite in scripts/test_site_postprocess.py."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import test_site_postprocess  # the test module lives next to this file
+
+    suite = unittest.defaultTestLoader.loadTestsFromModule(test_site_postprocess)
+    result = unittest.TextTestRunner(stream=sys.stdout, verbosity=2).run(suite)
+    return 0 if result.wasSuccessful() else 1
 
 
 # --------------------------------------------------------------------------
@@ -1079,7 +663,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("book", nargs="?", type=Path, help="built site directory (mdBook build-dir)")
     parser.add_argument("--verify", action="store_true", help="check a processed tree, write nothing")
-    parser.add_argument("--self-check", action="store_true", help="run the synthetic-tree tests")
+    parser.add_argument("--self-check", action="store_true", help="run scripts/test_site_postprocess.py")
     parser.add_argument("--summary", type=Path, default=DEFAULT_SUMMARY, help="mdBook SUMMARY.md")
     args = parser.parse_args(argv)
     if args.self_check:
