@@ -13,6 +13,12 @@
 # 사용 가이드
 
 - [Python](guide/python.md)
+  - [문서 읽기와 검사](guide/python/reading.md)
+  - [편집](guide/python/editing.md)
+  - [변환과 내보내기](guide/python/converting.md)
+  - [결과·경고·오류](guide/python/results-and-errors.md)
+  - [레시피](guide/python/recipes.md)
+  - [API 요약](guide/python/api.md)
 - [HWPX 인코딩/디코딩](guide/hwpx-codec.md)
 - [메타데이터 (Metadata)](guide/metadata.md)
 - [Markdown에서 HWPX로](guide/markdown-bridge.md)
