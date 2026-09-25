@@ -29,7 +29,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://ai-screams.github.io/HwpForge/"
+Homepage = "https://ai-scream.ai/HwpForge/"
+Documentation = "https://ai-scream.ai/HwpForge/guide/python.html"
 Repository = "https://github.com/ai-screams/HwpForge"
 Changelog = "https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md"
 
