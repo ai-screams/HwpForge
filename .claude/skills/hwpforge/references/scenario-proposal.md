@@ -43,7 +43,7 @@
 hwpforge convert proposal.md -o proposal.hwpx --preset default
 ```
 
-CLI `convert`는 `default`(함초롬돋움 10pt, A4)/`modern`/`classic`/`latest` 네 프리셋을 모두 받아들이고, 각각 카탈로그에 정의된 글꼴을 적용합니다. MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`도 동일하게 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
+`--preset`은 `default`(함초롬돋움 10pt, A4)·`modern`·`classic`·`latest` 중 하나입니다. 글꼴과 기존 문서의 `restyle`(손실 있음)은 [templates.md](templates.md).
 
 ## 예제 마크다운
 
@@ -91,9 +91,9 @@ date: 2026-03-09
 
 본 사업은 3단계 접근법으로 추진합니다.
 
-1. **1단계 (1~3개월)**: 현행 시스템 분석 및 AI 모델 설계
-2. **2단계 (4~8개월)**: 시스템 개발 및 파일럿 운영
-3. **3단계 (9~12개월)**: 전면 전환 및 안정화
+1. **1단계 (1–3개월)**: 현행 시스템 분석 및 AI 모델 설계
+2. **2단계 (4–8개월)**: 시스템 개발 및 파일럿 운영
+3. **3단계 (9–12개월)**: 전면 전환 및 안정화
 
 ### 2.2 세부 수행 계획
 

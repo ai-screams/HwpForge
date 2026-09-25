@@ -43,7 +43,7 @@
 hwpforge convert report.md -o report.hwpx --preset default
 ```
 
-CLI `convert`는 `default`(함초롬돋움 10pt, A4)/`modern`/`classic`/`latest` 네 프리셋을 모두 받아들이고, 각각 카탈로그에 정의된 글꼴을 적용합니다. MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`도 동일하게 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
+`--preset`은 `default`(함초롬돋움 10pt, A4)·`modern`·`classic`·`latest` 중 하나입니다. 글꼴과 기존 문서의 `restyle`(손실 있음)은 [templates.md](templates.md).
 
 ## YAML 프론트매터
 
@@ -87,7 +87,7 @@ date: "2026년 3월"
 # AI 기반 공공서비스 혁신 방안 연구
 
 **연구책임자**: 홍길동 (○○연구원 선임연구위원)
-**연구기간**: 2025년 6월 ~ 2026년 2월
+**연구기간**: 2025년 6월–2026년 2월
 
 <!-- hwpforge:section -->
 
@@ -128,7 +128,7 @@ date: "2026년 3월"
 
 **연구 범위**
 
-- 시간적 범위: 2020~2025년
+- 시간적 범위: 2020–2025년
 - 공간적 범위: 국내 중앙행정기관 및 주요 공공기관
 - 내용적 범위: 민원 처리, 데이터 분석, 의사결정 지원 분야
 
