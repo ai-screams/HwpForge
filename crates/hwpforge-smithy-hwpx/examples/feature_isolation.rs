@@ -1616,7 +1616,7 @@ fn gen_12_hyperlink() {
             Run::control(
                 Control::Hyperlink {
                     text: "HwpForge Docs".to_string(),
-                    url: "https://ai-screams.github.io/HwpForge/".to_string(),
+                    url: "https://ai-scream.ai/HwpForge/".to_string(),
                 },
                 csi(CS_LINK),
             ),

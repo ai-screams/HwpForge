@@ -14,6 +14,7 @@
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
+[![Docs site](https://img.shields.io/badge/docs-ai--scream.ai-blue.svg?logo=mdbook)](https://ai-scream.ai/HwpForge/)
 ![crates.io downloads](https://img.shields.io/crates/d/hwpforge.svg?label=downloads\&logo=rust\&color=orange)
 ![MSRV](https://img.shields.io/badge/MSRV-1.88+-orange.svg?logo=rust)
 ![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
@@ -57,6 +58,7 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
 
 - **📄&#x20;**&#x20;[**HWPX 완전 가이드 다운로드**](examples/showcase/guides/hwpx_complete_guide/hwpx_complete_guide.hwpx) — HwpForge API로 생성한 4섹션 데모 문서 (한글에서 열어보세요)
+- **📚 문서 사이트** — [ai-scream.ai/HwpForge](https://ai-scream.ai/HwpForge/): 시작하기, 사용 가이드(Python·Markdown 변환·스타일 템플릿 등), API 레퍼런스
 - **HWPX Reader for AI** — 기존 한글 문서(.hwpx)를 Markdown으로 변환하여 LLM이 즉시 이해 가능
 - **Full HWPX codec** — HWPX 파일을 손실 없이 디코딩/인코딩 (lossless roundtrip)
 - **Markdown bridge** — GFM Markdown과 HWPX 간 양방향 변환 (읽기 + 쓰기)

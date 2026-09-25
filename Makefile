@@ -1,4 +1,4 @@
-.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv msrv-pdf ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
+.PHONY: help install-tools check check-features test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc site-check cov deny machete msrv msrv-pdf ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test py-dev py-test py-cov py-lint py-check py-rust-test py-all
 
 AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
 AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
@@ -36,6 +36,7 @@ help:
 	@echo "  make lint-md          Lint Markdown/TOML/JSON (dprint + markdownlint)"
 	@echo "  make lint-md-fix      Fix Markdown/TOML/JSON formatting"
 	@echo "  make doc              Generate documentation (opens browser)"
+	@echo "  make site-check       Build the docs site like Pages (mdBook 0.4.52 on PATH) + postprocess check"
 	@echo "  make cov              Code coverage (llvm-cov, fail-under-lines=90)"
 	@echo "  make deny             Dependency license/advisory check"
 	@echo "  make machete          Find unused dependencies"
@@ -145,6 +146,10 @@ lint-md-fix:
 
 doc:
 	cargo doc --workspace --all-features --no-deps --open
+
+# Pages 와 같은 사이트 빌드 (mdBook + rustdoc + canonical/홈 링크 후처리). `make ci` 에는 넣지 않는다.
+site-check:
+	scripts/build_site.sh
 
 # 제외 사유는 `test` 와 같다. 순수 Python 층의 90% 게이트는 `make py-cov`.
 cov:

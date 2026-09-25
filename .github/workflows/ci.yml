@@ -288,6 +288,8 @@ jobs:
         run: npx dprint@${{ env.DPRINT_VERSION }} check
       - name: markdownlint-cli2
         run: npx markdownlint-cli2@${{ env.MARKDOWNLINT_CLI2_VERSION }} "**/*.md"
+      - name: Site postprocess self-check
+        run: python3 scripts/site_postprocess.py --self-check
 
   docs-build:
     name: "Verify › Docs Build"
@@ -302,6 +304,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
+        with:
+          # build_site.sh builds rustdoc in its own target dir; cache that one.
+          workspaces: ". -> target/site-build"
       - name: Install mdBook toolchain
         run: |
           set -euo pipefail
@@ -310,14 +315,8 @@ jobs:
           cargo install --locked --version "$MDBOOK_VERSION" mdbook --root "$install_root"
           cargo install --locked --version "$MDBOOK_ADMONISH_VERSION" mdbook-admonish --root "$install_root"
           cargo install --locked --version "$MDBOOK_MERMAID_VERSION" mdbook-mermaid --root "$install_root"
-      - name: Build mdBook
-        run: mdbook build
-      - name: Build rustdoc
-        run: >-
-          cargo doc --workspace --no-deps --all-features
-          --exclude hwpforge-bindings-py
-          --exclude hwpforge-bindings-cli
-          --exclude hwpforge-smithy-hwp5
+      - name: Build site (mdBook + rustdoc + postprocess)
+        run: scripts/build_site.sh
 
   msrv:
     name: "Verify › MSRV (1.88)"

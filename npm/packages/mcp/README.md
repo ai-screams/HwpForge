@@ -78,7 +78,7 @@ cargo install hwpforge-bindings-mcp
 ## Links
 
 - [GitHub](https://github.com/ai-screams/HwpForge)
-- [Documentation](https://ai-screams.github.io/HwpForge/)
+- [Documentation](https://ai-scream.ai/HwpForge/)
 - [crates.io](https://crates.io/crates/hwpforge-bindings-mcp)
 
 ## License

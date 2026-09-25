@@ -27,3 +27,18 @@ code, pre code {
   border-radius: 3px;
   padding: 1px 5px;
 }
+
+/* "by Ai-Scream" home link, inserted at the end of <main> by scripts/site_postprocess.py */
+.ai-scream-home {
+  margin-top: 3em;
+  padding-top: 1em;
+  border-top: 1px solid var(--table-border-color);
+  font-size: 0.875em;
+  text-align: right;
+}
+
+@media print {
+  .ai-scream-home {
+    display: none;
+  }
+}

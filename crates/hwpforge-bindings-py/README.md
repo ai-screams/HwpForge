@@ -138,7 +138,7 @@ present and worth reading before saving the result.
 
 ## Documentation
 
-- Guide: <https://ai-screams.github.io/HwpForge/guide/python.html>
+- Guide: <https://ai-scream.ai/HwpForge/guide/python.html>
 - Project: <https://github.com/ai-screams/HwpForge>
 
 ## License

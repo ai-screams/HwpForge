@@ -2,6 +2,8 @@
 
 MCP (Model Context Protocol) server for HwpForge — enables AI agents to create and edit Korean HWPX documents.
 
+Documentation: <https://ai-scream.ai/HwpForge/>
+
 ## Installation
 
 ```bash

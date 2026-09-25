@@ -30,7 +30,7 @@ categories = [
 ]
 documentation = "https://docs.rs/hwpforge"
 edition = "2021"
-homepage = "https://ai-screams.github.io/HwpForge/"
+homepage = "https://ai-scream.ai/HwpForge/"
 keywords = ["hwp", "hwpx", "hancom", "hangul", "korean"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
