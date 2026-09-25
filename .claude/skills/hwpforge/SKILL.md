@@ -41,15 +41,16 @@ t = Document.open("form.hwpx").read(table=0)["table"]   # ordinals: doc.outline(
 
 ## Intent → command
 
-| Intent                                | Command                                                                             |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| Values into a form 한컴 saved         | 누름틀: `fields` → `fill`. Other text/cells: `to-json --section N` → edit → `patch` |
-| Cells in a file 한컴 did not save     | `read --table N` → `set-cell`                                                       |
-| New document                          | `convert doc.md -o doc.hwpx --preset default`                                       |
-| Read content                          | `outline` → `read --section N --paras A..B` / `--table N` / `--field NAME`          |
-| PDF like 한컴 shows it                | `to-pdf doc.hwpx -o doc.pdf --discovery platform`                                   |
-| Legacy `.hwp`                         | `convert-hwp5 old.hwp -o new.hwpx`; `to-pdf old.hwp` takes it directly              |
-| Did my edit change only what I meant? | `diff before.hwpx after.hwpx --json`                                                |
+| Intent                                     | Command                                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Values into a form 한컴 saved              | 누름틀: `fields` → `fill`. Other text/cells: `to-json --section N` → edit → `patch` |
+| Cells in a file 한컴 did not save          | `read --table N` → `set-cell`                                                       |
+| New document                               | `convert doc.md -o doc.hwpx --preset default`                                       |
+| Read content                               | `outline` → `read --section N --paras A..B` / `--table N` / `--field NAME`          |
+| PDF like 한컴 shows it                     | `to-pdf doc.hwpx -o doc.pdf --discovery platform`                                   |
+| Legacy `.hwp`                              | `convert-hwp5 old.hwp -o new.hwpx`; `to-pdf old.hwp` takes it directly              |
+| Did my edit change only what I meant?      | `diff before.hwpx after.hwpx --json`                                                |
+| Ready to submit? 최종본 점검 (report only) | [hwpforge-submission-check](../hwpforge-submission-check/SKILL.md) skill            |
 
 ## Decision tree
 
