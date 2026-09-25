@@ -86,7 +86,16 @@ converted.document.save("old.hwpx")
 
 ## `to_pdf` — PDF 렌더
 
-렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시를 가진 문서만 렌더됩니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5(..., carry_layout_cache=True)`로 캐시를 옮긴 HWPX. Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
+렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5(..., carry_layout_cache=True)`로 캐시를 옮긴 HWPX. Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
+
+캐시가 있어도 아직 재생하지 못하는 내용이 있습니다. 한컴이 저장한 문서라도 아래 경우는 실패하고, **한컴에서 다시 저장해도 풀리지 않습니다.**
+
+| `cause["code"]`       | 언제                                                                                      | 예                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `INVALID_CACHE`       | 문단 안에 글자가 아닌 요소(누름틀·메모·각주·수식·하이퍼링크·상호참조·차트·도형 등)가 있음 | 누름틀이 든 서식 (`clickhere_filled.hwpx`)                                          |
+| `UNSUPPORTED_CONTENT` | 아직 지원하지 않는 배치 — `cause["kind"]`가 무엇인지 말함                                 | `kind == "non-default table position"` (`table_20_real_world_ministry_stress.hwpx`) |
+
+누름틀 서식처럼 이 경우에 걸리는 문서는 한컴에서 PDF로 저장하세요.
 
 ```python
 with open("old.hwp", "rb") as handle:
@@ -101,13 +110,14 @@ except hwpforge.HwpForgeError as exc:
     print(exc.code, exc.cause)
     # PDF_RENDER_FAILED {'stage': 'render', 'code': 'FONT_UNRESOLVED'}      ← 글꼴을 못 찾음
     # PDF_RENDER_FAILED {'stage': 'render', 'code': 'NO_RENDERABLE_CACHE', 'location': 's0'}  ← 캐시 없음
+    # PDF_RENDER_FAILED {'stage': 'render', 'code': 'INVALID_CACHE'}        ← 재생할 수 없는 요소가 든 문단
 ```
 
 - 글꼴은 기본 fail-closed입니다: 문서가 이름 붙인 글꼴 face를 `font_dirs` 안에서 찾지 못하면 추측하지 않고 실패합니다(`cause["code"] == "FONT_UNRESOLVED"`). `degraded=True`는 대체 글꼴로 렌더하며, 결과의 모양이 달라집니다.
 - `discovery`는 `font_dirs` 밖을 더 볼지의 선택입니다: `"explicit"`(기본, 결정적) · `"hancom"`(한컴 설치 글꼴 위치) · `"platform"`(OS 글꼴).
 - `font_dirs`는 시퀀스여야 합니다. 문자열 하나를 주면 한 글자짜리 디렉터리들로 읽히는 대신 `TypeError`로 거부됩니다.
 - `partial_cache_reject=True`는 캐시가 일부만 있는 문서를 다시 배치하지 않고 거부합니다.
-- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`가 어느 쪽인지 안내합니다.
+- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`는 원인과 상관없이 같은 문장이므로, 무엇을 할지는 `cause["code"]`로 가르세요: `FONT_UNRESOLVED`는 `font_dirs`·`discovery`, `NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`는 한컴에서 다시 저장, `INVALID_CACHE`·`UNSUPPORTED_CONTENT`는 위 표.
 
 ## `templates` · `schema`
 

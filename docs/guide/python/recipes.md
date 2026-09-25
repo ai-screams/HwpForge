@@ -152,7 +152,7 @@ back = result.document.to_md(mode="lossy")
 print(back.text[:300])
 ```
 
-생성한 문서는 조판 캐시가 없으므로 `to_pdf`는 되지 않습니다. 한컴에서 열어 저장하면 캐시가 생기고 그때부터 렌더됩니다.
+생성한 문서는 조판 캐시가 없으므로 `to_pdf`는 되지 않습니다. 한컴에서 열어 저장하면 캐시가 생기고, 재생할 수 없는 요소가 없다면 그때부터 렌더됩니다([`to_pdf`](converting.md#to_pdf--pdf-렌더) 표).
 
 ## pip 없는 호스트에 배포하기
 
