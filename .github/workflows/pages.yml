@@ -43,6 +43,9 @@ jobs:
         uses: actions/configure-pages@v6
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # build_site.sh builds rustdoc in its own target dir; cache that one.
+          workspaces: ". -> target/site-build"
 
       - name: Install mdBook toolchain
         run: |
@@ -53,13 +56,8 @@ jobs:
           cargo install --locked --version "$MDBOOK_ADMONISH_VERSION" mdbook-admonish --root "$install_root"
           cargo install --locked --version "$MDBOOK_MERMAID_VERSION" mdbook-mermaid --root "$install_root"
 
-      - name: Build mdBook
-        run: mdbook build
-
-      - name: Build rustdoc
-        run: |
-          cargo doc --workspace --no-deps --all-features --exclude hwpforge-bindings-py --exclude hwpforge-bindings-cli --exclude hwpforge-smithy-hwp5
-          cp -r target/doc book/api
+      - name: Build site (mdBook + rustdoc + postprocess)
+        run: scripts/build_site.sh
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
