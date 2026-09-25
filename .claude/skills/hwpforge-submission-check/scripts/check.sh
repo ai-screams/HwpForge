@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # Pre-submission check for one .hwpx — report only, never writes next to the input.
-# Usage: bash check.sh <doc.hwpx> [hwpforge-binary]
+# Usage: bash check.sh <doc.hwpx>
+# Runs `hwpforge` from PATH only. There is deliberately no argument that picks the binary: the skill
+# pre-approves `bash check.sh *`, so such an argument would run any executable without approval.
+# Extra arguments are rejected, so `bash check.sh doc.hwpx ./payload` exits 1 without running payload.
 # Last line: "CHECK COMPLETE" (exit 0) or "CHECK INCOMPLETE: <steps>" (exit 1).
-# Full outputs stay in the printed scratch dir.
-F=${1:?usage: bash check.sh <doc.hwpx> [hwpforge-binary]}
-HF=${2:-hwpforge}
+# Everything the verdict needs is printed. The scratch dir (a copy of the document's text) is deleted on
+# exit; KEEP=1 keeps it for inspection.
+if [ $# -ne 1 ] || [ -z "$1" ]; then
+  echo "usage: bash check.sh <doc.hwpx>" >&2
+  echo "CHECK INCOMPLETE: usage"; exit 1
+fi
+F=$1
+# A leading "-" would be read as an option.
+case $F in -*) F=./$F ;; esac
 D=$(mktemp -d) || { echo "CHECK INCOMPLETE: mktemp"; exit 1; }
-echo "scratch: $D"
+if [ "${KEEP:-}" = 1 ]; then echo "scratch: $D (kept)"; else trap 'command rm -rf -- "$D"' EXIT; fi
 FAILED=""
 fail() { FAILED="$FAILED $1"; }
 # grep that treats "no match" (exit 1) as success; only exit >= 2 is an error.
@@ -19,12 +28,11 @@ run() {
   return $rc
 }
 
-run validate "$HF" validate "$F" --json; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] || fail validate # 3 = document invalid (a finding, not a failed check)
-run fields "$HF" fields "$F" --json || fail fields
-run plan "$HF" stamp-plan "$F" --json || fail plan
-run inspect "$HF" inspect "$F" --json || fail inspect
-run tojson "$HF" to-json "$F" -o "$D/doc.json" --json || fail tojson
-run pdf "$HF" to-pdf "$F" -o "$D/doc.pdf" --discovery platform --json # failure = layout unverified, not incomplete
+run validate hwpforge validate "$F" --json; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] || fail validate # 3 = document invalid (a finding, not a failed check)
+run fields hwpforge fields "$F" --json || fail fields
+run plan hwpforge stamp-plan "$F" --json || fail plan
+run tojson hwpforge to-json "$F" -o "$D/doc.json" --json || fail tojson
+run pdf hwpforge to-pdf "$F" -o "$D/doc.pdf" --discovery platform --json # failure = layout unverified, not incomplete
 
 echo "-- validate"
 jq -c '{valid, sections, errors, warnings: (.warnings // [] | group_by(.code) | map({code: .[0].code, count: length}))}' "$D/validate.json" || fail validate-read
@@ -127,22 +135,50 @@ echo "-- local paths (확인 필요): $(g -c '' "$D/localpaths.txt")"; cat "$D/l
 
 M=$(jq '[.. | objects | select(has("Memo"))] | length' "$D/doc.json") || fail memo-count
 echo "-- memos: $M"
-g ' memo[ :]' "$D/paras.txt" || fail memo-lines
+# A memo line is one whose location (the part before the first ":") has a memo segment.
+g -E '^[^:]* memo[0-9]*[ :]' "$D/paras.txt" || fail memo-lines
 
-count() { g -o "$1" "$D/paras.txt" | g -c . ; }
-echo "-- boxes: □ $(count '□') · ☑ $(count '☑') · ■ $(count '■') · √ $(count '√') · ✓ $(count '✓')"
-g -E '[□☑■√✓]' "$D/paras.txt" > "$D/boxes.txt" || fail boxes
-echo "box lines: $(g -c '' "$D/boxes.txt")"; cat "$D/boxes.txt"
+# Choice marks. Byte-safe: multibyte characters appear only as literals or in alternations, never inside
+# [...], so a C-locale awk matches the same text. Bracket forms are counted first and removed, so "[✓]" is not
+# also a "✓". Unchecked: □, [ ] (one or more spaces). Checked: ☑ ■ √ ✓, and [○] [●] [◯] [✓] [√] [O] [o] [V] [v]
+# [X] [x] (spaces allowed inside). Bare ○ ◯ (open) and ● (filled) are choice marks only when a paragraph, or a
+# table cell across its paragraphs, holds two or more of them; one alone is taken as a bullet.
+awk -v O="$D/boxes.txt" '
+  {
+    loc = $0; sub(/: .*/, "", loc); t = $0; sub(/^[^:]*: /, "", t)
+    k = loc; if (loc ~ / c[0-9]+ p[0-9]+$/) sub(/ p[0-9]+$/, "", k)
+    line[NR] = $0; key[NR] = k
+    bc = gsub(/\[( |　)*(○|●|◯|✓|√|O|o|V|v|X|x)( |　)*\]/, " ", t)
+    bu = gsub(/\[( |　)+\]/, " ", t)
+    n1 = gsub(/□/, "&", t); n2 = gsub(/☑/, "&", t); n3 = gsub(/■/, "&", t); n4 = gsub(/√/, "&", t); n5 = gsub(/✓/, "&", t)
+    op[NR] = gsub(/○|◯/, "&", t); fi[NR] = gsub(/●/, "&", t); circ[k] += op[NR] + fi[NR]
+    tbc += bc; tbu += bu; t1 += n1; t2 += n2; t3 += n3; t4 += n4; t5 += n5
+    box[NR] = bc + bu + n1 + n2 + n3 + n4 + n5
+  }
+  END {
+    for (i = 1; i <= NR; i++) {
+      c = (circ[key[i]] >= 2 && op[i] + fi[i] > 0)
+      if (c) { co += op[i]; cf += fi[i] }
+      if (box[i] || c) { print line[i] > O; nl++ }
+    }
+    printf "-- boxes: unchecked □ %d · [ ] %d | checked ☑ %d · ■ %d · √ %d · ✓ %d · [✓] %d | choice marks ○ %d · ● %d\n", t1, tbu, t2, t3, t4, t5, tbc, co, cf
+    printf "box lines: %d\n", nl
+  }' "$D/paras.txt" || fail boxes
+touch "$D/boxes.txt"; cat "$D/boxes.txt"
 
 echo "-- plan"
 jq -c '{candidates: ([.candidates[] | if .pattern == "checkbox" then "checkbox " + .marker else .pattern end] | group_by(.) | map({(.[0]): length}) | add // {}), cells: (.cells | length), skipped_tables: (.skipped_tables | length)}' "$D/plan.json" || fail plan-read
+# A table whose grid stamp-plan could not build is not checked for empty cells: the cell check is incomplete.
+SK=$(jq '.skipped_tables // [] | length' "$D/plan.json") || fail plan-read
+jq -r '.skipped_tables // [] | .[] | "skipped table\(.table) \(.path): \(.error)"' "$D/plan.json" || fail plan-read
+[ "$SK" = 0 ] || fail cell-coverage
 jq -r '.cells[] | "cell table\(.table) r\(.at.row)c\(.at.col)\(if .guarded then " GUARDED" else "" end): \(.labels | map("\(.direction)=\(.normalized)\(if .guard then " [guard \(.guard)]" else "" end)") | join(" / "))"' "$D/plan.json" > "$D/cells.txt" || fail cells
 echo "cell lines: $(g -c '' "$D/cells.txt")"; cat "$D/cells.txt"
 
 # Removal/example instructions anywhere. A ※ line is joined with the NEXT paragraph of the same container
 # (same path, paragraph index + 1); a joined next line is not printed again.
 awk -v G="$D/guidance.txt" -v N="$D/notes.txt" '
-  BEGIN { re = "작성 ?요령|작성 ?방법|작성 ?예시|작성례|기재 ?요령|\\(예:|예시\\)|<예시>|삭제 ?후|삭제하고|삭제하[여십]|삭제해 ?주|삭제 ?바랍|삭제 ?바람|(제출|작성) ?(전|후|시)에? ?(반드시 )?(삭제|제거)|제거 ?후|제거하고|제거해 ?주|제거 ?바랍|지우고|지운 ?후|지워 ?주" }
+  BEGIN { re = "작성 ?요령|작성 ?방법|작성 ?예시|작성례|기재 ?요령|\\(예:|예시\\)|<예시>|삭제 ?후|삭제하고|삭제하(여|십)|삭제해 ?주|삭제 ?바랍|삭제 ?바람|(제출|작성) ?(전|후|시)(에)? ?(반드시 )?(삭제|제거)|제거 ?후|제거하고|제거해 ?주|제거 ?바랍|지우고|지운 ?후|지워 ?주" }
   {
     line[NR] = $0; loc = $0; sub(/: .*/, "", loc)
     k = loc; sub(/ p[0-9]+$/, "", k); n = loc; sub(/.* p/, "", n)
@@ -164,7 +200,9 @@ touch "$D/guidance.txt" "$D/notes.txt"
 echo "-- guidance (확인 필요): $(g -c '' "$D/guidance.txt")"; cat "$D/guidance.txt"
 echo "-- ※ only (참고): $(g -c '' "$D/notes.txt")"; cat "$D/notes.txt"
 
-echo "-- pdf"; cat "$D/pdf.json"; echo; echo "pdf error codes: $(codes "$D/pdf.err")"
+# Not in the gate: a render failure leaves the layout unverified. Any cause is reported with its code.
+echo "-- pdf"; cat "$D/pdf.json"; echo
+jq -R -r 'fromjson? | select(.status == "error") | "pdf failed: \(.code) cause=\(.cause.code // "none")\(if .cause.kind then " kind=\(.cause.kind)" else "" end)\(if .cause.location then " at \(.cause.location)" else "" end) — \(.message)"' "$D/pdf.err"
 
 if [ -z "$FAILED" ]; then echo "CHECK COMPLETE"; exit 0; fi
 echo "CHECK INCOMPLETE:$FAILED"; exit 1

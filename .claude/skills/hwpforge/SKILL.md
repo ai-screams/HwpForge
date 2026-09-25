@@ -6,7 +6,7 @@ compatibility: "Needs one of, version 0.16.6 or later: the hwpforge CLI, the Hwp
 metadata:
   author: ai-screams
   version: "0.3.0"
-allowed-tools: "Bash(hwpforge *)"
+allowed-tools: "Bash(hwpforge inspect *) Bash(hwpforge outline *) Bash(hwpforge read *) Bash(hwpforge fields *) Bash(hwpforge validate *) Bash(hwpforge stamp-plan *) Bash(hwpforge schema *) Bash(hwpforge templates *) Bash(hwpforge --version)"
 ---
 
 # HwpForge
@@ -96,19 +96,19 @@ Stdout nests the report under `.diff`. The `diff -o report.json` file and Python
 ## PDF (details: [pdf.md](references/pdf.md))
 
 - **Fonts:** use `--discovery platform` (your `--font-dir`s, the 한컴오피스 bundle, then system fonts). The default `explicit` searches only `--font-dir` and fails `FONT_UNRESOLVED` without one. Use `--font-dir DIR` on Linux, CI or air-gapped hosts.
-- **Not `--degraded` for fidelity.** It renders missing bold/italic or script faces as regular and skips bad images. It does not fix an unresolved body font.
-- **Needs the layout cache 한컴 saved.** A 한컴-saved `.hwpx`, a `.hwp`, or `convert-hwp5 --carry-layout-cache` output have one. `convert` and `from-json` output do not (`NO_RENDERABLE_CACHE`). After `patch`, old line breaks stay (`LINE_OVERFLOW`). After `fill`, `insert-para` or `delete-para`, plain paragraphs without cache are skipped (`PARAGRAPH_SKIPPED`), but a table without cache fails the render (`MISSING_LAYOUT_CACHE`). For edited content, re-save in 한컴 first.
+- **Not `--degraded` for fidelity.** It renders missing bold/italic faces as regular, missing characters as tofu, mixed per-script fonts with the 한글 one, and skips bad images. It does not fix an unresolved body font.
+- **Needs the layout cache 한컴 saved, and content it can replay.** A 한컴-saved `.hwpx`, a `.hwp` saved with its layout, or `convert-hwp5 --carry-layout-cache` output have the cache. `convert` and `from-json` output do not (`NO_RENDERABLE_CACHE`). Even with the cache, 0.16.6 cannot render a paragraph holding a 누름틀 or other field, a memo, footnote, equation, hyperlink, cross-reference, chart, drawn shape or anchored text box (`INVALID_CACHE`), or a table with a non-default position (`UNSUPPORTED_CONTENT`). Re-saving in 한컴 does not change that; tell the user to export the PDF from 한컴. After `patch`, old line breaks stay (`LINE_OVERFLOW`). After `fill`, `insert-para` or `delete-para`, plain paragraphs without cache are skipped (`PARAGRAPH_SKIPPED`), but a table without cache fails the render (`MISSING_LAYOUT_CACHE`). For edited content, re-save in 한컴 first; that restores a missing cache only.
 
 ## Errors (main codes: [errors.md](references/errors.md))
 
 With `--json` a failure is one object on stderr: `{"status":"error","code","message","hint"?}`. `to-pdf` adds `cause: {stage, code, kind?, location?}`. A malformed command line prints usage text and exits 2. Branch on `code`, then follow `hint`.
 
-| Code                                                 | Next step                                                                                             |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `INPUT_ENTRIES_NOT_CARRIED`, `UNCARRIED_ZIP_ENTRIES` | 한컴-saved input → `fill`, or `to-json --section N` → `patch`                                         |
-| `FIELD_NOT_FOUND` / `EMPTY_FIELD_VALUE`              | re-run `fields` / clearing is not supported                                                           |
-| `PATCH_FAILED`                                       | "structural change detected" (paragraph count changed) or "missing preservation metadata" (re-export) |
-| `PDF_RENDER_FAILED`                                  | `cause.code`: `FONT_UNRESOLVED` → `--discovery platform`; `NO_RENDERABLE_CACHE` → re-save in 한컴     |
+| Code                                                 | Next step                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `INPUT_ENTRIES_NOT_CARRIED`, `UNCARRIED_ZIP_ENTRIES` | 한컴-saved input → `fill`, or `to-json --section N` → `patch`                                                                                                                                                                                                                                     |
+| `FIELD_NOT_FOUND` / `EMPTY_FIELD_VALUE`              | re-run `fields` / clearing is not supported                                                                                                                                                                                                                                                       |
+| `PATCH_FAILED`                                       | "structural change detected" (paragraph count changed) or "missing preservation metadata" (re-export)                                                                                                                                                                                             |
+| `PDF_RENDER_FAILED`                                  | branch on `cause.code`, not `hint`: `FONT_UNRESOLVED` → `--discovery platform`; `NO_RENDERABLE_CACHE`, `MISSING_LAYOUT_CACHE` → re-save in 한컴; `INVALID_CACHE`, `UNSUPPORTED_CONTENT` → the measured kinds are not fixed by re-saving; others: report the message ([pdf.md](references/pdf.md)) |
 
 Exit codes: 0 ok · 1 refused input or missing file · 2 codec/schema failure or bad command line · 3 `validate` only. Warning shapes per command, interface-specific codes and size limits are in errors.md.
 
