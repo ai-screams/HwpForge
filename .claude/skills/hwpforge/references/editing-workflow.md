@@ -1,191 +1,112 @@
-# JSON Round-Trip Editing Workflow
+# JSON Round-Trip Editing
 
-Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it back.
-Use this (NOT Markdown conversion) when you must preserve images, styles, tables, and layout.
-
-## Two edit modes — choose correctly
-
-| Mode          | Command            | Use for                                                                                     | Limit                                                                                 |
-| ------------- | ------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| **Text-only** | `patch`            | changing text inside existing paragraphs and **table cells** (fill placeholders, fix typos) | **cannot** add/remove paragraphs — returns `PATCH_FAILED: structural change detected` |
-| **Rebuild**   | `from-json --base` | adding/removing paragraphs, structural edits                                                | rebuilds from the model; complex 한컴 form elements may be lost (verify in 한컴)      |
-
-If you only change existing text → `patch` (safest, preserves everything exactly).
-If you add or remove paragraphs → `from-json --base`.
+Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it back. Use this (not Markdown conversion) when images, styles, tables and layout must survive. For 누름틀 use `fill`, and for grid or paragraph edits on files 한컴 did not save see [structural-edit.md](structural-edit.md). Every edit ends with the verify loop in SKILL.md ("Verify every edit").
 
 ## Which surface a 한컴-saved document accepts
 
-This is the table to check before picking an edit surface for a real government form.
+A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce — `Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Nearly every `.hwpx` a person opened and saved in 한컴 has them. The surfaces that re-encode the whole package refuse such a document **fail-closed** instead of dropping them.
 
-A document 한컴 has saved carries package entries HwpForge's encoder does not reproduce —
-`Preview/PrvText.txt`, `Preview/PrvImage.png`, `META-INF/container.rdf`. Practically every
-`.hwpx` that has ever been opened and saved in 한컴 has them. The four surfaces that re-encode
-the whole package refuse such a document **fail-closed** instead of dropping those entries.
+| Surface                      | 한컴-saved document | CLI result                                                                |
+| ---------------------------- | ------------------- | ------------------------------------------------------------------------- |
+| `fill`                       | works               | writes the named 누름틀, keeps every other entry byte for byte            |
+| `patch`                      | works               | text inside existing paragraphs and cells; package preserved              |
+| `set-cell`                   | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1       |
+| `insert-para`, `delete-para` | refused             | `UNCARRIED_ZIP_ENTRIES` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1           |
+| `stamp`                      | refused             | `INPUT_ENTRIES_NOT_CARRIED` (or `INPUT_NOT_ROUNDTRIP_SAFE`), exit 1       |
+| `from-json --base`           | lossy               | succeeds; inherits images, drops the entries above and every layout cache |
+| `restyle` (MCP, Python)      | lossy               | succeeds; re-encodes like `from-json` — see [templates.md](templates.md)  |
 
-| Surface            | 한컴-saved document | What happens                                                                                         |
-| ------------------ | ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `fill`             | works               | preserve-first: writes the named 누름틀, keeps every other entry byte for byte                       |
-| `patch`            | works               | text-only inside existing paragraphs and cells; the package is preserved                             |
-| `set-cell`         | refused             | `INPUT_ENTRIES_NOT_CARRIED`, or `INPUT_NOT_ROUNDTRIP_SAFE` when round-trip is unprovable             |
-| `insert-para`      | refused             | `UNCARRIED_ZIP_ENTRIES`                                                                              |
-| `delete-para`      | refused             | `UNCARRIED_ZIP_ENTRIES`                                                                              |
-| `stamp`            | refused             | `INPUT_ENTRIES_NOT_CARRIED` / `INPUT_NOT_ROUNDTRIP_SAFE`                                             |
-| `from-json --base` | lossy               | rebuilds; `--base` inherits images, but the entries above are dropped without a warning of their own |
+The refusal codes differ by interface — Python and MCP name them differently; see [errors.md](errors.md).
 
-**The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, and change any other
-text with `to-json --section N` → edit `content.Text` → `patch`. Both preserve the package.
-Reach for `from-json --base` only when you genuinely must change structure, and open the result
-in 한컴 before submitting it.
+**The route that works on a form 한컴 wrote:** fill named 누름틀 with `fill`, change any other text (including table cells) with `to-json --section N` → edit `content.Text` → `patch`. `from-json --base` is **never** a way around a refusal from `set-cell`, `insert-para`, `delete-para` or `stamp`. Use it only when the user explicitly asks for a structural change to that file **and** accepts that the result is a new file that loses the 한컴 package entries and layout caches, and that they must check it in 한컴.
 
-`stamp` and the grid/structural surfaces are for templates HwpForge itself produced, or for
-documents whose lossless round-trip it can prove. Run the surface once on a copy to find out —
-the refusal is immediate and writes nothing.
+Because `fill` and `patch` keep every other entry byte for byte, `Preview/PrvText.txt` (the preview text file managers and 한컴 show before opening) still holds the old text after the edit (measured: fill and patch both). 한컴 refreshes it on the next save; mention it if the user relies on previews.
 
-Python (`fill`/`patch` vs `set_cell`/`insert_para`/`delete_para`/`stamp`) and the MCP tools of
-the same names inherit exactly this table; Python reports every refusal as
-`INPUT_ENTRIES_NOT_CARRIED` or `INPUT_NOT_ROUNDTRIP_SAFE`.
+A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
 
-## Step-by-step
+## Two write-back modes
 
-### 1. Inspect — understand structure (always first)
+| Mode      | Command            | Can do                                                                                          | Cannot do                                                                                                                             |
+| --------- | ------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves the package and layout caches | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                   |
+| Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                          | keep 한컴 package entries, layout caches, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
+
+## Steps
+
+### 1. Locate the target
 
 ```bash
-hwpforge inspect document.hwpx --json
+hwpforge outline document.hwpx --json          # headings, tables (ordinal + at {section, para}), fields
+hwpforge read document.hwpx --section 0 --paras 0..5
 ```
 
-Returns section count, per-section paragraph counts, and table/image/chart locations.
-
-### 2. Export to JSON
+### 2. Export
 
 ```bash
 hwpforge to-json document.hwpx --section 0 -o section0.json   # one section (for patch)
-hwpforge to-json document.hwpx -o full.json                   # whole document (for rebuild)
-hwpforge to-json document.hwpx --section 0 --no-styles -o section0.json  # smaller JSON
+hwpforge to-json document.hwpx -o full.json                   # whole document (for from-json)
+hwpforge to-json document.hwpx --section 0 --no-styles -o section0.json   # smaller
 ```
 
-`-o/--output` is **required** — there is no stdout export.
+`-o` is required — there is no stdout export. A section export has the top-level keys `section_index`, `section`, `styles` (omitted with `--no-styles`) and `preservation`; paragraphs carry `layout_cache`, table cells carry `addr`. A full export is `{"document": {"sections": [...]}, "styles": {...}}`. `hwpforge schema exported-section` / `exported-document` print the JSON Schemas.
 
 ### 3. Edit the JSON
 
-Section export (`--section`) follows `ExportedSection`:
+Edit the exported file in place and write it back whole — `patch` replaces the entire section, so the file must keep every existing paragraph.
 
-```jsonc
-{
-  "section_index": 0,
-  "section": {
-    "paragraphs": [
-      {
-        "runs": [
-          { "content": { "Text": "본문 텍스트입니다." }, "char_shape_id": 7 },
-        ],
-        "para_shape_id": 20,
-        "column_break": false,
-        "page_break": false,
-        // "style_id" and "heading_level" are OPTIONAL — present only on some paragraphs
-      },
-    ],
-  },
-  "styles": {},
-}
-```
+| Safe to edit                                                                      | Do not                                                                              |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `…runs[].content.Text`                                                            | remove or hand-edit `preservation` (`PATCH_FAILED … missing preservation metadata`) |
+| table cell text: `…content.Table.rows[].cells[].paragraphs[].runs[].content.Text` | change `section_index` (`SECTION_INDEX_MISMATCH`)                                   |
+| `char_shape_id` / `para_shape_id`, but only to IDs already in this document       | invent style IDs, or edit the `styles` registry (use `--preset` for new documents)  |
+|                                                                                   | touch `layout_cache` or cell `addr` — leave them as exported                        |
 
-Full export (no `--section`) follows `ExportedDocument`: `{ "document": { "sections": [ … ] }, "styles": { } }`
-where each section has the same `paragraphs` shape.
+Re-export with the same hwpforge version you patch with. `style_id` and `heading_level` are optional per paragraph — copy them only if the source paragraph has them.
 
-**Safe to edit:**
-
-- `…runs[].content.Text` — the visible text (text-only edits work with `patch`)
-- `…runs[].char_shape_id`, `…para_shape_id` — but only to **IDs that already exist** in this document
-- Table cell text: `…content.Table.rows[].cells[].paragraphs[].runs[].content.Text`
-
-**Do not:**
-
-- Invent new `char_shape_id` / `para_shape_id` / `style_id` values — copy from a neighboring paragraph
-- Hand-edit the `styles` registry — change styles via `--preset` instead
-- Change `section_index` — it must match the `--section` argument in `patch`
-
-### 4a. Write back — text-only (`patch`)
+### 4a. Write back text-only
 
 ```bash
-hwpforge patch document.hwpx --section 0 section0.json -o document.hwpx
+hwpforge patch document.hwpx --section 0 section0.json -o document.edited.hwpx --json
 ```
 
-`patch` **replaces the entire section**, so `section0.json` must contain ALL existing paragraphs
-plus your edits (read-modify-write the full section, not a delta). The first positional argument
-(base HWPX) supplies image/OLE inheritance. If you added or removed paragraphs, `patch` fails with
-`structural change detected` → use 4b instead.
+The first positional argument is the base whose package is preserved.
 
-### 4b. Write back — structural rebuild (`from-json --base`)
+### 4b. Write back with a rebuild
+
+Only under SKILL.md rule 5: the user explicitly asked for this structural change and accepted a new, lossy output that they will check in 한컴. Never as a way around a refusal.
 
 ```bash
-hwpforge from-json full.json -o document.hwpx --base document.hwpx
+hwpforge from-json full.json -o document.edited.hwpx --base document.hwpx --json
 ```
 
-Use after adding/removing paragraphs. `--base` inherits images from the original.
+`warnings` is always present in `from-json` output. If the input had layout caches, expect `["layout cache dropped at section[0].para[0] …", …]` (for a cacheless input it is `[]`): the rebuild never re-emits layout caches, so the output cannot go through `to-pdf` until 한컴 re-saves it. If you changed a table's shape (rows, columns, merges), delete the `addr` fields of that table's cells first — a stale `addr` is refused with `GRID_ADDR_INVALID` (a missing `addr` is not checked).
 
 ### 5. Verify
 
-```bash
-hwpforge validate document.hwpx       # still passes Document::validate?
-hwpforge inspect document.hwpx        # paragraph/table counts as expected?
-hwpforge to-md document.hwpx -o check.md   # eyeball the content
-```
+Run the loop in SKILL.md: `validate`, then `diff document.hwpx document.edited.hwpx --json` against the expected-delta table.
 
-## Common patterns
+## Code patterns
 
-### Replace text in a paragraph (text-only → patch)
+Replace text in a paragraph (for `patch`):
 
 ```python
-for para in data["section"]["paragraphs"]:
+import json
+d = json.load(open("section0.json"))
+for para in d["section"]["paragraphs"]:
     for run in para.get("runs", []):
         c = run.get("content", {})
         if "Text" in c and "기존 텍스트" in c["Text"]:
             c["Text"] = c["Text"].replace("기존 텍스트", "새 텍스트")
+json.dump(d, open("section0.json", "w"), ensure_ascii=False)
 ```
 
-### Fill table cells (text-only → patch)
+Fill table cells by logical grid address (for `patch` — the only cell route on a 한컴-saved file): the tested all-or-nothing script, which selects cells by `addr`, refuses multi-run or multi-paragraph cells and writes nothing unless every requested value lands exactly once, is Recipe B in [template-fill.md](template-fill.md).
 
-Tables usually repeat the same placeholder (e.g. `(작성)`) in many cells, so matching by text
-would write the same value everywhere. Fill **positionally**: find each row by its label cell,
-then set its columns by index.
+Add a paragraph (full-document JSON, for `from-json --base`; on a file 한컴 did not save, `insert-para` is the byte-preserving alternative):
 
 ```python
-def cell_text(cell):
-    for cp in cell.get("paragraphs", []):
-        for r in cp.get("runs", []):
-            if "Text" in r.get("content", {}):
-                return r["content"]["Text"]
-    return ""
-
-def set_cell(cell, value):
-    for cp in cell.get("paragraphs", []):
-        for r in cp.get("runs", []):
-            if "Text" in r.get("content", {}):
-                r["content"]["Text"] = value
-                return
-
-BUDGET = {"인건비": ["120,000", "130,000"], "재료비": ["30,000", "20,000"]}  # label → columns
-
-for para in data["section"]["paragraphs"]:
-    for run in para.get("runs", []):
-        tbl = run.get("content", {}).get("Table")
-        if not tbl:
-            continue
-        for row in tbl["rows"]:
-            cells = row["cells"]
-            cols = BUDGET.get(cell_text(cells[0]))   # cells[0] = row label
-            if cols:
-                for i, value in enumerate(cols, start=1):
-                    if i < len(cells):
-                        set_cell(cells[i], value)
-```
-
-### Add a new paragraph (structural → from-json --base)
-
-```python
-# Operate on the FULL document JSON (to-json without --section)
 paras = data["document"]["sections"][0]["paragraphs"]
-ref = paras[-1]  # copy a neighboring paragraph's style references
+ref = paras[-1]  # copy a neighbouring paragraph's style references
 new_para = {
     "runs": [{"content": {"Text": "추가할 내용입니다."},
               "char_shape_id": ref["runs"][0]["char_shape_id"]}],
@@ -196,43 +117,8 @@ new_para = {
 if "style_id" in ref:        # optional — copy only if present
     new_para["style_id"] = ref["style_id"]
 paras.append(new_para)
-# then: hwpforge from-json full.json -o document.hwpx --base document.hwpx
 ```
 
-## Schema
+## Large documents
 
-```bash
-hwpforge schema exported-document    # full-document JSON shape
-hwpforge schema exported-section     # single-section JSON shape
-```
-
-## Verification loop (E5)
-
-Every edit surface (`fill`, `set-cell`, `stamp`, `patch`, `from-json`) should be followed by:
-
-```bash
-hwpforge diff base.hwpx edited.hwpx --json     # or -o report.json for the full report
-```
-
-Expected deltas per surface:
-
-| Edit        | Expected semantic diff                                       |
-| ----------- | ------------------------------------------------------------ |
-| `fill`      | `field_values` only (value_changed per name)                 |
-| `set-cell`  | `cells` only (`{table, row, col, before, after}`)            |
-| `stamp`     | `field_values` added + marker/cell text changes at the spots |
-| `patch`     | `paragraphs`/`cells` text changes you made                   |
-| `from-json` | your structural changes + `structure` count entries          |
-
-Anything else in the report (unexpected `raw` entries, extra paragraphs, package entries
-added/removed) means the edit did more than intended — stop and re-check instead of
-shipping. `package.changed` listing the section XML is normal for any re-encoded surface;
-the report's `note` states what is not compared (entry-internal layout caches).
-
-## Tips
-
-- Outline before, diff after.
-- Use `--section N` to minimize JSON size (token efficiency) for text-only edits.
-- Back up the original before writing.
-- Government / 한컴-authored templates: prefer `patch` (preserves everything); if you must
-  rebuild, open the result in 한컴 and check it before submitting.
+Instead of exporting everything, use `outline` + `read --section N --paras A..B` to read and `to-json --section N` to edit one section at a time. MCP `hwpforge_to_json` returns JSON inline only while the response stays under 1 MB (in practice about 750–800 KB of document JSON); beyond that it fails `OUTPUT_TOO_LARGE` — pass `output_path`. Input limits per interface (file 100 MB, stdin/inline 50 MB, Python `from_bytes` none): [errors.md](errors.md).

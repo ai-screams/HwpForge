@@ -55,7 +55,7 @@
 hwpforge convert official.md -o official.hwpx --preset default
 ```
 
-CLI `convert`는 `default`(함초롬돋움 10pt, A4)/`modern`/`classic`/`latest` 네 프리셋을 모두 받아들이고, 각각 카탈로그에 정의된 글꼴을 적용합니다. MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`도 동일하게 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
+`--preset`은 `default`(함초롬돋움 10pt, A4)·`modern`·`classic`·`latest` 중 하나입니다. 글꼴과 기존 문서의 `restyle`(손실 있음)은 [templates.md](templates.md).
 
 ## YAML 프론트매터
 
@@ -93,7 +93,7 @@ date: "2026. 3. 9."
    가. 도입 개요
 
    1. 사업명: AI 기반 공공기관 문서 관리 시스템 구축
-   2. 사업 기간: 2026. 4. 1. ~ 2026. 12. 31.
+   2. 사업 기간: 2026. 4. 1.–2026. 12. 31.
    3. 대상 기관: 전 중앙행정기관 및 소속 기관
 
    나. 협조 요청 내용
