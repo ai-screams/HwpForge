@@ -1005,7 +1005,7 @@ fn hwp5_to_hwpx_user_sample_memo_basic_preserves_body_and_carries_memo() {
         "memo must emit <hp:fieldBegin type=\"MEMO\"> in HWPX"
     );
     assert!(
-        section_xml.contains("Claude야 여기가 메모야"),
+        section_xml.contains("쇠부리야 여기가 메모야"),
         "memo body content must carry into the <hp:subList>"
     );
 
