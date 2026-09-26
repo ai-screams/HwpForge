@@ -682,7 +682,7 @@ fn strip_line_segs_from(xml: &str, from_index: usize) -> Result<String, Structur
     for span in spans.into_iter().skip(from_index) {
         // Depth-aware: `<hp:linesegarray>` is a direct child of `<hp:p>`; a
         // substring search would wrongly hit a cell paragraph's cache first.
-        let lsa = collect_direct_child_outer_spans(xml, span.clone(), b"hp:linesegarray")
+        let lsa = collect_direct_child_outer_spans(xml, span.clone(), "hp:linesegarray")
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         removals.extend(lsa);
     }
@@ -730,8 +730,8 @@ fn renumber_paragraph_ids(xml: &str) -> Result<String, StructuralEditError> {
 /// Collects the outer byte spans of a section's direct-child `<hp:p>` elements.
 fn paragraph_spans(xml: &str) -> Result<Vec<std::ops::Range<usize>>, StructuralEditError> {
     let root =
-        find_root_span(xml, b"hs:sec").map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-    collect_direct_child_outer_spans(xml, root, b"hp:p")
+        find_root_span(xml, "hs:sec").map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    collect_direct_child_outer_spans(xml, root, "hp:p")
         .map_err(|e| StructuralEditError::Codec(e.to_string()))
 }
 

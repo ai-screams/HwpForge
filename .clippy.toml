@@ -5,3 +5,13 @@
 avoid-breaking-exported-api = false
 cognitive-complexity-threshold = 30
 type-complexity-threshold = 500
+
+# quick-xml serde decodes of HWPX parts must go through
+# `hwpforge_smithy_hwpx::decoder::xml_from_str`, which pins the recursion and
+# namespace-binding limits. Only that crate deserializes with quick-xml; its
+# unit-test modules and integration tests that exercise quick-xml directly opt
+# out with `#[allow(clippy::disallowed_methods)]`. (Clippy reads only the
+# nearest config file, so this lives here rather than in a crate-local one.)
+disallowed-methods = [
+  { path = "quick_xml::de::from_str", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
+]

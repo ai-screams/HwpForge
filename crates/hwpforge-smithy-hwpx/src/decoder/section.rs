@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use crate::decoder::xml_from_str;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnLine, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
@@ -21,7 +22,6 @@ use hwpforge_foundation::{
     ApplyPageType, BorderLineType, CharShapeIndex, Color, HwpUnit, PageNumberPosition,
     ParaShapeIndex, StyleIndex, TextDirection,
 };
-use quick_xml::de::from_str;
 
 use crate::color::parse_hex_color_raw;
 use crate::error::{HwpxError, HwpxResult};
@@ -141,7 +141,7 @@ pub fn parse_section(
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
     let xml = preserve_ws_only_text(xml);
-    let section: HxSection = from_str(&xml)
+    let section: HxSection = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;

@@ -97,6 +97,13 @@ def convert_md(
 def from_json(text: str, *, base: Document | None = None) -> DocumentResult[EncodeReport]:
     """Build a document from the JSON that [`Document.to_json`][hwpforge.Document.to_json] exports.
 
+    When `base` is given it is decoded on the calling thread, under the same
+    limits as [`Document.open`][hwpforge.Document.open] describes: a
+    `header.xml` or `section*.xml` nested deeper than 224 XML levels
+    (provisional) or with more than 128 namespace bindings in scope is
+    rejected with ``DECODE_FAILED``, and the calling thread needs the stack
+    that page gives (1 MiB as measured) for deeply nested input.
+
     Args:
         text: The exported JSON.
         base: A document to take the style store and package parts from, for
@@ -110,7 +117,9 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
 
     Raises:
         HwpForgeError: If the JSON does not describe a document, or if it
-            carries a grid address that no longer matches.
+            carries a grid address that no longer matches. Also
+            ``DECODE_FAILED`` if `base` cannot be decoded, including when it
+            exceeds the nesting or namespace limits.
     """
     data, report = _hwpforge.from_json(text, base=None if base is None else base.to_bytes())
     return DocumentResult(Document(data), report)

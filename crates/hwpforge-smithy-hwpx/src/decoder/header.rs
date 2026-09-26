@@ -3,12 +3,12 @@
 //! Converts XML schema types (`HxCharPr`, `HxParaPr`, `HxFont`) into
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
+use crate::decoder::xml_from_str;
 use hwpforge_foundation::{
     BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
     HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
     TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
 };
-use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
@@ -46,7 +46,7 @@ pub struct HeaderParseResult {
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
-    let head: HxHead = from_str(xml)
+    let head: HxHead = xml_from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
     let begin_num = parse_begin_num(&head);
 

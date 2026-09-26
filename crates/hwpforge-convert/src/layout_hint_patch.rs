@@ -171,7 +171,7 @@ impl RawPackage {
 #[derive(Debug)]
 struct SectionXmlPatchState {
     hints: SectionLayoutHints,
-    element_stack: Vec<Vec<u8>>,
+    element_stack: Vec<String>,
     paragraph_stack: Vec<ParagraphLayoutHint>,
     table_stack: Vec<TableLayoutHint>,
 }
@@ -191,14 +191,14 @@ impl SectionXmlPatchState {
         event: BytesStart<'_>,
         writer: &mut Writer<W>,
     ) -> LayoutPatchResult<()> {
-        let local = local_name(event.name().as_ref()).to_vec();
-        if local.as_slice() == b"p" {
+        let local = local_name(event.name().as_ref()).to_string();
+        if local == "p" {
             self.push_paragraph_hint()?;
-        } else if local.as_slice() == b"tbl" {
+        } else if local == "tbl" {
             self.push_table_hint()?;
         }
 
-        let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
+        let event = self.patch_table_size_event(&local, event.into_owned())?;
         writer.write_event(Event::Start(event)).map_err(|e| LayoutPatchError::Package {
             detail: format!("write patched section xml: {e}"),
         })?;
@@ -211,8 +211,8 @@ impl SectionXmlPatchState {
         event: BytesStart<'_>,
         writer: &mut Writer<W>,
     ) -> LayoutPatchResult<()> {
-        let local = local_name(event.name().as_ref()).to_vec();
-        let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
+        let local = local_name(event.name().as_ref()).to_string();
+        let event = self.patch_table_size_event(&local, event.into_owned())?;
         writer.write_event(Event::Empty(event)).map_err(|e| LayoutPatchError::Package {
             detail: format!("write patched section xml: {e}"),
         })?;
@@ -224,8 +224,8 @@ impl SectionXmlPatchState {
         event: BytesEnd<'_>,
         writer: &mut Writer<W>,
     ) -> LayoutPatchResult<()> {
-        let local = local_name(event.name().as_ref()).to_vec();
-        if local.as_slice() == b"p" {
+        let local = local_name(event.name().as_ref()).to_string();
+        if local == "p" {
             self.pop_paragraph_hint()?;
         }
 
@@ -233,8 +233,8 @@ impl SectionXmlPatchState {
             LayoutPatchError::Package { detail: format!("write patched section xml: {e}") }
         })?;
 
-        self.pop_element(local.as_slice())?;
-        if local.as_slice() == b"tbl" {
+        self.pop_element(&local)?;
+        if local == "tbl" {
             self.table_stack.pop();
         }
         Ok(())
@@ -254,7 +254,7 @@ impl SectionXmlPatchState {
 
     fn patch_table_size_event(
         &self,
-        local: &[u8],
+        local: &str,
         event: BytesStart<'static>,
     ) -> LayoutPatchResult<BytesStart<'static>> {
         if !self.is_active_table_size_element(local) {
@@ -267,9 +267,8 @@ impl SectionXmlPatchState {
         rewrite_element_attr(event, "height", &height.to_string())
     }
 
-    fn is_active_table_size_element(&self, local: &[u8]) -> bool {
-        local == b"sz"
-            && self.element_stack.last().is_some_and(|parent| parent.as_slice() == b"tbl")
+    fn is_active_table_size_element(&self, local: &str) -> bool {
+        local == "sz" && self.element_stack.last().is_some_and(|parent| parent == "tbl")
     }
 
     fn active_table_height(&self) -> LayoutPatchResult<Option<i32>> {
@@ -304,17 +303,13 @@ impl SectionXmlPatchState {
         })
     }
 
-    fn pop_element(&mut self, local: &[u8]) -> LayoutPatchResult<()> {
+    fn pop_element(&mut self, local: &str) -> LayoutPatchResult<()> {
         let popped = self.element_stack.pop().ok_or_else(|| LayoutPatchError::Package {
             detail: "xml element stack underflow".into(),
         })?;
         if popped != local {
             return Err(LayoutPatchError::Package {
-                detail: format!(
-                    "xml element stack mismatch: opened '{}' closed '{}'",
-                    String::from_utf8_lossy(&popped),
-                    String::from_utf8_lossy(local)
-                ),
+                detail: format!("xml element stack mismatch: opened '{popped}' closed '{local}'"),
             });
         }
         Ok(())
@@ -357,26 +352,19 @@ fn rewrite_element_attr(
     target_attr: &str,
     new_value: &str,
 ) -> LayoutPatchResult<BytesStart<'static>> {
-    let name = String::from_utf8(event.name().as_ref().to_vec()).map_err(|e| {
-        LayoutPatchError::Package { detail: format!("element name is not valid UTF-8: {e}") }
-    })?;
-    let mut rebuilt = BytesStart::new(name);
+    let mut rebuilt = BytesStart::new(event.name().as_ref().to_string());
     let mut replaced = false;
 
     for attr in event.attributes().with_checks(false) {
         let attr = attr.map_err(|e| LayoutPatchError::Package {
             detail: format!("read xml attribute: {e}"),
         })?;
-        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
-            LayoutPatchError::Package { detail: format!("attribute key is not valid UTF-8: {e}") }
-        })?;
-        let value = if local_name(attr.key.as_ref()) == target_attr.as_bytes() {
+        let key: &str = attr.key.as_ref();
+        let value = if local_name(key) == target_attr {
             replaced = true;
             new_value
         } else {
-            std::str::from_utf8(attr.value.as_ref()).map_err(|e| LayoutPatchError::Package {
-                detail: format!("attribute value is not valid UTF-8: {e}"),
-            })?
+            &attr.value
         };
         rebuilt.push_attribute((key, value));
     }
@@ -388,8 +376,8 @@ fn rewrite_element_attr(
     Ok(rebuilt)
 }
 
-fn local_name(name: &[u8]) -> &[u8] {
-    name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
+fn local_name(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
 }
 
 #[cfg(test)]
@@ -683,7 +671,7 @@ mod tests {
             paragraphs: VecDeque::new(),
             tables: VecDeque::new(),
         });
-        let err = state.pop_element(b"run").unwrap_err();
+        let err = state.pop_element("run").unwrap_err();
         assert!(
             err.to_string().contains("underflow"),
             "empty element stack pop must give underflow error: {err}"
@@ -699,8 +687,8 @@ mod tests {
             paragraphs: VecDeque::new(),
             tables: VecDeque::new(),
         });
-        state.element_stack.push(b"p".to_vec());
-        let err = state.pop_element(b"run").unwrap_err();
+        state.element_stack.push("p".to_string());
+        let err = state.pop_element("run").unwrap_err();
         assert!(
             err.to_string().contains("mismatch"),
             "mismatched element names must give mismatch error: {err}"
@@ -714,14 +702,12 @@ mod tests {
         // An element without a "height" attribute gets one injected.
         let event = BytesStart::new("hp:sz").into_owned();
         let result = rewrite_element_attr(event, "height", "9999").expect("rewrite must succeed");
-        let xml = format!("<{} />", std::str::from_utf8(result.name().as_ref()).unwrap());
+        let name = result.name();
+        let xml = format!("<{} />", name.as_ref());
         // Attribute must be present in the rebuilt element.
         let attrs: Vec<_> = result.attributes().with_checks(false).filter_map(|a| a.ok()).collect();
         assert!(
-            attrs.iter().any(|a| {
-                std::str::from_utf8(a.key.as_ref()).unwrap_or("") == "height"
-                    && a.value.as_ref() == b"9999"
-            }),
+            attrs.iter().any(|a| { a.key.as_ref() == "height" && a.value == "9999" }),
             "injected 'height' attribute must be present; xml={xml}"
         );
     }

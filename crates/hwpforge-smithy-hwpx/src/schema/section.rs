@@ -2427,6 +2427,8 @@ pub struct HxPoint {
 // ── Tests ─────────────────────────────────────────────────────────
 
 #[cfg(test)]
+// Schema tests exercise quick-xml directly, without the decoder limits.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

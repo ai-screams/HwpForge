@@ -114,9 +114,9 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 let name = e.name();
                 let local = local_name(name.as_ref());
                 match local {
-                    b"plotArea" => in_plot_area = true,
-                    b"title" if !in_series => in_title = true,
-                    b"ser" => {
+                    "plotArea" => in_plot_area = true,
+                    "title" if !in_series => in_title = true,
+                    "ser" => {
                         in_series = true;
                         series_name.clear();
                         cat_values.clear();
@@ -127,13 +127,13 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                             stock_series_count += 1;
                         }
                     }
-                    b"f" if in_series => in_formula = true,
-                    b"tx" if in_series => in_tx = true,
-                    b"cat" if in_series => in_cat = true,
-                    b"val" if in_series && !in_xval && !in_yval => in_val = true,
-                    b"xVal" if in_series => in_xval = true,
-                    b"yVal" if in_series => in_yval = true,
-                    b"marker" if in_series => in_marker = true,
+                    "f" if in_series => in_formula = true,
+                    "tx" if in_series => in_tx = true,
+                    "cat" if in_series => in_cat = true,
+                    "val" if in_series && !in_xval && !in_yval => in_val = true,
+                    "xVal" if in_series => in_xval = true,
+                    "yVal" if in_series => in_yval = true,
+                    "marker" if in_series => in_marker = true,
                     _ => {
                         if in_plot_area {
                             if let Some(ct) = detect_chart_type(local) {
@@ -190,7 +190,7 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 );
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.decode().map(|s| s.to_string()).unwrap_or_default();
+                let text = e.to_string();
                 if text.is_empty() || in_formula {
                     // skip formula text (<c:f>Sheet1!...</c:f>)
                 } else if in_title && !in_series {
@@ -249,9 +249,9 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 let name = e.name();
                 let local = local_name(name.as_ref());
                 match local {
-                    b"plotArea" => in_plot_area = false,
-                    b"title" if in_title => in_title = false,
-                    b"ser" => {
+                    "plotArea" => in_plot_area = false,
+                    "title" if in_title => in_title = false,
+                    "ser" => {
                         // Finalize current series
                         if is_xy {
                             if xy_series_list.len() >= MAX_CHART_SERIES {
@@ -295,16 +295,16 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                         in_yval = false;
                         in_marker = false;
                     }
-                    b"f" => in_formula = false,
-                    b"tx" => in_tx = false,
-                    b"cat" => in_cat = false,
-                    b"val" if in_val => in_val = false,
-                    b"xVal" => in_xval = false,
-                    b"yVal" => in_yval = false,
-                    b"marker" => in_marker = false,
+                    "f" => in_formula = false,
+                    "tx" => in_tx = false,
+                    "cat" => in_cat = false,
+                    "val" if in_val => in_val = false,
+                    "xVal" => in_xval = false,
+                    "yVal" => in_yval = false,
+                    "marker" => in_marker = false,
                     _ => {
                         if in_chart_elem && detect_chart_type(local).is_some() {
-                            if local == b"stockChart" {
+                            if local == "stockChart" {
                                 in_stock_chart = false;
                             }
                             in_chart_elem = false;
@@ -372,9 +372,9 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
 }
 
 /// Strips the namespace prefix from an XML tag name (`c:barChart` → `barChart`).
-fn local_name(name: &[u8]) -> &[u8] {
-    match name.iter().position(|&b| b == b':') {
-        Some(pos) => &name[pos + 1..],
+fn local_name(name: &str) -> &str {
+    match name.split_once(':') {
+        Some((_, local)) => local,
         None => name,
     }
 }
@@ -383,8 +383,8 @@ fn local_name(name: &[u8]) -> &[u8] {
 fn get_val_attr(e: &quick_xml::events::BytesStart) -> Option<String> {
     e.attributes()
         .filter_map(|a| a.ok())
-        .find(|a| a.key.as_ref() == b"val")
-        .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
+        .find(|a| a.key.as_ref() == "val")
+        .map(|a| a.value.to_string())
 }
 
 /// Processes attributes on Start/Empty elements for barDir, grouping, legendPos, and sub-variants.
@@ -403,60 +403,60 @@ fn process_start_attrs(
     scatter_style: &mut Option<ScatterStyle>,
     show_markers: &mut Option<bool>,
     in_marker: bool,
-    local: &[u8],
+    local: &str,
 ) {
     match local {
-        b"barDir" => {
+        "barDir" => {
             if let Some(val) = get_val_attr(e) {
                 *bar_dir = Some(val);
             }
         }
-        b"grouping" => {
+        "grouping" => {
             if let Some(val) = get_val_attr(e) {
                 *grouping = parse_grouping(&val);
             }
         }
-        b"legendPos" => {
+        "legendPos" => {
             if let Some(val) = get_val_attr(e) {
                 *legend = parse_legend_pos(&val);
             }
         }
-        b"shape" => {
+        "shape" => {
             if let Some(val) = get_val_attr(e) {
                 *bar_shape = parse_bar_shape(&val);
             }
         }
-        b"explosion" => {
+        "explosion" => {
             if let Some(val) = get_val_attr(e) {
                 *explosion = val.parse::<u32>().ok();
             }
         }
-        b"ofPieType" => {
+        "ofPieType" => {
             if let Some(val) = get_val_attr(e) {
                 *of_pie_type = parse_of_pie_type(&val);
             }
         }
-        b"radarStyle" => {
+        "radarStyle" => {
             if let Some(val) = get_val_attr(e) {
                 *radar_style = parse_radar_style(&val);
             }
         }
-        b"wireframe" => {
+        "wireframe" => {
             if let Some(val) = get_val_attr(e) {
                 *wireframe = Some(val == "1");
             }
         }
-        b"bubble3D" => {
+        "bubble3D" => {
             if let Some(val) = get_val_attr(e) {
                 *bubble_3d = Some(val == "1");
             }
         }
-        b"scatterStyle" => {
+        "scatterStyle" => {
             if let Some(val) = get_val_attr(e) {
                 *scatter_style = parse_scatter_style(&val);
             }
         }
-        b"symbol" if in_marker => {
+        "symbol" if in_marker => {
             // Any symbol in a marker block means markers are shown
             *show_markers = Some(true);
         }
@@ -465,24 +465,24 @@ fn process_start_attrs(
 }
 
 /// Maps an OOXML element tag name to a `ChartType`.
-fn detect_chart_type(local: &[u8]) -> Option<ChartType> {
+fn detect_chart_type(local: &str) -> Option<ChartType> {
     match local {
-        b"barChart" => Some(ChartType::Bar),
-        b"bar3DChart" => Some(ChartType::Bar3D),
-        b"lineChart" => Some(ChartType::Line),
-        b"line3DChart" => Some(ChartType::Line3D),
-        b"pieChart" => Some(ChartType::Pie),
-        b"pie3DChart" => Some(ChartType::Pie3D),
-        b"doughnutChart" => Some(ChartType::Doughnut),
-        b"ofPieChart" => Some(ChartType::OfPie),
-        b"areaChart" => Some(ChartType::Area),
-        b"area3DChart" => Some(ChartType::Area3D),
-        b"scatterChart" => Some(ChartType::Scatter),
-        b"bubbleChart" => Some(ChartType::Bubble),
-        b"radarChart" => Some(ChartType::Radar),
-        b"surfaceChart" => Some(ChartType::Surface),
-        b"surface3DChart" => Some(ChartType::Surface3D),
-        b"stockChart" => Some(ChartType::Stock),
+        "barChart" => Some(ChartType::Bar),
+        "bar3DChart" => Some(ChartType::Bar3D),
+        "lineChart" => Some(ChartType::Line),
+        "line3DChart" => Some(ChartType::Line3D),
+        "pieChart" => Some(ChartType::Pie),
+        "pie3DChart" => Some(ChartType::Pie3D),
+        "doughnutChart" => Some(ChartType::Doughnut),
+        "ofPieChart" => Some(ChartType::OfPie),
+        "areaChart" => Some(ChartType::Area),
+        "area3DChart" => Some(ChartType::Area3D),
+        "scatterChart" => Some(ChartType::Scatter),
+        "bubbleChart" => Some(ChartType::Bubble),
+        "radarChart" => Some(ChartType::Radar),
+        "surfaceChart" => Some(ChartType::Surface),
+        "surface3DChart" => Some(ChartType::Surface3D),
+        "stockChart" => Some(ChartType::Stock),
         _ => None,
     }
 }

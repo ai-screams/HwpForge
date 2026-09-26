@@ -453,6 +453,16 @@ jobs:
         # 바로 위 `maturin develop --release` 가 만든 의존성 아티팩트를 재사용한다
         # (다시 빌드되는 것은 pyo3 와 이 크레이트뿐).
         run: make py-rust-test
+      - name: cargo nextest (HWPX decode stack contract, release)
+        # `HwpxDecoder::decode` 문서가 약속하는 "최적화 빌드는 1 MiB 스택이면
+        # 된다" 를 지키는 유일한 테스트다. 스택 요구량은 빌드 프로필에 달려서
+        # `#[cfg(not(debug_assertions))]` 로 묶여 있고, `Verify › Test` 의 test
+        # 프로필 실행에서는 빠진다. 바로 위 단계가 만든 release 의존성
+        # 아티팩트를 재사용하는 이 잡에서 그 한 개만 돌린다. 넘치면 테스트
+        # 프로세스가 abort 하므로 실패는 SIGABRT 로 보인다.
+        run: >-
+          cargo nextest run -p hwpforge-smithy-hwpx --cargo-profile release
+          -E 'test(xml_limit_release)'
       - name: Build candidate wheel (manylinux_2_28, x86_64)
         # 릴리스와 **같은 방식**으로 만든다: SHA 핀한 maturin-action 의
         # manylinux_2_28 컨테이너. 네이티브 ubuntu-22.04 링크로는 2_28 wheel 이
