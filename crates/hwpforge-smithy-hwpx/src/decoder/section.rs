@@ -5285,18 +5285,52 @@ mod tests {
 
 /// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
 /// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
-/// 사라진다. CDATA·문자 참조(`&#32;`)도 unescape 후 판정이라 살아남지 못한다
+/// 사라진다. 문자 참조(`&#32;`)도 unescape 후 판정이라 같은 일을 겪는다
 /// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
 /// 노드를 살리고, [`HxText`] 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
+/// ws-only 판정은 literal 공백과 공백 문자 참조를 함께 본다
+/// ([`is_xml_whitespace`]) — quick-xml 0.42 가 텍스트의 CR 을 `&#13;` 로 쓰므로
+/// CR 하나만 든 run 이 이 형태로 온다.
 ///
-/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)는 건드리지 않는다 —
-/// 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
+/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)와 CDATA 는 건드리지
+/// 않는다 — 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
 fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
     let mut result = mark_ws_only_text(xml, "<hp:t");
     if let std::borrow::Cow::Borrowed(_) = result {
         result = mark_ws_only_text(xml, "<t");
     }
     result
+}
+
+/// `content` (escape 된 원시 텍스트) 가 XML 공백만 담는지 — literal
+/// `' ' '\t' '\r' '\n'` 과 그 문자 참조(`&#32;` `&#9;` `&#13;` `&#10;`, 16진
+/// `&#x20;` 등, 앞자리 0 허용). 다른 참조·엔티티(`&amp;` 등)가 하나라도 있으면
+/// false 다.
+fn is_xml_whitespace(content: &str) -> bool {
+    let mut rest = content;
+    while let Some(c) = rest.chars().next() {
+        if matches!(c, ' ' | '\t' | '\r' | '\n') {
+            rest = &rest[1..];
+            continue;
+        }
+        let Some(body) = rest.strip_prefix("&#") else { return false };
+        let Some(end) = body.find(';') else { return false };
+        // Digits only: `from_str_radix`/`parse` would also take a leading `+`.
+        let code = match body[..end].strip_prefix(['x', 'X']) {
+            Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                u32::from_str_radix(hex, 16).ok()
+            }
+            None if body[..end].bytes().all(|b| b.is_ascii_digit()) => {
+                body[..end].parse::<u32>().ok()
+            }
+            _ => None,
+        };
+        if !matches!(code, Some(0x20 | 0x09 | 0x0D | 0x0A)) {
+            return false;
+        }
+        rest = &body[end + 1..];
+    }
+    true
 }
 
 /// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
@@ -5323,9 +5357,7 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
         let content_start = tag_start + open.len() + gt_rel + 1;
         let Some(close_rel) = xml[content_start..].find(close) else { break };
         let content = &xml[content_start..content_start + close_rel];
-        let ws_only = !content.is_empty()
-            && !content.contains('<')
-            && content.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        let ws_only = !content.is_empty() && !content.contains('<') && is_xml_whitespace(content);
         if ws_only {
             let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
             buf.push_str(&xml[last..content_start]);
@@ -5378,5 +5410,45 @@ mod ws_preserve_tests {
             .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
             .collect();
         assert_eq!(texts, vec!["가", " ", "나"], "whitespace-only run must survive");
+    }
+
+    fn run_texts(xml: &str) -> Vec<String> {
+        let result = parse_section(xml, 0, &HashMap::new()).expect("parse");
+        result.paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect()
+    }
+
+    // quick-xml 0.42 writes a lone CR in text as `&#13;`, so a run holding only a
+    // CR now reaches the decoder as a character reference.
+    // 이것을 실패시키는 것: 판정을 literal 공백만으로 되돌리는 것(`&#13;` run 이 사라짐).
+    #[test]
+    fn a_run_of_whitespace_character_references_survives() {
+        for (wire, want) in [
+            ("&#13;", "\r"),
+            ("&#10;", "\n"),
+            ("&#9;", "\t"),
+            ("&#32;", " "),
+            ("&#xD;", "\r"),
+            ("&#x0d;", "\r"),
+            ("&#x20;&#13; ", " \r "),
+        ] {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t></run><run charPrIDRef="0"><t>{wire}</t></run><run charPrIDRef="0"><t>나</t></run></p></sec>"#
+            );
+            assert_eq!(run_texts(&xml), vec!["가", want, "나"], "{wire}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
+    // 보는 것 — sentinel 이 붙어 본문 앞에 U+E000 이 남는다.
+    #[test]
+    fn non_whitespace_references_are_not_marked() {
+        for wire in ["&#65;", "&amp;#13;", "&#13;x", "&#1;", "&#13", "&#+13;", "&#x+d;", "&#;"] {
+            let xml = format!("<hp:t>{wire}</hp:t>");
+            assert_eq!(preserve_ws_only_text(&xml), xml, "{wire}");
+        }
     }
 }

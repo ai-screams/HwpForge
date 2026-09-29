@@ -1771,6 +1771,31 @@ mod attr_control_whitespace_call_site_tests {
         assert_eq!(text, "가\r나", "text keeps its CR (Hancom reads &#13; like 0.41's literal CR)");
     }
 
+    /// quick-xml 0.42 writes a run holding only a CR as `<hp:t>&#13;</hp:t>`;
+    /// reading it back must keep the run (0.41 wrote a literal CR, which a
+    /// parser reads as LF, so it survived as `"\n"`).
+    // 이것을 실패시키는 것: 디코더의 ws-only 판정(`is_xml_whitespace`)을 literal 공백만으로
+    // 되돌리는 것 — run 이 경고 없이 사라진다.
+    #[test]
+    fn a_run_holding_only_a_cr_survives_the_round_trip() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let cs = CharShapeIndex::new(0);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![para(vec![Run::text("가", cs), Run::text("\r", cs), Run::text("나", cs)])],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+        let texts: Vec<String> = decoded.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect();
+        assert_eq!(texts, vec!["가", "\r", "나"]);
+    }
+
     /// Census attributes that Core strings reach (plan §4.3), other than the
     /// five the call-site tests above already pin.
     // 이것을 실패시키는 것: 이 속성들 중 하나를 serde 가 아닌 경로(정규화를 거치지 않는)로 옮기는 것,
