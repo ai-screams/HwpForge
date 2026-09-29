@@ -220,6 +220,7 @@ pub(super) fn build_header_xml(
     sub_list.text_height = u32::try_from(hf.text_height.as_i32()).unwrap_or(0);
     let sub_xml = quick_xml::se::to_string(&sub_list)
         .map_err(|e| crate::error::HwpxError::InvalidStructure { detail: e.to_string() })?;
+    let sub_xml = crate::encoder::normalize_attr_control_whitespace(&sub_xml);
     let sub_xml = sub_xml.replacen("<HxSubList", "<hp:subList", 1);
     let sub_xml = sub_xml.replacen("</HxSubList>", "</hp:subList>", 1);
     xml.push_str(&sub_xml);

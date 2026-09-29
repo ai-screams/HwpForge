@@ -370,6 +370,7 @@ pub(crate) fn encode_section_with_note_counters(
     renumber_note_autonums(&mut hx_section, numbering, &mut sink)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
+    let inner_xml = super::normalize_attr_control_whitespace(&inner_xml);
 
     // quick_xml produces `<sec>...</sec>` (from the serde rename).
     // We need `<hs:sec xmlns:...>...</hs:sec>`, so strip the outer

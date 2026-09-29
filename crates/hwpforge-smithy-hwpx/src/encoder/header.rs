@@ -45,6 +45,7 @@ pub(crate) fn encode_header(
     let head = build_head(store, sec_cnt);
     let head_xml = quick_xml::se::to_string(&head)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
+    let head_xml = super::normalize_attr_control_whitespace(&head_xml);
 
     // quick_xml serializes HxHead as `<head version="..." secCnt="...">...</head>`.
     // We need to extract the inner content and wrap it in our xmlns-decorated

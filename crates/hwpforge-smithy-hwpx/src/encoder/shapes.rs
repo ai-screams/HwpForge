@@ -1055,7 +1055,7 @@ fn serialize_with_root<T: serde::Serialize>(value: &T, root: &str) -> HwpxResult
     value
         .serialize(ser)
         .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
-    Ok(buf)
+    Ok(super::normalize_attr_control_whitespace(&buf).into_owned())
 }
 
 /// Sets the `groupLevel` attribute on a serialized shape XML fragment.

@@ -585,3 +585,30 @@ fn document_with_a_title_mark_footnote() -> String {
     let exported = ExportedDocument { document, styles: Some(styles) };
     serde_json::to_string(&exported).expect("serialise")
 }
+
+/// A style name with control whitespace comes back as spaces (CRLF as one),
+/// and generation reports no warning it did not report before: the value is
+/// the one a standard XML parser read from 0.41 output, so nothing is lost.
+// 이것을 실패시키는 것: `encoder/header.rs` 의 정규화 호출을 빼는 것 — 다시 읽은 이름이
+// `A\r\nB` 로 돌아온다(0.42 가 쓴 문자 참조를 decode 가 제어 문자로 되살림).
+#[test]
+fn control_whitespace_in_a_style_name_is_written_as_spaces_without_a_warning() {
+    let json = exported_text("SimpleTable.hwpx");
+    let baseline = from_json(&json, &FromJsonOptions::default()).expect("baseline");
+
+    let mut value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    let style = &mut value["styles"]["styles"][0];
+    style["name"] = "A\r\nB".into();
+    style["eng_name"] = "C\tD\nE\rF".into();
+    let out = from_json(&value.to_string(), &FromJsonOptions::default()).expect("from_json");
+
+    let codes = |w: &[hwpforge::ops::OpsWarning]| {
+        w.iter().map(|w| format!("{:?}", w.info())).collect::<Vec<_>>()
+    };
+    assert_eq!(codes(&out.warnings), codes(&baseline.warnings), "no new warning");
+    let reread = to_json(&out.bytes, &ToJsonOptions::default()).expect("re-export");
+    let reread = serde_json::to_value(&reread.document).expect("serialise");
+    let style = &reread["styles"]["styles"][0];
+    assert_eq!(style["name"], "A B");
+    assert_eq!(style["eng_name"], "C D E F");
+}
