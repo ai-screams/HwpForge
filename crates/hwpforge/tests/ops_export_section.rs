@@ -148,7 +148,7 @@ fn the_preservation_warning_reaches_the_meta() {
 /// surface silently disagreed with `to_json` on the same document.
 #[test]
 fn decode_warnings_reach_the_caller_as_they_do_for_to_json() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export_section");
 
@@ -169,7 +169,7 @@ fn decode_warnings_reach_the_caller_as_they_do_for_to_json() {
 /// The documented merge order is decoder → workflow → grid.
 #[test]
 fn decoder_warnings_come_before_the_workflow_warning() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = export_section(&bytes, &ExportSectionOptions::default()).expect("export_section");
 

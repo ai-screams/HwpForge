@@ -141,7 +141,7 @@ fn nested_table_document() -> Vec<u8> {
 /// a document that warns.
 #[test]
 fn decode_warnings_reach_the_caller() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = outline(&bytes).expect("outline");
 

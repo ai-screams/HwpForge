@@ -338,6 +338,9 @@ pub(crate) fn build_wire_map_over_runs(
                     for part in &hx_run.texts[idx].parts {
                         match part {
                             HxTextPart::Text(s) => {
+                                // The ws-only sentinel is the decoder's own mark,
+                                // not wire text: count what the run emits.
+                                let s = crate::schema::section::strip_ws_sentinel(s);
                                 let n = s.encode_utf16().count() as u32;
                                 if n == 0 {
                                     continue;
@@ -5439,6 +5442,21 @@ mod ws_preserve_tests {
                 r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t></run><run charPrIDRef="0"><t>{wire}</t></run><run charPrIDRef="0"><t>나</t></run></p></sec>"#
             );
             assert_eq!(run_texts(&xml), vec!["가", want, "나"], "{wire}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 와이어 맵이 sentinel 까지 세는 것 — `&#13;` run 이 1 이 아니라
+    // 2 로 잡혀 줄 조판 캐시 좌표가 한 칸 밀린다(캐시 fail-closed 로 소실).
+    #[test]
+    fn the_wire_map_does_not_count_the_ws_sentinel() {
+        for wire in [" ", "&#13;"] {
+            let xml = preserve_ws_only_text(&format!(
+                r#"<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>가</hp:t></hp:run><hp:run charPrIDRef="0"><hp:t>{wire}</hp:t></hp:run></hp:p>"#
+            ))
+            .into_owned();
+            let hx: HxParagraph = crate::decoder::xml_from_str(&xml).expect("parse");
+            let map = build_paragraph_wire_map(&hx).expect("map");
+            assert_eq!((map.wire_end(), map.core_end()), (2, 2), "{wire}");
         }
     }
 

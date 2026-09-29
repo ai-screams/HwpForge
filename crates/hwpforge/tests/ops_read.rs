@@ -286,7 +286,7 @@ fn a_field_read_serialises_its_list_under_the_fields_key() {
 /// representative target.
 #[test]
 fn decode_warnings_reach_the_caller_on_the_section_target() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = read(&bytes, &ReadOptions::default().with_section(0)).expect("read");
 

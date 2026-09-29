@@ -623,7 +623,7 @@ impl Serialize for HxText {
 /// "선두 U+E000 + 나머지 전부 XML whitespace" 일 때만 1글자 벗긴다.
 /// (원본 문서가 그 정확한 형태의 텍스트를 가질 이론적 위험은 PUA 단독+공백
 /// run 이라 실사용이 없다 — 전처리 rustdoc 참조.)
-fn strip_ws_sentinel(s: &str) -> &str {
+pub(crate) fn strip_ws_sentinel(s: &str) -> &str {
     if let Some(rest) = s.strip_prefix('\u{E000}') {
         if !rest.is_empty() && rest.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n')) {
             return rest;

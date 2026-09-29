@@ -24,10 +24,8 @@ use hwpforge_smithy_hwpx::{
 /// The same fixture backs `ops_to_json`'s decode-warning test, so the two
 /// layers cannot disagree about what "a document that warns" means.
 fn warning_fixture() -> Vec<u8> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/user_samples/sample-text-char-runs-basic.hwpx"
-    );
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/stale-line-cache.hwpx");
     std::fs::read(path).unwrap_or_else(|e| panic!("warning fixture: {e}"))
 }
 

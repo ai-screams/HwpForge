@@ -136,7 +136,7 @@ fn empty_input_is_a_decode_failure() {
 /// stops losing them.
 #[test]
 fn decode_warnings_reach_the_caller() {
-    let bytes = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let bytes = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = to_json(&bytes, &ToJsonOptions::default()).expect("to_json");
 

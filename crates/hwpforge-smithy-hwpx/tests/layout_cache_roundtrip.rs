@@ -418,3 +418,22 @@ fn resaved_inline_image_dimensions_come_from_sz_not_cursz() {
         "재저장 후 treatAsChar=1 유지"
     );
 }
+
+/// A Hancom save with a lone-space run between formatted runs (`plain `,
+/// `bold`, `' '`, `italic`, …) keeps its line cache. The decoder marks a
+/// whitespace-only run so quick-xml keeps it; the wire map used to count that
+/// mark as a character, measured the paragraph three units long and dropped
+/// the cache with `LayoutCacheDropped`.
+// 이것을 실패시키는 것: 와이어 맵에서 `strip_ws_sentinel` 을 빼는 것 — 캐시가 버려지고 경고가 난다.
+#[test]
+fn a_hancom_paragraph_with_lone_space_runs_keeps_its_line_cache() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/user_samples/sample-text-char-runs-basic.hwpx"
+    );
+    let bytes = std::fs::read(path).expect("fixture");
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+    let para = &decoded.document.sections()[0].paragraphs[0];
+    assert!(para.layout_cache.is_some(), "the Hancom line cache is kept");
+}
