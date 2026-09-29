@@ -5319,7 +5319,8 @@ fn is_xml_whitespace(content: &str) -> bool {
         let Some(body) = rest.strip_prefix("&#") else { return false };
         let Some(end) = body.find(';') else { return false };
         // Digits only: `from_str_radix`/`parse` would also take a leading `+`.
-        let code = match body[..end].strip_prefix(['x', 'X']) {
+        // XML CharRef takes a lowercase `x` only (quick-xml agrees).
+        let code = match body[..end].strip_prefix('x') {
             Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
                 u32::from_str_radix(hex, 16).ok()
             }
@@ -5460,11 +5461,32 @@ mod ws_preserve_tests {
         }
     }
 
+    // Inside a run-local field the body text is a zero-Core span `(n,0)`, which
+    // the length check cannot see; a miscounted `n` would shift every later
+    // textpos silently. A one-unit `&#13;` body must map like a one-unit `x`.
+    // 이것을 실패시키는 것: 와이어 맵에서 `strip_ws_sentinel` 을 빼는 것 — `&#13;` 가 2 로
+    // 세어져 뒤 줄의 Core 좌표가 `x` 판과 달라진다.
+    #[test]
+    fn a_field_body_of_whitespace_references_maps_like_one_character() {
+        let core_textpos = |body: &str| {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t><ctrl><fieldBegin id="1" type="HYPERLINK" name="" editable="0" dirty="0"><parameters cnt="1" name=""><stringParam name="Command">https://example.com;1;0;0;</stringParam></parameters></fieldBegin></ctrl><t>{body}</t><ctrl><fieldEnd beginIDRef="1"/></ctrl><t>나다</t></run><linesegarray><lineseg textpos="0" vertpos="0" vertsize="1000"/><lineseg textpos="19" vertpos="1600" vertsize="1000"/></linesegarray></p></sec>"#
+            );
+            let result = parse_section(&xml, 0, &HashMap::new()).expect("parse");
+            assert!(result.warnings.is_empty(), "{body}: {:?}", result.warnings);
+            let cache = result.paragraphs[0].layout_cache.as_ref().expect("cache kept");
+            cache.lines[1].textpos
+        };
+        assert_eq!(core_textpos("&#13;"), core_textpos("x"));
+    }
+
     // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
     // 보는 것 — sentinel 이 붙어 본문 앞에 U+E000 이 남는다.
     #[test]
     fn non_whitespace_references_are_not_marked() {
-        for wire in ["&#65;", "&amp;#13;", "&#13;x", "&#1;", "&#13", "&#+13;", "&#x+d;", "&#;"] {
+        for wire in
+            ["&#65;", "&amp;#13;", "&#13;x", "&#1;", "&#13", "&#+13;", "&#x+d;", "&#;", "&#X20;"]
+        {
             let xml = format!("<hp:t>{wire}</hp:t>");
             assert_eq!(preserve_ws_only_text(&xml), xml, "{wire}");
         }
