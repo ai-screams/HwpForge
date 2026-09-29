@@ -98,9 +98,10 @@ class Document:
         this package on macOS arm64, a `threading.Thread` of 1 MiB decoded
         every test input and one of 512 KiB crashed the interpreter; the
         same 1 MiB figure is checked for the Rust decoder on Linux x86_64 in
-        CI, and other platforms are not measured. The main thread and the
-        `threading.Thread` default both have more than 1 MiB; do not shrink
-        a decoding thread below it with `threading.stack_size()`.
+        CI, and other platforms are not measured. On Linux and macOS the main
+        thread and the `threading.Thread` default both have more than 1 MiB;
+        do not shrink a decoding thread below it with
+        `threading.stack_size()`.
 
         Args:
             path: The file to read.

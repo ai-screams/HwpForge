@@ -368,6 +368,7 @@ pub(crate) fn encode_section_with_note_counters(
         &mut sink,
     )?;
     renumber_note_autonums(&mut hx_section, numbering, &mut sink)?;
+    #[allow(clippy::disallowed_methods)] // normalized on the next line
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
     let inner_xml = super::normalize_attr_control_whitespace(&inner_xml);

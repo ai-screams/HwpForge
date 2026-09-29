@@ -166,6 +166,7 @@ pub(super) fn encode_memo_sublist(
         encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
     sink.leave();
     let sublist = sublist_result?;
+    #[allow(clippy::disallowed_methods)] // normalized on the next line
     let xml = quick_xml::se::to_string(&sublist)
         .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
     let xml = crate::encoder::normalize_attr_control_whitespace(&xml);

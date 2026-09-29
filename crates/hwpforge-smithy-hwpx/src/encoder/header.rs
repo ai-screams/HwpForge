@@ -43,6 +43,7 @@ pub(crate) fn encode_header(
     begin_num: Option<&hwpforge_core::section::BeginNum>,
 ) -> HwpxResult<String> {
     let head = build_head(store, sec_cnt);
+    #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
     let head_xml = super::normalize_attr_control_whitespace(&head_xml);

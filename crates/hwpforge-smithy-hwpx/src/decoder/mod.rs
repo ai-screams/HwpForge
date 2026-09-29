@@ -56,6 +56,7 @@ pub(crate) const XML_MAX_NAMESPACE_BINDINGS: usize = 128;
 pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
     xml: &'de str,
 ) -> Result<T, quick_xml::DeError> {
+    #[allow(clippy::disallowed_methods)] // the one place that sets the limits
     let mut de = quick_xml::de::Deserializer::from_str(xml);
     de.recursion_limit(XML_RECURSION_LIMIT);
     de.resolver_mut().set_max_namespace_bindings(XML_MAX_NAMESPACE_BINDINGS);
@@ -232,11 +233,13 @@ impl HwpxDecoder {
     /// | `opt-level = 0` (unoptimized dev build) | 4 MiB | 3 MiB |
     ///
     /// So in an optimized build call this from a thread with at least
-    /// 1 MiB of stack; Rust's default 2 MiB spawned threads and the main
-    /// thread qualify. An unoptimized build needs about 4 MiB, which Rust's
-    /// default spawned threads do not have. The release figure is also
-    /// checked by a test on Linux x86_64 in CI; other platforms are not
-    /// measured.
+    /// 1 MiB of stack; Rust's default 2 MiB spawned threads qualify, and so
+    /// does the main thread on Linux and macOS (typically 8 MiB). On
+    /// Windows the main thread defaults to 1 MiB in total, part of it
+    /// already used by the caller, so decode deeply nested input on a
+    /// spawned thread there. An unoptimized build needs about 4 MiB, which Rust's default
+    /// spawned threads do not have. The release figure is also checked by a
+    /// test on Linux x86_64 in CI; other platforms are not measured.
     pub fn decode(bytes: &[u8]) -> HwpxResult<HwpxDocument> {
         // Step 1: Open package
         let mut pkg = package::PackageReader::new(bytes)?;

@@ -5338,13 +5338,30 @@ fn is_xml_whitespace(content: &str) -> bool {
 }
 
 /// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
+///
+/// 주석·CDATA·PI 안의 `<hp:t>` 모양 글자는 요소가 아니므로 건너뛴다 — 표시하면
+/// 수식 스크립트 같은 문자 데이터에 U+E000 이 박히고, 주석 안의 가짜 여는 태그가
+/// 뒤따르는 진짜 run 을 가린다.
 fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
     let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
     let mut out: Option<String> = None;
     let mut last = 0usize;
     let mut search = 0usize;
-    while let Some(rel) = xml[search..].find(open) {
+    while let Some(rel) = xml[search..].find('<') {
         let tag_start = search + rel;
+        let rest = &xml[tag_start..];
+        let skip = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
+            .into_iter()
+            .find(|(o, _)| rest.starts_with(o));
+        if let Some((o, c)) = skip {
+            search =
+                rest[o.len()..].find(c).map_or(xml.len(), |p| tag_start + o.len() + p + c.len());
+            continue;
+        }
+        if !rest.starts_with(open) {
+            search = tag_start + 1;
+            continue;
+        }
         let after = &xml[tag_start + open.len()..];
         // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
         let Some(first) = after.chars().next() else { break };
@@ -5478,6 +5495,30 @@ mod ws_preserve_tests {
             cache.lines[1].textpos
         };
         assert_eq!(core_textpos("&#13;"), core_textpos("x"));
+    }
+
+    // `<hp:t>` inside a comment, CDATA section or processing instruction is
+    // character data, not an element: marking it would plant U+E000 in, e.g.,
+    // an equation script that no consumer strips.
+    // 이것을 실패시키는 것: 스캐너가 주석·CDATA·PI 를 건너뛰지 않는 것.
+    #[test]
+    fn markup_that_is_not_an_element_is_left_alone() {
+        for xml in [
+            "<hp:script><![CDATA[<hp:t>&#13;</hp:t>]]></hp:script>",
+            "<hp:script><![CDATA[<hp:t> </hp:t>]]></hp:script>",
+            "<!-- <hp:t> --><x/>",
+            "<?pi <hp:t> </hp:t>?>",
+        ] {
+            assert_eq!(preserve_ws_only_text(xml), xml, "{xml}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 주석을 건너뛰지 않는 것 — 주석 안의 가짜 `<hp:t>` 가 진짜
+    // `</hp:t>` 까지 먹어 뒤따르는 공백 run 이 표시되지 않는다.
+    #[test]
+    fn a_fake_tag_in_a_comment_does_not_hide_a_real_run() {
+        let xml = "<!-- <hp:t> --><hp:t> </hp:t>";
+        assert_eq!(preserve_ws_only_text(xml), "<!-- <hp:t> --><hp:t>\u{E000} </hp:t>");
     }
 
     // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
