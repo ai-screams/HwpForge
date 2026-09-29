@@ -24,6 +24,8 @@ disallowed-methods = [
   { path = "quick_xml::de::Deserializer::borrowing", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
   { path = "quick_xml::de::Deserializer::borrowing_with_resolver", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
   { path = "quick_xml::de::Deserializer::with_resolver", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
+  { path = "quick_xml::de::Deserializer::buffering", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
+  { path = "quick_xml::de::Deserializer::buffering_with_resolver", reason = "use hwpforge-smithy-hwpx `decoder::xml_from_str`, which pins the recursion and namespace limits" },
   { path = "quick_xml::se::to_string", reason = "pass the output through `encoder::normalize_attr_control_whitespace`, then allow this call there" },
   { path = "quick_xml::se::to_string_with_root", reason = "pass the output through `encoder::normalize_attr_control_whitespace`, then allow this call there" },
   { path = "quick_xml::se::to_writer", reason = "pass the output through `encoder::normalize_attr_control_whitespace`, then allow this call there" },

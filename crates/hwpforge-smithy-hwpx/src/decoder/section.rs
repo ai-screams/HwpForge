@@ -5337,6 +5337,29 @@ fn is_xml_whitespace(content: &str) -> bool {
     true
 }
 
+/// Length of the document type declaration at the start of `rest`, up to and
+/// including its closing `>`: quoted literals and the `[...]` internal subset
+/// may hold `>`, `]` and `<hp:t>`-shaped text. Runs to the end when unclosed
+/// (the parser then reports the malformed input).
+fn doctype_len(rest: &[u8]) -> usize {
+    let mut quote: Option<u8> = None;
+    let mut depth = 0usize;
+    for (i, &b) in rest.iter().enumerate() {
+        match quote {
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None => match b {
+                b'"' | b'\'' => quote = Some(b),
+                b'[' => depth += 1,
+                b']' => depth = depth.saturating_sub(1),
+                b'>' if depth == 0 => return i + 1,
+                _ => {}
+            },
+        }
+    }
+    rest.len()
+}
+
 /// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
 ///
 /// 주석·CDATA·PI 안의 `<hp:t>` 모양 글자는 요소가 아니므로 건너뛴다 — 표시하면
@@ -5356,6 +5379,10 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
         if let Some((o, c)) = skip {
             search =
                 rest[o.len()..].find(c).map_or(xml.len(), |p| tag_start + o.len() + p + c.len());
+            continue;
+        }
+        if rest.starts_with("<!DOCTYPE") {
+            search = tag_start + doctype_len(rest.as_bytes());
             continue;
         }
         if !rest.starts_with(open) {
@@ -5510,6 +5537,25 @@ mod ws_preserve_tests {
             "<?pi <hp:t> </hp:t>?>",
         ] {
             assert_eq!(preserve_ws_only_text(xml), xml, "{xml}");
+        }
+    }
+
+    // A document type declaration can hold `<hp:t>`-shaped text in an entity
+    // value or a quoted literal, and `]` / `>` inside quotes do not end it.
+    // 이것을 실패시키는 것: DOCTYPE 을 건너뛰지 않는 것(가짜 `<hp:t>` 가 진짜 run 을 가림),
+    // 따옴표 안의 `]>` 에서 끝으로 보는 것, 또는 내부 subset 의 첫 선언 `>` 에서
+    // 끝으로 보는 것(둘째 선언의 `<hp:t>` 가 진짜 run 을 가림).
+    #[test]
+    fn a_doctype_is_skipped_whole() {
+        for doctype in [
+            r#"<!DOCTYPE sec [<!ENTITY e "<hp:t>">]>"#,
+            r#"<!DOCTYPE sec [<!ENTITY e "]><hp:t>">]>"#,
+            r#"<!DOCTYPE sec SYSTEM "x.dtd">"#,
+            r#"<!DOCTYPE sec [<!ENTITY a "x"><!ENTITY e "<hp:t>">]>"#,
+        ] {
+            let xml = format!("{doctype}<hp:t> </hp:t>");
+            let want = format!("{doctype}<hp:t>\u{E000} </hp:t>");
+            assert_eq!(preserve_ws_only_text(&xml), want, "{doctype}");
         }
     }
 
