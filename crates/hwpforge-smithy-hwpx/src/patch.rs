@@ -373,7 +373,7 @@ fn build_section_preservation(
 ) -> HwpxResult<SectionPreservation> {
     let hx_section: HxSection = xml_from_str(section_xml).map_err(|error| HwpxError::XmlParse {
         file: section_path.to_string(),
-        detail: error.to_string(),
+        detail: crate::decoder::xml_error_detail(&error),
     })?;
 
     let raw_slots = collect_raw_text_slots(section_xml, &hx_section)?;

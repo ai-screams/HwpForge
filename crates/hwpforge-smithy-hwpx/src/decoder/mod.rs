@@ -65,6 +65,26 @@ pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
     T::deserialize(&mut de)
 }
 
+/// The `detail` text for a failed [`xml_from_str`], as users see it in
+/// `DECODE_FAILED`.
+///
+/// quick-xml's own text for the namespace limit tells the reader to call
+/// `NamespaceResolver::set_max_namespace_bindings`, which no caller of the
+/// CLI, MCP server or Python binding can do; it is replaced by a sentence
+/// that states the limit. Every other error keeps quick-xml's text.
+pub(crate) fn xml_error_detail(error: &quick_xml::DeError) -> String {
+    use quick_xml::name::NamespaceError;
+    match error {
+        quick_xml::DeError::InvalidXml(quick_xml::Error::Namespace(
+            NamespaceError::TooManyBindings(limit),
+        )) => format!(
+            "more than {limit} namespace bindings in scope; HwpForge does not read \
+             documents that declare more"
+        ),
+        other => other.to_string(),
+    }
+}
+
 // ── HwpxDocument ─────────────────────────────────────────────────
 
 /// The result of decoding an HWPX file.
@@ -1110,8 +1130,11 @@ mod xml_limit_tests {
 
     fn assert_namespace_limit_rejects(xml: &str) {
         match parse_section(xml, 0, &HashMap::new()) {
+            // 이것을 실패시키는 것: `xml_error_detail` 없이 quick-xml 문구를 그대로 쓰는 것 —
+            // 사용자가 부를 수 없는 `NamespaceResolver` API 를 안내한다.
             Err(HwpxError::XmlParse { detail, .. })
-                if detail.contains("more than 128 namespace bindings") => {}
+                if detail.contains("more than 128 namespace bindings")
+                    && !detail.contains("NamespaceResolver") => {}
             other => panic!("129 bindings in scope must be rejected, got: {other:?}"),
         }
     }

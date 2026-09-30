@@ -9,7 +9,7 @@ use hwpforge_foundation::{
     TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 
-use crate::decoder::xml_from_str;
+use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
 use crate::schema::header::{
@@ -46,8 +46,10 @@ pub struct HeaderParseResult {
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
-    let head: HxHead = xml_from_str(xml)
-        .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
+    let head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
+        file: "header.xml".into(),
+        detail: xml_error_detail(&e),
+    })?;
     let begin_num = parse_begin_num(&head);
 
     let mut store = HwpxStyleStore::new();

@@ -23,7 +23,7 @@ use hwpforge_foundation::{
 };
 
 use crate::color::parse_hex_color_raw;
-use crate::decoder::xml_from_str;
+use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,
@@ -142,7 +142,7 @@ pub fn parse_section(
     let file_hint = format!("Contents/section{section_index}.xml");
     let xml = crate::wire_xml::preserve_ws_only_text(xml);
     let section: HxSection = xml_from_str(&xml)
-        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
+        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: xml_error_detail(&e) })?;
 
     let mut page_settings = None;
     let mut headers = Vec::new();
