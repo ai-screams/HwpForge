@@ -5572,7 +5572,7 @@ mod ws_preserve_tests {
             r#"<!DOCTYPE sec SYSTEM "x.dtd">"#,
             r#"<!DOCTYPE sec [<!ENTITY a "x"><!ENTITY e "<hp:t>">]>"#,
             r#"<!DOCTYPE sec [<!-- " -->]>"#,
-            r#"<!DOCTYPE sec [<!-- ]> [ -->]>"#,
+            r#"<!DOCTYPE sec [<!-- ]><hp:t> </hp:t> -->]>"#,
             r#"<!DOCTYPE sec [<?pi ' ] ?>]>"#,
         ] {
             let xml = format!("{doctype}<hp:t> </hp:t>");
