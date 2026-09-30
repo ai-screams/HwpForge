@@ -567,7 +567,7 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
                 .into_iter()
                 .map(|f| HxFont {
                     id: f.id,
-                    face: f.face_name.clone(),
+                    face: super::clean_font_name(&f.face_name),
                     font_type: "TTF".into(),
                     is_embedded: 0,
                     type_info: Some(default_type_info()),

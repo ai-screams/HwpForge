@@ -1515,6 +1515,41 @@ mod tests {
         assert!(self_verify(&base, &expected).is_ok());
     }
 
+    /// Rewrites `Contents/header.xml` of a package, keeping every other entry.
+    fn with_header(base: &[u8], edit: impl Fn(&str) -> String) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(base)).unwrap();
+        let mut zout = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            if name == "Contents/header.xml" {
+                data = edit(std::str::from_utf8(&data).unwrap()).into_bytes();
+            }
+            zout.start_file(name, opts).unwrap();
+            zout.write_all(&data).unwrap();
+        }
+        zout.finish().unwrap().into_inner()
+    }
+
+    // Documents converted from HWP5 carry names like `' 윤명조440'`. The
+    // encoder writes font names trimmed, so the decoder must read them trimmed
+    // too, or decode→encode→decode differs and every edit is refused.
+    // 이것을 실패시키는 것: 디코더(`decoder/header.rs`)에서 `clean_font_name` 을 빼는 것 —
+    // `NotRoundTripSafe` (style_store … face_name) 로 거부된다.
+    #[test]
+    fn admit_accepts_a_font_name_with_edge_spaces() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let spaced = with_header(&base, |h| {
+            let i = h.find(" face=\"").expect("a font face") + " face=\"".len();
+            format!("{} {}", &h[..i], &h[i..])
+        });
+        admit(&spaced).expect("a leading space in a font name is not a round-trip hazard");
+    }
+
     #[test]
     fn admit_accepts_round_trip_safe_and_rejects_others() {
         let base = fixture("plain_paragraphs.hwpx");

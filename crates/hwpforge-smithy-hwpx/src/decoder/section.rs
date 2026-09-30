@@ -1502,7 +1502,8 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             height,
             base_line: eq.base_line,
             text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
-            font: eq.font.clone(),
+            // Same cleaning as the encoder, so a no-op round trip stays one.
+            font: crate::encoder::clean_font_name(&eq.font),
             inst_id: None,
         })),
         char_shape_id,
@@ -5254,6 +5255,23 @@ mod tests {
                     assert_eq!(font, "HCR Batang");
                 }
                 other => panic!("expected Equation, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // 이것을 실패시키는 것: `decode_equation` 에서 `clean_font_name` 을 빼는 것 — 수식
+    // 글꼴이 인코드 때와 다르게 읽혀 편집 전 무변경 왕복 검사가 거부한다.
+    #[test]
+    fn decode_equation_reads_the_font_name_cleaned() {
+        use crate::schema::section::HxEquation;
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxEquation { font: " HancomEQN\n".to_string(), ..Default::default() };
+        let run = decode_equation(&hx, CharShapeIndex::new(0)).unwrap();
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Equation { font, .. } => assert_eq!(font, "HancomEQN"),
+                _ => panic!("expected Equation"),
             },
             _ => panic!("expected Control"),
         }

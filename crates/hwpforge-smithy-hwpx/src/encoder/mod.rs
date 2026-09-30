@@ -15,6 +15,22 @@ pub(crate) mod package;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
+/// Cleans a font name before it is written (`hh:font@face`,
+/// `hp:equation@font`): control characters are removed and the ends are
+/// trimmed; spaces inside the name are kept (`Times New Roman`).
+///
+/// A control character is never part of a real font name, and Hancom matches
+/// the name against installed fonts exactly: with a space left in its place
+/// (what [`normalize_attr_control_whitespace`] would write, and what Hancom
+/// reads from 0.41's literal control character) `함초롬바탕 ` leaves the font
+/// box empty and `HancomEQN ` breaks the equation. Cleaning the name lets it
+/// match. No warning is raised: the removed characters carry no meaning in a
+/// font name (the change is recorded in the changelog).
+pub(crate) fn clean_font_name(name: &str) -> String {
+    let without_controls: String = name.chars().filter(|c| !c.is_control()).collect();
+    without_controls.trim().to_string()
+}
+
 /// Rewrites the control-whitespace character references that quick-xml's
 /// serde serializer writes in attribute values (`&#9;`, `&#10;`, `&#13;`) as
 /// plain spaces.
@@ -1618,6 +1634,12 @@ mod attr_control_whitespace_call_site_tests {
         eq
     }
 
+    /// A bookmark name reaches each serde call site as a plain attribute
+    /// (font names are cleaned before serde, so they cannot carry the test).
+    fn bookmark(name: &str) -> Control {
+        Control::bookmark(name)
+    }
+
     fn para(runs: Vec<Run>) -> Paragraph {
         Paragraph::with_runs(runs, ParaShapeIndex::new(0))
     }
@@ -1637,12 +1659,13 @@ mod attr_control_whitespace_call_site_tests {
             Control::connect_line(ShapePoint::new(0, 500), ShapePoint::new(2000, 1000))
                 .expect("non-degenerate");
         let memo = Control::memo_with_anchor(
-            vec![para(vec![Run::control(equation_with_font(&format!("MEMO{RAW}")), cs)])],
+            vec![para(vec![Run::control(bookmark(&format!("MEMO{RAW}")), cs)])],
             vec![Run::text("앵커", cs)],
         );
         let body = para(vec![
             Run::text("본문", cs),
-            Run::control(equation_with_font(&format!("BODY{RAW}")), cs),
+            Run::control(bookmark(&format!("BODY{RAW}")), cs),
+            Run::control(equation_with_font(&format!("EQ{RAW}")), cs),
             // A shape inside a group is written by `shapes.rs` `serialize_with_root`,
             // not by the section serializer.
             Run::control(
@@ -1659,7 +1682,7 @@ mod attr_control_whitespace_call_site_tests {
         ]);
         let mut section = Section::with_paragraphs(vec![body], PageSettings::a4());
         section.headers.push(HeaderFooter::all_pages(vec![para(vec![Run::control(
-            equation_with_font(&format!("HEAD{RAW}")),
+            bookmark(&format!("HEAD{RAW}")),
             cs,
         )])]));
         let mut doc = Document::new();
@@ -1699,19 +1722,46 @@ mod attr_control_whitespace_call_site_tests {
 
     // 이것을 실패시키는 것: `encoder/header.rs` 의 정규화 호출을 빼는 것.
     #[test]
-    fn header_xml_style_and_font_attrs_are_normalized() {
+    fn header_xml_style_attrs_are_normalized() {
         let (header, _) = encode_parts();
         assert_eq!(attr_value(&header, "name", "A"), "A B C D");
         assert_eq!(attr_value(&header, "engName", "E"), "E F", "CRLF folds to one space");
-        assert_eq!(attr_value(&header, "face", "글꼴"), "글꼴A B C D");
         assert_no_control_refs_in_start_tags("header.xml", &header);
+    }
+
+    // Font names go further than the D3 normalization: control characters are
+    // removed (not turned into spaces) and the ends are trimmed, so Hancom can
+    // match an installed font. With a space left in, `함초롬바탕 ` leaves the
+    // font box empty and `HancomEQN ` breaks the equation (0.41 did the same).
+    // 이것을 실패시키는 것: `header.rs`·`equation.rs` 에서 `clean_font_name` 을 빼는 것.
+    #[test]
+    fn font_names_lose_control_characters_and_edge_spaces() {
+        let (header, section) = encode_parts();
+        assert_eq!(attr_value(&header, "face", "글꼴"), "글꼴ABCD");
+        assert_eq!(attr_value(&section, "font", "EQ"), "EQABCD");
+    }
+
+    // 이것을 실패시키는 것: 제어 문자만 지우고 앞뒤를 자르지 않는 것, 또는 가운데 공백까지
+    // 지우는 것.
+    #[test]
+    fn clean_font_name_keeps_inner_spaces() {
+        for (raw, want) in [
+            ("함초롬바탕\r", "함초롬바탕"),
+            ("함초롬\r바탕", "함초롬바탕"),
+            ("HancomEQN\n", "HancomEQN"),
+            ("  Times New Roman\t ", "Times New Roman"),
+            ("\r\n", ""),
+            ("함초롬바탕", "함초롬바탕"),
+        ] {
+            assert_eq!(super::clean_font_name(raw), want, "{raw:?}");
+        }
     }
 
     // 이것을 실패시키는 것: `encoder/section.rs` 의 정규화 호출을 빼는 것.
     #[test]
-    fn section_body_equation_font_is_normalized() {
+    fn section_body_bookmark_name_is_normalized() {
         let (_, section) = encode_parts();
-        assert_eq!(attr_value(&section, "font", "BODY"), "BODYA B C D");
+        assert_eq!(attr_value(&section, "name", "BODY"), "BODYA B C D");
     }
 
     // 이것을 실패시키는 것: `encoder/shapes.rs` `serialize_with_root` 의 정규화 호출을 빼는 것.
@@ -1723,16 +1773,16 @@ mod attr_control_whitespace_call_site_tests {
 
     // 이것을 실패시키는 것: `encoder/section/memo.rs` 의 정규화 호출을 빼는 것.
     #[test]
-    fn memo_body_equation_font_is_normalized() {
+    fn memo_body_bookmark_name_is_normalized() {
         let (_, section) = encode_parts();
-        assert_eq!(attr_value(&section, "font", "MEMO"), "MEMOA B C D");
+        assert_eq!(attr_value(&section, "name", "MEMO"), "MEMOA B C D");
     }
 
     // 이것을 실패시키는 것: `encoder/section/header_footer.rs` 의 정규화 호출을 빼는 것.
     #[test]
-    fn header_footer_equation_font_is_normalized() {
+    fn header_footer_bookmark_name_is_normalized() {
         let (_, section) = encode_parts();
-        assert_eq!(attr_value(&section, "font", "HEAD"), "HEADA B C D");
+        assert_eq!(attr_value(&section, "name", "HEAD"), "HEADA B C D");
         assert_no_control_refs_in_start_tags("section0.xml", &section);
     }
 
