@@ -39,10 +39,14 @@ pub(crate) fn clean_font_name(name: &str) -> String {
 /// them literally, and an XML parser reads a literal one as a space
 /// (end-of-line handling folds CR LF into one LF, then attribute-value
 /// normalization turns each tab or LF into a space). Hancom reads the
-/// references instead: a style name `본&#13;문` shows only "본", a font face
-/// with `&#13;` leaves the font box empty, and an equation font with `&#10;`
-/// breaks the equation. Writing the space directly keeps the value that
-/// was read from 0.41 output, so no warning is raised.
+/// references instead and keeps the raw character: a style name `본&#13;문`
+/// shows only "본". Writing the space directly gives Hancom the value it
+/// read from 0.41 output (`본 문`, measured by re-saving in Hancom), so no
+/// warning is raised.
+///
+/// This restores 0.41's reading; it does not make every such value usable.
+/// A font name with a space at either end still matches no installed font,
+/// so font names are cleaned before serialization by [`clean_font_name`].
 ///
 /// `&#13;&#10;` (one line end) becomes one space; after that each remaining
 /// reference becomes one space. Only quoted attribute values inside start
