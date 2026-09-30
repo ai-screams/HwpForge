@@ -140,7 +140,7 @@ pub fn parse_section(
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let xml = preserve_ws_only_text(xml);
+    let xml = crate::wire_xml::preserve_ws_only_text(xml);
     let section: HxSection = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
@@ -340,7 +340,7 @@ pub(crate) fn build_wire_map_over_runs(
                             HxTextPart::Text(s) => {
                                 // The ws-only sentinel is the decoder's own mark,
                                 // not wire text: count what the run emits.
-                                let s = crate::schema::section::strip_ws_sentinel(s);
+                                let s = crate::wire_xml::strip_ws_sentinel(s);
                                 let n = s.encode_utf16().count() as u32;
                                 if n == 0 {
                                     continue;
@@ -1503,7 +1503,7 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             base_line: eq.base_line,
             text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
             // Same cleaning as the encoder, so a no-op round trip stays one.
-            font: crate::encoder::clean_font_name(&eq.font),
+            font: crate::wire_xml::clean_font_name(&eq.font),
             inst_id: None,
         })),
         char_shape_id,
@@ -5304,182 +5304,12 @@ mod tests {
     }
 }
 
-/// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
-/// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
-/// 사라진다. 문자 참조(`&#32;`)도 unescape 후 판정이라 같은 일을 겪는다
-/// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
-/// 노드를 살리고, [`HxText`] 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
-/// ws-only 판정은 literal 공백과 공백 문자 참조를 함께 본다
-/// ([`is_xml_whitespace`]) — quick-xml 0.42 가 텍스트의 CR 을 `&#13;` 로 쓰므로
-/// CR 하나만 든 run 이 이 형태로 온다.
-///
-/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)와 CDATA 는 건드리지
-/// 않는다 — 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
-fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
-    let mut result = mark_ws_only_text(xml, "<hp:t");
-    if let std::borrow::Cow::Borrowed(_) = result {
-        result = mark_ws_only_text(xml, "<t");
-    }
-    result
-}
-
-/// `content` (escape 된 원시 텍스트) 가 XML 공백만 담는지 — literal
-/// `' ' '\t' '\r' '\n'` 과 그 문자 참조(`&#32;` `&#9;` `&#13;` `&#10;`, 16진
-/// `&#x20;` 등, 앞자리 0 허용). 다른 참조·엔티티(`&amp;` 등)가 하나라도 있으면
-/// false 다.
-fn is_xml_whitespace(content: &str) -> bool {
-    let mut rest = content;
-    while let Some(c) = rest.chars().next() {
-        if matches!(c, ' ' | '\t' | '\r' | '\n') {
-            rest = &rest[1..];
-            continue;
-        }
-        let Some(body) = rest.strip_prefix("&#") else { return false };
-        let Some(end) = body.find(';') else { return false };
-        // Digits only: `from_str_radix`/`parse` would also take a leading `+`.
-        // XML CharRef takes a lowercase `x` only (quick-xml agrees).
-        let code = match body[..end].strip_prefix('x') {
-            Some(hex) if hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
-                u32::from_str_radix(hex, 16).ok()
-            }
-            None if body[..end].bytes().all(|b| b.is_ascii_digit()) => {
-                body[..end].parse::<u32>().ok()
-            }
-            _ => None,
-        };
-        if !matches!(code, Some(0x20 | 0x09 | 0x0D | 0x0A)) {
-            return false;
-        }
-        rest = &body[end + 1..];
-    }
-    true
-}
-
-/// Length of the document type declaration at the start of `rest`, up to and
-/// including its closing `>`: quoted literals and the `[...]` internal subset
-/// may hold `>`, `]` and `<hp:t>`-shaped text, and a comment or processing
-/// instruction inside the subset is skipped whole (its quotes and brackets are
-/// not markup). Runs to the end when unclosed (the parser then reports the
-/// malformed input).
-fn doctype_len(rest: &[u8]) -> usize {
-    let mut quote: Option<u8> = None;
-    let mut depth = 0usize;
-    let mut i = 0;
-    while i < rest.len() {
-        let b = rest[i];
-        if let Some(q) = quote {
-            if b == q {
-                quote = None;
-            }
-            i += 1;
-            continue;
-        }
-        let skip = [(&b"<!--"[..], &b"-->"[..]), (&b"<?"[..], &b"?>"[..])]
-            .into_iter()
-            .find(|(o, _)| rest[i..].starts_with(o));
-        if let Some((o, c)) = skip {
-            i = rest[i + o.len()..]
-                .windows(c.len())
-                .position(|w| w == c)
-                .map_or(rest.len(), |p| i + o.len() + p + c.len());
-            continue;
-        }
-        match b {
-            b'"' | b'\'' => quote = Some(b),
-            b'[' => depth += 1,
-            b']' => depth = depth.saturating_sub(1),
-            b'>' if depth == 0 => return i + 1,
-            _ => {}
-        }
-        i += 1;
-    }
-    rest.len()
-}
-
-/// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
-///
-/// 주석·CDATA·PI 안의 `<hp:t>` 모양 글자는 요소가 아니므로 건너뛴다 — 표시하면
-/// 수식 스크립트 같은 문자 데이터에 U+E000 이 박히고, 주석 안의 가짜 여는 태그가
-/// 뒤따르는 진짜 run 을 가린다.
-fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
-    let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
-    let mut out: Option<String> = None;
-    let mut last = 0usize;
-    let mut search = 0usize;
-    while let Some(rel) = xml[search..].find('<') {
-        let tag_start = search + rel;
-        let rest = &xml[tag_start..];
-        let skip = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
-            .into_iter()
-            .find(|(o, _)| rest.starts_with(o));
-        if let Some((o, c)) = skip {
-            search =
-                rest[o.len()..].find(c).map_or(xml.len(), |p| tag_start + o.len() + p + c.len());
-            continue;
-        }
-        if rest.starts_with("<!DOCTYPE") {
-            search = tag_start + doctype_len(rest.as_bytes());
-            continue;
-        }
-        if !rest.starts_with(open) {
-            search = tag_start + 1;
-            continue;
-        }
-        let after = &xml[tag_start + open.len()..];
-        // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
-        let Some(first) = after.chars().next() else { break };
-        if first != '>' && !first.is_ascii_whitespace() {
-            search = tag_start + open.len();
-            continue;
-        }
-        let Some(gt_rel) = after.find('>') else { break };
-        // 자기닫힘 `<hp:t/>` 는 콘텐츠 없음.
-        if after[..gt_rel].ends_with('/') {
-            search = tag_start + open.len() + gt_rel + 1;
-            continue;
-        }
-        let content_start = tag_start + open.len() + gt_rel + 1;
-        let Some(close_rel) = xml[content_start..].find(close) else { break };
-        let content = &xml[content_start..content_start + close_rel];
-        let ws_only = !content.is_empty() && !content.contains('<') && is_xml_whitespace(content);
-        if ws_only {
-            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
-            buf.push_str(&xml[last..content_start]);
-            buf.push('\u{E000}');
-            last = content_start;
-        }
-        search = content_start + close_rel + close.len();
-    }
-    match out {
-        Some(mut buf) => {
-            buf.push_str(&xml[last..]);
-            std::borrow::Cow::Owned(buf)
-        }
-        None => std::borrow::Cow::Borrowed(xml),
-    }
-}
-
-// ── ws-only `<hp:t>` 보존 테스트 (quick-xml de 무시 우회) ──────────────────
+// ── ws-only `<hp:t>` 보존 테스트: 섹션 파싱·와이어 맵 경로 (스캐너 단위 테스트는 `wire_xml`) ──
 
 #[cfg(test)]
 mod ws_preserve_tests {
     use super::*;
-
-    #[test]
-    fn preserve_ws_only_text_marks_only_pure_whitespace() {
-        let xml = "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>";
-        let out = preserve_ws_only_text(xml);
-        assert_eq!(
-            out,
-            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>"
-        );
-    }
-
-    #[test]
-    fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
-        let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
-        assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
-    }
+    use crate::wire_xml::preserve_ws_only_text;
 
     #[test]
     fn ws_only_run_survives_section_parse() {
@@ -5558,73 +5388,5 @@ mod ws_preserve_tests {
             cache.lines[1].textpos
         };
         assert_eq!(core_textpos("&#13;"), core_textpos("x"));
-    }
-
-    // `<hp:t>` inside a comment, CDATA section or processing instruction is
-    // character data, not an element: marking it would plant U+E000 in, e.g.,
-    // an equation script that no consumer strips.
-    // 이것을 실패시키는 것: 스캐너가 주석·CDATA·PI 를 건너뛰지 않는 것.
-    #[test]
-    fn markup_that_is_not_an_element_is_left_alone() {
-        for xml in [
-            "<hp:script><![CDATA[<hp:t>&#13;</hp:t>]]></hp:script>",
-            "<hp:script><![CDATA[<hp:t> </hp:t>]]></hp:script>",
-            "<!-- <hp:t> --><x/>",
-            "<?pi <hp:t> </hp:t>?>",
-        ] {
-            assert_eq!(preserve_ws_only_text(xml), xml, "{xml}");
-        }
-    }
-
-    // A document type declaration can hold `<hp:t>`-shaped text in an entity
-    // value or a quoted literal, and `]` / `>` inside quotes do not end it.
-    // 이것을 실패시키는 것: DOCTYPE 을 건너뛰지 않는 것(가짜 `<hp:t>` 가 진짜 run 을 가림),
-    // 따옴표 안의 `]>` 에서 끝으로 보는 것, 또는 내부 subset 의 첫 선언 `>` 에서
-    // 끝으로 보는 것(둘째 선언의 `<hp:t>` 가 진짜 run 을 가림), 또는 내부 subset 의
-    // 주석·PI 안 따옴표·괄호를 구문으로 보는 것(파일 끝까지 DOCTYPE 이 됨).
-    #[test]
-    fn a_doctype_is_skipped_whole() {
-        for doctype in [
-            r#"<!DOCTYPE sec [<!ENTITY e "<hp:t>">]>"#,
-            r#"<!DOCTYPE sec [<!ENTITY e "]><hp:t>">]>"#,
-            r#"<!DOCTYPE sec SYSTEM "x.dtd">"#,
-            r#"<!DOCTYPE sec [<!ENTITY a "x"><!ENTITY e "<hp:t>">]>"#,
-            r#"<!DOCTYPE sec [<!-- " -->]>"#,
-            r#"<!DOCTYPE sec [<!-- ]><hp:t> </hp:t> -->]>"#,
-            r#"<!DOCTYPE sec [<?pi ' ] ?>]>"#,
-        ] {
-            let xml = format!("{doctype}<hp:t> </hp:t>");
-            let want = format!("{doctype}<hp:t>\u{E000} </hp:t>");
-            assert_eq!(preserve_ws_only_text(&xml), want, "{doctype}");
-        }
-    }
-
-    // An unclosed declaration runs to the end: nothing after it is marked, and
-    // the parser reports the malformed input.
-    // 이것을 실패시키는 것: 닫히지 않은 DOCTYPE 에서 끝 대신 중간에서 멈추는 것.
-    #[test]
-    fn an_unclosed_doctype_runs_to_the_end() {
-        let xml = "<!DOCTYPE sec [<hp:t> </hp:t>";
-        assert_eq!(preserve_ws_only_text(xml), xml);
-    }
-
-    // 이것을 실패시키는 것: 주석을 건너뛰지 않는 것 — 주석 안의 가짜 `<hp:t>` 가 진짜
-    // `</hp:t>` 까지 먹어 뒤따르는 공백 run 이 표시되지 않는다.
-    #[test]
-    fn a_fake_tag_in_a_comment_does_not_hide_a_real_run() {
-        let xml = "<!-- <hp:t> --><hp:t> </hp:t>";
-        assert_eq!(preserve_ws_only_text(xml), "<!-- <hp:t> --><hp:t>\u{E000} </hp:t>");
-    }
-
-    // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
-    // 보는 것 — sentinel 이 붙어 본문 앞에 U+E000 이 남는다.
-    #[test]
-    fn non_whitespace_references_are_not_marked() {
-        for wire in
-            ["&#65;", "&amp;#13;", "&#13;x", "&#1;", "&#13", "&#+13;", "&#x+d;", "&#;", "&#X20;"]
-        {
-            let xml = format!("<hp:t>{wire}</hp:t>");
-            assert_eq!(preserve_ws_only_text(&xml), xml, "{wire}");
-        }
     }
 }

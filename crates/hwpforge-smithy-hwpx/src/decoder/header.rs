@@ -94,7 +94,7 @@ fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
                 store.push_font(HwpxFont {
                     id: font.id,
                     // Same cleaning as the encoder, so a no-op round trip stays one.
-                    face_name: crate::encoder::clean_font_name(&font.face),
+                    face_name: crate::wire_xml::clean_font_name(&font.face),
                     lang: group.lang.clone(),
                 });
             }

@@ -46,7 +46,7 @@ pub(crate) fn encode_header(
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
-    let head_xml = super::normalize_attr_control_whitespace(&head_xml);
+    let head_xml = crate::wire_xml::normalize_attr_control_whitespace(&head_xml);
 
     // quick_xml serializes HxHead as `<head version="..." secCnt="...">...</head>`.
     // We need to extract the inner content and wrap it in our xmlns-decorated
@@ -567,7 +567,7 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
                 .into_iter()
                 .map(|f| HxFont {
                     id: f.id,
-                    face: super::clean_font_name(&f.face_name),
+                    face: crate::wire_xml::clean_font_name(&f.face_name),
                     font_type: "TTF".into(),
                     is_embedded: 0,
                     type_info: Some(default_type_info()),

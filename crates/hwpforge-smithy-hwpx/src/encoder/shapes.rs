@@ -1057,7 +1057,7 @@ fn serialize_with_root<T: serde::Serialize>(value: &T, root: &str) -> HwpxResult
         .serialize(ser)
         .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
     // Most fragments hold no control-character reference; keep `buf` then.
-    match super::normalize_attr_control_whitespace(&buf) {
+    match crate::wire_xml::normalize_attr_control_whitespace(&buf) {
         std::borrow::Cow::Owned(normalized) => Ok(normalized),
         std::borrow::Cow::Borrowed(_) => Ok(buf),
     }

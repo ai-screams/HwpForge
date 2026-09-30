@@ -169,7 +169,7 @@ pub(super) fn encode_memo_sublist(
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let xml = quick_xml::se::to_string(&sublist)
         .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
-    let xml = crate::encoder::normalize_attr_control_whitespace(&xml);
+    let xml = crate::wire_xml::normalize_attr_control_whitespace(&xml);
     // Fix root element: <HxSubList ...>...</HxSubList> → <hp:subList ...>...</hp:subList>
     let xml = xml.replacen("<HxSubList", "<hp:subList", 1);
     let xml = xml.replacen("</HxSubList>", "</hp:subList>", 1);

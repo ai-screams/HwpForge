@@ -37,7 +37,7 @@ pub(super) fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
         text_color: text_color.to_hex_rgb(),
         base_unit: 1000,
         line_mode: "CHAR".to_string(),
-        font: crate::encoder::clean_font_name(font),
+        font: crate::wire_xml::clean_font_name(font),
 
         sz: Some(HxTableSz {
             width: w,
