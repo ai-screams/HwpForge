@@ -29,6 +29,32 @@ pub(crate) fn clean_font_name(name: &str) -> String {
     without_controls.trim().to_string()
 }
 
+/// Comments, CDATA sections and processing instructions: markup whose
+/// content is character data, never an element or attribute.
+const NON_ELEMENT_MARKUP: [(&[u8], &[u8]); 3] =
+    [(b"<!--", b"-->"), (b"<![CDATA[", b"]]>"), (b"<?", b"?>")];
+
+/// Comments and processing instructions, the only such markup a DTD internal
+/// subset can hold.
+const DTD_NON_DECLARATION_MARKUP: [(&[u8], &[u8]); 2] = [(b"<!--", b"-->"), (b"<?", b"?>")];
+
+/// If `rest` starts one of `kinds`, its length through the closing token (the
+/// whole of `rest` when unclosed: the parser then reports the malformed input).
+fn markup_len(rest: &[u8], kinds: &[(&[u8], &[u8])]) -> Option<usize> {
+    let (open, close) = kinds.iter().find(|(open, _)| rest.starts_with(open))?;
+    Some(
+        rest[open.len()..]
+            .windows(close.len())
+            .position(|w| w == *close)
+            .map_or(rest.len(), |p| open.len() + p + close.len()),
+    )
+}
+
+/// XML whitespace (`S` in the XML grammar).
+fn is_xml_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
 /// Rewrites the control-whitespace character references that quick-xml's
 /// serde serializer writes in attribute values (`&#9;`, `&#10;`, `&#13;`) as
 /// plain spaces.
@@ -76,21 +102,8 @@ pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> std::borrow::Cow<'
     while i < bytes.len() {
         if !in_tag {
             if bytes[i] == b'<' {
-                let rest = &bytes[i..];
-                let skip: Option<(usize, &[u8])> = if rest.starts_with(b"<!--") {
-                    Some((4, b"-->"))
-                } else if rest.starts_with(b"<![CDATA[") {
-                    Some((9, b"]]>"))
-                } else if rest.starts_with(b"<?") {
-                    Some((2, b"?>"))
-                } else {
-                    None
-                };
-                if let Some((open, close)) = skip {
-                    i = bytes[i + open..]
-                        .windows(close.len())
-                        .position(|w| w == close)
-                        .map_or(bytes.len(), |p| i + open + p + close.len());
+                if let Some(len) = markup_len(&bytes[i..], &NON_ELEMENT_MARKUP) {
+                    i += len;
                     continue;
                 }
                 in_tag = true;
@@ -169,7 +182,7 @@ pub(crate) fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
 fn is_xml_whitespace(content: &str) -> bool {
     let mut rest = content;
     while let Some(c) = rest.chars().next() {
-        if matches!(c, ' ' | '\t' | '\r' | '\n') {
+        if is_xml_space(c) {
             rest = &rest[1..];
             continue;
         }
@@ -213,14 +226,8 @@ fn doctype_len(rest: &[u8]) -> usize {
             i += 1;
             continue;
         }
-        let skip = [(&b"<!--"[..], &b"-->"[..]), (&b"<?"[..], &b"?>"[..])]
-            .into_iter()
-            .find(|(o, _)| rest[i..].starts_with(o));
-        if let Some((o, c)) = skip {
-            i = rest[i + o.len()..]
-                .windows(c.len())
-                .position(|w| w == c)
-                .map_or(rest.len(), |p| i + o.len() + p + c.len());
+        if let Some(len) = markup_len(&rest[i..], &DTD_NON_DECLARATION_MARKUP) {
+            i += len;
             continue;
         }
         match b {
@@ -248,12 +255,8 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
     while let Some(rel) = xml[search..].find('<') {
         let tag_start = search + rel;
         let rest = &xml[tag_start..];
-        let skip = [("<!--", "-->"), ("<![CDATA[", "]]>"), ("<?", "?>")]
-            .into_iter()
-            .find(|(o, _)| rest.starts_with(o));
-        if let Some((o, c)) = skip {
-            search =
-                rest[o.len()..].find(c).map_or(xml.len(), |p| tag_start + o.len() + p + c.len());
+        if let Some(len) = markup_len(rest.as_bytes(), &NON_ELEMENT_MARKUP) {
+            search = tag_start + len;
             continue;
         }
         if rest.starts_with("<!DOCTYPE") {
@@ -305,7 +308,7 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
 /// run 이라 실사용이 없다 — 전처리 rustdoc 참조.)
 pub(crate) fn strip_ws_sentinel(s: &str) -> &str {
     if let Some(rest) = s.strip_prefix('\u{E000}') {
-        if !rest.is_empty() && rest.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n')) {
+        if !rest.is_empty() && rest.chars().all(is_xml_space) {
             return rest;
         }
     }
@@ -435,6 +438,18 @@ mod attr_control_whitespace_tests {
 #[cfg(test)]
 mod ws_scanner_tests {
     use super::*;
+
+    // An unclosed comment runs to the end: nothing after `<!--` is markup, so
+    // a run-shaped string inside it is not marked and no attribute in it is
+    // rewritten (the parser then reports the malformed input).
+    // 이것을 실패시키는 것: 닫히지 않은 주석에서 여는 토큰 뒤부터 다시 훑는 것.
+    #[test]
+    fn an_unclosed_comment_runs_to_the_end() {
+        let marked = "<!-- <hp:t> </hp:t>";
+        assert_eq!(preserve_ws_only_text(marked), marked);
+        let attr = r#"<!-- <a x="A&#9;B"/>"#;
+        assert_eq!(normalize_attr_control_whitespace(attr), attr);
+    }
 
     #[test]
     fn preserve_ws_only_text_marks_only_pure_whitespace() {
