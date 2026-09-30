@@ -5339,23 +5339,41 @@ fn is_xml_whitespace(content: &str) -> bool {
 
 /// Length of the document type declaration at the start of `rest`, up to and
 /// including its closing `>`: quoted literals and the `[...]` internal subset
-/// may hold `>`, `]` and `<hp:t>`-shaped text. Runs to the end when unclosed
-/// (the parser then reports the malformed input).
+/// may hold `>`, `]` and `<hp:t>`-shaped text, and a comment or processing
+/// instruction inside the subset is skipped whole (its quotes and brackets are
+/// not markup). Runs to the end when unclosed (the parser then reports the
+/// malformed input).
 fn doctype_len(rest: &[u8]) -> usize {
     let mut quote: Option<u8> = None;
     let mut depth = 0usize;
-    for (i, &b) in rest.iter().enumerate() {
-        match quote {
-            Some(q) if b == q => quote = None,
-            Some(_) => {}
-            None => match b {
-                b'"' | b'\'' => quote = Some(b),
-                b'[' => depth += 1,
-                b']' => depth = depth.saturating_sub(1),
-                b'>' if depth == 0 => return i + 1,
-                _ => {}
-            },
+    let mut i = 0;
+    while i < rest.len() {
+        let b = rest[i];
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
         }
+        let skip = [(&b"<!--"[..], &b"-->"[..]), (&b"<?"[..], &b"?>"[..])]
+            .into_iter()
+            .find(|(o, _)| rest[i..].starts_with(o));
+        if let Some((o, c)) = skip {
+            i = rest[i + o.len()..]
+                .windows(c.len())
+                .position(|w| w == c)
+                .map_or(rest.len(), |p| i + o.len() + p + c.len());
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => quote = Some(b),
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b'>' if depth == 0 => return i + 1,
+            _ => {}
+        }
+        i += 1;
     }
     rest.len()
 }
@@ -5544,7 +5562,8 @@ mod ws_preserve_tests {
     // value or a quoted literal, and `]` / `>` inside quotes do not end it.
     // 이것을 실패시키는 것: DOCTYPE 을 건너뛰지 않는 것(가짜 `<hp:t>` 가 진짜 run 을 가림),
     // 따옴표 안의 `]>` 에서 끝으로 보는 것, 또는 내부 subset 의 첫 선언 `>` 에서
-    // 끝으로 보는 것(둘째 선언의 `<hp:t>` 가 진짜 run 을 가림).
+    // 끝으로 보는 것(둘째 선언의 `<hp:t>` 가 진짜 run 을 가림), 또는 내부 subset 의
+    // 주석·PI 안 따옴표·괄호를 구문으로 보는 것(파일 끝까지 DOCTYPE 이 됨).
     #[test]
     fn a_doctype_is_skipped_whole() {
         for doctype in [
@@ -5552,11 +5571,23 @@ mod ws_preserve_tests {
             r#"<!DOCTYPE sec [<!ENTITY e "]><hp:t>">]>"#,
             r#"<!DOCTYPE sec SYSTEM "x.dtd">"#,
             r#"<!DOCTYPE sec [<!ENTITY a "x"><!ENTITY e "<hp:t>">]>"#,
+            r#"<!DOCTYPE sec [<!-- " -->]>"#,
+            r#"<!DOCTYPE sec [<!-- ]> [ -->]>"#,
+            r#"<!DOCTYPE sec [<?pi ' ] ?>]>"#,
         ] {
             let xml = format!("{doctype}<hp:t> </hp:t>");
             let want = format!("{doctype}<hp:t>\u{E000} </hp:t>");
             assert_eq!(preserve_ws_only_text(&xml), want, "{doctype}");
         }
+    }
+
+    // An unclosed declaration runs to the end: nothing after it is marked, and
+    // the parser reports the malformed input.
+    // 이것을 실패시키는 것: 닫히지 않은 DOCTYPE 에서 끝 대신 중간에서 멈추는 것.
+    #[test]
+    fn an_unclosed_doctype_runs_to_the_end() {
+        let xml = "<!DOCTYPE sec [<hp:t> </hp:t>";
+        assert_eq!(preserve_ws_only_text(xml), xml);
     }
 
     // 이것을 실패시키는 것: 주석을 건너뛰지 않는 것 — 주석 안의 가짜 `<hp:t>` 가 진짜
