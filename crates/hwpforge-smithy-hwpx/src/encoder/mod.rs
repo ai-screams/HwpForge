@@ -19,13 +19,15 @@ pub(crate) mod shapes;
 /// `hp:equation@font`): control characters are removed and the ends are
 /// trimmed; spaces inside the name are kept (`Times New Roman`).
 ///
-/// A control character is never part of a real font name, and Hancom matches
-/// the name against installed fonts exactly: with a space left in its place
-/// (what [`normalize_attr_control_whitespace`] would write, and what Hancom
-/// reads from 0.41's literal control character) `함초롬바탕 ` leaves the font
-/// box empty and `HancomEQN ` breaks the equation. Cleaning the name lets it
-/// match. No warning is raised: the removed characters carry no meaning in a
-/// font name (the change is recorded in the changelog).
+/// Hancom matches the name against installed fonts exactly, and neither a
+/// control character nor a space at either end counts toward a name it can
+/// match: with a space in place of the control character (what
+/// [`normalize_attr_control_whitespace`] would write, and what Hancom reads
+/// from 0.41's literal control character) `함초롬바탕 ` leaves the font box
+/// empty and `HancomEQN ` breaks the equation, and ` 함초롬바탕` does the
+/// same. Cleaning the name lets it match. The decoder reads names through
+/// this function too, so decode→encode→decode stays a no-op for edits. No
+/// warning is raised (the change is recorded in the changelog).
 pub(crate) fn clean_font_name(name: &str) -> String {
     let without_controls: String = name.chars().filter(|c| !c.is_control()).collect();
     without_controls.trim().to_string()
@@ -46,7 +48,11 @@ pub(crate) fn clean_font_name(name: &str) -> String {
 ///
 /// This restores 0.41's reading; it does not make every such value usable.
 /// A font name with a space at either end still matches no installed font,
-/// so font names are cleaned before serialization by [`clean_font_name`].
+/// so the font list (`hh:font@face`) and equation font (`hp:equation@font`)
+/// are cleaned before serialization by [`clean_font_name`]. The text-art font
+/// (`hp:textartPr@fontName`) is written by its own escape path and is not
+/// cleaned here; text-art attributes are left as 0.41 wrote them (their line
+/// breaks in the `text` attribute are issue #199).
 ///
 /// `&#13;&#10;` (one line end) becomes one space; after that each remaining
 /// reference becomes one space. Only quoted attribute values inside start
