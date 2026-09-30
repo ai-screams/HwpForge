@@ -3,13 +3,13 @@
 //! Converts XML schema types (`HxCharPr`, `HxParaPr`, `HxFont`) into
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
-use crate::decoder::xml_from_str;
 use hwpforge_foundation::{
     BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
     HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
     TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 
+use crate::decoder::xml_from_str;
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
 use crate::schema::header::{

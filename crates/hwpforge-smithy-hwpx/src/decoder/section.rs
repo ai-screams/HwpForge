@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use crate::decoder::xml_from_str;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnLine, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
@@ -24,6 +23,7 @@ use hwpforge_foundation::{
 };
 
 use crate::color::parse_hex_color_raw;
+use crate::decoder::xml_from_str;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,

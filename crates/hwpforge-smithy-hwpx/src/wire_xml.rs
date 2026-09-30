@@ -11,6 +11,8 @@
 //!
 //! Every function here scans raw XML text; none of them parses XML.
 
+use std::borrow::Cow;
+
 /// Cleans a font name before it is written (`hh:font@face`,
 /// `hp:equation@font`): control characters are removed and the ends are
 /// trimmed; spaces inside the name are kept (`Times New Roman`).
@@ -23,10 +25,12 @@
 /// empty and `HancomEQN ` breaks the equation, and ` 함초롬바탕` does the
 /// same. Cleaning the name lets it match. The decoder reads names through
 /// this function too, so decode→encode→decode stays a no-op for edits. No
-/// warning is raised (the change is recorded in the changelog).
+/// warning is raised; the release notes record the change.
 pub(crate) fn clean_font_name(name: &str) -> String {
-    let without_controls: String = name.chars().filter(|c| !c.is_control()).collect();
-    without_controls.trim().to_string()
+    name.trim_matches(|c: char| c.is_control() || c.is_whitespace())
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect()
 }
 
 /// Comments, CDATA sections and processing instructions: markup whose
@@ -54,6 +58,10 @@ fn markup_len(rest: &[u8], kinds: &[(&[u8], &[u8])]) -> Option<usize> {
 fn is_xml_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n')
 }
+
+/// The references [`normalize_attr_control_whitespace`] rewrites, each to one
+/// space. The CR LF pair comes first so that it becomes one space, not two.
+const CONTROL_WS_REFS: [&[u8]; 4] = [b"&#13;&#10;", b"&#9;", b"&#10;", b"&#13;"];
 
 /// Rewrites the control-whitespace character references that quick-xml's
 /// serde serializer writes in attribute values (`&#9;`, `&#10;`, `&#13;`) as
@@ -86,9 +94,9 @@ fn is_xml_space(c: char) -> bool {
 /// The input must be quick-xml serde output: it relies on every `<` in
 /// text and attribute values being escaped, so an unescaped `<` starts
 /// markup. It is not a general XML rewriter.
-pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> Cow<'_, str> {
     if !xml.contains("&#") {
-        return std::borrow::Cow::Borrowed(xml);
+        return Cow::Borrowed(xml);
     }
     // All matching is on bytes: `i` may sit inside a multi-byte UTF-8
     // sequence, and slicing `xml` there would panic. Slices of `xml` are
@@ -125,61 +133,66 @@ pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> std::borrow::Cow<'
                 i += 1;
             }
             Some(_) => {
-                let rest = &bytes[i..];
-                let len = if rest.starts_with(b"&#13;&#10;") {
-                    10
-                } else if rest.starts_with(b"&#9;") {
-                    4
-                } else if rest.starts_with(b"&#10;") || rest.starts_with(b"&#13;") {
-                    5
-                } else {
-                    0
-                };
-                if len == 0 {
+                let Some(reference) = CONTROL_WS_REFS.iter().find(|r| bytes[i..].starts_with(r))
+                else {
                     i += 1;
                     continue;
-                }
+                };
                 let buf = out.get_or_insert_with(|| String::with_capacity(xml.len()));
                 buf.push_str(&xml[copied..i]);
                 buf.push(' ');
-                i += len;
+                i += reference.len();
                 copied = i;
             }
         }
     }
     match out {
-        None => std::borrow::Cow::Borrowed(xml),
+        None => Cow::Borrowed(xml),
         Some(mut buf) => {
             buf.push_str(&xml[copied..]);
-            std::borrow::Cow::Owned(buf)
+            Cow::Owned(buf)
         }
     }
 }
 
-/// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
-/// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
-/// 사라진다. 문자 참조(`&#32;`)도 unescape 후 판정이라 같은 일을 겪는다
-/// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
-/// 노드를 살리고, [`HxText`](crate::schema::section::HxText) 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
-/// ws-only 판정은 literal 공백과 공백 문자 참조를 함께 본다
-/// ([`is_xml_whitespace`]) — quick-xml 0.42 가 텍스트의 CR 을 `&#13;` 로 쓰므로
-/// CR 하나만 든 run 이 이 형태로 온다.
+/// The mark [`preserve_ws_only_text`] puts in front of a whitespace-only run
+/// (a private-use character a real document has no reason to hold there).
+const WS_SENTINEL: char = '\u{E000}';
+
+/// A text element spelling the scanner looks for: opening prefix, closing tag.
+type TextTag = (&'static str, &'static str);
+
+/// Section parts write `<hp:t>`; the fragments some tests parse write `<t>`.
+const TEXT_TAGS: [TextTag; 2] = [("<hp:t", "</hp:t>"), ("<t", "</t>")];
+
+/// Marks every whitespace-only `<hp:t>` so quick-xml's serde decode keeps it.
 ///
-/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)와 CDATA 는 건드리지
-/// 않는다 — 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
-pub(crate) fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
-    let mut result = mark_ws_only_text(xml, "<hp:t");
-    if let std::borrow::Cow::Borrowed(_) = result {
-        result = mark_ws_only_text(xml, "<t");
+/// quick-xml's serde decoder drops a text node that holds only whitespace,
+/// so `<hp:t> </hp:t>` (a space-only run, which Hancom writes too) would
+/// vanish. It judges after unescaping, so a run of whitespace references
+/// (`&#32;`, and `&#13;`, which quick-xml 0.42 writes for a lone CR) vanishes
+/// the same way. Before the parse, [`WS_SENTINEL`] is put in front of such
+/// content; [`strip_ws_sentinel`] takes it off where the text is read
+/// ([`HxText`](crate::schema::section::HxText) and the wire map). A document
+/// that itself holds a run of exactly the sentinel plus whitespace would lose
+/// that sentinel; no real document has been seen to.
+///
+/// Mixed content (an element inside `<hp:t>`) and CDATA are left alone. A
+/// section uses one spelling of the text element, so the unprefixed `<t>`
+/// pass runs only when the prefixed pass found nothing to mark.
+pub(crate) fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
+    let [prefixed, unprefixed] = TEXT_TAGS;
+    match mark_ws_only_text(xml, prefixed) {
+        Cow::Borrowed(_) => mark_ws_only_text(xml, unprefixed),
+        marked => marked,
     }
-    result
 }
 
-/// `content` (escape 된 원시 텍스트) 가 XML 공백만 담는지 — literal
-/// `' ' '\t' '\r' '\n'` 과 그 문자 참조(`&#32;` `&#9;` `&#13;` `&#10;`, 16진
-/// `&#x20;` 등, 앞자리 0 허용). 다른 참조·엔티티(`&amp;` 등)가 하나라도 있으면
-/// false 다.
-fn is_xml_whitespace(content: &str) -> bool {
+/// Whether escaped element content holds only XML whitespace: literal
+/// `' ' '\t' '\r' '\n'` or references to them (`&#32;` `&#9;` `&#13;` `&#10;`,
+/// or hexadecimal `&#x20;`, leading zeros allowed). Any other reference or
+/// entity (`&amp;`, …), or markup, makes it false.
+fn is_ws_only_wire_text(content: &str) -> bool {
     let mut rest = content;
     while let Some(c) = rest.chars().next() {
         if is_xml_space(c) {
@@ -242,13 +255,13 @@ fn doctype_len(rest: &[u8]) -> usize {
     rest.len()
 }
 
-/// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
+/// One pass of [`preserve_ws_only_text`] for one spelling of the text element.
 ///
-/// 주석·CDATA·PI 안의 `<hp:t>` 모양 글자는 요소가 아니므로 건너뛴다 — 표시하면
-/// 수식 스크립트 같은 문자 데이터에 U+E000 이 박히고, 주석 안의 가짜 여는 태그가
-/// 뒤따르는 진짜 run 을 가린다.
-fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
-    let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
+/// Comments, CDATA sections, processing instructions and the document type
+/// declaration are skipped: `<hp:t>`-shaped text inside them is character
+/// data, and marking it would plant [`WS_SENTINEL`] in, e.g., an equation
+/// script, or let a fake opening tag hide the real run after it.
+fn mark_ws_only_text<'a>(xml: &'a str, (open, close): TextTag) -> Cow<'a, str> {
     let mut out: Option<String> = None;
     let mut last = 0usize;
     let mut search = 0usize;
@@ -268,14 +281,14 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
             continue;
         }
         let after = &xml[tag_start + open.len()..];
-        // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
+        // Not `<hp:tab/>` and the like: the name ends at `>` or whitespace.
         let Some(first) = after.chars().next() else { break };
-        if first != '>' && !first.is_ascii_whitespace() {
+        if first != '>' && !is_xml_space(first) {
             search = tag_start + open.len();
             continue;
         }
         let Some(gt_rel) = after.find('>') else { break };
-        // 자기닫힘 `<hp:t/>` 는 콘텐츠 없음.
+        // A self-closing `<hp:t/>` has no content.
         if after[..gt_rel].ends_with('/') {
             search = tag_start + open.len() + gt_rel + 1;
             continue;
@@ -283,11 +296,11 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
         let content_start = tag_start + open.len() + gt_rel + 1;
         let Some(close_rel) = xml[content_start..].find(close) else { break };
         let content = &xml[content_start..content_start + close_rel];
-        let ws_only = !content.is_empty() && !content.contains('<') && is_xml_whitespace(content);
-        if ws_only {
-            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
+        if !content.is_empty() && is_ws_only_wire_text(content) {
+            let buf = out
+                .get_or_insert_with(|| String::with_capacity(xml.len() + WS_SENTINEL.len_utf8()));
             buf.push_str(&xml[last..content_start]);
-            buf.push('\u{E000}');
+            buf.push(WS_SENTINEL);
             last = content_start;
         }
         search = content_start + close_rel + close.len();
@@ -295,19 +308,17 @@ fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> 
     match out {
         Some(mut buf) => {
             buf.push_str(&xml[last..]);
-            std::borrow::Cow::Owned(buf)
+            Cow::Owned(buf)
         }
-        None => std::borrow::Cow::Borrowed(xml),
+        None => Cow::Borrowed(xml),
     }
 }
 
-/// 디코더 전처리(`preserve_ws_only_text`)가 ws-only `<hp:t>` 콘텐츠 선두에
-/// 붙인 sentinel `U+E000` 을 대칭 제거한다. 조건은 전처리와 정확히 동형 —
-/// "선두 U+E000 + 나머지 전부 XML whitespace" 일 때만 1글자 벗긴다.
-/// (원본 문서가 그 정확한 형태의 텍스트를 가질 이론적 위험은 PUA 단독+공백
-/// run 이라 실사용이 없다 — 전처리 rustdoc 참조.)
+/// Takes off the [`WS_SENTINEL`] that [`preserve_ws_only_text`] put in front
+/// of a whitespace-only run. It mirrors that condition exactly: the mark comes
+/// off only when the rest is non-empty XML whitespace.
 pub(crate) fn strip_ws_sentinel(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix('\u{E000}') {
+    if let Some(rest) = s.strip_prefix(WS_SENTINEL) {
         if !rest.is_empty() && rest.chars().all(is_xml_space) {
             return rest;
         }
@@ -392,24 +403,6 @@ mod attr_control_whitespace_tests {
         assert!(matches!(norm(src), Cow::Borrowed(s) if s == src));
     }
 
-    // 한컴 판정(VG-1) 입력을 0.42 serde 가 쓰는 형태 그대로 넣는다. 참조가 남으면 한컴에서
-    // 스타일 이름이 잘린다. (글꼴 이름·수식 글꼴은 serde 전에 `clean_font_name` 이 정리해
-    // 이 함수까지 제어 문자가 오지 않는다 — 공백으로 두면 한컴이 글꼴을 못 찾는다, VG-2·3.)
-    // 이것을 실패시키는 것: `&#9;`·`&#10;`·`&#13;` 중 하나의 치환을 빼는 것.
-    #[test]
-    fn hancom_verdict_inputs_leave_no_references() {
-        let cases = [
-            (
-                r#"<hh:style name="바탕&#10;글" engName="Nor&#9;mal"/>"#,
-                r#"<hh:style name="바탕 글" engName="Nor mal"/>"#,
-            ),
-            (r#"<hh:style name="본&#13;문"/>"#, r#"<hh:style name="본 문"/>"#),
-        ];
-        for (src, want) in cases {
-            assert_eq!(norm(src), want);
-        }
-    }
-
     // 이것을 실패시키는 것: 바뀐 것이 없어도 `Owned` 로 새로 할당하는 것.
     #[test]
     fn unchanged_input_is_borrowed() {
@@ -417,19 +410,27 @@ mod attr_control_whitespace_tests {
             assert!(matches!(norm(src), Cow::Borrowed(_)), "{src}");
         }
     }
-    // 이것을 실패시키는 것: 제어 문자만 지우고 앞뒤를 자르지 않는 것, 또는 가운데 공백까지
-    // 지우는 것.
+}
+
+#[cfg(test)]
+mod clean_font_name_tests {
+    use super::clean_font_name;
+
+    // 이것을 실패시키는 것: 제어 문자만 지우고 앞뒤를 자르지 않는 것, 가운데 공백까지 지우는 것,
+    // 또는 가운데 제어 문자를 남기는 것.
     #[test]
-    fn clean_font_name_keeps_inner_spaces() {
+    fn control_characters_go_and_only_edge_spaces_are_trimmed() {
         for (raw, want) in [
             ("함초롬바탕\r", "함초롬바탕"),
             ("함초롬\r바탕", "함초롬바탕"),
             ("HancomEQN\n", "HancomEQN"),
             ("  Times New Roman\t ", "Times New Roman"),
+            (" \r 윤명조440", "윤명조440"),
+            ("Times \u{1}New", "Times New"),
             ("\r\n", ""),
             ("함초롬바탕", "함초롬바탕"),
         ] {
-            assert_eq!(super::clean_font_name(raw), want, "{raw:?}");
+            assert_eq!(clean_font_name(raw), want, "{raw:?}");
         }
     }
 }
@@ -438,32 +439,43 @@ mod attr_control_whitespace_tests {
 mod ws_scanner_tests {
     use super::*;
 
-    // An unclosed comment runs to the end: nothing after `<!--` is markup, so
-    // a run-shaped string inside it is not marked and no attribute in it is
-    // rewritten (the parser then reports the malformed input).
+    // An unclosed comment runs to the end for both scanners that share
+    // `markup_len`: nothing after `<!--` is marked or rewritten (the parser
+    // then reports the malformed input).
     // 이것을 실패시키는 것: 닫히지 않은 주석에서 여는 토큰 뒤부터 다시 훑는 것.
     #[test]
-    fn an_unclosed_comment_runs_to_the_end() {
+    fn an_unclosed_comment_hides_the_rest_from_both_scanners() {
         let marked = "<!-- <hp:t> </hp:t>";
         assert_eq!(preserve_ws_only_text(marked), marked);
         let attr = r#"<!-- <a x="A&#9;B"/>"#;
         assert_eq!(normalize_attr_control_whitespace(attr), attr);
     }
 
+    // 이것을 실패시키는 것: 공백 판정을 빼거나 느슨하게 하는 것 — `a`·`  b` run 에도 표시가
+    // 붙는다. 또는 빈 run 을 공백 전용으로 치는 것.
     #[test]
     fn preserve_ws_only_text_marks_only_pure_whitespace() {
-        let xml = "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>";
+        let xml =
+            "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t></hp:t><hp:t/></hp:run>";
         let out = preserve_ws_only_text(xml);
         assert_eq!(
             out,
-            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>"
+            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t></hp:t><hp:t/></hp:run>"
         );
     }
 
+    // Mixed content is left alone, and an element whose name only starts like
+    // the text element (`<hp:tbl>`) is not read as a run.
+    // 이것을 실패시키는 것: 요소 이름 뒤 글자 검사를 빼는 것 — `<hp:tbl>` 을 run 으로 읽어
+    // 첫 `</hp:t>` 까지 건너뛰므로 그 안의 진짜 공백 run 이 표시되지 않는다.
     #[test]
     fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
         let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
         assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
+        assert_eq!(
+            preserve_ws_only_text("<hp:tbl><hp:t> </hp:t></hp:tbl>"),
+            "<hp:tbl><hp:t>\u{E000} </hp:t></hp:tbl>"
+        );
     }
 
     // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로

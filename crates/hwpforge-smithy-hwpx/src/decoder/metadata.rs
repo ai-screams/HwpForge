@@ -288,7 +288,7 @@ pub(crate) fn parse_meta_name_attr(e: &BytesStart<'_>) -> HwpxResult<Option<Stri
             // simple identifier (creator / subject / …). Use the raw
             // attribute value directly — no XML entity expansion is
             // expected here, and avoiding `unescape_value()` keeps the
-            // crate free of deprecation warnings under quick-xml 0.40.
+            // crate free of deprecation warnings (still deprecated in quick-xml 0.42).
             let raw: &str = &attr.value;
             if raw.len() > MAX_TEXT_BYTES {
                 return Err(structure(format!(

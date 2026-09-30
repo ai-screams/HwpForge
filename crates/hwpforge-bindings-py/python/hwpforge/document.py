@@ -91,8 +91,9 @@ class Document:
 
         Decoding happens later, in the operation that needs it, on the thread
         that calls that operation. A package whose `header.xml` or
-        `section*.xml` nests deeper than 224 XML levels (provisional; tables
-        and text boxes nested 32 deep still decode) or has more than 128
+        `section*.xml` nests deeper than 224 XML levels (provisional: it may
+        change in a minor release; tables and text boxes nested 32 deep still
+        decode) or has more than 128
         namespace bindings in scope is rejected with ``DECODE_FAILED``.
         Deeply nested input needs stack. Measured with an optimized build of
         this package on macOS arm64, a `threading.Thread` of 1 MiB decoded

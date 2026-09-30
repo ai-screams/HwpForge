@@ -7,10 +7,11 @@ cognitive-complexity-threshold = 30
 type-complexity-threshold = 500
 
 # quick-xml serde decodes of HWPX parts must go through
-# `hwpforge_smithy_hwpx::decoder::xml_from_str`, which pins the recursion and
+# `hwpforge_smithy_hwpx::decoder::xml_from_str` (crate-private; only that crate
+# deserializes with quick-xml), which pins the recursion and
 # namespace-binding limits. quick-xml serde encodes must pass their output
 # through `wire_xml::normalize_attr_control_whitespace` (Hancom misreads control
-# character references in attribute values); the call sites that do so opt in
+# character references in attribute values); the call sites that do so opt out
 # with `#[allow(clippy::disallowed_methods)]` next to that call. Unit-test
 # modules and integration tests that exercise quick-xml directly opt out the
 # same way. (Clippy reads only the nearest config file, so this lives here

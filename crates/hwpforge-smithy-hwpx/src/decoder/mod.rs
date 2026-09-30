@@ -32,13 +32,15 @@ use crate::style_store::HwpxStyleStore;
 /// quick-xml 0.42 caps serde nesting at 128 by default, which rejects
 /// tables nested 21 deep — well inside our own
 /// [`MAX_NESTING_DEPTH`](section::MAX_NESTING_DEPTH) guard of 32, which the
-/// encoder also honours. `7 * 32 = 224` restores the quick-xml 0.41
-/// boundary: 32 nested tables, text boxes or table/text-box mixes decode,
-/// and the 33rd level is rejected by our structural nesting guards rather
-/// than by the serde budget.
+/// encoder also honours. A nested table spans six XML element levels and a
+/// text box five (measured on real fixtures), so seven per nesting level —
+/// `7 * 32 = 224` — keeps even the 33rd level inside the budget: that level
+/// is rejected by our structural nesting guards rather than by the serde
+/// budget, the boundary quick-xml 0.41 had.
 ///
-/// **Provisional.** Deep inputs still need stack; the measured minimum per
-/// build profile is on [`HwpxDecoder::decode`].
+/// **Provisional:** the value may change in a minor release once more real
+/// documents have been measured. Deep inputs still need stack; the measured
+/// minimum per build profile is on [`HwpxDecoder::decode`].
 pub(crate) const XML_RECURSION_LIMIT: usize = 7 * section::MAX_NESTING_DEPTH;
 
 /// Upper bound on namespace bindings in scope while deserializing.
@@ -211,7 +213,8 @@ impl HwpxDecoder {
     /// # Limits
     ///
     /// `header.xml` and `section*.xml` are deserialized with a nesting budget
-    /// of 224 XML levels (provisional), enough for tables, text boxes or
+    /// of 224 XML levels (provisional: it may change in a minor release once
+    /// more real documents have been measured), enough for tables, text boxes or
     /// table/text-box mixes nested 32 deep. The 33rd level is rejected as
     /// [`HwpxError::InvalidStructure`](crate::HwpxError::InvalidStructure) by
     /// our structural nesting guards. A part deeper than the budget, or one

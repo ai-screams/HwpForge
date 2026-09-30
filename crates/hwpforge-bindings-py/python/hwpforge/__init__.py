@@ -100,9 +100,10 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
     When `base` is given it is decoded on the calling thread, under the same
     limits as [`Document.open`][hwpforge.Document.open] describes: a
     `header.xml` or `section*.xml` nested deeper than 224 XML levels
-    (provisional) or with more than 128 namespace bindings in scope is
-    rejected with ``DECODE_FAILED``, and the calling thread needs the stack
-    that page gives (1 MiB as measured) for deeply nested input.
+    (provisional: it may change in a minor release) or with more than 128
+    namespace bindings in scope is rejected with ``DECODE_FAILED``, and the
+    calling thread needs the stack that page gives (1 MiB as measured) for
+    deeply nested input.
 
     Args:
         text: The exported JSON.
