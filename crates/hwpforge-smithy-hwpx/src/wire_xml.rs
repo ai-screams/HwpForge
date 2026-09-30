@@ -392,8 +392,9 @@ mod attr_control_whitespace_tests {
         assert!(matches!(norm(src), Cow::Borrowed(s) if s == src));
     }
 
-    // 한컴 판정(VG-1·2·3) 입력을 0.42 serde 가 쓰는 형태 그대로 넣는다. 참조가 남으면 한컴에서
-    // 스타일 이름 잘림·글꼴 칸 빈칸·수식 깨짐이 난다.
+    // 한컴 판정(VG-1) 입력을 0.42 serde 가 쓰는 형태 그대로 넣는다. 참조가 남으면 한컴에서
+    // 스타일 이름이 잘린다. (글꼴 이름·수식 글꼴은 serde 전에 `clean_font_name` 이 정리해
+    // 이 함수까지 제어 문자가 오지 않는다 — 공백으로 두면 한컴이 글꼴을 못 찾는다, VG-2·3.)
     // 이것을 실패시키는 것: `&#9;`·`&#10;`·`&#13;` 중 하나의 치환을 빼는 것.
     #[test]
     fn hancom_verdict_inputs_leave_no_references() {
@@ -403,8 +404,6 @@ mod attr_control_whitespace_tests {
                 r#"<hh:style name="바탕 글" engName="Nor mal"/>"#,
             ),
             (r#"<hh:style name="본&#13;문"/>"#, r#"<hh:style name="본 문"/>"#),
-            (r#"<hh:font face="함초롬바탕&#13;"/>"#, r#"<hh:font face="함초롬바탕 "/>"#),
-            (r#"<hp:equation font="HancomEQN&#10;"/>"#, r#"<hp:equation font="HancomEQN "/>"#),
         ];
         for (src, want) in cases {
             assert_eq!(norm(src), want);

@@ -827,7 +827,7 @@ mod tests {
         assert_eq!(f1.lang, "LATIN");
     }
 
-    // The encoder writes font names cleaned (`encoder::clean_font_name`); reading
+    // The encoder writes font names cleaned (`wire_xml::clean_font_name`); reading
     // them the same way keeps decode→encode→decode a no-op for edits.
     // 이것을 실패시키는 것: `load_fonts` 에서 `clean_font_name` 을 빼는 것.
     #[test]
