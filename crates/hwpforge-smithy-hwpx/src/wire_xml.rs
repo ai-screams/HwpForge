@@ -14,8 +14,10 @@
 use std::borrow::Cow;
 
 /// Cleans a font name before it is written (`hh:font@face`,
-/// `hp:equation@font`): control characters are removed and the ends are
-/// trimmed; spaces inside the name are kept (`Times New Roman`).
+/// `hp:equation@font`): control characters are removed and ASCII spaces
+/// are trimmed from the ends; spaces inside the name are kept
+/// (`Times New Roman`). Other whitespace at the ends (U+3000, NBSP) is kept:
+/// only ASCII spaces and control characters were checked in Hancom.
 ///
 /// Hancom matches the name against installed fonts exactly, and neither a
 /// control character nor a space at either end counts toward a name it can
@@ -27,7 +29,7 @@ use std::borrow::Cow;
 /// this function too, so decode→encode→decode stays a no-op for edits. No
 /// warning is raised; the release notes record the change.
 pub(crate) fn clean_font_name(name: &str) -> String {
-    name.trim_matches(|c: char| c.is_control() || c.is_whitespace())
+    name.trim_matches(|c: char| c.is_control() || c == ' ')
         .chars()
         .filter(|c| !c.is_control())
         .collect()
@@ -417,7 +419,7 @@ mod clean_font_name_tests {
     use super::clean_font_name;
 
     // 이것을 실패시키는 것: 제어 문자만 지우고 앞뒤를 자르지 않는 것, 가운데 공백까지 지우는 것,
-    // 또는 가운데 제어 문자를 남기는 것.
+    // 가운데 제어 문자를 남기는 것, 또는 앞뒤 자르기를 유니코드 공백 전체로 넓히는 것.
     #[test]
     fn control_characters_go_and_only_edge_spaces_are_trimmed() {
         for (raw, want) in [
@@ -429,6 +431,7 @@ mod clean_font_name_tests {
             ("Times \u{1}New", "Times New"),
             ("\r\n", ""),
             ("함초롬바탕", "함초롬바탕"),
+            ("\u{3000}명조\u{a0}", "\u{3000}명조\u{a0}"),
         ] {
             assert_eq!(clean_font_name(raw), want, "{raw:?}");
         }
