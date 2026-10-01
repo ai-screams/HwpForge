@@ -2213,6 +2213,46 @@ fn census_hwp5_writes_output_file() {
 }
 
 #[test]
+fn census_hwp5_companion_with_malformed_section_xml_fails_instead_of_truncating() {
+    // 이것을 실패시키는 것: hwpx_paths 스캐너의 XML 오류 팔을 `break` 로 되돌리는 변경
+    // (잘린 목록이 `status: ok`, exit 0 으로 나옴)
+    let source = fixture("mixed_02b_textbox_with_image_real.hwp");
+    let companion = fixture("mixed_02b_textbox_with_image_real.hwpx");
+
+    let mut archive =
+        ZipArchive::new(std::io::Cursor::new(std::fs::read(&companion).unwrap())).unwrap();
+    let mut section_xml = String::new();
+    archive.by_name("Contents/section0.xml").unwrap().read_to_string(&mut section_xml).unwrap();
+    // Insert a `<hp:t>` closed with the wrong case so the reader hits a
+    // mismatched end tag mid-document.
+    let broken_xml = section_xml.replacen("<hp:t>", "<hp:t>x</hp:T><hp:t>", 1);
+    assert_ne!(broken_xml, section_xml, "fixture must contain an <hp:t> to corrupt");
+
+    let names: Vec<String> =
+        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (index, name) in names.iter().enumerate() {
+        if name == "Contents/section0.xml" {
+            continue;
+        }
+        writer.raw_copy_file(archive.by_index_raw(index).unwrap()).unwrap();
+    }
+    writer.start_file("Contents/section0.xml", zip::write::SimpleFileOptions::default()).unwrap();
+    writer.write_all(broken_xml.as_bytes()).unwrap();
+    let broken = test_tmp().join("broken-companion.hwpx");
+    std::fs::write(&broken, writer.finish().unwrap().into_inner()).unwrap();
+
+    let (_, stderr, code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        broken.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(stderr.contains("HWPX_CENSUS_FAILED"), "stderr: {stderr}");
+}
+
+#[test]
 fn census_hwp5_json_uses_canonical_escaped_paths_across_transports() {
     let source = fixture("chart_01_single_column.hwp");
     let companion = fixture("chart_01_single_column.hwpx");
