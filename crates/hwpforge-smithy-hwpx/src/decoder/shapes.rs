@@ -722,6 +722,12 @@ pub(crate) fn decode_connect_line(
 /// from each produced `Run`. Geometry/offset come from the container's
 /// `orgSz`/`pos`; `instid` maps to `inst_id`. Returns `None` when the
 /// container has no representable children.
+///
+/// # Errors
+///
+/// Returns [`HwpxError::InvalidStructure`](crate::HwpxError) when group nesting reaches
+/// `MAX_NESTING_DEPTH`, like nested tables. Returning `None` there would
+/// cascade up and silently drop the whole outermost group.
 pub(crate) fn decode_container(
     container: &crate::schema::section::HxContainer,
     char_shape_id: CharShapeIndex,
@@ -729,9 +735,15 @@ pub(crate) fn decode_container(
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     // Bound nested-container recursion (group-in-group) against pathological
-    // depth — same cap and pattern as table nesting (`convert_table`).
+    // depth — same cap and error as table nesting (`convert_table`).
     if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
-        return Ok(None);
+        return Err(crate::HwpxError::InvalidStructure {
+            detail: format!(
+                "group nesting depth {} exceeds limit of {}",
+                depth,
+                crate::decoder::section::MAX_NESTING_DEPTH,
+            ),
+        });
     }
 
     let mut children: Vec<Control> = Vec::new();

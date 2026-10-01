@@ -961,6 +961,42 @@ mod xml_limit_tests {
         format!("{}{}{}", &section[..table_span.start], fragment, &section[table_span.end..])
     }
 
+    const GROUP_OPEN: &str = r#"<hp:container id="1000" zOrder="0" numberingType="PICTURE" textWrap="IN_FRONT_OF_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="1000"><hp:offset x="0" y="0"/><hp:orgSz width="15000" height="13000"/><hp:curSz width="0" height="0"/><hp:sz width="15000" widthRelTo="ABSOLUTE" height="13000" heightRelTo="ABSOLUTE" protect="0"/>"#;
+    const GROUP_CLOSE: &str = "</hp:container>";
+
+    /// The table fixture's section with its table replaced by `levels`
+    /// nested `<hp:container>` groups around one textbox that holds
+    /// [`DEEPEST`]; `levels == 0` leaves the bare textbox.
+    fn group_section(levels: usize) -> String {
+        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
+        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
+        let box_section = fixture_section("images/textbox_anchored.hwpx");
+        let textbox = &box_section[first_element(&box_section, "<hp:rect", "</hp:rect>")];
+        assert_eq!(textbox.matches(TEXTBOX_ANCHOR).count(), 1, "textbox anchor");
+        let run = format!(r#"<hp:run charPrIDRef="0"><hp:t>{DEEPEST}</hp:t></hp:run>"#);
+        let fragment = format!(
+            "{}{}{}",
+            GROUP_OPEN.repeat(levels),
+            textbox.replacen(TEXTBOX_ANCHOR, &run, 1),
+            GROUP_CLOSE.repeat(levels)
+        );
+        format!("{}{}{}", &section[..table_span.start], fragment, &section[table_span.end..])
+    }
+
+    /// The table fixture's section with its table replaced by one group
+    /// that has no children at all.
+    fn empty_group_section() -> String {
+        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
+        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
+        format!(
+            "{}{}{}{}",
+            &section[..table_span.start],
+            GROUP_OPEN,
+            GROUP_CLOSE,
+            &section[table_span.end..]
+        )
+    }
+
     /// Decodes on a 64 MiB thread; returns the paragraphs' debug text.
     fn decode_on_big_stack(xml: String) -> Result<String, HwpxError> {
         std::thread::Builder::new()
@@ -982,10 +1018,14 @@ mod xml_limit_tests {
 
     /// `guard` is `"table"` or `"sublist"`: which structural guard fires.
     fn assert_nesting_guard(pattern: &str, levels: usize, guard: &str) {
+        assert_nesting_guard_with(nested_section(pattern, levels), guard);
+    }
+
+    fn assert_nesting_guard_with(xml: String, guard: &str) {
         let expected = format!("{guard} nesting depth 32 exceeds limit of 32");
-        match decode_on_big_stack(nested_section(pattern, levels)) {
+        match decode_on_big_stack(xml) {
             Err(HwpxError::InvalidStructure { detail }) if detail == expected => {}
-            other => panic!("{pattern} x{levels} must hit the {guard} guard, got: {other:?}"),
+            other => panic!("must hit the {guard} guard, got: {other:?}"),
         }
     }
 
@@ -1032,6 +1072,38 @@ mod xml_limit_tests {
     #[test]
     fn xml_limit_textbox_nesting_33_hits_sublist_guard() {
         assert_nesting_guard("B", 33, "sublist");
+    }
+
+    // 묶음 도형도 표와 같은 한도: 32겹은 가장 안쪽 글자까지 살아 있다.
+    // 이것을 실패시키는 것: `decode_container` 가드를 `depth >= MAX_NESTING_DEPTH`
+    // 에서 `depth >= 31` 로 낮추기 (32겹이 오류가 된다).
+    #[test]
+    fn xml_limit_group_nesting_32_decodes() {
+        match decode_on_big_stack(group_section(32)) {
+            Ok(debug) => {
+                assert!(debug.contains(DEEPEST), "group x32: deepest text lost");
+                assert_eq!(debug.matches("Group {").count(), 32, "group x32: Group count");
+            }
+            Err(err) => panic!("group x32 must decode, got: {err:?}"),
+        }
+    }
+
+    // 33겹은 조용히 사라지지 않고 구조 오류로 멈춘다 (serde 한도 224 보다 먼저).
+    // 이것을 실패시키는 것: `decode_container` 한도 분기를 `Ok(None)` 으로 되돌리기.
+    #[test]
+    fn xml_limit_group_nesting_33_hits_nesting_guard() {
+        assert_nesting_guard_with(group_section(33), "group");
+    }
+
+    // 원래 빈 묶음은 한도와 무관하게 그대로 조용히 생략된다 (동작 불변).
+    // 이것을 실패시키는 것: `decode_container` 의 `children.is_empty()` 분기를
+    // 오류로 바꾸기.
+    #[test]
+    fn xml_limit_empty_group_is_still_skipped() {
+        match decode_on_big_stack(empty_group_section()) {
+            Ok(debug) => assert!(!debug.contains("Group {"), "empty group must not emit a Group"),
+            Err(err) => panic!("empty group must decode, got: {err:?}"),
+        }
     }
 
     // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 크게 올리기(예: 10000) —
