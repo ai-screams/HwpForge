@@ -9,47 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- *(hwpx)* tidy the wire XML helpers, their tests and notes
+- *(hwpx)* `header.xml`·`section*.xml` 이 XML 224 단계보다 깊게 중첩되거나 한 지점에서 namespace 바인딩이 128개를 넘으면 `DECODE_FAILED` 로 거부한다. 224 는 잠정값이고, 표·글상자 32겹은 계속 읽힌다. namespace 한도를 넘으면 HwpForge 의 한도라고 알리는 문장으로 오류를 낸다
 
-- *(hwpx)* share one markup skip and one whitespace test in wire_xml
-
-- *(hwpx)* move the wire XML helpers into one module
+- *(hwpx)* 최적화 빌드에서 디코드 스레드의 스택은 2 MiB 를 권장한다 (잰 최소값 1 MiB)
 
 
 ### Documentation
-
-- *(hwpx)* recommend 2 MiB of stack for decoding
-
-- *(hwpx)* narrow the font-name notes to what was measured
-
-- *(hwpx)* say what the attribute normalizer restores and what it does not
 
 - *(readme)* link the docs site from the root and MCP crate READMEs
 
 
 ### Fixed
 
-- *(hwpx)* trim only ASCII spaces from the ends of font names
+- *(hwpx)* quick-xml 0.42 로 올린다. 한컴이 읽는 결과가 0.41 과 같도록 아래 셋을 맞춘다
 
-- *(hwpx)* state the namespace limit instead of quick-xml's API advice
+- *(hwpx)* 속성 값의 탭·줄바꿈·CR 은 공백으로 쓴다. 0.42 는 이를 `&#9;`·`&#10;`·`&#13;` 로 써서 한컴에서 스타일 이름이 잘렸다. 0.41 출력을 XML 파서가 읽은 값과 같다
 
-- *(hwpx)* write font names without control characters or edge spaces
+- *(hwpx)* 공백 문자 참조 (`&#13;` 등) 만 든 텍스트 run 을 읽을 때 버리지 않는다. 0.42 는 CR 하나를 이렇게 쓴다. 공백만 든 run 이 서식 run 사이에 있는 문단의 줄 조판 캐시도 이제 유지한다 (이전에는 `LAYOUT_CACHE_DROPPED` 와 함께 버려졌다)
 
-- *(hwpx)* skip comments and PIs inside a document type declaration
-
-- *(hwpx)* skip a document type declaration when marking whitespace-only runs
-
-- *(hwpx)* skip comments, CDATA and PIs when marking whitespace-only runs
-
-- *(hwpx)* accept only a lowercase x in whitespace character references
-
-- *(hwpx)* leave the whitespace sentinel out of the wire text map
-
-- *(hwpx)* keep text runs that hold only whitespace character references
-
-- *(hwpx)* write control whitespace in attribute values as spaces
-
-- *(hwpx)* migrate to quick-xml 0.42 and pin its decode limits
+- *(hwpx)* 글꼴 이름 (`hh:font@face`, 수식 글꼴 `hp:equation@font`) 은 쓸 때와 읽을 때 모두 제어 문자를 지우고 앞뒤 ASCII 공백을 자른다. 가운데 공백은 지킨다. 경고는 내지 않는다
 
 
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.5...hwpforge-smithy-hwpx-v0.16.6) - 2026-09-22

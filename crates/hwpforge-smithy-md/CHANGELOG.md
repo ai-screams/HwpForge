@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(hwpx)* migrate to quick-xml 0.42 and pin its decode limits
+- *(hwpx)* quick-xml 0.42 로 올린다. lossless Markdown 디코더를 0.42 의 문자열 API 로 옮긴다
 
 
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.5...hwpforge-smithy-md-v0.16.6) - 2026-09-22
