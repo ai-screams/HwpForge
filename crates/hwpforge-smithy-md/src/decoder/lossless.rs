@@ -4,7 +4,7 @@ use hwpforge_core::{
     Control, Image, ImageFormat, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
 };
 use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::XmlVersion;
 
@@ -71,8 +71,11 @@ pub(super) fn decode_lossless_sections(content: &str) -> MdResult<Vec<Section>> 
             Ok(Event::Comment(_))
             | Ok(Event::Decl(_))
             | Ok(Event::DocType(_))
-            | Ok(Event::PI(_))
-            | Ok(Event::GeneralRef(_)) => {}
+            | Ok(Event::PI(_)) => {}
+            Ok(Event::GeneralRef(reference)) => {
+                let resolved = resolve_general_ref(&reference)?;
+                append_text(&mut stack, resolved.encode_utf8(&mut [0u8; 4]))?;
+            }
             Ok(Event::Eof) => break,
             Err(err) => {
                 return Err(MdError::LosslessParse {
@@ -308,6 +311,28 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
             parent.unwrap_or("<root>")
         ),
     })
+}
+
+/// 텍스트 안의 `&name;` / `&#NN;` / `&#xNN;` 를 글자 하나로 푼다.
+///
+/// 미리 정의된 다섯 엔티티와 유효한 숫자 참조만 받고, 나머지는 fail-closed 로 거부한다
+/// (엔티티 선언을 읽지 않으므로 알 수 없는 이름을 지어내 치환하지 않는다).
+fn resolve_general_ref(reference: &BytesRef<'_>) -> MdResult<char> {
+    let name: &str = reference.as_ref();
+    let unresolved = || MdError::LosslessParse {
+        detail: format!("unresolvable entity or character reference '&{name};'"),
+    };
+    if reference.is_char_ref() {
+        return reference.resolve_char_ref().ok().flatten().ok_or_else(unresolved);
+    }
+    match name {
+        "amp" => Ok('&'),
+        "lt" => Ok('<'),
+        "gt" => Ok('>'),
+        "quot" => Ok('"'),
+        "apos" => Ok('\''),
+        _ => Err(unresolved()),
+    }
 }
 
 fn append_text(stack: &mut [OpenNode], text: &str) -> MdResult<()> {
