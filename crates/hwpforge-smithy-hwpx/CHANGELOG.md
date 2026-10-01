@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.6...hwpforge-smithy-hwpx-v0.16.7) - 2026-10-01
+
+### Changed
+
+- *(hwpx)* tidy the wire XML helpers, their tests and notes
+
+- *(hwpx)* share one markup skip and one whitespace test in wire_xml
+
+- *(hwpx)* move the wire XML helpers into one module
+
+
+### Documentation
+
+- *(hwpx)* recommend 2 MiB of stack for decoding
+
+- *(hwpx)* narrow the font-name notes to what was measured
+
+- *(hwpx)* say what the attribute normalizer restores and what it does not
+
+- *(readme)* link the docs site from the root and MCP crate READMEs
+
+
+### Fixed
+
+- *(hwpx)* trim only ASCII spaces from the ends of font names
+
+- *(hwpx)* state the namespace limit instead of quick-xml's API advice
+
+- *(hwpx)* write font names without control characters or edge spaces
+
+- *(hwpx)* skip comments and PIs inside a document type declaration
+
+- *(hwpx)* skip a document type declaration when marking whitespace-only runs
+
+- *(hwpx)* skip comments, CDATA and PIs when marking whitespace-only runs
+
+- *(hwpx)* accept only a lowercase x in whitespace character references
+
+- *(hwpx)* leave the whitespace sentinel out of the wire text map
+
+- *(hwpx)* keep text runs that hold only whitespace character references
+
+- *(hwpx)* write control whitespace in attribute values as spaces
+
+- *(hwpx)* migrate to quick-xml 0.42 and pin its decode limits
+
+
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.5...hwpforge-smithy-hwpx-v0.16.6) - 2026-09-22
 
 ### Added

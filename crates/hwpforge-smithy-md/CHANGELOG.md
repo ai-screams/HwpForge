@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.6...hwpforge-smithy-md-v0.16.7) - 2026-10-01
+
+### Documentation
+
+- *(readme)* link the docs site from the root and MCP crate READMEs
+
+
+### Fixed
+
+- *(hwpx)* migrate to quick-xml 0.42 and pin its decode limits
+
+
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.5...hwpforge-smithy-md-v0.16.6) - 2026-09-22
 
 ### Added
