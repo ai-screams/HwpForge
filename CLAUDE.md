@@ -17,16 +17,16 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 ## 로딩 맵 (필요할 때 읽는다 — 해당 작업 전 필독)
 
-| 상황 (트리거)                          | 읽을 파일                                                                                                 |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                        |
-| **커밋·푸시·테스트 실행 전**           | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정)                                                 |
-| 새 타입/API 설계 · 테스트 작성         | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스)                              |
-| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1\~37; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립)) |
-| 릴리스·머지 큐·publish 검증            | `RELEASING.md` (canonical — §8 운영 함정 포함)                                                            |
-| 에픽 정식 절차                         | `.claude/rules/epic-workflow.md` (자동 로드)                                                              |
-| 에이전트 경계/크레이트 규칙            | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬                                                     |
-| 내부 문서·계획·참조 자료 위치          | `.docs/README.md` (git 밖, 인덱스)                                                                        |
+| 상황 (트리거)                          | 읽을 파일                                                                                                              |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                                     |
+| **커밋·푸시·테스트 실행 전**           | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정)                                                              |
+| 새 타입/API 설계 · 테스트 작성         | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스)                                           |
+| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1\~37; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립))              |
+| 릴리스·머지 큐·publish 검증            | `RELEASING.md` (canonical — §8 운영 함정 포함)                                                                         |
+| 에픽 정식 절차                         | `.claude/rules/epic-workflow.md` (자동 로드)                                                                           |
+| 에이전트 경계/크레이트 규칙            | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬 (미추적 로컬 파일 — worktree 에서는 메인 체크아웃 경로로 읽는다) |
+| 내부 문서·계획·참조 자료 위치          | `.docs/README.md` (git 밖, 인덱스)                                                                                     |
 
 ---
 
@@ -68,7 +68,7 @@ cargo clippy -p <crate> --all-targets -- -D warnings   # 커밋 전 touched 크�
 bacon / bacon test    # watch 모드
 ```
 
-`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·HWP5 Audit Gate·Docs Build·Python·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
+`make ci` 는 CI 전체가 아니라 빠른 다섯 레인이다 — CI 는 여기에 Coverage·MSRV·HWP5 Audit Gate·Docs Build·Python(release 전용 테스트 포함)·Workflow Lint 를 더 돌린다. 상세 (coverage·doc·훅 함정 전체) = `.claude/guides/tooling.md`.
 
 ---
 
@@ -93,7 +93,7 @@ bacon / bacon test    # watch 모드
 4. **버전/태그/publish 수동 조작 금지** — release-plz 소유. 머지는 GraphQL `enqueuePullRequest` 로만 (`gh pr merge` 거부됨).
 5. **테스트 실행 중 소스 편집 금지** (rebuild 유발) · nextest 필터는 **substring** (`'a|b'` 무효).
 6. `examples/README.md` 미커밋 변경 = 사용자 낙서 — 보존 말고 **항상 원복**, 커밋 절대 금지.
-7. PR/이슈 생성 시 **assignee = 나** (`gh --assignee @me`) · PR 제목·본문 **한글** · PR 생성/큐 등록은 **사용자 명시 승인 후에만**.
+7. PR/이슈 생성 시 **assignee = 나** (`gh --assignee @me`) · 제목 **English**·본문 **한글** · PR 생성/큐 등록은 **사용자 명시 승인 후에만**.
 8. stale `.git/index.lock`(0바이트·git 프로세스 없음 확인) 은 `rm -f` — 반복 사고.
 
 ---
