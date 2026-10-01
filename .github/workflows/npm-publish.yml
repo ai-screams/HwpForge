@@ -5,6 +5,11 @@
 # Triggered on GitHub Release creation (after release-plz publishes a release).
 # Builds hwpforge-mcp for 5 targets, publishes platform packages, then the
 # base @hwpforge/mcp package with updated optionalDependencies.
+#
+# Publishing uses npm trusted publishing (OIDC) only: each of the six packages
+# trusts this repository and this workflow file on npmjs.com, and no npm token
+# is passed. A package without that trust fails its publish instead of falling
+# back to a token. Provenance is attached automatically.
 # =============================================================================
 
 name: npm publish
@@ -146,9 +151,8 @@ jobs:
         run: |
           node -v
           npm -v
-          # Below npm 11.5.1 the CLI silently falls back to NODE_AUTH_TOKEN.
-          # That looks like a successful publish while OIDC never engaged, so
-          # surface it explicitly instead of letting it pass unnoticed.
+          # Trusted publishing (OIDC) needs npm >= 11.5.1, and there is no
+          # token to fall back to, so stop here rather than fail at publish.
           if ! node -e '
             const need = [11, 5, 1];
             const got = process.argv[1].split(".").map(Number);
@@ -157,7 +161,8 @@ jobs:
               if ((got[i] || 0) < need[i]) process.exit(1);
             }
           ' "$(npm -v)"; then
-            echo "::warning::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable, falling back to NODE_AUTH_TOKEN"
+            echo "::error::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable"
+            exit 1
           else
             echo "npm $(npm -v) supports trusted publishing (OIDC)"
           fi
@@ -170,10 +175,8 @@ jobs:
           if npm view "${pkg_name}@${pkg_ver}" version 2>/dev/null; then
             echo "✓ ${pkg_name}@${pkg_ver} already published — skipping"
           else
-            npm publish --access public --provenance
+            npm publish --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-base:
     name: "npm › @hwpforge/mcp (base)"
@@ -262,7 +265,8 @@ jobs:
               if ((got[i] || 0) < need[i]) process.exit(1);
             }
           ' "$(npm -v)"; then
-            echo "::warning::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable, falling back to NODE_AUTH_TOKEN"
+            echo "::error::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable"
+            exit 1
           else
             echo "npm $(npm -v) supports trusted publishing (OIDC)"
           fi
@@ -275,10 +279,8 @@ jobs:
           if npm view "${pkg_name}@${pkg_ver}" version 2>/dev/null; then
             echo "✓ ${pkg_name}@${pkg_ver} already published — skipping"
           else
-            npm publish --access public --provenance
+            npm publish --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   refresh-context7:
     name: "Context7 › Refresh"

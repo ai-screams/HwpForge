@@ -126,7 +126,7 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 | ---------------------------- | ------------------------------------------------- |
 | `APP_ID` + `APP_PRIVATE_KEY` | release-plz용 GitHub App 토큰 (PR 생성·태그 push) |
 | `CARGO_REGISTRY_TOKEN`       | crates.io publish                                 |
-| npm 토큰 (`npm-publish.yml`) | `@hwpforge/*` npm 배포                            |
+| (없음 — npm 은 OIDC)         | `@hwpforge/*` npm 배포는 Trusted Publishing       |
 
 ---
 
@@ -152,7 +152,8 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - **릴리스 완주 판정**: GitHub Release 는 release-plz 실행 **도중** 먼저 게시되고, 그 이벤트가 npm-publish 와 pypi-publish 를 **함께** 트리거한다 → release-plz·npm-publish·pypi-publish **셋 다 success** + 세 레지스트리 실측까지 확인해야 완료: sparse index(`index.crates.io/hw/pf/<crate>`) · npm(`npm view @hwpforge/mcp version`) · PyPI(`curl -s https://pypi.org/pypi/hwpforge/json | jq '.info.version, (.urls[].filename)'` — 버전이 맞고 파일이 wheel 5 + sdist 인지). **Release PR 생성 여부도 실측**: release-plz 로그의 `release_pr_output` 이 `{"prs":[]}` 면 미발화 (0.16.0 사고 — 2회 미발화 후 발견).
 - **publish 검증**: crates.io API 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>` 로 확인.
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험. (`release-plz-v0.3.159` 는 **CLI**(`release-plz/release-plz`) 릴리스 태그이며, `.github/workflows/release-plz.yml` 이 실제로 고정하는 `release-plz/action@…v0.5.131` 과는 버전 계열이 다르다 — action 이 내부적으로 vendor 하는 CLI 버전은 별개이므로, 재현 시 `gh release list --repo release-plz/release-plz --limit 5` 로 최신 CLI 태그를 다시 조회할 것.)
-- **npm 토큰**: granular 토큰 90일 만료(npm 은 인증 실패를 **E404 로 위장**), 재발급 시 **"Bypass 2FA" 필수**(없으면 E403). ⚠️ 현 토큰 **~2026-10-10 재만료** — 영구 해결은 npm Trusted Publishing(OIDC) 전환.
+- **npm 은 Trusted Publishing(OIDC) 전용**: `@hwpforge/mcp` 와 플랫폼 패키지 5개가 npmjs.com Settings → Trusted Publisher 에서 `ai-screams/HwpForge` · `npm-publish.yml` · Allow `npm publish` 를 신뢰한다(2026-10-01 등록). 워크플로는 토큰을 넘기지 않으므로, 이 신뢰가 없는 패키지는 publish 단계에서 실패한다 — 새 플랫폼 패키지를 추가하면 그 패키지에도 같은 신뢰를 등록해야 한다. 설정은 수정 불가(지우고 다시 만듦). 실패한 npm 잡은 이미 올라간 버전을 건너뛰므로 등록을 고친 뒤 재실행해도 안전하다. 재실행은 태그 시점의 워크플로 파일로 돈다.
+- **`npm view` 는 publish 직후 캐시로 옛 버전을 보일 수 있다** (0.16.7 에서 몇 분간 0.16.6) — 판정은 `curl -s https://registry.npmjs.org/@hwpforge%2fmcp` 의 `dist-tags` 로.
 
 ---
 
