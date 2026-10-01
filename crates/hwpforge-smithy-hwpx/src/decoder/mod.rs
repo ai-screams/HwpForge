@@ -255,14 +255,18 @@ impl HwpxDecoder {
     /// | `opt-level = 1` (the `cargo test` profile) | 1 MiB | 768 KiB |
     /// | `opt-level = 0` (unoptimized dev build) | 4 MiB | 3 MiB |
     ///
-    /// So in an optimized build call this from a thread with at least
-    /// 1 MiB of stack; Rust's default 2 MiB spawned threads qualify, and so
-    /// does the main thread on Linux and macOS (typically 8 MiB). On
+    /// So in an optimized build give the calling thread 2 MiB of stack.
+    /// 1 MiB is the measured minimum, but how much a build needs depends on
+    /// how the compiler inlines the recursive decode: a test binary that
+    /// compiled extra code into the same crate needed about twice as much
+    /// for the same input. Rust's default 2 MiB spawned threads qualify, and
+    /// so does the main thread on Linux and macOS (typically 8 MiB). On
     /// Windows the main thread defaults to 1 MiB in total, part of it
     /// already used by the caller, so decode deeply nested input on a
-    /// spawned thread there. An unoptimized build needs about 4 MiB, which Rust's default
-    /// spawned threads do not have. The release figure is also checked by a
-    /// test on Linux x86_64 in CI; other platforms are not measured.
+    /// spawned thread there. An unoptimized build needs about 4 MiB, which
+    /// Rust's default spawned threads do not have. The 1 MiB release figure
+    /// is also checked by a test on Linux x86_64 in CI; other platforms are
+    /// not measured.
     pub fn decode(bytes: &[u8]) -> HwpxResult<HwpxDocument> {
         // Step 1: Open package
         let mut pkg = package::PackageReader::new(bytes)?;
@@ -364,8 +368,8 @@ impl HwpxDecoder {
     /// Decodes an HWPX file from a filesystem path.
     ///
     /// The nesting and namespace limits of [`decode`](Self::decode) apply,
-    /// including its provisional 224-level budget and the per-build minimum
-    /// stack for the calling thread.
+    /// including its provisional 224-level budget and its stack advice for
+    /// the calling thread (2 MiB recommended, 1 MiB measured).
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
         let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)

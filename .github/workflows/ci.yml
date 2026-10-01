@@ -454,8 +454,8 @@ jobs:
         # (다시 빌드되는 것은 pyo3 와 이 크레이트뿐).
         run: make py-rust-test
       - name: cargo nextest (HWPX decode stack contract, release)
-        # `HwpxDecoder::decode` 문서가 약속하는 "최적화 빌드는 1 MiB 스택이면
-        # 된다" 를 지키는 유일한 테스트다(`smithy-hwpx/tests/decode_stack.rs`).
+        # `HwpxDecoder::decode` 문서의 측정값 "최적화 빌드는 1 MiB 스택이면
+        # 된다"(권장은 2 MiB) 를 지키는 유일한 테스트다(`smithy-hwpx/tests/decode_stack.rs`).
         # 배포되는 라이브러리를 그대로 링크하도록 unit test 가 아니라
         # integration test 로 둔다 — unit test 바이너리는 테스트 코드와 함께
         # 컴파일돼 인라인이 달라지고, 같은 입력에 스택이 두 배까지 든다.
