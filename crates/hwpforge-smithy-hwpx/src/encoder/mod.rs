@@ -1082,7 +1082,9 @@ mod tests {
     }
 
     // 이것을 실패시키는 것: `ImageStore.images` 를 `HashMap` 으로 되돌리는 것
-    // (manifest·ZIP 의 BinData 순서가 실행마다 달라지고, 12개 key 가 정렬 순서로 나올 확률은 1/12!)
+    // (아래 ZIP·manifest 순서 assert 가 실패한다: 12개 key 가 정렬 순서로 나올 확률은 1/12!.
+    //  같은 프로세스 안에서는 같은 맵이 같은 순서를 내므로 `first == second` 는 이 변이를 잡지 못하고,
+    //  실행 간 재현성에 대한 보조 확인일 뿐이다)
     #[test]
     fn bindata_order_in_manifest_and_zip_follows_image_key_order() {
         use std::io::Read;
