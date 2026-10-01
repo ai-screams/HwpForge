@@ -19,7 +19,7 @@
 //! assert!(img.path.ends_with(".png"));
 //! ```
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;
@@ -368,7 +368,8 @@ impl std::fmt::Display for ImageFormat {
 
 /// Storage for binary image data keyed by path.
 ///
-/// Maps image paths (e.g. `"image1.jpg"`) to their binary content.
+/// Maps image paths (e.g. `"image1.jpg"`) to their binary content, kept in
+/// key order so iteration is deterministic.
 /// Used by the encoder to embed images into HWPX archives and by the
 /// decoder to extract them.
 ///
@@ -384,13 +385,13 @@ impl std::fmt::Display for ImageFormat {
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ImageStore {
-    images: HashMap<String, Vec<u8>>,
+    images: BTreeMap<String, Vec<u8>>,
 }
 
 impl ImageStore {
     /// Creates an empty image store.
     pub fn new() -> Self {
-        Self { images: HashMap::new() }
+        Self { images: BTreeMap::new() }
     }
 
     /// Inserts an image with the given key and binary data.
@@ -415,7 +416,12 @@ impl ImageStore {
         self.images.is_empty()
     }
 
-    /// Iterates over all `(key, data)` pairs.
+    /// Iterates over all `(key, data)` pairs in ascending key order.
+    ///
+    /// The order is deterministic (plain string order, so `image10.png` comes
+    /// before `image2.png`) and independent of insertion order, which keeps
+    /// encoder output such as the HWPX manifest and ZIP entry order
+    /// reproducible.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[u8])> {
         self.images.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
     }
@@ -859,5 +865,27 @@ mod tests {
         assert_ne!(upper, lower, "Different casing in Unknown produces inequality");
         // But display output is identical
         assert_eq!(upper.to_string(), lower.to_string());
+    }
+
+    // 이것을 실패시키는 것: `ImageStore.images` 를 다시 `HashMap` 으로 되돌리는 것
+    // (HashMap 은 프로세스마다 seed 가 달라 24개 key 가 정렬 순서로 나올 확률이 사실상 0)
+    #[test]
+    fn iter_yields_keys_in_sorted_order_regardless_of_insertion_order() {
+        let mut store = ImageStore::new();
+        // 삽입 순서를 일부러 뒤섞는다: 끝에서부터 + 사전순 비교가 숫자순과 다른 key(image10 < image2)
+        for i in (1..=24).rev() {
+            store.insert(format!("image{i}.png"), vec![i as u8]);
+        }
+        let keys: Vec<&str> = store.iter().map(|(k, _)| k).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted, "iter() must follow key order");
+        assert_eq!(keys.len(), 24);
+
+        // 같은 내용을 다른 삽입 순서로 만들어도 순회가 같아야 한다 (from_iter 경로 포함)
+        let other: ImageStore =
+            (1..=24).map(|i| (format!("image{i}.png"), vec![i as u8])).collect();
+        let other_keys: Vec<&str> = other.iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, other_keys);
     }
 }

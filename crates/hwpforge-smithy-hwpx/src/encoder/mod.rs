@@ -1081,6 +1081,42 @@ mod tests {
         assert!(bytes.len() > 100, "ZIP too small: {} bytes", bytes.len());
     }
 
+    // 이것을 실패시키는 것: `ImageStore.images` 를 `HashMap` 으로 되돌리는 것
+    // (manifest·ZIP 의 BinData 순서가 실행마다 달라지고, 12개 key 가 정렬 순서로 나올 확률은 1/12!)
+    #[test]
+    fn bindata_order_in_manifest_and_zip_follows_image_key_order() {
+        use std::io::Read;
+        let (doc, store) = minimal_doc_and_store();
+        let mut images = ImageStore::new();
+        for i in (1..=12).rev() {
+            images.insert(format!("image{i}.png"), vec![i as u8; 4]);
+        }
+        let mut expected: Vec<String> = (1..=12).map(|i| format!("image{i}.png")).collect();
+        expected.sort();
+
+        let first = HwpxEncoder::encode(&doc, &store, &images).unwrap();
+        let second = HwpxEncoder::encode(&doc, &store, &images).unwrap();
+        assert_eq!(first, second, "same input must give identical bytes");
+
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(first)).unwrap();
+        let zip_order: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .filter(|n| n.starts_with("BinData/"))
+            .collect();
+        let want: Vec<String> = expected.iter().map(|k| format!("BinData/{k}")).collect();
+        assert_eq!(zip_order, want, "ZIP BinData entries must follow key order");
+
+        let mut hpf = String::new();
+        zip.by_name("Contents/content.hpf").unwrap().read_to_string(&mut hpf).unwrap();
+        let manifest_order: Vec<&str> = hpf
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|r| r.split('"').next())
+            .filter(|h| h.starts_with("BinData/"))
+            .collect();
+        assert_eq!(manifest_order, want.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+
     // ── 2. Full encode → decode roundtrip ──────────────────────
 
     #[test]
