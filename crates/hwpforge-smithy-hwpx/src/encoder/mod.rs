@@ -1379,3 +1379,294 @@ mod tests {
         assert!(result.is_ok(), "Decoder failed on encoder output: {:?}", result.err());
     }
 }
+
+/// The five serde call sites each normalize their own output: a Core string
+/// with tab, LF, CR and CRLF reaches every one of them in one document. A
+/// bookmark name carries it to the section, memo and header/footer sites
+/// (font names are cleaned before serialization, so they cannot).
+#[cfg(test)]
+mod attr_control_whitespace_call_site_tests {
+    use super::HwpxEncoder;
+    use crate::style_store::{HwpxFont, HwpxStyle, HwpxStyleStore};
+    use crate::HwpxDecoder;
+    use hwpforge_core::control::{Control, ShapePoint};
+    use hwpforge_core::image::ImageStore;
+    use hwpforge_core::paragraph::Paragraph;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::{HeaderFooter, Section};
+    use hwpforge_core::{Document, PageSettings};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use std::io::Read;
+
+    const RAW: &str = "A\tB\nC\rD";
+    const RAW_CRLF: &str = "E\r\nF";
+
+    fn equation_with_font(font: &str) -> Control {
+        let mut eq = Control::equation("a+b");
+        if let Control::Equation { font: f, .. } = &mut eq {
+            *f = font.to_string();
+        }
+        eq
+    }
+
+    fn para(runs: Vec<Run>) -> Paragraph {
+        Paragraph::with_runs(runs, ParaShapeIndex::new(0))
+    }
+
+    fn encode_parts() -> (String, String) {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_font(HwpxFont::new(7, format!(" 글꼴{RAW} "), "HANGUL"));
+        store.push_style(HwpxStyle::new(0, "PARA", RAW, RAW_CRLF, 0, 0, 0, 1042, 0));
+        let cs = CharShapeIndex::new(0);
+
+        let mut connect = Control::connect_line(ShapePoint::new(0, 0), ShapePoint::new(1000, 500))
+            .expect("non-degenerate");
+        if let Control::ConnectLine { connect_type, .. } = &mut connect {
+            *connect_type = format!("CT{RAW}");
+        }
+        let plain_line =
+            Control::connect_line(ShapePoint::new(0, 500), ShapePoint::new(2000, 1000))
+                .expect("non-degenerate");
+        let memo = Control::memo_with_anchor(
+            vec![para(vec![Run::control(Control::bookmark(&format!("MEMO{RAW}")), cs)])],
+            vec![Run::text("앵커", cs)],
+        );
+        let body = para(vec![
+            Run::text("본문", cs),
+            Run::control(Control::bookmark(&format!("BODY{RAW}")), cs),
+            Run::control(equation_with_font(&format!(" EQ{RAW} ")), cs),
+            // A shape inside a group is written by `shapes.rs` `serialize_with_root`,
+            // not by the section serializer.
+            Run::control(
+                Control::Group {
+                    children: vec![connect, plain_line],
+                    width: HwpUnit::new(2000).unwrap(),
+                    height: HwpUnit::new(1000).unwrap(),
+                    placement: None,
+                    inst_id: None,
+                },
+                cs,
+            ),
+            Run::control(memo, cs),
+        ]);
+        let mut section = Section::with_paragraphs(vec![body], PageSettings::a4());
+        section.headers.push(HeaderFooter::all_pages(vec![para(vec![Run::control(
+            Control::bookmark(&format!("HEAD{RAW}")),
+            cs,
+        )])]));
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("valid document");
+
+        read_parts(&HwpxEncoder::encode(&doc, &store, &ImageStore::new()).expect("encode"))
+    }
+
+    /// `(header.xml, section0.xml)` of an encoded package.
+    fn read_parts(bytes: &[u8]) -> (String, String) {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+        let mut read = |name: &str| {
+            let mut s = String::new();
+            zip.by_name(name).expect(name).read_to_string(&mut s).expect("utf-8");
+            s
+        };
+        (read("Contents/header.xml"), read("Contents/section0.xml"))
+    }
+
+    /// The value of the first `attr="…"` (a whole attribute name, preceded by
+    /// a space) whose value starts with `prefix`.
+    fn attr_value<'a>(xml: &'a str, attr: &str, prefix: &str) -> &'a str {
+        let needle = format!(" {attr}=\"");
+        let start = xml
+            .match_indices(&needle)
+            .map(|(i, _)| i + needle.len())
+            .find(|&start| xml[start..].starts_with(prefix))
+            .unwrap_or_else(|| panic!("{attr}=\"{prefix}… not in output"));
+        let end = start + xml[start..].find('"').expect("closing quote");
+        &xml[start..end]
+    }
+
+    /// Every start tag, read with quote awareness so a `>` inside a value does
+    /// not end the tag, is free of control-character references.
+    fn assert_no_control_refs_in_start_tags(part: &str, xml: &str) {
+        let mut tag_start: Option<usize> = None;
+        let mut quote: Option<char> = None;
+        for (i, c) in xml.char_indices() {
+            match (tag_start, quote) {
+                (None, _) if c == '<' => tag_start = Some(i),
+                (Some(_), Some(q)) if c == q => quote = None,
+                (Some(_), None) if c == '"' || c == '\'' => quote = Some(c),
+                (Some(start), None) if c == '>' => {
+                    let tag = &xml[start..=i];
+                    for r in ["&#9;", "&#10;", "&#13;"] {
+                        assert!(!tag.contains(r), "{part}: {r} left in {tag}");
+                    }
+                    tag_start = None;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 다섯 호출 지점 중 하나라도 정규화 호출을 빼는 것 — 그 part 의 어느
+    // 시작 태그에 문자 참조가 남는다.
+    #[test]
+    fn no_control_reference_is_left_in_any_start_tag() {
+        let (header, section) = encode_parts();
+        assert_no_control_refs_in_start_tags("header.xml", &header);
+        assert_no_control_refs_in_start_tags("section0.xml", &section);
+    }
+
+    // 이것을 실패시키는 것: `encoder/header.rs` 의 정규화 호출을 빼는 것.
+    #[test]
+    fn header_xml_style_attrs_are_normalized() {
+        let (header, _) = encode_parts();
+        assert_eq!(attr_value(&header, "name", "A"), "A B C D");
+        assert_eq!(attr_value(&header, "engName", "E"), "E F", "CRLF folds to one space");
+    }
+
+    // Font names go further than the attribute normalization: control
+    // characters are removed (not turned into spaces) and the ends are trimmed,
+    // so Hancom can match an installed font. With a space left in, `함초롬바탕 `
+    // leaves the font box empty and `HancomEQN ` breaks the equation (0.41 did
+    // the same).
+    // 이것을 실패시키는 것: `header.rs`·`equation.rs` 에서 `clean_font_name` 을 빼는 것.
+    #[test]
+    fn font_names_lose_control_characters_and_edge_spaces() {
+        let (header, section) = encode_parts();
+        assert_eq!(attr_value(&header, "face", "글꼴"), "글꼴ABCD");
+        assert_eq!(attr_value(&section, "font", "EQ"), "EQABCD");
+    }
+
+    // 이것을 실패시키는 것: `encoder/section.rs` 의 정규화 호출을 빼는 것.
+    #[test]
+    fn section_body_bookmark_name_is_normalized() {
+        let (_, section) = encode_parts();
+        assert_eq!(attr_value(&section, "name", "BODY"), "BODYA B C D");
+    }
+
+    // 이것을 실패시키는 것: `encoder/shapes.rs` `serialize_with_root` 의 정규화 호출을 빼는 것.
+    #[test]
+    fn grouped_connect_line_type_is_normalized() {
+        let (_, section) = encode_parts();
+        assert_eq!(attr_value(&section, "type", "CT"), "CTA B C D");
+    }
+
+    // 이것을 실패시키는 것: `encoder/section/memo.rs` 의 정규화 호출을 빼는 것.
+    #[test]
+    fn memo_body_bookmark_name_is_normalized() {
+        let (_, section) = encode_parts();
+        assert_eq!(attr_value(&section, "name", "MEMO"), "MEMOA B C D");
+    }
+
+    // 이것을 실패시키는 것: `encoder/section/header_footer.rs` 의 정규화 호출을 빼는 것.
+    #[test]
+    fn header_footer_bookmark_name_is_normalized() {
+        let (_, section) = encode_parts();
+        assert_eq!(attr_value(&section, "name", "HEAD"), "HEADA B C D");
+    }
+
+    // 텍스트 `hp:t` 와 수식 `hp:script` 는 0.42 escape(`&#13;`) 그대로 둔다 — 한컴이 이것을
+    // 0.41 의 literal CR 과 같게 표시하고 저장한다. 속성은 decode 하면 공백으로 돌아온다.
+    // 이것을 실패시키는 것: `encoder/header.rs` 정규화 호출을 빼는 것(decode 값이 제어 문자가 됨),
+    // 또는 정규화를 텍스트 구간까지 넓히는 것(`&#13;` 이 사라짐).
+    #[test]
+    fn normalized_output_decodes_to_spaces() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_style(HwpxStyle::new(0, "PARA", RAW, RAW_CRLF, 0, 0, 0, 1042, 0));
+        let cs = CharShapeIndex::new(0);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![para(vec![
+                Run::text("가\r나", cs),
+                Run::control(Control::equation("a+b\r\n+c"), cs),
+            ])],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+        let (_, section) = read_parts(&bytes);
+        assert!(section.contains("<hp:t>가&#13;나</hp:t>"), "text keeps the 0.42 escape");
+        assert!(section.contains("a+b&#13;\n+c</hp:script>"), "script keeps the 0.42 escape");
+        let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+        let style = decoded.style_store.iter_styles().next().expect("one style");
+        assert_eq!((style.name.as_str(), style.eng_name.as_str()), ("A B C D", "E F"));
+        let text = decoded.document.sections()[0].paragraphs[0].text_content();
+        assert_eq!(text, "가\r나", "text keeps its CR (Hancom reads &#13; like 0.41's literal CR)");
+    }
+
+    /// quick-xml 0.42 writes a run holding only a CR as `<hp:t>&#13;</hp:t>`;
+    /// reading it back must keep the run (0.41 wrote a literal CR, which a
+    /// parser reads as LF, so it survived as `"\n"`).
+    // 이것을 실패시키는 것: 디코더의 ws-only 판정(`is_ws_only_wire_text`)을 literal 공백만으로
+    // 되돌리는 것 — run 이 경고 없이 사라진다.
+    #[test]
+    fn a_run_holding_only_a_cr_survives_the_round_trip() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let cs = CharShapeIndex::new(0);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![para(vec![Run::text("가", cs), Run::text("\r", cs), Run::text("나", cs)])],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+        let texts: Vec<String> = decoded.document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect();
+        assert_eq!(texts, vec!["가", "\r", "나"]);
+    }
+
+    /// The other serde attributes a Core string reaches (found by filling every
+    /// string of every repo fixture with control whitespace), beyond the ones
+    /// the call-site tests above already pin.
+    // 이것을 실패시키는 것: 이 속성들 중 하나를 serde 가 아닌 경로(정규화를 거치지 않는)로 옮기는 것,
+    // 또는 header·section 정규화 호출을 빼는 것.
+    #[test]
+    fn remaining_census_attrs_are_normalized() {
+        use crate::style_store::HwpxParaShape;
+        use hwpforge_core::image::Image;
+
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_font(HwpxFont::new(7, "글꼴", format!("LANG{RAW}")));
+        store.push_style(HwpxStyle::new(0, format!("TY{RAW}"), "s", "s", 0, 0, 0, 1042, 0));
+        store
+            .push_para_shape(HwpxParaShape { line_wrap: format!("LW{RAW}"), ..Default::default() });
+        let cs = CharShapeIndex::new(0);
+        let mut compose = Control::compose(format!("CX{RAW}"));
+        if let Control::Compose { circle_type, compose_type, .. } = &mut compose {
+            *circle_type = format!("CI{RAW}");
+            *compose_type = format!("CO{RAW}");
+        }
+        let body = para(vec![
+            Run::control(Control::bookmark(&format!("BM{RAW}")), cs),
+            Run::control(compose, cs),
+            Run::image(
+                Image::from_path(
+                    format!("BinData/IM{RAW}.png"),
+                    HwpUnit::new(1000).unwrap(),
+                    HwpUnit::new(1000).unwrap(),
+                ),
+                cs,
+            ),
+        ]);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
+        let mut images = ImageStore::new();
+        images.insert(format!("BinData/IM{RAW}.png"), vec![0x89, b'P', b'N', b'G']);
+        let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images).expect("encode");
+        let (header, section) = read_parts(&bytes);
+        assert_eq!(attr_value(&header, "lang", "LANG"), "LANGA B C D");
+        assert_eq!(attr_value(&header, "type", "TY"), "TYA B C D");
+        assert_eq!(attr_value(&header, "lineWrap", "LW"), "LWA B C D");
+        assert_eq!(attr_value(&section, "name", "BM"), "BMA B C D");
+        assert_eq!(attr_value(&section, "composeText", "CX"), "CXA B C D");
+        assert_eq!(attr_value(&section, "circleType", "CI"), "CIA B C D");
+        assert_eq!(attr_value(&section, "composeType", "CO"), "COA B C D");
+        assert_eq!(attr_value(&section, "binaryItemIDRef", "IM"), "IMA B C D");
+        assert_no_control_refs_in_start_tags("header.xml", &header);
+        assert_no_control_refs_in_start_tags("section0.xml", &section);
+    }
+}

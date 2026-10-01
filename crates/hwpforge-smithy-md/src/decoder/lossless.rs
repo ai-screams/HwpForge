@@ -25,40 +25,37 @@ pub(super) fn decode_lossless_sections(content: &str) -> MdResult<Vec<Section>> 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(start)) => {
-                if start.name().as_ref() == ROOT_TAG.as_bytes() {
+                if start.name().as_ref() == ROOT_TAG {
                     buf.clear();
                     continue;
                 }
-                let node = parse_start_tag(&reader, &start, &stack)?;
+                let node = parse_start_tag(&start, &stack)?;
                 stack.push(node);
             }
             Ok(Event::Empty(empty)) => {
-                if empty.name().as_ref() == ROOT_TAG.as_bytes() {
+                if empty.name().as_ref() == ROOT_TAG {
                     buf.clear();
                     continue;
                 }
-                parse_empty_tag(&reader, &empty, &mut stack)?;
+                parse_empty_tag(&empty, &mut stack)?;
             }
             Ok(Event::End(end)) => {
-                let tag = end.name().as_ref().to_vec();
-                if tag.as_slice() == ROOT_TAG.as_bytes() {
+                let name = end.name();
+                let tag: &str = name.as_ref();
+                if tag == ROOT_TAG {
                     buf.clear();
                     continue;
                 }
 
                 let node = stack.pop().ok_or_else(|| MdError::LosslessParse {
-                    detail: format!(
-                        "unexpected closing tag </{}>",
-                        String::from_utf8_lossy(tag.as_slice())
-                    ),
+                    detail: format!("unexpected closing tag </{tag}>"),
                 })?;
 
-                if node.tag_name().as_bytes() != tag.as_slice() {
+                if node.tag_name() != tag {
                     return Err(MdError::LosslessParse {
                         detail: format!(
-                            "tag mismatch: opened <{}> but closed </{}>",
-                            node.tag_name(),
-                            String::from_utf8_lossy(tag.as_slice())
+                            "tag mismatch: opened <{}> but closed </{tag}>",
+                            node.tag_name()
                         ),
                     });
                 }
@@ -66,14 +63,10 @@ pub(super) fn decode_lossless_sections(content: &str) -> MdResult<Vec<Section>> 
                 attach_closed_node(node, &mut stack, &mut sections)?;
             }
             Ok(Event::Text(text)) => {
-                let value = text.decode().map_err(|err| MdError::LosslessParse {
-                    detail: format!("text decode failed: {err}"),
-                })?;
-                append_text(&mut stack, value.as_ref())?;
+                append_text(&mut stack, &text)?;
             }
             Ok(Event::CData(cdata)) => {
-                let value = String::from_utf8_lossy(cdata.as_ref());
-                append_text(&mut stack, value.as_ref())?;
+                append_text(&mut stack, &cdata)?;
             }
             Ok(Event::Comment(_))
             | Ok(Event::Decl(_))
@@ -200,127 +193,106 @@ struct UnknownControlNode {
     data: String,
 }
 
-fn parse_start_tag(
-    reader: &Reader<&[u8]>,
-    start: &BytesStart<'_>,
-    stack: &[OpenNode],
-) -> MdResult<OpenNode> {
-    validate_parent(start.name().as_ref(), stack)?;
-    match start.name().as_ref() {
-        b"section" => Ok(OpenNode::Section(parse_section_node(reader, start)?)),
-        b"p" => Ok(OpenNode::Paragraph(ParagraphNode {
-            para_shape_id: parse_para_index_attr(reader, start, "p", "data-para-shape")?,
+fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenNode> {
+    let name = start.name();
+    let tag: &str = name.as_ref();
+    validate_parent(tag, stack)?;
+    match tag {
+        "section" => Ok(OpenNode::Section(parse_section_node(start)?)),
+        "p" => Ok(OpenNode::Paragraph(ParagraphNode {
+            para_shape_id: parse_para_index_attr(start, "p", "data-para-shape")?,
             runs: Vec::new(),
         })),
-        b"table" => Ok(OpenNode::Table(parse_table_node(reader, start)?)),
-        b"tr" => Ok(OpenNode::Row(RowNode {
+        "table" => Ok(OpenNode::Table(parse_table_node(start)?)),
+        "tr" => Ok(OpenNode::Row(RowNode {
             cells: Vec::new(),
-            height: parse_optional_length_attr(
-                reader,
-                start,
-                "tr",
-                "data-height-unit",
-                "data-height-mm",
-            )?,
+            height: parse_optional_length_attr(start, "tr", "data-height-unit", "data-height-mm")?,
         })),
-        b"td" => Ok(OpenNode::Cell(CellNode {
-            col_span: parse_optional_u16_attr(reader, start, "td", "data-col-span")?.unwrap_or(1),
-            row_span: parse_optional_u16_attr(reader, start, "td", "data-row-span")?.unwrap_or(1),
-            width: parse_length_attr(reader, start, "td", "data-width-unit", "data-width-mm")?,
-            background: parse_optional_color_attr(reader, start, "td", "data-background")?,
+        "td" => Ok(OpenNode::Cell(CellNode {
+            col_span: parse_optional_u16_attr(start, "td", "data-col-span")?.unwrap_or(1),
+            row_span: parse_optional_u16_attr(start, "td", "data-row-span")?.unwrap_or(1),
+            width: parse_length_attr(start, "td", "data-width-unit", "data-width-mm")?,
+            background: parse_optional_color_attr(start, "td", "data-background")?,
             paragraphs: Vec::new(),
         })),
-        b"span" => Ok(OpenNode::Span(SpanNode {
-            char_shape_id: parse_index_attr(reader, start, "span", "data-char-shape")?,
+        "span" => Ok(OpenNode::Span(SpanNode {
+            char_shape_id: parse_index_attr(start, "span", "data-char-shape")?,
             text: String::new(),
         })),
-        b"a" => Ok(OpenNode::Link(LinkNode {
-            char_shape_id: parse_index_attr(reader, start, "a", "data-char-shape")?,
-            href: required_attr(reader, start, "a", "href")?,
+        "a" => Ok(OpenNode::Link(LinkNode {
+            char_shape_id: parse_index_attr(start, "a", "data-char-shape")?,
+            href: required_attr(start, "a", "href")?,
             text: String::new(),
         })),
-        b"textbox" => Ok(OpenNode::TextBox(TextBoxNode {
-            char_shape_id: parse_index_attr(reader, start, "textbox", "data-char-shape")?,
-            width: parse_length_attr(reader, start, "textbox", "data-width-unit", "data-width-mm")?,
-            height: parse_length_attr(
-                reader,
-                start,
-                "textbox",
-                "data-height-unit",
-                "data-height-mm",
-            )?,
+        "textbox" => Ok(OpenNode::TextBox(TextBoxNode {
+            char_shape_id: parse_index_attr(start, "textbox", "data-char-shape")?,
+            width: parse_length_attr(start, "textbox", "data-width-unit", "data-width-mm")?,
+            height: parse_length_attr(start, "textbox", "data-height-unit", "data-height-mm")?,
             text: String::new(),
             paragraphs: Vec::new(),
         })),
-        b"footnote" => Ok(OpenNode::Footnote(FootnoteNode {
-            char_shape_id: parse_index_attr(reader, start, "footnote", "data-char-shape")?,
+        "footnote" => Ok(OpenNode::Footnote(FootnoteNode {
+            char_shape_id: parse_index_attr(start, "footnote", "data-char-shape")?,
             text: String::new(),
             paragraphs: Vec::new(),
         })),
-        b"control" => Ok(OpenNode::UnknownControl(UnknownControlNode {
-            char_shape_id: parse_index_attr(reader, start, "control", "data-char-shape")?,
-            kind: required_attr(reader, start, "control", "data-kind")?,
+        "control" => Ok(OpenNode::UnknownControl(UnknownControlNode {
+            char_shape_id: parse_index_attr(start, "control", "data-char-shape")?,
+            kind: required_attr(start, "control", "data-kind")?,
             data: String::new(),
         })),
-        other => Err(MdError::LosslessParse {
-            detail: format!("unsupported lossless tag <{}>", String::from_utf8_lossy(other)),
-        }),
+        other => {
+            Err(MdError::LosslessParse { detail: format!("unsupported lossless tag <{}>", other) })
+        }
     }
 }
 
-fn parse_empty_tag(
-    reader: &Reader<&[u8]>,
-    empty: &BytesStart<'_>,
-    stack: &mut [OpenNode],
-) -> MdResult<()> {
-    validate_parent(empty.name().as_ref(), stack)?;
-    match empty.name().as_ref() {
-        b"img" => {
-            let char_shape_id = parse_index_attr(reader, empty, "img", "data-char-shape")?;
-            let src = required_attr(reader, empty, "img", "src")?;
-            let format = parse_image_format(&required_attr(reader, empty, "img", "data-format")?);
-            let width =
-                parse_length_attr(reader, empty, "img", "data-width-unit", "data-width-mm")?;
-            let height =
-                parse_length_attr(reader, empty, "img", "data-height-unit", "data-height-mm")?;
+fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<()> {
+    let name = empty.name();
+    let tag: &str = name.as_ref();
+    validate_parent(tag, stack)?;
+    match tag {
+        "img" => {
+            let char_shape_id = parse_index_attr(empty, "img", "data-char-shape")?;
+            let src = required_attr(empty, "img", "src")?;
+            let format = parse_image_format(&required_attr(empty, "img", "data-format")?);
+            let width = parse_length_attr(empty, "img", "data-width-unit", "data-width-mm")?;
+            let height = parse_length_attr(empty, "img", "data-height-unit", "data-height-mm")?;
 
             let image = Image::new(src, width, height, format);
             push_run_to_parent(stack, Run::image(image, char_shape_id))
         }
-        b"span" => {
-            let char_shape_id = parse_index_attr(reader, empty, "span", "data-char-shape")?;
+        "span" => {
+            let char_shape_id = parse_index_attr(empty, "span", "data-char-shape")?;
             push_run_to_parent(stack, Run::text("", char_shape_id))
         }
-        b"a" => {
-            let char_shape_id = parse_index_attr(reader, empty, "a", "data-char-shape")?;
-            let href = required_attr(reader, empty, "a", "href")?;
+        "a" => {
+            let char_shape_id = parse_index_attr(empty, "a", "data-char-shape")?;
+            let href = required_attr(empty, "a", "href")?;
             let link = Control::Hyperlink { text: String::new(), url: href };
             push_run_to_parent(stack, Run::control(link, char_shape_id))
         }
-        b"p" => {
-            let para_shape_id = parse_para_index_attr(reader, empty, "p", "data-para-shape")?;
+        "p" => {
+            let para_shape_id = parse_para_index_attr(empty, "p", "data-para-shape")?;
             let paragraph =
                 Paragraph::with_runs(vec![Run::text("", CharShapeIndex::new(0))], para_shape_id);
             push_paragraph_to_parent(stack, paragraph)
         }
         other => Err(MdError::LosslessParse {
-            detail: format!(
-                "unsupported empty lossless tag <{} />",
-                String::from_utf8_lossy(other)
-            ),
+            detail: format!("unsupported empty lossless tag <{} />", other),
         }),
     }
 }
 
-fn validate_parent(tag: &[u8], stack: &[OpenNode]) -> MdResult<()> {
+fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
     let parent = stack.last().map(OpenNode::tag_name);
     let valid = match tag {
-        b"section" => parent.is_none(),
-        b"p" => matches!(parent, Some("section" | "td" | "textbox" | "footnote")),
-        b"table" => matches!(parent, Some("p")),
-        b"tr" => matches!(parent, Some("table")),
-        b"td" => matches!(parent, Some("tr")),
-        b"span" | b"img" | b"a" | b"textbox" | b"footnote" | b"control" => {
+        "section" => parent.is_none(),
+        "p" => matches!(parent, Some("section" | "td" | "textbox" | "footnote")),
+        "table" => matches!(parent, Some("p")),
+        "tr" => matches!(parent, Some("table")),
+        "td" => matches!(parent, Some("tr")),
+        "span" | "img" | "a" | "textbox" | "footnote" | "control" => {
             matches!(parent, Some("p"))
         }
         _ => true,
@@ -332,8 +304,7 @@ fn validate_parent(tag: &[u8], stack: &[OpenNode]) -> MdResult<()> {
 
     Err(MdError::LosslessParse {
         detail: format!(
-            "invalid nesting: <{}> cannot be inside <{}>",
-            String::from_utf8_lossy(tag),
+            "invalid nesting: <{tag}> cannot be inside <{}>",
             parent.unwrap_or("<root>")
         ),
     })
@@ -567,14 +538,12 @@ fn push_paragraph_to_parent(stack: &mut [OpenNode], paragraph: Paragraph) -> MdR
     }
 }
 
-fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResult<SectionNode> {
+fn parse_section_node(start: &BytesStart<'_>) -> MdResult<SectionNode> {
     let mut page = PageSettings::a4();
-    page.width = parse_length_attr(reader, start, "section", "data-width-unit", "data-width-mm")?;
-    page.height =
-        parse_length_attr(reader, start, "section", "data-height-unit", "data-height-mm")?;
+    page.width = parse_length_attr(start, "section", "data-width-unit", "data-width-mm")?;
+    page.height = parse_length_attr(start, "section", "data-height-unit", "data-height-mm")?;
 
     if let Some(v) = parse_optional_length_attr(
-        reader,
         start,
         "section",
         "data-margin-left-unit",
@@ -583,7 +552,6 @@ fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResul
         page.margin_left = v;
     }
     if let Some(v) = parse_optional_length_attr(
-        reader,
         start,
         "section",
         "data-margin-right-unit",
@@ -591,17 +559,12 @@ fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResul
     )? {
         page.margin_right = v;
     }
-    if let Some(v) = parse_optional_length_attr(
-        reader,
-        start,
-        "section",
-        "data-margin-top-unit",
-        "data-margin-top-mm",
-    )? {
+    if let Some(v) =
+        parse_optional_length_attr(start, "section", "data-margin-top-unit", "data-margin-top-mm")?
+    {
         page.margin_top = v;
     }
     if let Some(v) = parse_optional_length_attr(
-        reader,
         start,
         "section",
         "data-margin-bottom-unit",
@@ -610,7 +573,6 @@ fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResul
         page.margin_bottom = v;
     }
     if let Some(v) = parse_optional_length_attr(
-        reader,
         start,
         "section",
         "data-header-margin-unit",
@@ -619,7 +581,6 @@ fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResul
         page.header_margin = v;
     }
     if let Some(v) = parse_optional_length_attr(
-        reader,
         start,
         "section",
         "data-footer-margin-unit",
@@ -631,18 +592,12 @@ fn parse_section_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResul
     Ok(SectionNode { page_settings: page, paragraphs: Vec::new() })
 }
 
-fn parse_table_node(reader: &Reader<&[u8]>, start: &BytesStart<'_>) -> MdResult<TableNode> {
+fn parse_table_node(start: &BytesStart<'_>) -> MdResult<TableNode> {
     Ok(TableNode {
-        char_shape_id: parse_index_attr(reader, start, "table", "data-char-shape")?,
+        char_shape_id: parse_index_attr(start, "table", "data-char-shape")?,
         rows: Vec::new(),
-        width: parse_optional_length_attr(
-            reader,
-            start,
-            "table",
-            "data-width-unit",
-            "data-width-mm",
-        )?,
-        caption: attr_value(reader, start, "data-caption")?,
+        width: parse_optional_length_attr(start, "table", "data-width-unit", "data-width-mm")?,
+        caption: attr_value(start, "data-caption")?,
     })
 }
 
@@ -659,31 +614,25 @@ fn parse_image_format(raw: &str) -> ImageFormat {
 }
 
 fn required_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<String> {
-    attr_value(reader, start, attribute)?
-        .ok_or(MdError::LosslessMissingAttribute { element, attribute })
+    attr_value(start, attribute)?.ok_or(MdError::LosslessMissingAttribute { element, attribute })
 }
 
-fn attr_value(
-    reader: &Reader<&[u8]>,
-    start: &BytesStart<'_>,
-    attribute: &'static str,
-) -> MdResult<Option<String>> {
+fn attr_value(start: &BytesStart<'_>, attribute: &'static str) -> MdResult<Option<String>> {
     for attr in start.attributes() {
         let attr = attr.map_err(|err| MdError::LosslessParse {
             detail: format!("attribute decode error: {err}"),
         })?;
 
-        if attr.key.as_ref() == attribute.as_bytes() {
-            let value = attr
-                .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
-                .map_err(|err| MdError::LosslessParse {
+        if attr.key.as_ref() == attribute {
+            let value = attr.normalized_value(XmlVersion::Explicit1_0).map_err(|err| {
+                MdError::LosslessParse {
                     detail: format!("attribute value decode error ({attribute}): {err}"),
-                })?;
+                }
+            })?;
             return Ok(Some(value.into_owned()));
         }
     }
@@ -691,12 +640,11 @@ fn attr_value(
 }
 
 fn parse_index_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<CharShapeIndex> {
-    let value = required_attr(reader, start, element, attribute)?;
+    let value = required_attr(start, element, attribute)?;
     let idx = value.parse::<usize>().map_err(|_| MdError::LosslessInvalidAttribute {
         element,
         attribute,
@@ -706,12 +654,11 @@ fn parse_index_attr(
 }
 
 fn parse_para_index_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<ParaShapeIndex> {
-    let value = required_attr(reader, start, element, attribute)?;
+    let value = required_attr(start, element, attribute)?;
     let idx = value.parse::<usize>().map_err(|_| MdError::LosslessInvalidAttribute {
         element,
         attribute,
@@ -721,48 +668,44 @@ fn parse_para_index_attr(
 }
 
 fn parse_mm_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<HwpUnit> {
-    let value = required_attr(reader, start, element, attribute)?;
+    let value = required_attr(start, element, attribute)?;
     parse_mm_value(element, attribute, value)
 }
 
 fn parse_length_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     unit_attribute: &'static str,
     mm_attribute: &'static str,
 ) -> MdResult<HwpUnit> {
-    if let Some(value) = attr_value(reader, start, unit_attribute)? {
+    if let Some(value) = attr_value(start, unit_attribute)? {
         return parse_unit_value(element, unit_attribute, value);
     }
-    parse_mm_attr(reader, start, element, mm_attribute)
+    parse_mm_attr(start, element, mm_attribute)
 }
 
 fn parse_optional_length_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     unit_attribute: &'static str,
     mm_attribute: &'static str,
 ) -> MdResult<Option<HwpUnit>> {
-    if let Some(value) = attr_value(reader, start, unit_attribute)? {
+    if let Some(value) = attr_value(start, unit_attribute)? {
         return Ok(Some(parse_unit_value(element, unit_attribute, value)?));
     }
-    parse_optional_mm_attr(reader, start, element, mm_attribute)
+    parse_optional_mm_attr(start, element, mm_attribute)
 }
 
 fn parse_optional_mm_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<Option<HwpUnit>> {
-    match attr_value(reader, start, attribute)? {
+    match attr_value(start, attribute)? {
         Some(value) => Ok(Some(parse_mm_value(element, attribute, value)?)),
         None => Ok(None),
     }
@@ -801,12 +744,11 @@ fn parse_unit_value(
 }
 
 fn parse_optional_u16_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<Option<u16>> {
-    match attr_value(reader, start, attribute)? {
+    match attr_value(start, attribute)? {
         Some(value) => {
             let parsed = value.parse::<u16>().map_err(|_| MdError::LosslessInvalidAttribute {
                 element,
@@ -820,12 +762,11 @@ fn parse_optional_u16_attr(
 }
 
 fn parse_optional_color_attr(
-    reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<Option<Color>> {
-    match attr_value(reader, start, attribute)? {
+    match attr_value(start, attribute)? {
         Some(value) => {
             let hex = value.strip_prefix('#').unwrap_or(value.as_str());
             if hex.len() != 6 {

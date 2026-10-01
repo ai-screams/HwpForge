@@ -57,7 +57,7 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 - push 전 `make ci` (플래그 일치: `--all-targets`·`--all-features`·fmt `--all`).
 - coverage 게이트 ≥90% — **linux 가 macOS 보다 ~0.02–0.06% 낮게** 나오므로 마진을 확보한다.
-- PR 제목·본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (`RELEASING.md` §8 canonical).
+- PR 제목은 **English**, 본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (`RELEASING.md` §8 canonical).
 
 ## 8. 릴리스 (release-plz 소유)
 

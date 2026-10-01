@@ -8,8 +8,8 @@ use hwpforge_foundation::{
     HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
     TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
 };
-use quick_xml::de::from_str;
 
+use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
 use crate::schema::header::{
@@ -46,8 +46,10 @@ pub struct HeaderParseResult {
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
-    let head: HxHead = from_str(xml)
-        .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
+    let head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
+        file: "header.xml".into(),
+        detail: xml_error_detail(&e),
+    })?;
     let begin_num = parse_begin_num(&head);
 
     let mut store = HwpxStyleStore::new();
@@ -93,7 +95,8 @@ fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
             for font in &group.fonts {
                 store.push_font(HwpxFont {
                     id: font.id,
-                    face_name: font.face.clone(),
+                    // Same cleaning as the encoder, so a no-op round trip stays one.
+                    face_name: crate::wire_xml::clean_font_name(&font.face),
                     lang: group.lang.clone(),
                 });
             }
@@ -824,6 +827,28 @@ mod tests {
         let f1 = store.font(FontIndex::new(1)).unwrap();
         assert_eq!(f1.face_name, "Times New Roman");
         assert_eq!(f1.lang, "LATIN");
+    }
+
+    // The encoder writes font names cleaned (`wire_xml::clean_font_name`); reading
+    // them the same way keeps decode→encode→decode a no-op for edits.
+    // 이것을 실패시키는 것: `load_fonts` 에서 `clean_font_name` 을 빼는 것.
+    #[test]
+    fn font_names_are_read_cleaned() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <fontfaces itemCnt="1">
+                    <fontface lang="HANGUL" fontCnt="3">
+                        <font id="0" face=" 윤명조440" type="TTF" isEmbedded="0"/>
+                        <font id="1" face="함초롬바탕&#13;" type="TTF" isEmbedded="0"/>
+                        <font id="2" face="Times New Roman" type="TTF" isEmbedded="0"/>
+                    </fontface>
+                </fontfaces>
+            </refList>
+        </head>"##;
+        let store = parse_header(xml).unwrap().style_store;
+        let names: Vec<_> =
+            (0..3).map(|i| store.font(FontIndex::new(i)).unwrap().face_name.clone()).collect();
+        assert_eq!(names, ["윤명조440", "함초롬바탕", "Times New Roman"]);
     }
 
     #[test]

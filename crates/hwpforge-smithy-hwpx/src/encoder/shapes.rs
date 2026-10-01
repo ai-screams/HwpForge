@@ -1050,12 +1050,17 @@ pub(crate) fn encode_connect_line_to_hx(
 /// is concatenated in document (z-) order inside `<hp:container>`.
 fn serialize_with_root<T: serde::Serialize>(value: &T, root: &str) -> HwpxResult<String> {
     let mut buf = String::new();
+    #[allow(clippy::disallowed_methods)] // normalized below
     let ser = quick_xml::se::Serializer::with_root(&mut buf, Some(root))
         .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
     value
         .serialize(ser)
         .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
-    Ok(buf)
+    // Most fragments hold no control-character reference; keep `buf` then.
+    match crate::wire_xml::normalize_attr_control_whitespace(&buf) {
+        std::borrow::Cow::Owned(normalized) => Ok(normalized),
+        std::borrow::Cow::Borrowed(_) => Ok(buf),
+    }
 }
 
 /// Sets the `groupLevel` attribute on a serialized shape XML fragment.
@@ -2881,6 +2886,7 @@ mod tests {
             encode_rect_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
                 .unwrap();
         let mut buf = String::new();
+        #[allow(clippy::disallowed_methods)] // test inspects raw serde output
         let ser = quick_xml::se::Serializer::with_root(&mut buf, Some("hp:rect")).unwrap();
         serde::Serialize::serialize(&rect, ser).unwrap();
         assert!(buf.contains("<hp:rect"), "encoded XML should contain <hp:rect: {buf}");

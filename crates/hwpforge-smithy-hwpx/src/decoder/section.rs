@@ -21,9 +21,9 @@ use hwpforge_foundation::{
     ApplyPageType, BorderLineType, CharShapeIndex, Color, HwpUnit, PageNumberPosition,
     ParaShapeIndex, StyleIndex, TextDirection,
 };
-use quick_xml::de::from_str;
 
 use crate::color::parse_hex_color_raw;
+use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,
@@ -140,9 +140,9 @@ pub fn parse_section(
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let xml = preserve_ws_only_text(xml);
-    let section: HxSection = from_str(&xml)
-        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
+    let xml = crate::wire_xml::preserve_ws_only_text(xml);
+    let section: HxSection = xml_from_str(&xml)
+        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: xml_error_detail(&e) })?;
 
     let mut page_settings = None;
     let mut headers = Vec::new();
@@ -338,6 +338,9 @@ pub(crate) fn build_wire_map_over_runs(
                     for part in &hx_run.texts[idx].parts {
                         match part {
                             HxTextPart::Text(s) => {
+                                // The ws-only sentinel is the decoder's own mark,
+                                // not wire text: count what the run emits.
+                                let s = crate::wire_xml::strip_ws_sentinel(s);
                                 let n = s.encode_utf16().count() as u32;
                                 if n == 0 {
                                     continue;
@@ -1499,7 +1502,8 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             height,
             base_line: eq.base_line,
             text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
-            font: eq.font.clone(),
+            // Same cleaning as the encoder, so a no-op round trip stays one.
+            font: crate::wire_xml::clean_font_name(&eq.font),
             inst_id: None,
         })),
         char_shape_id,
@@ -5256,6 +5260,23 @@ mod tests {
         }
     }
 
+    // 이것을 실패시키는 것: `decode_equation` 에서 `clean_font_name` 을 빼는 것 — 수식
+    // 글꼴이 인코드 때와 다르게 읽혀 편집 전 무변경 왕복 검사가 거부한다.
+    #[test]
+    fn decode_equation_reads_the_font_name_cleaned() {
+        use crate::schema::section::HxEquation;
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxEquation { font: " HancomEQN\n".to_string(), ..Default::default() };
+        let run = decode_equation(&hx, CharShapeIndex::new(0)).unwrap();
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Equation { font, .. } => assert_eq!(font, "HancomEQN"),
+                _ => panic!("expected Equation"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
     #[test]
     fn decode_equation_no_sz_uses_zero() {
         use crate::schema::section::HxEquation;
@@ -5283,87 +5304,12 @@ mod tests {
     }
 }
 
-/// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
-/// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
-/// 사라진다. CDATA·문자 참조(`&#32;`)도 unescape 후 판정이라 살아남지 못한다
-/// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
-/// 노드를 살리고, [`HxText`] 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
-///
-/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)는 건드리지 않는다 —
-/// 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
-fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
-    let mut result = mark_ws_only_text(xml, "<hp:t");
-    if let std::borrow::Cow::Borrowed(_) = result {
-        result = mark_ws_only_text(xml, "<t");
-    }
-    result
-}
-
-/// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
-fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
-    let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
-    let mut out: Option<String> = None;
-    let mut last = 0usize;
-    let mut search = 0usize;
-    while let Some(rel) = xml[search..].find(open) {
-        let tag_start = search + rel;
-        let after = &xml[tag_start + open.len()..];
-        // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
-        let Some(first) = after.chars().next() else { break };
-        if first != '>' && !first.is_ascii_whitespace() {
-            search = tag_start + open.len();
-            continue;
-        }
-        let Some(gt_rel) = after.find('>') else { break };
-        // 자기닫힘 `<hp:t/>` 는 콘텐츠 없음.
-        if after[..gt_rel].ends_with('/') {
-            search = tag_start + open.len() + gt_rel + 1;
-            continue;
-        }
-        let content_start = tag_start + open.len() + gt_rel + 1;
-        let Some(close_rel) = xml[content_start..].find(close) else { break };
-        let content = &xml[content_start..content_start + close_rel];
-        let ws_only = !content.is_empty()
-            && !content.contains('<')
-            && content.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
-        if ws_only {
-            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
-            buf.push_str(&xml[last..content_start]);
-            buf.push('\u{E000}');
-            last = content_start;
-        }
-        search = content_start + close_rel + close.len();
-    }
-    match out {
-        Some(mut buf) => {
-            buf.push_str(&xml[last..]);
-            std::borrow::Cow::Owned(buf)
-        }
-        None => std::borrow::Cow::Borrowed(xml),
-    }
-}
-
-// ── ws-only `<hp:t>` 보존 테스트 (quick-xml de 무시 우회) ──────────────────
+// ── ws-only `<hp:t>` 보존 테스트: 섹션 파싱·와이어 맵 경로 (스캐너 단위 테스트는 `wire_xml`) ──
 
 #[cfg(test)]
 mod ws_preserve_tests {
     use super::*;
-
-    #[test]
-    fn preserve_ws_only_text_marks_only_pure_whitespace() {
-        let xml = "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>";
-        let out = preserve_ws_only_text(xml);
-        assert_eq!(
-            out,
-            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>"
-        );
-    }
-
-    #[test]
-    fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
-        let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
-        assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
-    }
+    use crate::wire_xml::preserve_ws_only_text;
 
     #[test]
     fn ws_only_run_survives_section_parse() {
@@ -5378,5 +5324,69 @@ mod ws_preserve_tests {
             .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
             .collect();
         assert_eq!(texts, vec!["가", " ", "나"], "whitespace-only run must survive");
+    }
+
+    fn run_texts(xml: &str) -> Vec<String> {
+        let result = parse_section(xml, 0, &HashMap::new()).expect("parse");
+        result.paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect()
+    }
+
+    // quick-xml 0.42 writes a lone CR in text as `&#13;`, so a run holding only a
+    // CR now reaches the decoder as a character reference.
+    // 이것을 실패시키는 것: 판정을 literal 공백만으로 되돌리는 것(`&#13;` run 이 사라짐).
+    #[test]
+    fn a_run_of_whitespace_character_references_survives() {
+        for (wire, want) in [
+            ("&#13;", "\r"),
+            ("&#10;", "\n"),
+            ("&#9;", "\t"),
+            ("&#32;", " "),
+            ("&#xD;", "\r"),
+            ("&#x0d;", "\r"),
+            ("&#x20;&#13; ", " \r "),
+        ] {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t></run><run charPrIDRef="0"><t>{wire}</t></run><run charPrIDRef="0"><t>나</t></run></p></sec>"#
+            );
+            assert_eq!(run_texts(&xml), vec!["가", want, "나"], "{wire}");
+        }
+    }
+
+    // 이것을 실패시키는 것: 와이어 맵이 sentinel 까지 세는 것 — `&#13;` run 이 1 이 아니라
+    // 2 로 잡혀 줄 조판 캐시 좌표가 한 칸 밀린다(캐시 fail-closed 로 소실).
+    #[test]
+    fn the_wire_map_does_not_count_the_ws_sentinel() {
+        for wire in [" ", "&#13;"] {
+            let xml = preserve_ws_only_text(&format!(
+                r#"<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>가</hp:t></hp:run><hp:run charPrIDRef="0"><hp:t>{wire}</hp:t></hp:run></hp:p>"#
+            ))
+            .into_owned();
+            let hx: HxParagraph = crate::decoder::xml_from_str(&xml).expect("parse");
+            let map = build_paragraph_wire_map(&hx).expect("map");
+            assert_eq!((map.wire_end(), map.core_end()), (2, 2), "{wire}");
+        }
+    }
+
+    // Inside a run-local field the body text is a zero-Core span `(n,0)`, which
+    // the length check cannot see; a miscounted `n` would shift every later
+    // textpos silently. A one-unit `&#13;` body must map like a one-unit `x`.
+    // 이것을 실패시키는 것: 와이어 맵에서 `strip_ws_sentinel` 을 빼는 것 — `&#13;` 가 2 로
+    // 세어져 뒤 줄의 Core 좌표가 `x` 판과 달라진다.
+    #[test]
+    fn a_field_body_of_whitespace_references_maps_like_one_character() {
+        let core_textpos = |body: &str| {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>가</t><ctrl><fieldBegin id="1" type="HYPERLINK" name="" editable="0" dirty="0"><parameters cnt="1" name=""><stringParam name="Command">https://example.com;1;0;0;</stringParam></parameters></fieldBegin></ctrl><t>{body}</t><ctrl><fieldEnd beginIDRef="1"/></ctrl><t>나다</t></run><linesegarray><lineseg textpos="0" vertpos="0" vertsize="1000"/><lineseg textpos="19" vertpos="1600" vertsize="1000"/></linesegarray></p></sec>"#
+            );
+            let result = parse_section(&xml, 0, &HashMap::new()).expect("parse");
+            assert!(result.warnings.is_empty(), "{body}: {:?}", result.warnings);
+            let cache = result.paragraphs[0].layout_cache.as_ref().expect("cache kept");
+            cache.lines[1].textpos
+        };
+        assert_eq!(core_textpos("&#13;"), core_textpos("x"));
     }
 }

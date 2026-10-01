@@ -84,7 +84,7 @@ fn the_flattened_payload_matches_the_dto_key_for_key() {
 /// the same warning must appear twice, once for each side.
 #[test]
 fn both_inputs_decode_warnings_reach_the_caller_base_first() {
-    let noisy = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let noisy = repo_fixture("layout/stale-line-cache.hwpx");
 
     let out = diff(&noisy, &noisy).expect("diff");
 
@@ -100,7 +100,7 @@ fn both_inputs_decode_warnings_reach_the_caller_base_first() {
 /// Pins the order itself, which the symmetric case above cannot see.
 #[test]
 fn the_base_warnings_come_before_the_revised_ones() {
-    let noisy = repo_fixture("user_samples/sample-text-char-runs-basic.hwpx");
+    let noisy = repo_fixture("layout/stale-line-cache.hwpx");
     let quiet = fixture("SimpleTable.hwpx");
 
     let base_noisy = diff(&noisy, &quiet).expect("diff").warnings;

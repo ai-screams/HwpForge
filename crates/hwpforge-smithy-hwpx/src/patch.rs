@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read as _, Write as _};
 use std::ops::Range;
 
-use quick_xml::de::from_str;
+use crate::decoder::xml_from_str;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use sha2::{Digest, Sha256};
@@ -371,9 +371,9 @@ fn build_section_preservation(
     section_path: &str,
     section: &Section,
 ) -> HwpxResult<SectionPreservation> {
-    let hx_section: HxSection = from_str(section_xml).map_err(|error| HwpxError::XmlParse {
+    let hx_section: HxSection = xml_from_str(section_xml).map_err(|error| HwpxError::XmlParse {
         file: section_path.to_string(),
-        detail: error.to_string(),
+        detail: crate::decoder::xml_error_detail(&error),
     })?;
 
     let raw_slots = collect_raw_text_slots(section_xml, &hx_section)?;
@@ -608,7 +608,7 @@ fn collect_semantic_control_slots(
 }
 
 fn collect_raw_text_slots(xml: &str, section: &HxSection) -> HwpxResult<Vec<PreservedTextSlot>> {
-    let root_span = find_root_span(xml, b"hs:sec")?;
+    let root_span = find_root_span(xml, "hs:sec")?;
     let mut slots = RawSectionSlots::default();
     let mut body_slots: Vec<PreservedTextSlot> = Vec::new();
     let mut sink = RawSlotSink { body_slots: &mut body_slots, section_slots: &mut slots };
@@ -632,7 +632,7 @@ fn collect_raw_paragraph_list_slots(
     sink: &mut RawSlotSink<'_>,
     allow_section_header_footer: bool,
 ) -> HwpxResult<()> {
-    let paragraph_spans = collect_direct_child_outer_spans(xml, parent_span, b"hp:p")?;
+    let paragraph_spans = collect_direct_child_outer_spans(xml, parent_span, "hp:p")?;
     if paragraph_spans.len() != paragraphs.len() {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -668,7 +668,7 @@ fn collect_raw_paragraph_slots(
     sink: &mut RawSlotSink<'_>,
     allow_section_header_footer: bool,
 ) -> HwpxResult<()> {
-    let run_spans = collect_direct_child_outer_spans(xml, paragraph_span.clone(), b"hp:run")?;
+    let run_spans = collect_direct_child_outer_spans(xml, paragraph_span.clone(), "hp:run")?;
     if run_spans.len() != paragraph.runs.len() {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -739,7 +739,7 @@ fn collect_raw_run_slots(
     // by-kind 재현(texts→tables→pictures→ctrls→shapes)은 인터리브 run 에서
     // 경로 주소가 어긋난다. field 본문도 순서 기반: begin/end **사이**의
     // 텍스트가 본문 (gotcha #30 모호성 게이트 철폐 — 디코더와 거울).
-    let kind_spans = |name: &[u8], expect: usize, label: &str| -> HwpxResult<Vec<Range<usize>>> {
+    let kind_spans = |name: &str, expect: usize, label: &str| -> HwpxResult<Vec<Range<usize>>> {
         let spans = collect_direct_child_outer_spans(xml, run_span.clone(), name)?;
         if spans.len() != expect {
             return Err(HwpxError::InvalidStructure {
@@ -752,15 +752,15 @@ fn collect_raw_run_slots(
         }
         Ok(spans)
     };
-    let table_spans = kind_spans(b"hp:tbl", run.tables.len(), "table")?;
-    let picture_spans = kind_spans(b"hp:pic", run.pictures.len(), "picture")?;
-    let ctrl_spans = kind_spans(b"hp:ctrl", run.ctrls.len(), "ctrl")?;
-    let rect_spans = kind_spans(b"hp:rect", run.rects.len(), "rect")?;
-    let line_spans = kind_spans(b"hp:line", run.lines.len(), "line")?;
-    let ellipse_spans = kind_spans(b"hp:ellipse", run.ellipses.len(), "ellipse")?;
-    let polygon_spans = kind_spans(b"hp:polygon", run.polygons.len(), "polygon")?;
-    let curve_spans = kind_spans(b"hp:curve", run.curves.len(), "curve")?;
-    let connect_line_spans = kind_spans(b"hp:connectLine", run.connect_lines.len(), "connectLine")?;
+    let table_spans = kind_spans("hp:tbl", run.tables.len(), "table")?;
+    let picture_spans = kind_spans("hp:pic", run.pictures.len(), "picture")?;
+    let ctrl_spans = kind_spans("hp:ctrl", run.ctrls.len(), "ctrl")?;
+    let rect_spans = kind_spans("hp:rect", run.rects.len(), "rect")?;
+    let line_spans = kind_spans("hp:line", run.lines.len(), "line")?;
+    let ellipse_spans = kind_spans("hp:ellipse", run.ellipses.len(), "ellipse")?;
+    let polygon_spans = kind_spans("hp:polygon", run.polygons.len(), "polygon")?;
+    let curve_spans = kind_spans("hp:curve", run.curves.len(), "curve")?;
+    let connect_line_spans = kind_spans("hp:connectLine", run.connect_lines.len(), "connectLine")?;
 
     let order = if run.child_order.is_empty() {
         crate::schema::section::legacy_child_order(run)
@@ -1053,7 +1053,7 @@ fn collect_raw_table_slots(
 ) -> HwpxResult<()> {
     if let Some(caption) = &table.caption {
         let caption_span =
-            single_optional_direct_outer_span(xml, table_span.clone(), b"hp:caption")?.ok_or_else(
+            single_optional_direct_outer_span(xml, table_span.clone(), "hp:caption")?.ok_or_else(
                 || HwpxError::InvalidStructure {
                     detail: format!("table caption span missing for {prefix}"),
                 },
@@ -1061,7 +1061,7 @@ fn collect_raw_table_slots(
         collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
     }
 
-    let row_spans = collect_direct_child_outer_spans(xml, table_span, b"hp:tr")?;
+    let row_spans = collect_direct_child_outer_spans(xml, table_span, "hp:tr")?;
     if row_spans.len() != table.rows.len() {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -1084,7 +1084,7 @@ fn collect_raw_row_slots(
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
-    let cell_spans = collect_direct_child_outer_spans(xml, row_span, b"hp:tc")?;
+    let cell_spans = collect_direct_child_outer_spans(xml, row_span, "hp:tc")?;
     if cell_spans.len() != row.cells.len() {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -1110,7 +1110,7 @@ fn collect_raw_cell_slots(
     let Some(sub_list) = &cell.sub_list else {
         return Ok(());
     };
-    let sub_list_span = single_optional_direct_outer_span(xml, cell_span, b"hp:subList")?
+    let sub_list_span = single_optional_direct_outer_span(xml, cell_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("cell subList span missing for {prefix}"),
         })?;
@@ -1132,7 +1132,7 @@ fn collect_raw_picture_slots(
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
     if let Some(caption) = &picture.caption {
-        let caption_span = single_optional_direct_outer_span(xml, picture_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, picture_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("picture caption span missing for {prefix}"),
             })?;
@@ -1150,7 +1150,7 @@ fn collect_raw_rect_slots(
 ) -> HwpxResult<()> {
     if let Some(draw_text) = &rect.draw_text {
         let draw_text_span =
-            single_optional_direct_outer_span(xml, rect_span.clone(), b"hp:drawText")?.ok_or_else(
+            single_optional_direct_outer_span(xml, rect_span.clone(), "hp:drawText")?.ok_or_else(
                 || HwpxError::InvalidStructure {
                     detail: format!("textbox drawText span missing for {prefix}"),
                 },
@@ -1158,7 +1158,7 @@ fn collect_raw_rect_slots(
         collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink)?;
     }
     if let Some(caption) = &rect.caption {
-        let caption_span = single_optional_direct_outer_span(xml, rect_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, rect_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("textbox caption span missing for {prefix}"),
             })?;
@@ -1175,7 +1175,7 @@ fn collect_raw_line_slots(
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
     if let Some(caption) = &line.caption {
-        let caption_span = single_optional_direct_outer_span(xml, line_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, line_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("line caption span missing for {prefix}"),
             })?;
@@ -1195,7 +1195,7 @@ fn collect_raw_ellipse_slots(
     if control_name == "ellipse" {
         if let Some(draw_text) = &ellipse.draw_text {
             let draw_text_span =
-                single_optional_direct_outer_span(xml, ellipse_span.clone(), b"hp:drawText")?
+                single_optional_direct_outer_span(xml, ellipse_span.clone(), "hp:drawText")?
                     .ok_or_else(|| HwpxError::InvalidStructure {
                         detail: format!("ellipse drawText span missing for {prefix}"),
                     })?;
@@ -1203,7 +1203,7 @@ fn collect_raw_ellipse_slots(
         }
     }
     if let Some(caption) = &ellipse.caption {
-        let caption_span = single_optional_direct_outer_span(xml, ellipse_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, ellipse_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("{control_name} caption span missing for {prefix}"),
             })?;
@@ -1221,14 +1221,14 @@ fn collect_raw_polygon_slots(
 ) -> HwpxResult<()> {
     if let Some(draw_text) = &polygon.draw_text {
         let draw_text_span =
-            single_optional_direct_outer_span(xml, polygon_span.clone(), b"hp:drawText")?
+            single_optional_direct_outer_span(xml, polygon_span.clone(), "hp:drawText")?
                 .ok_or_else(|| HwpxError::InvalidStructure {
                     detail: format!("polygon drawText span missing for {prefix}"),
                 })?;
         collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink)?;
     }
     if let Some(caption) = &polygon.caption {
-        let caption_span = single_optional_direct_outer_span(xml, polygon_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, polygon_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("polygon caption span missing for {prefix}"),
             })?;
@@ -1245,7 +1245,7 @@ fn collect_raw_curve_slots(
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
     if let Some(caption) = &curve.caption {
-        let caption_span = single_optional_direct_outer_span(xml, curve_span, b"hp:caption")?
+        let caption_span = single_optional_direct_outer_span(xml, curve_span, "hp:caption")?
             .ok_or_else(|| HwpxError::InvalidStructure {
                 detail: format!("curve caption span missing for {prefix}"),
             })?;
@@ -1262,12 +1262,10 @@ fn collect_raw_connect_line_slots(
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
     if let Some(caption) = &connect_line.caption {
-        let caption_span =
-            single_optional_direct_outer_span(xml, connect_line_span, b"hp:caption")?.ok_or_else(
-                || HwpxError::InvalidStructure {
-                    detail: format!("connect line caption span missing for {prefix}"),
-                },
-            )?;
+        let caption_span = single_optional_direct_outer_span(xml, connect_line_span, "hp:caption")?
+            .ok_or_else(|| HwpxError::InvalidStructure {
+                detail: format!("connect line caption span missing for {prefix}"),
+            })?;
         collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
     }
     Ok(())
@@ -1280,7 +1278,7 @@ fn collect_raw_draw_text_slots(
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
-    let sub_list_span = single_optional_direct_outer_span(xml, draw_text_span, b"hp:subList")?
+    let sub_list_span = single_optional_direct_outer_span(xml, draw_text_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("drawText subList span missing for {prefix}"),
         })?;
@@ -1301,7 +1299,7 @@ fn collect_raw_header_footer_slots(
     prefix: &str,
     slots: &mut Vec<PreservedTextSlot>,
 ) -> HwpxResult<()> {
-    let tag = if prefix == "header" { b"hp:header".as_slice() } else { b"hp:footer".as_slice() };
+    let tag = if prefix == "header" { "hp:header" } else { "hp:footer" };
     let header_footer_span =
         single_optional_direct_outer_span(xml, ctrl_span, tag)?.ok_or_else(|| {
             HwpxError::InvalidStructure {
@@ -1311,10 +1309,10 @@ fn collect_raw_header_footer_slots(
     let Some(sub_list) = &value.sub_list else {
         return Ok(());
     };
-    let sub_list_span = single_optional_direct_outer_span(xml, header_footer_span, b"hp:subList")?
+    let sub_list_span = single_optional_direct_outer_span(xml, header_footer_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
-            detail: format!("{prefix} subList span missing while building preservation metadata"),
-        })?;
+        detail: format!("{prefix} subList span missing while building preservation metadata"),
+    })?;
     let mut section_sink = RawSectionSlots::default();
     let mut sink = RawSlotSink { body_slots: slots, section_slots: &mut section_sink };
     collect_raw_sublist_slots(
@@ -1334,15 +1332,11 @@ fn collect_raw_footnote_slots(
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
-    let tag = if prefix.ends_with(".footnote") {
-        b"hp:footNote".as_slice()
-    } else {
-        b"hp:endNote".as_slice()
-    };
+    let tag = if prefix.ends_with(".footnote") { "hp:footNote" } else { "hp:endNote" };
     let note_span = single_optional_direct_outer_span(xml, ctrl_span, tag)?.ok_or_else(|| {
         HwpxError::InvalidStructure { detail: format!("note span missing for {prefix}") }
     })?;
-    let sub_list_span = single_optional_direct_outer_span(xml, note_span, b"hp:subList")?
+    let sub_list_span = single_optional_direct_outer_span(xml, note_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("note subList span missing for {prefix}"),
         })?;
@@ -1363,7 +1357,7 @@ fn collect_raw_caption_slots(
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
 ) -> HwpxResult<()> {
-    let sub_list_span = single_optional_direct_outer_span(xml, caption_span, b"hp:subList")?
+    let sub_list_span = single_optional_direct_outer_span(xml, caption_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("caption subList span missing for {prefix}"),
         })?;
@@ -1399,7 +1393,7 @@ fn picture_has_semantic_run(picture: &HxPic) -> bool {
     matches!(picture.img.as_ref(), Some(img) if !img.binary_item_id_ref.is_empty())
 }
 
-pub(crate) fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> {
+pub(crate) fn find_root_span(xml: &str, tag: &str) -> HwpxResult<Range<usize>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut buf: Vec<u8> = Vec::new();
@@ -1410,7 +1404,7 @@ pub(crate) fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> 
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(event)) if event.name().as_ref() == tag => {
                 let end = buffer_position(&reader)?;
-                let start = event_start(end, (&event as &[u8]).len(), false)?;
+                let start = event_start(end, event.len(), false)?;
                 if root_start.is_none() {
                     root_start = Some(start);
                 }
@@ -1418,7 +1412,7 @@ pub(crate) fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> 
             }
             Ok(Event::Empty(event)) if event.name().as_ref() == tag => {
                 let end = buffer_position(&reader)?;
-                let start = event_start(end, (&event as &[u8]).len(), true)?;
+                let start = event_start(end, event.len(), true)?;
                 if depth == 0 {
                     return Ok(start..end);
                 }
@@ -1448,15 +1442,13 @@ pub(crate) fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> 
         buf.clear();
     }
 
-    Err(HwpxError::InvalidStructure {
-        detail: format!("root element '{}' not found", String::from_utf8_lossy(tag)),
-    })
+    Err(HwpxError::InvalidStructure { detail: format!("root element '{tag}' not found") })
 }
 
 pub(crate) fn collect_direct_child_outer_spans(
     xml: &str,
     parent_span: Range<usize>,
-    tag: &[u8],
+    tag: &str,
 ) -> HwpxResult<Vec<Range<usize>>> {
     let fragment = &xml[parent_span.clone()];
     let mut reader = Reader::from_str(fragment);
@@ -1472,8 +1464,7 @@ pub(crate) fn collect_direct_child_outer_spans(
             Ok(Event::Start(event)) => {
                 if depth == 1 && event.name().as_ref() == tag {
                     let end = buffer_position(&reader)?;
-                    let start =
-                        parent_span.start + event_start(end, (&event as &[u8]).len(), false)?;
+                    let start = parent_span.start + event_start(end, event.len(), false)?;
                     results.push(start..0);
                     open_indices.push(results.len() - 1);
                 }
@@ -1483,7 +1474,7 @@ pub(crate) fn collect_direct_child_outer_spans(
                 if depth == 1 && event.name().as_ref() == tag {
                     let end = parent_span.start + buffer_position(&reader)?;
                     let start = parent_span.start
-                        + event_start(end - parent_span.start, (&event as &[u8]).len(), true)?;
+                        + event_start(end - parent_span.start, event.len(), true)?;
                     results.push(start..end);
                 }
             }
@@ -1516,18 +1507,14 @@ pub(crate) fn collect_direct_child_outer_spans(
 fn single_optional_direct_outer_span(
     xml: &str,
     parent_span: Range<usize>,
-    tag: &[u8],
+    tag: &str,
 ) -> HwpxResult<Option<Range<usize>>> {
     let spans = collect_direct_child_outer_spans(xml, parent_span, tag)?;
     match spans.len() {
         0 => Ok(None),
         1 => Ok(spans.into_iter().next()),
         count => Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "expected at most one direct '{}' child but found {}",
-                String::from_utf8_lossy(tag),
-                count
-            ),
+            detail: format!("expected at most one direct '{tag}' child but found {count}"),
         }),
     }
 }
@@ -1548,9 +1535,9 @@ fn collect_direct_text_elements(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(event)) => {
-                if depth == 1 && event.name().as_ref() == b"hp:t" {
+                if depth == 1 && event.name().as_ref() == "hp:t" {
                     let end_local = buffer_position(&reader)?;
-                    let start_local = event_start(end_local, (&event as &[u8]).len(), false)?;
+                    let start_local = event_start(end_local, event.len(), false)?;
                     results.push(TextElementSpan {
                         element_start: parent_span.start + start_local,
                         element_end: 0,
@@ -1560,7 +1547,7 @@ fn collect_direct_text_elements(
                     });
                     open_indices.push(results.len() - 1);
                 }
-                if event.name().as_ref() != b"hp:t" {
+                if event.name().as_ref() != "hp:t" {
                     if let Some(index) = open_indices.last().copied() {
                         results[index].has_inline_markup = true;
                     }
@@ -1568,9 +1555,9 @@ fn collect_direct_text_elements(
                 depth += 1;
             }
             Ok(Event::Empty(event)) => {
-                if depth == 1 && event.name().as_ref() == b"hp:t" {
+                if depth == 1 && event.name().as_ref() == "hp:t" {
                     let end_local = buffer_position(&reader)?;
-                    let start_local = event_start(end_local, (&event as &[u8]).len(), true)?;
+                    let start_local = event_start(end_local, event.len(), true)?;
                     results.push(TextElementSpan {
                         element_start: parent_span.start + start_local,
                         element_end: parent_span.start + end_local,
@@ -1583,9 +1570,9 @@ fn collect_direct_text_elements(
                 }
             }
             Ok(Event::End(event)) => {
-                if depth == 2 && event.name().as_ref() == b"hp:t" {
+                if depth == 2 && event.name().as_ref() == "hp:t" {
                     let end_local = buffer_position(&reader)?;
-                    let close_start_local = end_tag_start(end_local, (&event as &[u8]).len())?;
+                    let close_start_local = end_tag_start(end_local, event.len())?;
                     let index = open_indices.pop().ok_or_else(|| HwpxError::XmlParse {
                         file: "section.xml".into(),
                         detail: "closing </hp:t> without matching start".into(),

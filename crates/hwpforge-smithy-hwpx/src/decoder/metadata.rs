@@ -61,8 +61,7 @@ pub fn parse_content_hpf_metadata(xml: &str) -> HwpxResult<Metadata> {
             Ok(Event::Start(e)) => state.on_start(&e)?,
             Ok(Event::Empty(e)) => state.on_empty(&e)?,
             Ok(Event::Text(t)) => {
-                let decoded = t.decode().map_err(|e| structure(format!("text decode: {e}")))?;
-                let unescaped = quick_xml::escape::unescape(&decoded)
+                let unescaped = quick_xml::escape::unescape(&t)
                     .map_err(|e| structure(format!("text unescape: {e}")))?
                     .into_owned();
                 state.on_text(&unescaped)?;
@@ -173,14 +172,13 @@ impl ParserState {
             return Ok(());
         }
         match name.prefix().map(|p| p.into_inner()) {
-            Some(b"opf") => Ok(()),
+            Some("opf") => Ok(()),
             Some(p) => Err(structure(format!(
-                "content.hpf: unexpected namespace prefix {:?} inside <opf:metadata>",
-                std::str::from_utf8(p).unwrap_or("?"),
+                "content.hpf: unexpected namespace prefix {p:?} inside <opf:metadata>",
             ))),
             None => Err(structure(format!(
                 "content.hpf: missing `opf:` prefix on {:?} inside <opf:metadata>",
-                std::str::from_utf8(name.local_name().into_inner()).unwrap_or("?"),
+                name.local_name().into_inner(),
             ))),
         }
     }
@@ -201,13 +199,13 @@ impl ParserState {
         let opened = self.stack.pop().ok_or_else(|| {
             structure(format!(
                 "content.hpf: closing tag without matching open: {:?}",
-                std::str::from_utf8(name.as_ref()).unwrap_or("?"),
+                name.as_ref(),
             ))
         })?;
         if opened != kind {
             return Err(structure(format!(
                 "content.hpf: mismatched closing tag: {:?}",
-                std::str::from_utf8(name.as_ref()).unwrap_or("?"),
+                name.as_ref(),
             )));
         }
 
@@ -235,13 +233,13 @@ impl ParserState {
 fn classify(name: QName) -> ElementKind {
     let local = name.local_name();
     match local.into_inner() {
-        b"package" => ElementKind::Package,
-        b"metadata" => ElementKind::Metadata,
-        b"title" => ElementKind::Title,
-        b"language" => ElementKind::Language,
-        b"meta" => ElementKind::Meta,
-        b"manifest" => ElementKind::Manifest,
-        b"spine" => ElementKind::Spine,
+        "package" => ElementKind::Package,
+        "metadata" => ElementKind::Metadata,
+        "title" => ElementKind::Title,
+        "language" => ElementKind::Language,
+        "meta" => ElementKind::Meta,
+        "manifest" => ElementKind::Manifest,
+        "spine" => ElementKind::Spine,
         _ => ElementKind::Other,
     }
 }
@@ -285,21 +283,19 @@ fn promote_meta(meta: &mut Metadata, name: &str, value: Option<String>) {
 pub(crate) fn parse_meta_name_attr(e: &BytesStart<'_>) -> HwpxResult<Option<String>> {
     for attr in e.attributes() {
         let attr = attr.map_err(|e| structure(format!("attr: {e}")))?;
-        if attr.key.as_ref() == b"name" {
+        if attr.key.as_ref() == "name" {
             // The `name="..."` attribute on `<opf:meta>` is always a
             // simple identifier (creator / subject / …). Use the raw
-            // attribute bytes directly — no XML entity expansion is
+            // attribute value directly — no XML entity expansion is
             // expected here, and avoiding `unescape_value()` keeps the
-            // crate free of deprecation warnings under quick-xml 0.40.
-            let raw = attr.value.as_ref();
+            // crate free of deprecation warnings (still deprecated in quick-xml 0.42).
+            let raw: &str = &attr.value;
             if raw.len() > MAX_TEXT_BYTES {
                 return Err(structure(format!(
                     "content.hpf: <opf:meta name=...> value exceeds {MAX_TEXT_BYTES} bytes",
                 )));
             }
-            let value = std::str::from_utf8(raw)
-                .map_err(|e| structure(format!("attr value utf-8: {e}")))?;
-            return Ok(Some(value.to_string()));
+            return Ok(Some(raw.to_string()));
         }
     }
     Ok(None)

@@ -10,6 +10,9 @@
 //! 직렬화는 검증하지 않는다 — Codex 리뷰 #2 채택: 인코더는 1 Core Run →
 //! 1 HxRun 정규형을 유지하므로 read/write DTO 분리로 mixed serializer 불요.
 
+// Spike tests exercise quick-xml directly, without the decoder limits.
+#![allow(clippy::disallowed_methods)]
+
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

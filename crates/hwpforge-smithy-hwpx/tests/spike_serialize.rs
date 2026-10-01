@@ -3,6 +3,9 @@
 //! GO/NO-GO gate for Phase 4 dual serde rename approach.
 //! All tests must pass before proceeding with encoder implementation.
 
+// Spike tests exercise quick-xml directly, without the decoder limits.
+#![allow(clippy::disallowed_methods)]
+
 use quick_xml::de::from_str;
 use quick_xml::se::to_string;
 use serde::{Deserialize, Serialize};

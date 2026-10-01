@@ -52,43 +52,29 @@ pub(crate) fn scan_section_xml(section_index: usize, xml: &str) -> Vec<HwpxPathO
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(element)) => {
-                let name: String = local_name(element.name().as_ref());
+                let name: String = local_name(element.name().as_ref()).to_string();
                 let path: String = build_path(&stack, &name);
-                record_element_occurrence(
-                    section_index,
-                    &path,
-                    &name,
-                    &element,
-                    reader.decoder(),
-                    &mut occurrences,
-                );
+                record_element_occurrence(section_index, &path, &name, &element, &mut occurrences);
                 stack.push(name);
             }
             Ok(Event::Empty(element)) => {
-                let name: String = local_name(element.name().as_ref());
-                let path: String = build_path(&stack, &name);
-                record_element_occurrence(
-                    section_index,
-                    &path,
-                    &name,
-                    &element,
-                    reader.decoder(),
-                    &mut occurrences,
-                );
+                let qname = element.name();
+                let name: &str = local_name(qname.as_ref());
+                let path: String = build_path(&stack, name);
+                record_element_occurrence(section_index, &path, name, &element, &mut occurrences);
             }
             Ok(Event::Text(text)) => {
                 if stack.last().is_some_and(|name| name == "t") {
-                    if let Ok(decoded_text) = text.xml_content(XmlVersion::Explicit1_0) {
-                        let trimmed: &str = decoded_text.trim();
-                        if !trimmed.is_empty() {
-                            occurrences.push(HwpxPathOccurrence {
-                                section_index,
-                                kind: "text".to_string(),
-                                path: build_path(&stack[..stack.len().saturating_sub(1)], "t"),
-                                ref_id: None,
-                                text: Some(trimmed.to_string()),
-                            });
-                        }
+                    let decoded_text = text.xml_content(XmlVersion::Explicit1_0);
+                    let trimmed: &str = decoded_text.trim();
+                    if !trimmed.is_empty() {
+                        occurrences.push(HwpxPathOccurrence {
+                            section_index,
+                            kind: "text".to_string(),
+                            path: build_path(&stack[..stack.len().saturating_sub(1)], "t"),
+                            ref_id: None,
+                            text: Some(trimmed.to_string()),
+                        });
                     }
                 }
             }
@@ -111,7 +97,6 @@ fn record_element_occurrence(
     path: &str,
     name: &str,
     element: &BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
     occurrences: &mut Vec<HwpxPathOccurrence>,
 ) {
     if !is_interesting_element(name) {
@@ -120,12 +105,10 @@ fn record_element_occurrence(
 
     let mut refs: BTreeMap<String, String> = BTreeMap::new();
     for attribute in element.attributes().with_checks(false).flatten() {
-        let key: String = local_name(attribute.key.as_ref());
-        if matches!(key.as_str(), "binaryItemIDRef" | "chartIDRef") {
-            if let Ok(value) =
-                attribute.decoded_and_normalized_value(XmlVersion::Explicit1_0, decoder)
-            {
-                refs.insert(key, value.into_owned());
+        let key: &str = local_name(attribute.key.as_ref());
+        if matches!(key, "binaryItemIDRef" | "chartIDRef") {
+            if let Ok(value) = attribute.normalized_value(XmlVersion::Explicit1_0) {
+                refs.insert(key.to_string(), value.into_owned());
             }
         }
     }
@@ -174,7 +157,6 @@ fn build_path(stack: &[String], name: &str) -> String {
     path
 }
 
-fn local_name(bytes: &[u8]) -> String {
-    let raw: String = String::from_utf8_lossy(bytes).into_owned();
-    raw.rsplit(':').next().unwrap_or(raw.as_str()).to_string()
+fn local_name(name: &str) -> &str {
+    name.rsplit(':').next().unwrap_or(name)
 }

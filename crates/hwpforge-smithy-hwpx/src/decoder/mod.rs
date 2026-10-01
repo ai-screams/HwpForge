@@ -23,6 +23,68 @@ use hwpforge_foundation::ApplyPageType;
 use crate::error::HwpxResult;
 use crate::style_store::HwpxStyleStore;
 
+// ── serde decode entry point ─────────────────────────────────────
+
+/// Serde recursion budget for the HWPX parts this crate deserializes with
+/// serde (`header.xml`, `section*.xml`, and the patch path's section
+/// reparse; `content.hpf` and chart XML use the pull reader instead).
+///
+/// quick-xml 0.42 caps serde nesting at 128 by default, which rejects
+/// tables nested 21 deep — well inside our own
+/// [`MAX_NESTING_DEPTH`](section::MAX_NESTING_DEPTH) guard of 32, which the
+/// encoder also honours. A nested table spans six XML element levels and a
+/// text box five (measured on real fixtures), so seven per nesting level —
+/// `7 * 32 = 224` — keeps even the 33rd level inside the budget: that level
+/// is rejected by our structural nesting guards rather than by the serde
+/// budget, the boundary quick-xml 0.41 had.
+///
+/// **Provisional:** the value may change in a minor release once more real
+/// documents have been measured. Deep inputs still need stack; the measured
+/// minimum per build profile is on [`HwpxDecoder::decode`].
+pub(crate) const XML_RECURSION_LIMIT: usize = 7 * section::MAX_NESTING_DEPTH;
+
+/// Upper bound on namespace bindings in scope while deserializing.
+///
+/// quick-xml 0.42 counts bindings in scope (not per element as 0.41 did) and
+/// defaults to 128. The value is set explicitly so a future quick-xml bump
+/// cannot move it silently. The largest count seen in real documents is 15.
+pub(crate) const XML_MAX_NAMESPACE_BINDINGS: usize = 128;
+
+/// Deserializes one HWPX XML part with this crate's explicit limits.
+///
+/// Every serde decode in this crate goes through here so the recursion and
+/// namespace limits are applied uniformly; `quick_xml::de::from_str` is
+/// rejected by the workspace `.clippy.toml` (`disallowed-methods`).
+pub(crate) fn xml_from_str<'de, T: serde::Deserialize<'de>>(
+    xml: &'de str,
+) -> Result<T, quick_xml::DeError> {
+    #[allow(clippy::disallowed_methods)] // the one place that sets the limits
+    let mut de = quick_xml::de::Deserializer::from_str(xml);
+    de.recursion_limit(XML_RECURSION_LIMIT);
+    de.resolver_mut().set_max_namespace_bindings(XML_MAX_NAMESPACE_BINDINGS);
+    T::deserialize(&mut de)
+}
+
+/// The `detail` text for a failed [`xml_from_str`], as users see it in
+/// `DECODE_FAILED`.
+///
+/// quick-xml's own text for the namespace limit tells the reader to call
+/// `NamespaceResolver::set_max_namespace_bindings`, which no caller of the
+/// CLI, MCP server or Python binding can do; it is replaced by a sentence
+/// that states the limit. Every other error keeps quick-xml's text.
+pub(crate) fn xml_error_detail(error: &quick_xml::DeError) -> String {
+    use quick_xml::name::NamespaceError;
+    match error {
+        quick_xml::DeError::InvalidXml(quick_xml::Error::Namespace(
+            NamespaceError::TooManyBindings(limit),
+        )) => format!(
+            "more than {limit} namespace bindings in scope; HwpForge does not read \
+             documents that declare more"
+        ),
+        other => other.to_string(),
+    }
+}
+
 // ── HwpxDocument ─────────────────────────────────────────────────
 
 /// The result of decoding an HWPX file.
@@ -167,6 +229,44 @@ impl HwpxDecoder {
     /// 2. Parse `Contents/header.xml` → `HwpxStyleStore`
     /// 3. Parse `Contents/section*.xml` → paragraphs + page settings
     /// 4. Assemble `Document<Draft>` with sections
+    ///
+    /// # Limits
+    ///
+    /// `header.xml` and `section*.xml` are deserialized with a nesting budget
+    /// of 224 XML levels (provisional: it may change in a minor release once
+    /// more real documents have been measured), enough for tables, text boxes or
+    /// table/text-box mixes nested 32 deep. The 33rd level is rejected as
+    /// [`HwpxError::InvalidStructure`](crate::HwpxError::InvalidStructure) by
+    /// our structural nesting guards. A part deeper than the budget, or one
+    /// with more than 128 namespace bindings in scope, fails with
+    /// [`HwpxError::XmlParse`](crate::HwpxError::XmlParse). Other parts
+    /// (`content.hpf`, charts) are read without these two limits.
+    ///
+    /// # Stack
+    ///
+    /// Deeply nested input recurses on the calling thread's stack, and an
+    /// overflow aborts the process instead of returning an error. Measured
+    /// through this function on macOS arm64, with packages holding nested
+    /// tables and text boxes up to and past the budget:
+    ///
+    /// | Build | Stack that decoded every input | Overflowed at |
+    /// | -- | -- | -- |
+    /// | release (optimized) | 1 MiB | 512 KiB |
+    /// | `opt-level = 1` (the `cargo test` profile) | 1 MiB | 768 KiB |
+    /// | `opt-level = 0` (unoptimized dev build) | 4 MiB | 3 MiB |
+    ///
+    /// So in an optimized build give the calling thread 2 MiB of stack.
+    /// 1 MiB is the measured minimum, but how much a build needs depends on
+    /// how the compiler inlines the recursive decode: a test binary that
+    /// compiled extra code into the same crate needed about twice as much
+    /// for the same input. Rust's default 2 MiB spawned threads qualify, and
+    /// so does the main thread on Linux and macOS (typically 8 MiB). On
+    /// Windows the main thread defaults to 1 MiB in total, part of it
+    /// already used by the caller, so decode deeply nested input on a
+    /// spawned thread there. An unoptimized build needs about 4 MiB, which
+    /// Rust's default spawned threads do not have. The 1 MiB release figure
+    /// is also checked by a test on Linux x86_64 in CI; other platforms are
+    /// not measured.
     pub fn decode(bytes: &[u8]) -> HwpxResult<HwpxDocument> {
         // Step 1: Open package
         let mut pkg = package::PackageReader::new(bytes)?;
@@ -266,6 +366,10 @@ impl HwpxDecoder {
     }
 
     /// Decodes an HWPX file from a filesystem path.
+    ///
+    /// The nesting and namespace limits of [`decode`](Self::decode) apply,
+    /// including its provisional 224-level budget and its stack advice for
+    /// the calling thread (2 MiB recommended, 1 MiB measured).
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
         let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)
@@ -785,5 +889,216 @@ mod tests {
         assert_eq!(decoded.style_store.para_shape(level1.para_shape_id).unwrap().heading_level, 0);
         assert_eq!(decoded.style_store.para_shape(level2.para_shape_id).unwrap().heading_level, 1);
         assert_eq!(decoded.style_store.para_shape(level3.para_shape_id).unwrap().heading_level, 2);
+    }
+}
+
+/// Limits of the shared serde entry point [`xml_from_str`]: our structural
+/// nesting guards must stay the error that fires at 33 levels (not the serde
+/// recursion budget), and the namespace-binding cap is 128 in scope.
+///
+/// Boundary cases run on a 64 MiB thread so they hold in every build
+/// profile (an unoptimized build overflows 2 MiB at 32 nested tables, and an
+/// overflow aborts the test process). The documented 1 MiB minimum for
+/// optimized builds is checked by `tests/decode_stack.rs`, which links the
+/// library as it ships.
+#[cfg(test)]
+mod xml_limit_tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    use super::section::parse_section;
+    use crate::error::HwpxError;
+
+    /// The A1 cell run of `tables/table_01_basic_2x2.hwpx`.
+    const TABLE_ANCHOR: &str = r#"<hp:run charPrIDRef="0"><hp:t>A1</hp:t></hp:run>"#;
+    /// The drawText run of `images/textbox_anchored.hwpx`.
+    const TEXTBOX_ANCHOR: &str =
+        r#"<hp:run charPrIDRef="0"><hp:t>앵커형 글상자입니다.</hp:t></hp:run>"#;
+    /// Text placed in the innermost level; a decode that drops it is a
+    /// silent loss, not a success.
+    const DEEPEST: &str = "XML_LIMIT_DEEPEST";
+
+    fn fixture_section(rel: &str) -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(rel);
+        let bytes = std::fs::read(&path).expect("read fixture");
+        super::package::PackageReader::new(&bytes)
+            .expect("open fixture package")
+            .read_section_xml(0)
+            .expect("read section0.xml")
+    }
+
+    /// Byte range of the first `<open …>…</close>` element.
+    fn first_element(xml: &str, open: &str, close: &str) -> std::ops::Range<usize> {
+        let start = xml.find(open).expect("element start");
+        let end = xml.find(close).expect("element end") + close.len();
+        start..end
+    }
+
+    /// The table fixture's section with its table replaced by `levels`
+    /// nested levels following `pattern` (`T` = table, `B` = textbox), the
+    /// outermost level being `pattern[0]`. Real fixture fragments keep the
+    /// per-level element depth equal to the measured one (T 6, B 5).
+    fn nested_section(pattern: &str, levels: usize) -> String {
+        let section = fixture_section("tables/table_01_basic_2x2.hwpx");
+        let table_span = first_element(&section, "<hp:tbl", "</hp:tbl>");
+        let table = &section[table_span.clone()];
+        assert_eq!(table.matches(TABLE_ANCHOR).count(), 1, "table anchor");
+        let box_section = fixture_section("images/textbox_anchored.hwpx");
+        let textbox = &box_section[first_element(&box_section, "<hp:rect", "</hp:rect>")];
+        assert_eq!(textbox.matches(TEXTBOX_ANCHOR).count(), 1, "textbox anchor");
+
+        let kinds: Vec<char> = pattern.chars().cycle().take(levels).collect();
+        let mut fragment = String::new();
+        for (index, kind) in kinds.iter().rev().enumerate() {
+            let text = if index == 0 { DEEPEST } else { "outer" };
+            let run = format!(r#"<hp:run charPrIDRef="0">{fragment}<hp:t>{text}</hp:t></hp:run>"#);
+            fragment = match kind {
+                'T' => table.replacen(TABLE_ANCHOR, &run, 1),
+                'B' => textbox.replacen(TEXTBOX_ANCHOR, &run, 1),
+                other => panic!("unknown nesting kind {other}"),
+            };
+        }
+        format!("{}{}{}", &section[..table_span.start], fragment, &section[table_span.end..])
+    }
+
+    /// Decodes on a 64 MiB thread; returns the paragraphs' debug text.
+    fn decode_on_big_stack(xml: String) -> Result<String, HwpxError> {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                parse_section(&xml, 0, &HashMap::new()).map(|r| format!("{:?}", r.paragraphs))
+            })
+            .expect("spawn decode thread")
+            .join()
+            .expect("decode thread panicked")
+    }
+
+    fn assert_decodes_to_deepest(pattern: &str, levels: usize) {
+        match decode_on_big_stack(nested_section(pattern, levels)) {
+            Ok(debug) => assert!(debug.contains(DEEPEST), "{pattern} x{levels}: deepest text lost"),
+            Err(err) => panic!("{pattern} x{levels} must decode, got: {err:?}"),
+        }
+    }
+
+    /// `guard` is `"table"` or `"sublist"`: which structural guard fires.
+    fn assert_nesting_guard(pattern: &str, levels: usize, guard: &str) {
+        let expected = format!("{guard} nesting depth 32 exceeds limit of 32");
+        match decode_on_big_stack(nested_section(pattern, levels)) {
+            Err(HwpxError::InvalidStructure { detail }) if detail == expected => {}
+            other => panic!("{pattern} x{levels} must hit the {guard} guard, got: {other:?}"),
+        }
+    }
+
+    // 이것을 실패시키는 것: `xml_from_str` 에서 `recursion_limit` 호출을 빼기
+    // (0.42 기본 128 → XmlParse "recursion limit of 128 exceeded"), 또는
+    // section.rs 가 `quick_xml::de::from_str` 를 직접 부르기.
+    #[test]
+    fn xml_limit_table_nesting_32_decodes() {
+        assert_decodes_to_deepest("T", 32);
+    }
+
+    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 200 으로 낮추기 — 가드보다
+    // serde 재귀 한도가 먼저 걸려 XmlParse 가 된다. 표 가드(section.rs
+    // `convert_table`)를 `depth > MAX_NESTING_DEPTH` 로 바꾸기.
+    #[test]
+    fn xml_limit_table_nesting_33_hits_nesting_guard() {
+        assert_nesting_guard("T", 33, "table");
+    }
+
+    // 이것을 실패시키는 것: `recursion_limit` 호출을 빼기 (TB 32 = 요소 깊이 180).
+    #[test]
+    fn xml_limit_table_textbox_nesting_32_decodes() {
+        assert_decodes_to_deepest("TB", 32);
+    }
+
+    // TB 33 은 표 가드가 먼저 걸린다(실측).
+    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 180 으로 낮추기 — TB 33 에서
+    // 가드보다 serde 재귀 한도가 먼저 걸린다. 표 가드를 `>` 로 바꾸기.
+    #[test]
+    fn xml_limit_table_textbox_nesting_33_hits_nesting_guard() {
+        assert_nesting_guard("TB", 33, "table");
+    }
+
+    // 이것을 실패시키는 것: `recursion_limit` 호출을 빼기 (B 32 = 요소 깊이 164).
+    #[test]
+    fn xml_limit_textbox_nesting_32_decodes() {
+        assert_decodes_to_deepest("B", 32);
+    }
+
+    // 글상자만 겹치면 표가 아니라 subList 가드가 먼저 걸린다.
+    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 160 으로 낮추기 — B 33 (요소
+    // 깊이 169) 에서 가드보다 serde 재귀 한도가 먼저 걸린다. subList 가드
+    // (section.rs `decode_sublist_paragraphs_skipping`)를 `>` 로 바꾸기.
+    #[test]
+    fn xml_limit_textbox_nesting_33_hits_sublist_guard() {
+        assert_nesting_guard("B", 33, "sublist");
+    }
+
+    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 크게 올리기(예: 10000) —
+    // 표 42겹이 serde 를 통과해 가드 오류로 바뀐다.
+    #[test]
+    fn xml_limit_table_nesting_42_fails_closed_on_recursion_limit() {
+        match decode_on_big_stack(nested_section("T", 42)) {
+            Err(HwpxError::XmlParse { detail, .. })
+                if detail.contains("recursion limit of 224 exceeded") => {}
+            other => panic!("table x42 must fail on the serde recursion limit, got: {other:?}"),
+        }
+    }
+
+    /// `n` namespace declarations with distinct prefixes starting `tag`.
+    fn namespace_decls(tag: &str, n: usize) -> String {
+        (0..n).map(|k| format!(r#" xmlns:{tag}{k}="urn:hwpforge-test:{tag}{k}""#)).collect()
+    }
+
+    /// A minimal section whose `sec`, `p` and `run` elements declare the
+    /// given numbers of namespace bindings, all in scope at the run.
+    fn namespace_section(on_sec: usize, on_p: usize, on_run: usize) -> String {
+        format!(
+            r#"<sec{}><p paraPrIDRef="0"{}><run charPrIDRef="0"{}><t>ns</t></run></p></sec>"#,
+            namespace_decls("s", on_sec),
+            namespace_decls("p", on_p),
+            namespace_decls("r", on_run),
+        )
+    }
+
+    fn assert_namespace_limit_rejects(xml: &str) {
+        match parse_section(xml, 0, &HashMap::new()) {
+            // 이것을 실패시키는 것: `xml_error_detail` 없이 quick-xml 문구를 그대로 쓰는 것 —
+            // 사용자가 부를 수 없는 `NamespaceResolver` API 를 안내한다.
+            Err(HwpxError::XmlParse { detail, .. })
+                if detail.contains("more than 128 namespace bindings")
+                    && !detail.contains("NamespaceResolver") => {}
+            other => panic!("129 bindings in scope must be rejected, got: {other:?}"),
+        }
+    }
+
+    // quick-xml 0.42 의 기본값도 128 이라 `set_max_namespace_bindings` 호출을
+    // 빼는 변이는 오늘 이 테스트들을 빨갛게 만들지 못한다(no-op). 호출은 다음
+    // bump 에서 기본값이 움직이는 것을 막으려고 둔다.
+    // 이것을 실패시키는 것: `XML_MAX_NAMESPACE_BINDINGS` 를 127 로 낮추기.
+    #[test]
+    fn xml_limit_namespace_bindings_128_on_root_decode() {
+        parse_section(&namespace_section(128, 0, 0), 0, &HashMap::new()).expect("128 bindings");
+    }
+
+    // 이것을 실패시키는 것: `XML_MAX_NAMESPACE_BINDINGS` 를 256 (또는 usize::MAX)
+    // 으로 올리기.
+    #[test]
+    fn xml_limit_namespace_bindings_129_on_root_rejected() {
+        assert_namespace_limit_rejects(&namespace_section(129, 0, 0));
+    }
+
+    // 요소 하나당이 아니라 범위 안 합계를 센다(0.41 은 요소당 256).
+    // 이것을 실패시키는 것: `XML_MAX_NAMESPACE_BINDINGS` 를 127 로 낮추기.
+    #[test]
+    fn xml_limit_namespace_bindings_128_spread_decode() {
+        parse_section(&namespace_section(43, 43, 42), 0, &HashMap::new())
+            .expect("128 bindings spread over sec/p/run");
+    }
+
+    // 이것을 실패시키는 것: `XML_MAX_NAMESPACE_BINDINGS` 를 256 으로 올리기.
+    #[test]
+    fn xml_limit_namespace_bindings_129_spread_rejected() {
+        assert_namespace_limit_rejects(&namespace_section(43, 43, 43));
     }
 }

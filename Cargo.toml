@@ -40,7 +40,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 # === XML Processing ===
 base64 = "0.23"
-quick-xml = { version = "0.41", features = ["serialize", "overlapped-lists"] }
+quick-xml = { version = "0.42", features = ["serialize", "overlapped-lists"] }
 serde = { version = "1.0", features = ["derive"] }
 # `Vec<u8>` serialises as a sequence of integers; `ByteBuf` keeps bytes as
 # bytes, which is what a serde-driven FFI bridge needs to hand Python `bytes`.

@@ -89,6 +89,22 @@ class Document:
         the bytes yourself and pass them to
         [`from_bytes`][hwpforge.Document.from_bytes], which has no cap.
 
+        Decoding happens later, in the operation that needs it, on the thread
+        that calls that operation. A package whose `header.xml` or
+        `section*.xml` nests deeper than 224 XML levels (provisional: it may
+        change in a minor release; tables and text boxes nested 32 deep still
+        decode) or has more than 128
+        namespace bindings in scope is rejected with ``DECODE_FAILED``.
+        Deeply nested input needs stack. Measured with an optimized build of
+        this package on macOS arm64, a `threading.Thread` of 1 MiB decoded
+        every test input and one of 512 KiB crashed the interpreter; the
+        same 1 MiB figure is checked for the Rust decoder on Linux x86_64 in
+        CI, and other platforms are not measured. The need varies between
+        builds, so give a decoding thread 2 MiB: on macOS and on Linux with
+        glibc the main thread and the `threading.Thread` default already
+        have more; elsewhere, or after lowering it, call
+        `threading.stack_size(2 * 1024 * 1024)` before starting the thread.
+
         Args:
             path: The file to read.
 
