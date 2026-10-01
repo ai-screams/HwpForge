@@ -183,6 +183,11 @@ fn encode_warning_line(w: &EncodeWarning) -> String {
         EncodeWarning::TitleMarkSkipped { path, reason } => {
             format!("TITLE_MARK_SKIPPED at {path}: {reason}")
         }
+        EncodeWarning::XmlForbiddenCharsRemoved { part, location, count } => {
+            format!(
+                "XML_FORBIDDEN_CHARS_REMOVED at {part} {location}: {count} character(s) removed"
+            )
+        }
         other => format!("ENCODE_WARNING {other:?}"),
     }
 }
@@ -216,5 +221,21 @@ mod tests {
         // `ParagraphPath`'s own `Display` (`decoder::mod.rs`) renders
         // segments as `section[N].para[N]`, not a `sN/pN` shorthand.
         assert_eq!(line, "LAYOUT_CACHE_DROPPED at section[0].para[1]: x");
+    }
+
+    #[test]
+    fn encode_warning_line_names_the_part_and_location_of_removed_characters() {
+        // 이것을 실패시키는 것: `encode_warning_line` 의 `XmlForbiddenCharsRemoved` 갈래를 빼는 것
+        // (Debug 폴백 `ENCODE_WARNING …` 이 된다).
+        let warning = EncodeWarning::XmlForbiddenCharsRemoved {
+            part: "Contents/section0.xml".into(),
+            location: "hp:t".into(),
+            count: 3,
+        };
+
+        assert_eq!(
+            encode_warning_line(&warning),
+            "XML_FORBIDDEN_CHARS_REMOVED at Contents/section0.xml hp:t: 3 character(s) removed"
+        );
     }
 }

@@ -469,6 +469,16 @@ fn convert_warnings_keep_the_cli_codes_and_the_convert_stage() {
             "LAYOUT_CACHE_DROPPED",
             "section[0]: ledger",
         ),
+        // 이것을 실패시키는 것: `convert_warning_parts` 의 `XmlForbiddenCharsRemoved` 갈래를 빼는 것 (`OTHER` 로 떨어짐).
+        (
+            ConvertWarning::HwpxEncode(EncodeWarning::XmlForbiddenCharsRemoved {
+                part: "Contents/header.xml".into(),
+                location: "hh:style@engName".into(),
+                count: 2,
+            }),
+            "XML_FORBIDDEN_CHARS_REMOVED",
+            "Contents/header.xml hh:style@engName: removed 2 XML-forbidden character(s)",
+        ),
     ];
 
     for (warning, code, message) in cases {

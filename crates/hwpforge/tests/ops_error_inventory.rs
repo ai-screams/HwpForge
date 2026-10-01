@@ -283,6 +283,7 @@ const WARNING_MAPPING: Table = &[
             ("NoteHeadSkipped", "NOTE_HEAD_SKIPPED"),
             ("TitleMarkSkipped", "TITLE_MARK_SKIPPED"),
             ("NoteRestartIgnored", "NOTE_RESTART_IGNORED"),
+            ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
         ],
     ),
     (
@@ -718,6 +719,15 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 OpsWarning::Encode(EncodeWarning::NoteRestartIgnored {
                     path: path(),
                     reason: "ON_SECTION".into(),
+                }),
+            ),
+            // 이것을 실패시키는 것: `encode_warning_code` 의 `XmlForbiddenCharsRemoved` 갈래를 빼는 것 (`OTHER`).
+            (
+                "XmlForbiddenCharsRemoved",
+                OpsWarning::Encode(EncodeWarning::XmlForbiddenCharsRemoved {
+                    part: "Contents/header.xml".into(),
+                    location: "hh:style@engName".into(),
+                    count: 1,
                 }),
             ),
         ],

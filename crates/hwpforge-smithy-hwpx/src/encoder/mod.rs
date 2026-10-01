@@ -514,6 +514,20 @@ pub enum EncodeWarning {
         /// 무시 사유.
         reason: String,
     },
+    /// XML 1.0 이 금지하는 문자를 part 에서 지움 — TAB·LF·CR 을 뺀 C0 제어
+    /// 문자(U+0000–U+0008, U+000B, U+000C, U+000E–U+001F)와 U+FFFE·U+FFFF.
+    /// 이 문자는 문자 참조(`&#1;`)로도 쓸 수 없어, 남기면 part 가
+    /// well-formed XML 이 아니게 된다 (#198). 같은 `(part, location)` 의
+    /// 제거는 한 경고로 합친다.
+    XmlForbiddenCharsRemoved {
+        /// 패키지 안 part 경로 (예: `Contents/header.xml`).
+        part: String,
+        /// 문자가 있던 자리 — 속성은 `요소@속성` (`hh:style@engName`),
+        /// 텍스트는 그것을 담은 요소 이름 (`hp:t`).
+        location: String,
+        /// 지운 문자 수.
+        count: usize,
+    },
 }
 
 impl EncodeWarning {
@@ -563,9 +577,23 @@ impl EncodeWarning {
             Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. } => true,
-            Self::LayoutCacheDropped { .. } => false,
+            Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
         }
     }
+}
+
+/// One [`EncodeWarning::XmlForbiddenCharsRemoved`] per `(location, count)`
+/// that [`strip_xml_forbidden_chars`](crate::wire_xml::strip_xml_forbidden_chars)
+/// reported for `part`.
+pub(crate) fn forbidden_char_warnings(
+    part: &str,
+    sites: Vec<(String, usize)>,
+) -> impl Iterator<Item = EncodeWarning> + '_ {
+    sites.into_iter().map(move |(location, count)| EncodeWarning::XmlForbiddenCharsRemoved {
+        part: part.to_string(),
+        location,
+        count,
+    })
 }
 
 /// 경고 목록을 `(의미 손상, 그 외)` 로 가른다 — **양쪽 모두 원래 순서 유지**.
@@ -614,6 +642,9 @@ impl std::fmt::Display for EncodeWarning {
             }
             Self::NoteRestartIgnored { path, reason } => {
                 write!(f, "note restart ignored at {path}: {reason}")
+            }
+            Self::XmlForbiddenCharsRemoved { part, location, count } => {
+                write!(f, "removed {count} XML-forbidden character(s) from {location} in {part}")
             }
         }
     }
@@ -665,6 +696,7 @@ mod is_semantic_loss_tests {
                     | EncodeWarning::NoteHeadSkipped { reason, .. }
                     | EncodeWarning::TitleMarkSkipped { reason, .. }
                     | EncodeWarning::NoteRestartIgnored { reason, .. } => reason.clone(),
+                    EncodeWarning::XmlForbiddenCharsRemoved { location, .. } => location.clone(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -828,6 +860,23 @@ impl HwpxEncoder {
         // Step 1: Encode header
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
+        let mut warnings: Vec<EncodeWarning> = Vec::new();
+        // #198: a font face loses its forbidden characters (with the other
+        // controls) to `clean_font_name` before serialization, so the part
+        // scan below cannot see them; they are counted here instead.
+        let mut header_sites = Vec::new();
+        let face_removed = style_store
+            .iter_fonts()
+            .map(|f| {
+                f.face_name.chars().filter(|&c| crate::wire_xml::is_xml_forbidden_char(c)).count()
+            })
+            .sum();
+        crate::wire_xml::tally_removed(&mut header_sites, "hh:font@face", face_removed);
+        let (header_xml, scanned) = crate::wire_xml::strip_xml_forbidden_chars(&header_xml);
+        for (location, count) in scanned {
+            crate::wire_xml::tally_removed(&mut header_sites, &location, count);
+        }
+        warnings.extend(forbidden_char_warnings("Contents/header.xml", header_sites));
 
         // Step 2: Encode sections (each produces XML + chart + masterpage entries)
         // chart_offset / masterpage_offset / embedded_ole_offset track global
@@ -860,7 +909,6 @@ impl HwpxEncoder {
             embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
-        let mut warnings: Vec<EncodeWarning> = Vec::new();
         for r in &mut section_results {
             warnings.append(&mut r.warnings);
         }

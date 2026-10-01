@@ -657,6 +657,17 @@ fn convert_warning_parts(warning: &ConvertWarning) -> (&'static str, String, Opt
         ConvertWarning::HwpxEncode(EncodeWarning::LayoutCacheDropped { path, reason }) => {
             return ("LAYOUT_CACHE_DROPPED", reason.clone(), Some(path.to_string()));
         }
+        ConvertWarning::HwpxEncode(EncodeWarning::XmlForbiddenCharsRemoved {
+            part,
+            location,
+            count,
+        }) => {
+            return (
+                "XML_FORBIDDEN_CHARS_REMOVED",
+                format!("removed {count} XML-forbidden character(s)"),
+                Some(format!("{part} {location}")),
+            );
+        }
         ConvertWarning::HwpxEncode(_) => {
             return (OTHER, format!("{warning:?}"), None);
         }

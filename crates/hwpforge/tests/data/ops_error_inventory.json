@@ -753,6 +753,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "XmlForbiddenCharsRemoved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

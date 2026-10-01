@@ -785,9 +785,9 @@ impl OpsWarning {
     /// **new canonical codes** that the frontends will adopt through their
     /// compatibility tables: `NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`,
     /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
-    /// `IMAGE_EMBED_SKIPPED`. `ASSET_DROPPED` and `ASSET_REMOTE` are
-    /// **reserved, not emitted**: `convert_md` reports an excluded image once,
-    /// through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
+    /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`. `ASSET_DROPPED`
+    /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
+    /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
     /// and keeps the typed disposition in its `assets` list; the two codes
     /// exist for a future asset provider that reports outcomes directly. The CLI's
     /// `to-pdf` also files a decode-side `LayoutCacheDropped` under `OTHER`
@@ -821,6 +821,7 @@ fn encode_warning_code(warning: &EncodeWarning) -> &'static str {
         EncodeWarning::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
         EncodeWarning::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
         EncodeWarning::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
+        EncodeWarning::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
         _ => UNCLASSIFIED,
     }
 }
