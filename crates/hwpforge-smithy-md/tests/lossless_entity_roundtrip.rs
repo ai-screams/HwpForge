@@ -25,7 +25,7 @@ fn roundtrip(text: &str) -> String {
     first_text(&MdDecoder::decode_lossless(&md).unwrap())
 }
 
-/// 본문 한 줄만 `replacement` 로 바꾼 lossless Markdown 을 만든다.
+/// 본문 한 줄만 `raw` 로 바꾼 lossless Markdown 을 만든다.
 fn md_with_raw_body(text: &str, raw: &str) -> String {
     let md = MdEncoder::encode_lossless(&doc_with_text(text).validate().unwrap()).unwrap();
     assert!(md.contains(text), "marker text must appear verbatim: {md}");
