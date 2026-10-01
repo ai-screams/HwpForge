@@ -416,8 +416,21 @@ pub(crate) fn encode_section_with_note_counters(
     // Generate masterpage XML files
     let master_pages = build_masterpage_entries(section, masterpage_offset);
 
+    // #198: serde writes XML-forbidden characters as they are; scan the
+    // assembled part so memo, header/footer and shape fragments are covered.
+    let xml = wrap_section_xml(&enriched);
+    let (clean, sites) = crate::wire_xml::strip_xml_forbidden_chars(&xml);
+    let xml = match clean {
+        std::borrow::Cow::Owned(clean) => clean,
+        std::borrow::Cow::Borrowed(_) => xml,
+    };
+    sink.warnings.extend(super::forbidden_char_warnings(
+        &format!("Contents/section{section_index}.xml"),
+        sites,
+    ));
+
     Ok(SectionEncodeResult {
-        xml: wrap_section_xml(&enriched),
+        xml,
         warnings: sink.warnings,
         charts: chart_entries,
         master_pages,

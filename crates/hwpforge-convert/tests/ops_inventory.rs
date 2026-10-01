@@ -100,6 +100,9 @@ const AUDITED: &[Audited] = &[
             ("NoteHeadSkipped", "OTHER"),
             ("TitleMarkSkipped", "OTHER"),
             ("NoteRestartIgnored", "OTHER"),
+            // New with #198 and printed by no older frontend, so it gets its
+            // own code; the part and location travel in the location column.
+            ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
         ],
     },
     Audited {

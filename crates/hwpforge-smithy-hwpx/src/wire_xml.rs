@@ -157,6 +157,160 @@ pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> Cow<'_, str> {
     }
 }
 
+/// Whether XML 1.0 forbids `c` anywhere in a document: the C0 controls
+/// other than TAB, LF and CR, and U+FFFE/U+FFFF (the `Char` production;
+/// a surrogate cannot occur in a `str`). Not even a character reference
+/// (`&#1;`) may stand for one, so the only way to keep a part well-formed
+/// is to leave the character out.
+///
+/// U+0000 is included: the XML grammar forbids it like the other controls.
+/// The hand-built escape path ([`escape_xml`](crate::encoder::escape_xml))
+/// does not strip it.
+pub(crate) fn is_xml_forbidden_char(c: char) -> bool {
+    matches!(c, '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}')
+}
+
+/// Adds `count` removals at `location`, merging with an earlier entry for
+/// the same location so the list stays in first-seen order.
+pub(crate) fn tally_removed(sites: &mut Vec<(String, usize)>, location: &str, count: usize) {
+    if count == 0 {
+        return;
+    }
+    match sites.iter_mut().find(|(seen, _)| seen == location) {
+        Some((_, total)) => *total += count,
+        None => sites.push((location.to_string(), count)),
+    }
+}
+
+/// Copies `s` into `out` without its forbidden characters; returns how many
+/// were left out.
+fn push_allowed(out: &mut String, s: &str) -> usize {
+    let mut removed = 0;
+    for c in s.chars() {
+        if is_xml_forbidden_char(c) {
+            removed += 1;
+        } else {
+            out.push(c);
+        }
+    }
+    removed
+}
+
+/// Length of the start or end tag at the front of `rest` (which starts with
+/// `<`), through the `>` that is not inside a quoted attribute value; the
+/// whole of `rest` when unclosed.
+fn tag_len(rest: &[u8]) -> usize {
+    let mut quote: Option<u8> = None;
+    for (i, &b) in rest.iter().enumerate().skip(1) {
+        match quote {
+            Some(q) if b == q => quote = None,
+            Some(_) => {}
+            None if b == b'"' || b == b'\'' => quote = Some(b),
+            None if b == b'>' => return i + 1,
+            None => {}
+        }
+    }
+    rest.len()
+}
+
+/// Removes every character [`is_xml_forbidden_char`] rejects from a whole
+/// XML part, and reports where they were: `(location, count)` per location,
+/// in first-seen order. A location is `element@attribute` for an attribute
+/// value (`hh:style@engName`) and the enclosing element's name for text
+/// (`hp:t`), including a comment, CDATA section or processing instruction
+/// inside it; content outside the root element is `(top level)`.
+///
+/// quick-xml's serde serializer writes these characters as they are, and
+/// so would any string spliced into a part unescaped. Scanning the part
+/// after it is assembled covers every such path at once, which a per-field
+/// strip at the Core→schema boundary cannot promise for the hundreds of
+/// string fields the schema has.
+///
+/// The input must be a part this encoder assembled: every `<` in text and
+/// attribute values is escaped, so an unescaped `<` starts markup. It is not
+/// a general XML rewriter. Text after an end tag is placed in the parent
+/// element, so the element stack must balance, as it does in serde output.
+pub(crate) fn strip_xml_forbidden_chars(xml: &str) -> (Cow<'_, str>, Vec<(String, usize)>) {
+    if !xml.chars().any(is_xml_forbidden_char) {
+        return (Cow::Borrowed(xml), Vec::new());
+    }
+    let bytes = xml.as_bytes();
+    let mut out = String::with_capacity(xml.len());
+    let mut sites: Vec<(String, usize)> = Vec::new();
+    let mut open: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < xml.len() {
+        let parent = open.last().copied().unwrap_or("(top level)");
+        // Every boundary below is an ASCII `<` or `>` (or the end), so each
+        // slice of `xml` starts and ends on a char boundary.
+        let end = if bytes[i] != b'<' {
+            xml[i..].find('<').map_or(xml.len(), |p| i + p)
+        } else if let Some(len) = markup_len(&bytes[i..], &NON_ELEMENT_MARKUP) {
+            i + len
+        } else {
+            let end = i + tag_len(&bytes[i..]);
+            push_tag(&xml[i..end], &mut out, &mut open, &mut sites);
+            i = end;
+            continue;
+        };
+        let removed = push_allowed(&mut out, &xml[i..end]);
+        tally_removed(&mut sites, parent, removed);
+        i = end;
+    }
+    (Cow::Owned(out), sites)
+}
+
+/// Copies one start or end tag into `out` without its forbidden characters,
+/// keeping the element stack of [`strip_xml_forbidden_chars`] in step.
+fn push_tag<'a>(
+    tag: &'a str,
+    out: &mut String,
+    open: &mut Vec<&'a str>,
+    sites: &mut Vec<(String, usize)>,
+) {
+    if tag.starts_with("</") {
+        open.pop();
+        let removed = push_allowed(out, tag);
+        tally_removed(sites, open.last().copied().unwrap_or("(top level)"), removed);
+        return;
+    }
+    let name_end = tag[1..]
+        .find(|c: char| is_xml_space(c) || c == '/' || c == '>')
+        .map_or(tag.len(), |p| p + 1);
+    let name = &tag[1..name_end];
+    out.push_str(&tag[..name_end]);
+    // `seg` is where the text before the next `=` began: after the name or
+    // after the last closing quote, so its last word is the attribute name.
+    let mut seg = name_end;
+    let mut value: Option<(char, &str, usize)> = None;
+    for (offset, c) in tag[name_end..].char_indices() {
+        let at = name_end + offset;
+        match value {
+            Some((q, attr, removed)) if c == q => {
+                tally_removed(sites, &format!("{name}@{attr}"), removed);
+                value = None;
+                seg = at + 1;
+                out.push(c);
+            }
+            Some((q, attr, removed)) if is_xml_forbidden_char(c) => {
+                value = Some((q, attr, removed + 1));
+            }
+            Some(_) => out.push(c),
+            None if c == '"' || c == '\'' => {
+                let before = tag[seg..at].trim_end().trim_end_matches('=');
+                let attr = before.split_whitespace().last().unwrap_or("");
+                value = Some((c, attr, 0));
+                out.push(c);
+            }
+            None if is_xml_forbidden_char(c) => tally_removed(sites, name, 1),
+            None => out.push(c),
+        }
+    }
+    if !tag.ends_with("/>") {
+        open.push(name);
+    }
+}
+
 /// The mark [`preserve_ws_only_text`] puts in front of a whitespace-only run
 /// (a private-use character a real document has no reason to hold there).
 const WS_SENTINEL: char = '\u{E000}';
@@ -547,5 +701,83 @@ mod ws_scanner_tests {
     fn an_unclosed_doctype_runs_to_the_end() {
         let xml = "<!DOCTYPE sec [<hp:t> </hp:t>";
         assert_eq!(preserve_ws_only_text(xml), xml);
+    }
+}
+
+#[cfg(test)]
+mod forbidden_char_tests {
+    use super::strip_xml_forbidden_chars;
+    use std::borrow::Cow;
+
+    fn strip(xml: &str) -> (String, Vec<(String, usize)>) {
+        let (out, sites) = strip_xml_forbidden_chars(xml);
+        (out.into_owned(), sites)
+    }
+
+    fn site(location: &str, count: usize) -> (String, usize) {
+        (location.to_string(), count)
+    }
+
+    #[test]
+    fn an_attribute_value_is_located_as_element_at_attribute() {
+        // 이것을 실패시키는 것: 따옴표 안 금지 문자를 `{name}@{attr}` 대신 요소 이름으로 집계하는 것.
+        let (out, sites) = strip("<a x=\"1\" y=\"p\u{1}q\"/>");
+        assert_eq!(out, r#"<a x="1" y="pq"/>"#);
+        assert_eq!(sites, vec![site("a@y", 1)]);
+    }
+
+    #[test]
+    fn text_after_a_child_closes_belongs_to_the_parent() {
+        // 이것을 실패시키는 것: 끝 태그에서 `open.pop()` 을 빼는 것.
+        let (out, sites) = strip("<p><t>a\u{1}</t>b\u{2}</p>");
+        assert_eq!(out, "<p><t>a</t>b</p>");
+        assert_eq!(sites, vec![site("t", 1), site("p", 1)]);
+    }
+
+    #[test]
+    fn a_self_closing_element_is_not_a_parent() {
+        // 이것을 실패시키는 것: `/>` 로 끝난 태그도 스택에 올리는 것.
+        let (_, sites) = strip("<p><br/>x\u{1}</p>");
+        assert_eq!(sites, vec![site("p", 1)]);
+    }
+
+    #[test]
+    fn the_two_noncharacters_and_nul_are_removed() {
+        // 이것을 실패시키는 것: `is_xml_forbidden_char` 에서 U+FFFE·U+FFFF·U+0000 중 하나를 빼는 것.
+        let (out, sites) = strip("<t>a\u{FFFE}b\u{FFFF}c\u{0}d</t>");
+        assert_eq!(out, "<t>abcd</t>");
+        assert_eq!(sites, vec![site("t", 3)]);
+    }
+
+    #[test]
+    fn tab_lf_cr_are_kept_and_the_input_is_borrowed() {
+        // 이것을 실패시키는 것: `is_xml_forbidden_char` 범위에 TAB·LF·CR 을 넣는 것.
+        let xml = "<t a=\"\t\n\r\">\t\n\r</t>";
+        let (out, sites) = strip_xml_forbidden_chars(xml);
+        assert!(matches!(out, Cow::Borrowed(_)));
+        assert!(sites.is_empty());
+    }
+
+    #[test]
+    fn removals_merge_per_location_in_first_seen_order() {
+        // 이것을 실패시키는 것: `tally_removed` 가 같은 location 을 합치지 않고 새로 push 하는 것.
+        let (_, sites) =
+            strip("<r><t>\u{1}</t><s n=\"\u{1}\"/><t>\u{1}\u{1}</t><s n=\"\u{1}\"/></r>");
+        assert_eq!(sites, vec![site("t", 3), site("s@n", 2)]);
+    }
+
+    #[test]
+    fn markup_inside_an_element_belongs_to_that_element() {
+        // 이것을 실패시키는 것: 주석·CDATA 구간을 금지 문자 검사 없이 그대로 복사하는 것.
+        let (out, sites) = strip("<t><!--c\u{1}--><![CDATA[d\u{1}]]></t>");
+        assert_eq!(out, "<t><!--c--><![CDATA[d]]></t>");
+        assert_eq!(sites, vec![site("t", 2)]);
+    }
+
+    #[test]
+    fn a_quote_of_the_other_kind_does_not_end_the_value() {
+        // 이것을 실패시키는 것: 여는 따옴표와 다른 종류의 따옴표에서도 값을 닫는 것.
+        let (_, sites) = strip("<a x=\"it's\u{1}\"/>");
+        assert_eq!(sites, vec![site("a@x", 1)]);
     }
 }
