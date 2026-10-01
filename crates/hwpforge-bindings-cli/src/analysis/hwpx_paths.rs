@@ -84,7 +84,15 @@ pub(crate) fn scan_section_xml(
             Ok(Event::End(_)) => {
                 stack.pop();
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                if !stack.is_empty() {
+                    return Err(HwpxError::XmlParse {
+                        file: format!("Contents/section{section_index}.xml"),
+                        detail: format!("unexpected end of input, unclosed <{}>", stack.join("/")),
+                    });
+                }
+                break;
+            }
             Ok(_) => {}
             Err(err) => {
                 return Err(HwpxError::XmlParse {
@@ -186,6 +194,14 @@ mod tests {
             }
             other => panic!("expected XmlParse, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn scan_reports_unclosed_element_at_eof() {
+        // 이것을 실패시키는 것: `Eof` 팔의 `!stack.is_empty()` 검사 삭제
+        // (raw reader 는 닫히지 않은 요소가 있어도 Eof 를 정상으로 돌려줌)
+        let err = scan_section_xml(0, "<hs:sec><hp:tbl/>").unwrap_err();
+        assert!(matches!(err, HwpxError::XmlParse { .. }), "{err:?}");
     }
 
     #[test]
