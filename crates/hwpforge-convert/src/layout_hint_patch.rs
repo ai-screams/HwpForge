@@ -360,13 +360,13 @@ fn rewrite_element_attr(
             detail: format!("read xml attribute: {e}"),
         })?;
         let key: &str = attr.key.as_ref();
-        let value = if local_name(key) == target_attr {
+        if local_name(key) == target_attr {
             replaced = true;
-            new_value
+            rebuilt.push_attribute((key, new_value));
         } else {
-            &attr.value
-        };
-        rebuilt.push_attribute((key, value));
+            // `attr.value` is already escaped as written; pass the Attribute itself so it is not escaped again.
+            rebuilt.push_attribute(attr);
+        }
     }
 
     if !replaced {
@@ -385,6 +385,30 @@ mod tests {
     use super::*;
     use hwpforge_smithy_hwp5::schema::section::Hwp5ParaLineSeg;
     use std::collections::VecDeque;
+
+    fn rewrite_empty_element(xml: &str, target: &str, value: &str) -> String {
+        let mut reader = Reader::from_str(xml);
+        let event = match reader.read_event().unwrap() {
+            Event::Empty(e) => e.into_owned(),
+            other => panic!("expected empty element, got {other:?}"),
+        };
+        let rebuilt = rewrite_element_attr(event, target, value).unwrap();
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        writer.write_event(Event::Empty(rebuilt)).unwrap();
+        String::from_utf8(writer.into_inner().into_inner()).unwrap()
+    }
+
+    #[test]
+    fn rewrite_element_attr_keeps_untouched_attributes_as_written() {
+        // 이것을 실패시키는 것: 비대상 속성을 `push_attribute((key, &str))` 로 다시 쓰는 변경
+        // (`&amp;` 가 `&amp;amp;` 로 이중 escape 됨)
+        let out = rewrite_empty_element(
+            r#"<hp:sz width="10" note="a&amp;b&lt;c" height="5"/>"#,
+            "height",
+            "9999",
+        );
+        assert_eq!(out, r#"<hp:sz width="10" note="a&amp;b&lt;c" height="9999"/>"#);
+    }
 
     /// Build a small in-memory ZIP whose entries hold the given byte payloads.
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
