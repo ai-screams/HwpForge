@@ -110,10 +110,27 @@ use super::escape_xml;
 /// even when multiple Control variants are encoded in the same document.
 static MARKER_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Per-process random token carried by every marker from [`next_marker`].
+///
+/// The counter alone is predictable (`__HWPTXT_1_4__` in a fresh process), so
+/// user text could spell a marker the encoder is about to issue and receive
+/// its replacement. A random 64-bit salt makes that collision impractical and
+/// gives [`apply_run_xml_replacements`] one token to search for when it checks
+/// that no marker survived. Markers never reach the output, so the salt does
+/// not make encoding nondeterministic.
+fn marker_salt() -> &'static str {
+    static SALT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SALT.get_or_init(|| {
+        use std::hash::BuildHasher as _;
+        let n = std::collections::hash_map::RandomState::new().hash_one(std::process::id());
+        format!("{n:016x}")
+    })
+}
+
 /// Returns a unique marker string for placeholder run injection.
 fn next_marker(prefix: &str, field_id: usize) -> String {
     let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("__{prefix}_{nonce}_{field_id}__")
+    format!("__{prefix}_{salt}x{nonce}_{field_id}__", salt = marker_salt())
 }
 
 /// Maximum nesting depth for tables-within-tables.
@@ -394,7 +411,7 @@ pub(crate) fn encode_section_with_note_counters(
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
-    enriched = apply_run_xml_replacements(enriched, &run_xml_replacements);
+    enriched = apply_run_xml_replacements(enriched, &run_xml_replacements)?;
 
     // Generate masterpage XML files
     let master_pages = build_masterpage_entries(section, masterpage_offset);
@@ -408,70 +425,135 @@ pub(crate) fn encode_section_with_note_counters(
     })
 }
 
-/// Applies marker → real-XML substitutions in a single allocation.
+/// Replaces every marker with its real XML, including markers nested inside
+/// another marker's replacement, and fails if any marker is left over.
 ///
-/// Each marker produced by [`next_marker`] is a globally-unique nonce token
-/// that occurs exactly once in `xml` and never inside any replacement value,
-/// so locating every marker up front and splicing in offset order yields the
-/// same bytes as sequentially calling `String::replacen(marker, real, 1)` —
-/// while allocating the output string only once instead of once per marker
-/// (the previous loop was O(N·L): one full-string copy per replacement).
+/// A `real_xml` payload may embed other markers: a memo body or a group's
+/// text box is serialized to a string while its own runs (tab, line break,
+/// hyperlink, field …) are still markers. Those child markers only appear in
+/// the section after the parent is spliced in, so one pass over the original
+/// string cannot see them (#195 — a memo body with a tab came out as
+/// `<hp:t>__HWPTXT_1_4__</hp:t>`).
 ///
-/// # Invariant this relies on: child-before-parent push ordering
+/// The loop repeats [`splice_pending_markers`] over the markers not yet
+/// spliced until a pass splices nothing. Each productive pass retires at
+/// least one marker, so the loop always ends; markers at the same nesting
+/// level resolve in the same pass, so it runs at most nesting depth + 2
+/// passes. A document without nesting finishes in one productive pass plus
+/// one pass over the (usually empty) remainder.
 ///
-/// A `real_xml` payload *may* embed another control's marker token — e.g. a
-/// memo/group whose sublist contains a nested field. Equivalence to the old
-/// sequential `replacen` loop is preserved only because nested controls push
-/// their `(marker, real)` pair to `run_xml_replacements` **before** their
-/// enclosing parent. With that ordering both strategies behave identically:
-/// the child's pass runs while its marker is still hidden inside the parent's
-/// not-yet-applied `real_xml` (a no-op for both), then the parent's pass
-/// splices the child marker into the output where it stays unreplaced in both
-/// the old loop and this single pass.
+/// Resolution happens here, at the end, rather than inside each sublist
+/// encoder: group children go through first-match / strip-all rewrites
+/// (`set_group_child_offset`, `remove_self_closing_element(.., "hp:pos")` in
+/// `shapes.rs`) while their nested content is still markers. Resolving early
+/// would expose nested memo or text-box content to those rewrites.
 ///
-/// If ordering ever inverted to parent-before-child, the two would DIVERGE:
-/// the old `replacen` rescans the mutated string and would resolve the nested
-/// marker, whereas this pass only locates markers in the *original* string and
-/// would leave it. `apply_run_xml_replacements_child_before_parent_matches_replacen`
-/// locks the safe ordering against that regression.
+/// # Errors
 ///
-/// (The fact that a deeply-nested field marker can survive into the output at
-/// all is a separate, pre-existing memo/group limitation — see
-/// `BACKLOG_SMITHY_HWPX.md` — and is byte-identical across both strategies, so
-/// it does not affect this optimization.)
-fn apply_run_xml_replacements(xml: String, replacements: &[(String, String)]) -> String {
-    if replacements.is_empty() {
-        return xml;
+/// [`HwpxError::InvalidStructure`] when the result still contains the marker
+/// salt — a marker that no registered replacement resolved. Writing it would
+/// silently replace user content with an internal string. This is an encoder
+/// bug, not a property of the input; the detail names the leftover count and
+/// marker prefixes (never the salt).
+fn apply_run_xml_replacements(
+    mut xml: String,
+    replacements: &[(String, String)],
+) -> HwpxResult<String> {
+    let mut done = vec![false; replacements.len()];
+    loop {
+        let (next, spliced) = splice_pending_markers(xml, replacements, &mut done);
+        xml = next;
+        // 이것을 실패시키는 것: 이 조기 종료를 지우기 — 그러면 어떤 입력에서도
+        // 루프가 끝나지 않는다. 신호는 RED 가 아니라 hang 이다: 이 레포의
+        // `.config/nextest.toml` 에는 slow-timeout/terminate-after 가 없어
+        // 테스트(`apply_run_xml_replacements_empty_and_missing` 등)가 멈춘 채로
+        // 남는다.
+        if spliced == 0 {
+            break;
+        }
     }
-    // Locate each marker's byte offset. Each marker is unique and occurs at
-    // most once; a missing marker is a silent no-op, matching `replacen`.
-    let mut hits: Vec<(usize, usize, &str)> = Vec::with_capacity(replacements.len());
-    for (marker, real) in replacements {
+    // 이것을 실패시키는 것: 이 검사를 지우기
+    // (`apply_run_xml_replacements_rejects_leftover_marker`).
+    let salt = marker_salt();
+    if xml.contains(salt) {
+        return Err(HwpxError::InvalidStructure { detail: leftover_marker_detail(&xml, salt) });
+    }
+    Ok(xml)
+}
+
+/// Error detail for markers left after splicing: count and prefixes only.
+///
+/// Markers look like `__{prefix}_{salt}x{nonce}_{id}__`; the prefix is the
+/// text between the `__` that opens the marker and the `_` before the salt.
+/// The salt itself is never included.
+fn leftover_marker_detail(xml: &str, salt: &str) -> String {
+    let mut prefixes: Vec<&str> = Vec::new();
+    let mut count = 0usize;
+    for (pos, _) in xml.match_indices(salt) {
+        count += 1;
+        let head = &xml[..pos];
+        let prefix = head
+            .strip_suffix('_')
+            .and_then(|h| h.rfind("__").map(|start| &h[start + 2..]))
+            .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_uppercase()))
+            .unwrap_or("?");
+        if !prefixes.contains(&prefix) {
+            prefixes.push(prefix);
+        }
+    }
+    format!(
+        "encoder bug: {count} internal replacement marker(s) left in section XML \
+         (prefix: {}); a nested control's content was not resolved — please report",
+        prefixes.join(", ")
+    )
+}
+
+/// One splice pass over the markers whose `done` flag is still `false`.
+///
+/// Each marker is a unique nonce token that occurs at most once, so locating
+/// every pending marker up front and splicing in offset order equals calling
+/// `String::replacen(marker, real, 1)` for each, while allocating the output
+/// once. Spliced markers get `done = true`; the return value counts them.
+fn splice_pending_markers(
+    xml: String,
+    replacements: &[(String, String)],
+    done: &mut [bool],
+) -> (String, usize) {
+    // Locate each pending marker's byte offset. A missing marker is a no-op,
+    // matching `replacen`; it may appear in a later pass once its parent is in.
+    let mut hits: Vec<(usize, usize, usize)> = Vec::new();
+    for (idx, (marker, _)) in replacements.iter().enumerate() {
+        if done[idx] {
+            continue;
+        }
         if let Some(pos) = xml.find(marker.as_str()) {
-            hits.push((pos, marker.len(), real.as_str()));
+            hits.push((pos, marker.len(), idx));
         }
     }
     if hits.is_empty() {
-        return xml;
+        return (xml, 0);
     }
     hits.sort_unstable_by_key(|&(pos, _, _)| pos);
 
-    let extra: usize = hits.iter().map(|&(_, len, real)| real.len().saturating_sub(len)).sum();
+    let extra: usize =
+        hits.iter().map(|&(_, len, idx)| replacements[idx].1.len().saturating_sub(len)).sum();
     let mut out = String::with_capacity(xml.len() + extra);
     let mut cursor = 0usize;
-    for (pos, len, real) in hits {
+    let mut spliced = 0usize;
+    for (pos, len, idx) in hits {
         // Skip any hit overlapping an already-applied region (defensive: a
-        // duplicate marker would otherwise splice twice). Mirrors `replacen`'s
-        // "first occurrence wins, later passes find nothing" behavior.
+        // duplicate marker would otherwise splice twice).
         if pos < cursor {
             continue;
         }
         out.push_str(&xml[cursor..pos]);
-        out.push_str(real);
+        out.push_str(&replacements[idx].1);
         cursor = pos + len;
+        done[idx] = true;
+        spliced += 1;
     }
     out.push_str(&xml[cursor..]);
-    out
+    (out, spliced)
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -4830,35 +4912,59 @@ mod tests {
         assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
     }
 
-    /// Locks the child-before-parent ordering invariant that
-    /// [`apply_run_xml_replacements`] relies on for `replacen`-equivalence.
-    ///
-    /// Models a nested control: a child (hyperlink) marker that is embedded
-    /// inside a parent's (memo's) `real_xml`, with the child pair listed
-    /// BEFORE the parent pair (the order the encoder actually produces). Under
-    /// this ordering both the old sequential `replacen` loop and the new
-    /// single-pass splice leave the nested child marker unreplaced — i.e. they
-    /// are byte-identical. (Were the order inverted, `replacen` would resolve
-    /// the nested marker and the splice would not — the divergence this guards.)
+    /// A child marker embedded in its parent's `real_xml` is resolved once the
+    /// parent is spliced in, whichever order the pairs were registered in
+    /// (#195). The encoder registers the child first (a memo body's tab run is
+    /// encoded before the memo itself); the reversed order is checked too.
+    // 이것을 실패시키는 것: `apply_run_xml_replacements` 를 한 pass 로 되돌리기
+    // (루프 대신 `splice_pending_markers` 한 번) — 자식 마커가 남아 Err.
     #[test]
-    fn apply_run_xml_replacements_child_before_parent_matches_replacen() {
-        let child_marker = "__HWPHL_0_0__".to_string();
-        let parent_marker = "__HWPME_1_0__".to_string();
+    fn apply_run_xml_replacements_resolves_nested_child_marker() {
+        let child_marker = next_marker("HWPHL", 0);
+        let parent_marker = next_marker("HWPME", 1);
         // Parent payload embeds the child marker (memo sublist containing a field).
         let parent_real = format!("<hp:fieldBegin/><hp:subList>{child_marker}</hp:subList>");
         // Only the parent marker is present in the base string; the child marker
         // appears only AFTER the parent is spliced in.
         let xml = format!("<p>before</p>{parent_marker}<p>after</p>");
-        // Child-before-parent ordering, as the encoder emits it.
-        let repls = vec![
-            (child_marker.clone(), "<hp:run>RESOLVED-CHILD</hp:run>".to_string()),
-            (parent_marker, parent_real),
-        ];
-        let single = apply_run_xml_replacements(xml.clone(), &repls);
-        let reference = replacen_reference(xml, &repls);
-        assert_eq!(single, reference, "splice must equal replacen under child-before-parent order");
-        // Both leave the nested child marker unreplaced (documents the shared behavior).
-        assert!(single.contains(&child_marker), "nested child marker stays unreplaced in both");
+        let child = (child_marker, "<hp:run>RESOLVED-CHILD</hp:run>".to_string());
+        let parent = (parent_marker, parent_real);
+        let expected = "<p>before</p><hp:fieldBegin/><hp:subList><hp:run>RESOLVED-CHILD</hp:run>\
+                        </hp:subList><p>after</p>";
+        for repls in [vec![child.clone(), parent.clone()], vec![parent, child]] {
+            let out = apply_run_xml_replacements(xml.clone(), &repls).unwrap();
+            assert_eq!(out, expected);
+            assert_eq!(out, replacen_reference_fixpoint(xml.clone(), &repls));
+        }
+    }
+
+    /// A marker that no replacement resolves fails the encode instead of being
+    /// written (#195 safety net).
+    // 이것을 실패시키는 것: `apply_run_xml_replacements` 의 `marker_salt()` 잔류
+    // 검사를 지우기.
+    #[test]
+    fn apply_run_xml_replacements_rejects_leftover_marker() {
+        let orphan = next_marker("HWPTXT", 0);
+        let xml = format!("<hp:t>{orphan}</hp:t>");
+        for repls in [vec![], vec![(next_marker("HWPTXT", 0), "X".to_string())]] {
+            let err = apply_run_xml_replacements(xml.clone(), &repls).unwrap_err();
+            let HwpxError::InvalidStructure { detail } = err else { panic!("{err:?}") };
+            // 이것을 실패시키는 것: detail 을 고정 문구로 되돌리기, 또는 marker 를
+            // 통째로 넣기 (salt 노출).
+            assert!(detail.contains("encoder bug"), "{detail}");
+            assert!(detail.contains("1 internal replacement marker"), "{detail}");
+            assert!(detail.contains("prefix: HWPTXT"), "{detail}");
+            assert!(!detail.contains(marker_salt()), "salt must not leak: {detail}");
+        }
+    }
+
+    /// User text that merely looks like a marker (no salt) is left alone and
+    /// does not trip the safety net.
+    // 이것을 실패시키는 것: 잔류 검사를 `marker_salt()` 대신 `"__HWP"` 접두로 하기.
+    #[test]
+    fn apply_run_xml_replacements_accepts_marker_lookalike_user_text() {
+        let xml = "<hp:t>__HWPTXT_1_4__</hp:t>".to_string();
+        assert_eq!(apply_run_xml_replacements(xml.clone(), &[]).unwrap(), xml);
     }
 
     // ── Dutmal encoding ────────────────────────────────────────────
@@ -5391,6 +5497,17 @@ mod tests {
         xml
     }
 
+    /// Reference for nested markers: repeat the `replacen` loop until stable.
+    fn replacen_reference_fixpoint(mut xml: String, replacements: &[(String, String)]) -> String {
+        loop {
+            let next = replacen_reference(xml.clone(), replacements);
+            if next == xml {
+                return xml;
+            }
+            xml = next;
+        }
+    }
+
     #[test]
     fn apply_run_xml_replacements_matches_replacen() {
         // Markers are unique nonce tokens; payloads never contain markers.
@@ -5400,7 +5517,7 @@ mod tests {
             ("__clk_1_2__".to_string(), "<hp:ctrl>Y</hp:ctrl>".to_string()),
             ("__clk_2_3__".to_string(), "Z".to_string()),
         ];
-        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let single = apply_run_xml_replacements(xml.clone(), &repls).unwrap();
         let reference = replacen_reference(xml, &repls);
         assert_eq!(single, reference);
     }
@@ -5414,7 +5531,7 @@ mod tests {
             ("__m_2_0__".to_string(), "A".to_string()),
             ("__m_1_2__".to_string(), "C".to_string()),
         ];
-        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let single = apply_run_xml_replacements(xml.clone(), &repls).unwrap();
         let reference = replacen_reference(xml, &repls);
         assert_eq!(single, reference);
         assert_eq!(single, "headABC");
@@ -5424,10 +5541,35 @@ mod tests {
     fn apply_run_xml_replacements_empty_and_missing() {
         // Empty list: identity.
         let xml = "<p>no markers</p>".to_string();
-        assert_eq!(apply_run_xml_replacements(xml.clone(), &[]), xml);
+        assert_eq!(apply_run_xml_replacements(xml.clone(), &[]).unwrap(), xml);
         // Missing marker: silent no-op (matches replacen).
         let repls = vec![("__absent_9_9__".to_string(), "X".to_string())];
-        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let single = apply_run_xml_replacements(xml.clone(), &repls).unwrap();
         assert_eq!(single, replacen_reference(xml, &repls));
+    }
+
+    /// 사용자 텍스트가 인코더가 곧 발급할 마커와 글자까지 같아도 치환이 그
+    /// 텍스트로 새지 않아야 한다 (#195). 예측은 `MARKER_NONCE` 의 현재 값에
+    /// 기대므로 테스트당 프로세스 하나인 nextest 에서 결정적이다.
+    // 이것을 실패시키는 것: `next_marker` 에서 프로세스 salt 를 빼고
+    // `__{prefix}_{nonce}_{field_id}__` 로 되돌리기.
+    #[test]
+    fn user_text_equal_to_a_predictable_marker_is_not_replaced() {
+        let nonce = MARKER_NONCE.load(std::sync::atomic::Ordering::Relaxed);
+        let forged = format!("__HWPTXT_{nonce}_0__");
+        let para = Paragraph::with_runs(
+            vec![
+                Run::text(forged.clone(), CharShapeIndex::new(0)),
+                Run::text("A\tB", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let section = Section::with_paragraphs(vec![para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        // 충돌하면 사용자 run 자리에 탭 조각이 들어가고, 뒤 run 에는 마커가
+        // (사용자 텍스트와 같은 글자로) 남는다 — 순서로 가른다.
+        let user_at = xml.find(&format!("<hp:t>{forged}</hp:t>")).expect("user text must survive");
+        let tab_at = xml.find("<hp:t>A<hp:tab").expect("real tab run must be emitted");
+        assert!(user_at < tab_at, "user text must stay in the first run: {xml}");
     }
 }
