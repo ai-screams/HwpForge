@@ -241,3 +241,39 @@ fn group_text_box_tab_is_emitted() {
     let container = &xml[xml.find("<hp:container").expect("container")..];
     assert!(container.contains("<hp:t>A<hp:tab"), "group text box must carry the tab: {container}");
 }
+
+/// 3단 중첩: 메모 → 메모 → `"A\tB"` (HWPME → HWPME → HWPTXT). 2단 테스트만으로는
+/// "pass 2회 고정" 루프가 통과한다.
+// 이것을 실패시키는 것: `apply_run_xml_replacements` 의 루프를 pass 2회로 제한하기
+// — 가장 안쪽 HWPTXT 가 남아 안전망 오류로 인코드가 실패한다.
+#[test]
+fn memo_inside_memo_tab_is_emitted() {
+    let inner = Control::memo(vec![Paragraph::with_runs(
+        vec![Run::text("A\tB", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )]);
+    let outer = Control::memo(vec![Paragraph::with_runs(
+        vec![Run::control(inner, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )]);
+    let section = Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![
+                Run::text("본문", CharShapeIndex::new(0)),
+                Run::control(outer, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    );
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let validated = doc.validate().expect("validate");
+    let out =
+        HwpxEncoder::encode(&validated, &minimal_store(), &ImageStore::new()).expect("encode");
+    let xml = zip_entry(&out, "Contents/section0.xml");
+    assert!(!xml.contains("__HWP"), "internal marker leaked: {xml}");
+    assert_eq!(xml.matches(r#"type="MEMO""#).count(), 2, "both memos emitted: {xml}");
+    let inner_sub = &xml[xml.rfind("<hp:subList").expect("inner subList")..];
+    assert!(inner_sub.contains("<hp:t>A<hp:tab"), "innermost memo must carry the tab: {inner_sub}");
+}

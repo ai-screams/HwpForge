@@ -437,9 +437,10 @@ pub(crate) fn encode_section_with_note_counters(
 ///
 /// The loop repeats [`splice_pending_markers`] over the markers not yet
 /// spliced until a pass splices nothing. Each productive pass retires at
-/// least one marker, so there are at most `replacements.len() + 1` passes; a
-/// document without nesting finishes in one productive pass plus one pass over
-/// the (usually empty) remainder.
+/// least one marker, so the loop always ends; markers at the same nesting
+/// level resolve in the same pass, so it runs at most nesting depth + 2
+/// passes. A document without nesting finishes in one productive pass plus
+/// one pass over the (usually empty) remainder.
 ///
 /// Resolution happens here, at the end, rather than inside each sublist
 /// encoder: group children go through first-match / strip-all rewrites
@@ -451,7 +452,9 @@ pub(crate) fn encode_section_with_note_counters(
 ///
 /// [`HwpxError::InvalidStructure`] when the result still contains the marker
 /// salt — a marker that no registered replacement resolved. Writing it would
-/// silently replace user content with an internal string.
+/// silently replace user content with an internal string. This is an encoder
+/// bug, not a property of the input; the detail names the leftover count and
+/// marker prefixes (never the salt).
 fn apply_run_xml_replacements(
     mut xml: String,
     replacements: &[(String, String)],
@@ -460,23 +463,49 @@ fn apply_run_xml_replacements(
     loop {
         let (next, spliced) = splice_pending_markers(xml, replacements, &mut done);
         xml = next;
-        // 이것을 실패시키는 것: 이 조기 종료를 지우기 — 끝내 없는 마커가 하나라도
-        // 등록돼 있으면 루프가 끝나지 않는다
-        // (`apply_run_xml_replacements_empty_and_missing`).
+        // 이것을 실패시키는 것: 이 조기 종료를 지우기 — 그러면 어떤 입력에서도
+        // 루프가 끝나지 않는다. 신호는 RED 가 아니라 hang 이다: 이 레포의
+        // `.config/nextest.toml` 에는 slow-timeout/terminate-after 가 없어
+        // 테스트(`apply_run_xml_replacements_empty_and_missing` 등)가 멈춘 채로
+        // 남는다.
         if spliced == 0 {
             break;
         }
     }
     // 이것을 실패시키는 것: 이 검사를 지우기
     // (`apply_run_xml_replacements_rejects_leftover_marker`).
-    if xml.contains(marker_salt()) {
-        return Err(HwpxError::InvalidStructure {
-            detail: "internal replacement marker left in section XML: a nested control's \
-                     content was not resolved"
-                .to_string(),
-        });
+    let salt = marker_salt();
+    if xml.contains(salt) {
+        return Err(HwpxError::InvalidStructure { detail: leftover_marker_detail(&xml, salt) });
     }
     Ok(xml)
+}
+
+/// Error detail for markers left after splicing: count and prefixes only.
+///
+/// Markers look like `__{prefix}_{salt}x{nonce}_{id}__`; the prefix is the
+/// text between the `__` that opens the marker and the `_` before the salt.
+/// The salt itself is never included.
+fn leftover_marker_detail(xml: &str, salt: &str) -> String {
+    let mut prefixes: Vec<&str> = Vec::new();
+    let mut count = 0usize;
+    for (pos, _) in xml.match_indices(salt) {
+        count += 1;
+        let head = &xml[..pos];
+        let prefix = head
+            .strip_suffix('_')
+            .and_then(|h| h.rfind("__").map(|start| &h[start + 2..]))
+            .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_uppercase()))
+            .unwrap_or("?");
+        if !prefixes.contains(&prefix) {
+            prefixes.push(prefix);
+        }
+    }
+    format!(
+        "encoder bug: {count} internal replacement marker(s) left in section XML \
+         (prefix: {}); a nested control's content was not resolved — please report",
+        prefixes.join(", ")
+    )
 }
 
 /// One splice pass over the markers whose `done` flag is still `false`.
@@ -4919,7 +4948,13 @@ mod tests {
         let xml = format!("<hp:t>{orphan}</hp:t>");
         for repls in [vec![], vec![(next_marker("HWPTXT", 0), "X".to_string())]] {
             let err = apply_run_xml_replacements(xml.clone(), &repls).unwrap_err();
-            assert!(matches!(err, HwpxError::InvalidStructure { .. }), "{err:?}");
+            let HwpxError::InvalidStructure { detail } = err else { panic!("{err:?}") };
+            // 이것을 실패시키는 것: detail 을 고정 문구로 되돌리기, 또는 marker 를
+            // 통째로 넣기 (salt 노출).
+            assert!(detail.contains("encoder bug"), "{detail}");
+            assert!(detail.contains("1 internal replacement marker"), "{detail}");
+            assert!(detail.contains("prefix: HWPTXT"), "{detail}");
+            assert!(!detail.contains(marker_salt()), "salt must not leak: {detail}");
         }
     }
 
