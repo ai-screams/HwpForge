@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.7](https://github.com/ai-screams/HwpForge/compare/v0.16.6...v0.16.7) - 2026-10-01
+
+### Changed
+
+- *(hwpx)* HWPX 의 `header.xml`·`section*.xml` 이 XML 224 단계보다 깊게 중첩되거나 namespace 바인딩이 128개를 넘으면 `DECODE_FAILED` 로 거부한다 (224 는 잠정값, 표·글상자 32겹은 계속 읽힌다). 최적화 빌드의 디코드 스레드 스택은 2 MiB 를 권장한다
+
+
+### Documentation
+
+- *(readme)* link the docs site from the root and MCP crate READMEs
+
+
+### Fixed
+
+- *(hwpx)* quick-xml 0.42 로 올리면서 한컴이 읽는 결과는 0.41 과 같게 맞춘다 — 속성 값의 탭·줄바꿈·CR 은 공백으로 쓴다
+
+- *(hwpx)* 공백 문자 참조 (`&#13;` 등) 만 든 텍스트 run 이 읽을 때 사라지지 않고, 공백만 든 run 이 서식 run 사이에 있는 문단의 줄 조판 캐시가 유지된다
+
+- *(hwpx)* 글꼴 이름은 읽고 쓸 때 제어 문자를 지우고 앞뒤 ASCII 공백을 자른다 (끝에 공백이 남으면 한컴이 글꼴을 찾지 못한다)
+
+
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/v0.16.5...v0.16.6) - 2026-09-22
 
 ### Added
