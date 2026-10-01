@@ -5,7 +5,7 @@ use quick_xml::reader::Reader;
 use quick_xml::XmlVersion;
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{HwpxResult, PackageReader};
+use hwpforge_smithy_hwpx::{HwpxError, HwpxResult, PackageReader};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct HwpxPathOccurrence {
@@ -26,7 +26,7 @@ pub(crate) fn collect_section_path_inventory(
 
     for section_index in 0..section_count {
         let xml: String = package_reader.read_section_xml(section_index)?;
-        path_inventory.extend(scan_section_xml(section_index, &xml));
+        path_inventory.extend(scan_section_xml(section_index, &xml)?);
     }
 
     path_inventory.sort_by(|left, right| {
@@ -41,7 +41,10 @@ pub(crate) fn collect_section_path_inventory(
     Ok(path_inventory)
 }
 
-pub(crate) fn scan_section_xml(section_index: usize, xml: &str) -> Vec<HwpxPathOccurrence> {
+pub(crate) fn scan_section_xml(
+    section_index: usize,
+    xml: &str,
+) -> HwpxResult<Vec<HwpxPathOccurrence>> {
     let mut reader: Reader<&[u8]> = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
 
@@ -83,13 +86,18 @@ pub(crate) fn scan_section_xml(section_index: usize, xml: &str) -> Vec<HwpxPathO
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
-            Err(_) => break,
+            Err(err) => {
+                return Err(HwpxError::XmlParse {
+                    file: format!("Contents/section{section_index}.xml"),
+                    detail: err.to_string(),
+                });
+            }
         }
 
         buf.clear();
     }
 
-    occurrences
+    Ok(occurrences)
 }
 
 fn record_element_occurrence(
@@ -159,4 +167,33 @@ fn build_path(stack: &[String], name: &str) -> String {
 
 fn local_name(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_reports_xml_error_instead_of_truncating() {
+        // 이것을 실패시키는 것: `Err(err)` 팔을 `Err(_) => break` 로 되돌리는 변경
+        // (앞부분 목록만 Ok 로 반환됨)
+        let xml = "<hs:sec><hp:tbl/><hp:t>x</hp:T></hs:sec>";
+        let err = scan_section_xml(3, xml).unwrap_err();
+        match err {
+            HwpxError::XmlParse { file, detail } => {
+                assert_eq!(file, "Contents/section3.xml");
+                assert!(detail.contains("hp:T"), "{detail}");
+            }
+            other => panic!("expected XmlParse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scan_accepts_well_formed_xml() {
+        let xml = "<hs:sec><hp:tbl/><hp:t>x</hp:t></hs:sec>";
+        let found = scan_section_xml(0, xml).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].kind, "tbl");
+        assert_eq!(found[1].text.as_deref(), Some("x"));
+    }
 }
