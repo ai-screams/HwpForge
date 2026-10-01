@@ -12,6 +12,10 @@
 - pre-push `cargo deny` 가 RustSec advisory DB fetch 네트워크 오류로 간헐 실패 → 재시도로 해결.
 - **전체 `cargo nextest run --workspace`는 cold 빌드 시 15분+** (foreground 한계 초과) → 변경 영향 크레이트만 `-p <crate>`로 돌리고 byte-중립 게이트만 골라 검증. **테스트 실행 중 소스 편집 금지**(rebuild 유발로 더 느려짐).
 - **nextest 통합 테스트 파일 필터**: substring 은 테스트 _이름_ 만 매칭 (파일명 안 잡힘) — 파일 단위는 `-E 'binary(<파일명>)'`.
+- **`make ci` 는 release 전용 테스트(`#[cfg(not(debug_assertions))]`)를 안 돌린다** — CI `Verify › Python` 만 돌림. 디코드 스택·재귀 한도를 건드렸으면 push 전 `cargo nextest run -p hwpforge-smithy-hwpx --cargo-profile release -E 'test(xml_limit_release)'` (PR #208).
+- **스택·코드 생성에 민감한 측정은 integration test(`tests/`)에 둔다** — `codegen-units = 1` 인 unit test 바이너리는 `#[cfg(test)]` 코드와 함께 컴파일돼 인라인이 바뀐다. 무관한 unit test 하나로 B 44 스택이 631 → 1,329 KiB (배포 코드는 불변, PR #208).
+- release 전용 테스트 파일은 debug 에서 통째로 빠져 `make ci` clippy 도 못 본다 → `cargo clippy -p <crate> --release --all-targets -- -D warnings` 로 따로.
+- `make ci` 는 첫 실패에서 멈춰 나머지 실패를 가린다 — 실패 전체를 보려면 `cargo nextest run -p <crate> --no-fail-fast`.
 - **commit 출력도 `| tail` 로 자르지 말 것** — 실패한 훅 라인·exit code 가 사라져 "커밋됐다" 오판. 파일 리다이렉트 후 grep (push 파이프 금지 규칙과 동일 계열).
 - **커밋 전 touched 크레이트만 `cargo clippy --all-targets -- -D warnings` 사전 점검** — 훅 거부 1회 = 2분+ 재사이클 (nextest/build 는 clippy lint 를 안 잡음).
 - `rm` 은 대화형 alias — stale `.git/index.lock`(0바이트·git 프로세스 없음 확인 후) 등 스크립트 삭제는 `rm -f`.
