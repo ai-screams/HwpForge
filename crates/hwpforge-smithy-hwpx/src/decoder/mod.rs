@@ -895,7 +895,8 @@ mod tests {
 /// Boundary cases run on a 64 MiB thread so they hold in every build
 /// profile (an unoptimized build overflows 2 MiB at 32 nested tables, and an
 /// overflow aborts the test process). The documented 1 MiB minimum for
-/// optimized builds is checked separately on a 1 MiB thread.
+/// optimized builds is checked by `tests/decode_stack.rs`, which links the
+/// library as it ships.
 #[cfg(test)]
 mod xml_limit_tests {
     use std::collections::HashMap;
@@ -1038,78 +1039,6 @@ mod xml_limit_tests {
                 if detail.contains("recursion limit of 224 exceeded") => {}
             other => panic!("table x42 must fail on the serde recursion limit, got: {other:?}"),
         }
-    }
-
-    /// `tables/table_01_basic_2x2.hwpx` with `section0.xml` replaced by
-    /// [`nested_section`]; every other entry is copied as is, so the result
-    /// is a real package for the public [`HwpxDecoder::decode`] path.
-    #[cfg(not(debug_assertions))]
-    fn nested_package(pattern: &str, levels: usize) -> Vec<u8> {
-        use std::io::{Read, Write};
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/tables/table_01_basic_2x2.hwpx");
-        let source = std::fs::read(path).expect("read fixture");
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(source)).expect("open zip");
-        let section = nested_section(pattern, levels);
-        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        for index in 0..archive.len() {
-            let mut entry = archive.by_index(index).expect("zip entry");
-            let options =
-                zip::write::SimpleFileOptions::default().compression_method(entry.compression());
-            let name = entry.name().to_string();
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).expect("read zip entry");
-            if name == "Contents/section0.xml" {
-                bytes = section.clone().into_bytes();
-            }
-            writer.start_file(name, options).expect("start zip entry");
-            writer.write_all(&bytes).expect("write zip entry");
-        }
-        writer.finish().expect("finish zip").into_inner()
-    }
-
-    /// Runs the public `HwpxDecoder::decode` on a thread with `stack` bytes;
-    /// returns the decoded sections' debug text.
-    #[cfg(not(debug_assertions))]
-    fn decode_package_on_stack(bytes: Vec<u8>, stack: usize) -> Result<String, HwpxError> {
-        std::thread::Builder::new()
-            .stack_size(stack)
-            .spawn(move || {
-                super::HwpxDecoder::decode(&bytes).map(|d| format!("{:?}", d.document.sections()))
-            })
-            .expect("spawn decode thread")
-            .join()
-            .expect("decode thread panicked")
-    }
-
-    /// The 1 MiB minimum documented on `HwpxDecoder::decode` for optimized
-    /// builds, checked on the public path with real packages. B 44 is the
-    /// deepest text-box input the recursion budget still admits and the
-    /// input that needs the most stack; B 100 is past the budget. Only
-    /// optimized builds are covered (an unoptimized build needs more), so CI
-    /// runs this with `--cargo-profile release` in `Verify › Python`.
-    // 이것을 실패시키는 것: `XML_RECURSION_LIMIT` 를 10000 으로 올리기 — B 100 이
-    // 한도에 막히지 않고 1 MiB 스택을 넘쳐 테스트 프로세스가 abort 한다.
-    // 스택을 512 KiB 로 줄이기 — B 44 가 abort 한다.
-    #[cfg(not(debug_assertions))]
-    #[test]
-    fn xml_limit_release_decodes_on_documented_1_mib_stack() {
-        const DOCUMENTED_MIN_STACK: usize = 1 << 20;
-        let decode = |pattern: &str, levels: usize| {
-            decode_package_on_stack(nested_package(pattern, levels), DOCUMENTED_MIN_STACK)
-        };
-        for (pattern, levels) in [("T", 32), ("B", 32), ("TB", 32)] {
-            let debug = decode(pattern, levels).expect("32 levels decode on 1 MiB");
-            assert!(debug.contains(DEEPEST), "{pattern} x{levels}: deepest text lost");
-        }
-        assert!(matches!(
-            decode("B", 44),
-            Err(HwpxError::InvalidStructure { detail }) if detail.starts_with("sublist nesting depth")
-        ));
-        assert!(matches!(
-            decode("B", 100),
-            Err(HwpxError::XmlParse { detail, .. }) if detail.contains("recursion limit of 224")
-        ));
     }
 
     /// `n` namespace declarations with distinct prefixes starting `tag`.

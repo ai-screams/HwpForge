@@ -455,8 +455,12 @@ jobs:
         run: make py-rust-test
       - name: cargo nextest (HWPX decode stack contract, release)
         # `HwpxDecoder::decode` 문서가 약속하는 "최적화 빌드는 1 MiB 스택이면
-        # 된다" 를 지키는 유일한 테스트다. 스택 요구량은 빌드 프로필에 달려서
-        # `#[cfg(not(debug_assertions))]` 로 묶여 있고, `Verify › Test` 의 test
+        # 된다" 를 지키는 유일한 테스트다(`smithy-hwpx/tests/decode_stack.rs`).
+        # 배포되는 라이브러리를 그대로 링크하도록 unit test 가 아니라
+        # integration test 로 둔다 — unit test 바이너리는 테스트 코드와 함께
+        # 컴파일돼 인라인이 달라지고, 같은 입력에 스택이 두 배까지 든다.
+        # 스택 요구량은 빌드 프로필에 달려서 파일 전체가
+        # `#![cfg(not(debug_assertions))]` 로 묶여 있고, `Verify › Test` 의 test
         # 프로필 실행에서는 빠진다. 바로 위 단계가 만든 release 의존성
         # 아티팩트를 재사용하는 이 잡에서 그 한 개만 돌린다. 넘치면 테스트
         # 프로세스가 abort 하므로 실패는 SIGABRT 로 보인다.
