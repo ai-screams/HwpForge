@@ -48,7 +48,7 @@ fn a_filled_field_reports_the_value_instead_of_the_hint() {
 
     let field = &out.fields[0];
     assert_eq!(field.name.as_deref(), Some("user_email"));
-    assert_eq!(field.current, "hanyul.ryu@example.com");
+    assert_eq!(field.current, "soeburi.anvilscribe@example.com");
     assert_ne!(Some(&field.current), field.hint.as_ref(), "the hint no longer shows through");
 }
 

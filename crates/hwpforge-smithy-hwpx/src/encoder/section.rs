@@ -4327,7 +4327,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
-            display_text: "hanyul".to_string(),
+            display_text: "SoeBuri".to_string(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -4338,18 +4338,18 @@ mod tests {
         );
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
         // Body carries the cached value, NOT an empty `<hp:t/>`.
-        assert!(xml.contains("<hp:t>hanyul</hp:t>"), "cached value missing from body: {xml}");
+        assert!(xml.contains("<hp:t>SoeBuri</hp:t>"), "cached value missing from body: {xml}");
         // Round-trip: decode the field back and confirm display_text survives.
         let decoded = lossy_roundtrip_decode_first_control(Control::Field {
             field_type: FieldType::Author,
             hint_text: None,
             help_text: None,
             name: None,
-            display_text: "hanyul".to_string(),
+            display_text: "SoeBuri".to_string(),
         });
         match decoded {
             Control::Field { display_text, .. } => {
-                assert_eq!(display_text, "hanyul", "display_text lost on round-trip");
+                assert_eq!(display_text, "SoeBuri", "display_text lost on round-trip");
             }
             other => panic!("expected Control::Field, got {other:?}"),
         }

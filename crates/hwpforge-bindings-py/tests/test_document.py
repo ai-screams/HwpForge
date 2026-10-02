@@ -19,7 +19,7 @@ from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextR
 if TYPE_CHECKING:
     from hwpforge._hwpforge import StampRequestV2
 
-EMAIL = "hanyul@example.com"
+EMAIL = "soeburi@example.com"
 
 
 def test_version_is_a_real_version() -> None:

@@ -702,10 +702,10 @@ mod clickhere_body_tests {
             "user_email",
             0,
             1_000_000_000,
-            "hanyul@example.com",
+            "soeburi@example.com",
         );
         assert!(
-            xml.contains("<hp:t>hanyul@example.com</hp:t>"),
+            xml.contains("<hp:t>soeburi@example.com</hp:t>"),
             "본문은 채워진 값이어야 한다: {xml}"
         );
         assert!(

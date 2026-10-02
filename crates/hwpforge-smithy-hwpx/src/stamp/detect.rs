@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn email_address_at_is_not_standalone() {
-        assert!(detect_markers("hanyul@example.com").is_empty());
+        assert!(detect_markers("soeburi@example.com").is_empty());
     }
 
     // ── checkbox ────────────────────────────────────────────────────

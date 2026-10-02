@@ -103,7 +103,7 @@ fn list_fields_marks_merged_run_field_fillable() {
     let fields = HwpxFiller::list_fields(&bytes).expect("list");
     let f = fields.iter().find(|f| f.name.as_deref() == Some("user_email")).expect("field");
     assert!(f.fillable, "병합-run 필드도 이제 fillable");
-    assert_eq!(f.current, "hanyul.ryu@example.com");
+    assert_eq!(f.current, "soeburi.anvilscribe@example.com");
 }
 
 // ── fill 성공 경로 ───────────────────────────────────────────────
@@ -112,11 +112,11 @@ fn list_fields_marks_merged_run_field_fillable() {
 fn fill_replaces_named_field_body() {
     let bytes = fixture_bytes("clickhere_named.hwpx");
     let outcome =
-        HwpxFiller::fill(&bytes, &values(&[("user_email", "hanyul@example.com")])).expect("fill");
+        HwpxFiller::fill(&bytes, &values(&[("user_email", "soeburi@example.com")])).expect("fill");
     assert_eq!(outcome.filled.len(), 1);
     assert_eq!(outcome.filled[0].name, "user_email");
     assert_eq!(outcome.filled[0].previous, "회사 이메일을 입력하세요");
-    assert_eq!(field_display(&outcome.bytes, 0, "user_email"), "hanyul@example.com");
+    assert_eq!(field_display(&outcome.bytes, 0, "user_email"), "soeburi@example.com");
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn fill_replaces_merged_run_field_body() {
     let bytes = fixture_bytes("clickhere_filled.hwpx");
     let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "x@y.z")])).expect("fill 성공");
     assert_eq!(outcome.filled.len(), 1);
-    assert_eq!(outcome.filled[0].previous, "hanyul.ryu@example.com");
+    assert_eq!(outcome.filled[0].previous, "soeburi.anvilscribe@example.com");
     assert_eq!(field_display(&outcome.bytes, 0, "user_email"), "x@y.z");
     // 라벨 텍스트 보존 (병합 run 의 필드-앞 텍스트가 지워지면 회귀).
     let redecoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&outcome.bytes).expect("redecode");
@@ -228,8 +228,9 @@ fn fill_same_value_is_complete_noop() {
     // W1b (§1g v5 변경 5): 현재 값과 동일한 fill 은 완전 no-op —
     // mutate/FilledField/캐시 무효화 전부 생략, 바이트 동일.
     let bytes = fixture_bytes("clickhere_filled.hwpx");
-    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "hanyul.ryu@example.com")]))
-        .expect("fill");
+    let outcome =
+        HwpxFiller::fill(&bytes, &values(&[("user_email", "soeburi.anvilscribe@example.com")]))
+            .expect("fill");
     assert!(outcome.filled.is_empty(), "동일 값은 filled 에 기록되지 않는다");
     assert_eq!(outcome.bytes, bytes, "바이트가 원본과 동일해야 한다");
 }

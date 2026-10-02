@@ -288,7 +288,7 @@ fn the_editable_warning_fixture_still_produces_a_decode_warning() {
 fn fill_reports_decode_warnings_and_keeps_its_outcome() {
     let bytes = editable_warning_fixture();
     let values: std::collections::BTreeMap<String, String> =
-        [("user_email".to_string(), "hanyul@example.com".to_string())].into_iter().collect();
+        [("user_email".to_string(), "soeburi@example.com".to_string())].into_iter().collect();
 
     let diagnosed = HwpxFiller::fill_with_diagnostics(&bytes, &values).expect("fill twin");
     let plain = HwpxFiller::fill(&bytes, &values).expect("fill");

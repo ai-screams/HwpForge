@@ -1295,7 +1295,7 @@ pub(crate) fn split_slash_command<'a>(
 /// for the same Command-parameter mirroring.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5MemoCommand {
-    /// Raw command string ("MEMO/65535/1/.../.../hanyul/\;;"). Mirrored
+    /// Raw command string ("MEMO/65535/1/.../.../SoeBuri/\;;"). Mirrored
     /// verbatim into the HWPX `Command` parameter.
     pub raw: String,
     /// Memo-shape table reference (slash[1]); 한컴 default is `65535`.

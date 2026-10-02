@@ -13,7 +13,7 @@ use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxPatcher};
 
-const FILLED: &str = "hanyul@example.com";
+const FILLED: &str = "soeburi@example.com";
 
 fn fixture_bytes() -> Vec<u8> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -82,7 +82,7 @@ fn hancom_resaved_merged_run_attributes_body_exactly() {
     let section = decoded.document.sections()[0].clone();
     let (name, body) = first_field(&section);
     assert_eq!(name.as_deref(), Some("user_email"), "필드 이름 앵커는 살아야 한다");
-    assert_eq!(body, "hanyul.ryu@example.com", "begin/end 사이 텍스트 = 본문 (정확 귀속)");
+    assert_eq!(body, "soeburi.anvilscribe@example.com", "begin/end 사이 텍스트 = 본문 (정확 귀속)");
 
     // 무모호 귀속이므로 편집 슬롯도 생긴다 (patch/fill 경로 활성).
     let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section)

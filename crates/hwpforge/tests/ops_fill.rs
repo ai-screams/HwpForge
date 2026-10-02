@@ -89,14 +89,14 @@ fn fills_a_named_field_and_reports_what_it_replaced() {
     let bytes = named_fixture();
 
     let out =
-        fill(&bytes, &pairs(&[("user_email", "hanyul@example.com")]), &FillOptions::default())
+        fill(&bytes, &pairs(&[("user_email", "soeburi@example.com")]), &FillOptions::default())
             .expect("fill");
 
     assert_eq!(out.filled.len(), 1);
     assert_eq!(out.filled[0].name, "user_email");
     assert_eq!(out.filled[0].section, 0);
     assert_eq!(out.filled[0].previous, "회사 이메일을 입력하세요", "the hint was the body");
-    assert_eq!(body(&out.bytes, 0, "user_email"), "hanyul@example.com");
+    assert_eq!(body(&out.bytes, 0, "user_email"), "soeburi@example.com");
     assert!(
         out.warnings.is_empty(),
         "a cleanly decoding template reports nothing: {:?}",
