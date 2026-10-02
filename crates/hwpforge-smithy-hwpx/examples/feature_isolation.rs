@@ -1658,8 +1658,8 @@ fn gen_12_hyperlink() {
             Run::text("\u{bb38}\u{c758}\u{c0ac}\u{d56d}: ", csi(CS_NORMAL)),
             Run::control(
                 Control::Hyperlink {
-                    text: "pignuante@gmail.com".to_string(),
-                    url: "mailto:pignuante@gmail.com".to_string(),
+                    text: "soeburi@example.com".to_string(),
+                    url: "mailto:soeburi@example.com".to_string(),
                 },
                 csi(CS_LINK),
             ),
