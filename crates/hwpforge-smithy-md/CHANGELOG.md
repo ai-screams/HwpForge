@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.8](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.7...hwpforge-smithy-md-v0.16.8) - 2026-10-01
+
+### Fixed
+
+- *(md)* 무손실 Markdown 을 다시 읽을 때 `&amp;`·`&lt;`·`&gt;`·`&quot;`·`&#39;` 같은 참조를 글자로 풀어 읽는다. 이전에는 `A & B` 가 `A  B` 로 돌아왔다. 모르는 엔티티나 잘못된 숫자 참조는 `LosslessParse` 오류 (#197)
+
+
 ## [0.16.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.6...hwpforge-smithy-md-v0.16.7) - 2026-10-01
 
 ### Documentation

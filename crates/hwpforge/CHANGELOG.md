@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.8](https://github.com/ai-screams/HwpForge/compare/v0.16.7...v0.16.8) - 2026-10-01
+
+### Fixed
+
+- *(hwpx)* 메모 본문·묶음 글상자 안의 탭·줄바꿈·하이퍼링크가 내부 치환 문자열로 저장되던 문제를 고친다 (#195)
+
+- *(hwpx)* HWPX 를 쓸 때 XML 이 금지하는 제어 문자를 지우고 `XML_FORBIDDEN_CHARS_REMOVED` 경고를 낸다 (#198)
+
+- *(hwpx)* 33겹 이상 중첩된 묶음 도형은 조용히 사라지지 않고 `InvalidStructure` 로 거부된다. 그런 문서는 편집 명령도 거부한다 (#196)
+
+- *(md)* 무손실 Markdown 왕복에서 `&`·`<`·`>`·따옴표가 사라지던 문제를 고친다 (#197)
+
+- *(core)* 이미지가 여럿인 문서도 HWPX 출력 바이트가 실행마다 같다 (#200)
+
+- *(cli)* `census-hwp5 --companion` 이 깨진 section XML 에서 잘린 목록을 `status: ok` 로 돌려주던 것을 `HWPX_CENSUS_FAILED` 로 끝낸다. `inspect` 도 그런 section 에서 실패할 수 있다 (#201)
+
+
 ## [0.16.7](https://github.com/ai-screams/HwpForge/compare/v0.16.6...v0.16.7) - 2026-10-01
 
 ### Changed

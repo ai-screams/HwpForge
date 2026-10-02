@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.8](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.7...hwpforge-core-v0.16.8) - 2026-10-01
+
+### Fixed
+
+- *(core)* `ImageStore` 를 key 순서로 순회한다. 같은 문서를 여러 번 HWPX 로 저장해도 `content.hpf` 의 이미지 항목과 ZIP 안 `BinData/*` 순서가 같아 출력 바이트가 재현된다 (#200). 순서는 key 문자열 순서 (`image10` 이 `image2` 보다 앞)
+
+
 ## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.4...hwpforge-core-v0.16.5) - 2026-09-17
 
 ### Added
