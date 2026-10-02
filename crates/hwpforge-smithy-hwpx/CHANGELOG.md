@@ -9,7 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(hwpx)* replace markers nested inside memo bodies and fail on leftovers
+- *(hwpx)* 메모 본문·묶음 도형 글상자 안의 탭·줄바꿈·하이퍼링크가 내부 치환 문자열(`__HWPTXT_…`)로 바뀌어 저장되던 문제를 고친다. 중첩된 치환을 끝까지 풀고, 그래도 남으면 깨진 파일 대신 `InvalidStructure` 오류로 멈춘다 (#195)
+
+- *(hwpx)* serde 로 쓰는 part(`header.xml`·`section*.xml`)에서 XML 1.0 이 금지하는 제어 문자(U+0001 등)를 지우고 `XML_FORBIDDEN_CHARS_REMOVED` 경고를 낸다. 이전에는 표준 XML parser 가 거부하는 파일이 경고 없이 나왔다. TAB·LF·CR 은 그대로 (#198)
+
+- *(hwpx)* 묶음 도형이 33겹 이상 중첩되면 묶음 전체가 경고 없이 사라지던 것을, 표와 같이 `InvalidStructure` (`group nesting depth 32 exceeds limit of 32`) 로 거부한다 (#196)
 
 
 ## [0.16.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.6...hwpforge-smithy-hwpx-v0.16.7) - 2026-10-01

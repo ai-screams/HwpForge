@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(core)* keep ImageStore in key order so HWPX BinData output is reproducible
+- *(core)* `ImageStore` 를 key 순서로 순회한다. 같은 문서를 여러 번 HWPX 로 저장해도 `content.hpf` 의 이미지 항목과 ZIP 안 `BinData/*` 순서가 같아 출력 바이트가 재현된다 (#200). 순서는 key 문자열 순서 (`image10` 이 `image2` 보다 앞)
 
 
 ## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.4...hwpforge-core-v0.16.5) - 2026-09-17
