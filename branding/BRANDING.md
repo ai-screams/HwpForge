@@ -11,12 +11,14 @@
 
 ---
 
-## Mascot: 쇠부리 Anvilscribe (SoeBuri Anvilscribe)
+## Mascot: 쇠부리 Anvilscribe (SöBuri Anvilscribe)
 
 > **쇠부리 Anvilscribe** — 한 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리.
 > 모루(Anvil) 위에서 문서를 기록하는 서기관(Scribe).
 
 HwpForge의 마스코트. "쇠부리"는 쇠(철/금속)와 부리(주둥이)를 합친 이름으로, 대장간에서 쇳물을 다루는 장인이자 뾰족한 부리로 문서를 정밀하게 다듬는 오리너구리의 정체성을 담고 있다. 대장장이 모자에 "HWP" 명패와 불꽃 엠블럼을 달고, 망치와 집게를 들고 모루 앞에서 한글 문서를 벼려내는 모습.
+
+영문 표기는 **SöBuri다.** ö는 ㅚ의 단모음 발음 [ø]을 그대로 옮긴 글자이고, 이름에 북유럽 느낌을 준다. 이메일·파일명·코드 식별자·테스트 데이터처럼 ASCII만 쓸 수 있는 자리에서는 ö를 `oe` 로 풀어 **SoeBuri라고** 쓴다(`soeburi@example.com`). 두 표기를 함께 보일 때는 "SöBuri (SoeBuri)" 로 적는다.
 
 ### Assets
 
