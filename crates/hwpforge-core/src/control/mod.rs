@@ -511,7 +511,13 @@ pub enum Control {
     /// integer enum (`0..=54`); the HWPX wire stores it as a string name
     /// (e.g. `"WAVE2"`). This carries the HWPX string form directly.
     TextArt {
-        /// The displayed text content.
+        /// The displayed text content. A line break is `\r\n`, the form the
+        /// HWP5 record uses.
+        ///
+        /// The HWPX wire writes every break as the visible pair `␍␊`
+        /// (U+240D U+240A), as Hancom does, so a lone `\r` or `\n` here comes
+        /// back as `\r\n` after an HWPX round trip, and a literal `␍␊` typed
+        /// into the text comes back as a line break.
         text: String,
         /// HWPX `textShape` name (e.g. `"WAVE2"`). One of 55 known shapes.
         shape: String,
@@ -1915,7 +1921,7 @@ impl std::fmt::Display for Control {
                 write!(f, "Group({} children)", children.len())
             }
             Self::TextArt { text, shape, .. } => {
-                write!(f, "TextArt(\"{text}\", {shape})")
+                write!(f, "TextArt({text:?}, {shape})")
             }
             Self::Bookmark { name, bookmark_type } => {
                 write!(f, "Bookmark(\"{name}\", {bookmark_type})")
@@ -2128,6 +2134,27 @@ mod tests {
     fn unknown_without_data() {
         let ctrl = Control::Unknown { tag: "header".to_string(), data: None };
         assert!(ctrl.is_unknown());
+    }
+
+    /// A multi-line TextArt (issue #199) still displays on one line.
+    /// 이것을 실패시키는 것: Display 가 `text` 를 이스케이프 없이 그대로 씀(줄바꿈이 진단 줄을 쪼갬).
+    #[test]
+    fn display_text_art_escapes_line_breaks() {
+        let ta = Control::TextArt {
+            text: "위\r\n\r\n\"아래\"".to_string(),
+            shape: "WAVE2".to_string(),
+            font_name: String::new(),
+            font_style: String::new(),
+            align: "LEFT".to_string(),
+            line_spacing: 120,
+            char_spacing: 100,
+            width: HwpUnit::new(6500).unwrap(),
+            height: HwpUnit::new(5000).unwrap(),
+            placement: None,
+            fill_color: None,
+            inst_id: None,
+        };
+        assert_eq!(ta.to_string(), r#"TextArt("위\r\n\r\n\"아래\"", WAVE2)"#);
     }
 
     #[test]

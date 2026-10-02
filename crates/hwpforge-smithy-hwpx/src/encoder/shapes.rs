@@ -34,10 +34,10 @@ fn resolve_arrow_type_str(arrow_type: &ArrowType) -> String {
 
 use crate::error::HwpxResult;
 use crate::schema::section::{
-    HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment,
-    HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine, HxLineShape, HxMatrix, HxOffset, HxPoint,
-    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxShadow, HxShapeComment, HxSizeAttr,
-    HxTableMargin, HxTablePos, HxTableSz,
+    textart_text_to_wire, HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve,
+    HxCurveSegment, HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine, HxLineShape, HxMatrix,
+    HxOffset, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxShadow,
+    HxShapeComment, HxSizeAttr, HxTableMargin, HxTablePos, HxTableSz,
 };
 
 use super::escape_xml;
@@ -1175,7 +1175,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
     let sca_y = format!("{:.6}", f64::from(h) / 14173.0);
     let center_x = w / 2;
     let center_y = h / 2;
-    let text_esc = escape_xml(text);
+    let text_esc = escape_xml(&textart_text_to_wire(text));
     let shape_esc = escape_xml(shape);
     let font_name_esc = escape_xml(font_name);
     let font_style_esc = escape_xml(font_style);
@@ -1666,6 +1666,61 @@ mod tests {
         assert!(xml.contains(r#"e5="0.352783""#), "scaMatrix e5 wrong");
         // No fill → native default blue.
         assert!(xml.contains(r##"faceColor="#0000FF""##), "default fill missing");
+    }
+
+    /// Encodes a TextArt carrying `text` and returns its `text` attribute.
+    fn text_art_wire_text(text: &str) -> String {
+        use hwpforge_foundation::HwpUnit;
+        let ta = Control::TextArt {
+            text: text.to_string(),
+            shape: "WAVE2".to_string(),
+            font_name: "함초롬바탕".to_string(),
+            font_style: "보통".to_string(),
+            align: "LEFT".to_string(),
+            line_spacing: 120,
+            char_spacing: 100,
+            width: HwpUnit::new(6500).unwrap(),
+            height: HwpUnit::new(5000).unwrap(),
+            placement: None,
+            fill_color: None,
+            inst_id: None,
+        };
+        let xml = encode_text_art_to_xml(&ta).unwrap();
+        let value = xml.split(" text=\"").nth(1).expect("text attribute");
+        value[..value.find('"').expect("text attribute closes")].to_string()
+    }
+
+    /// Issue #199: Hancom writes a TextArt line break as `␍␊`; a raw CR/LF in
+    /// the attribute is read back as a space.
+    /// 이것을 실패시키는 것: `\r\n` 을 쌍으로 묶지 않고 글자마다 바꿈(`␍␊␍␊`), 또는 그대로 씀.
+    #[test]
+    fn text_art_crlf_encodes_as_one_hancom_pair() {
+        assert_eq!(text_art_wire_text("첫 줄\r\n둘째 줄"), "첫 줄␍␊둘째 줄");
+    }
+
+    /// 이것을 실패시키는 것: 빈 줄(`\r\n\r\n`)을 한 쌍으로 접음.
+    #[test]
+    fn text_art_blank_line_keeps_two_pairs() {
+        assert_eq!(text_art_wire_text("위\r\n\r\n아래"), "위␍␊␍␊아래");
+    }
+
+    /// 이것을 실패시키는 것: 단독 `\n` 을 빠뜨림 — JSON 입력의 흔한 줄바꿈.
+    #[test]
+    fn text_art_lone_lf_encodes_as_one_pair() {
+        assert_eq!(text_art_wire_text("a\nb"), "a␍␊b");
+    }
+
+    /// 이것을 실패시키는 것: 단독 `\r` 을 빠뜨림.
+    #[test]
+    fn text_art_lone_cr_encodes_as_one_pair() {
+        assert_eq!(text_art_wire_text("a\rb"), "a␍␊b");
+    }
+
+    /// `\r\r\n` = 단독 CR 하나 + CRLF 하나 = 줄바꿈 둘.
+    /// 이것을 실패시키는 것: CR 뒤 LF 를 미리 보지 않고 CR 을 바로 쌍으로 바꿈(`␍␊␍␊␍␊`).
+    #[test]
+    fn text_art_cr_then_crlf_is_two_breaks() {
+        assert_eq!(text_art_wire_text("a\r\r\nb"), "a␍␊␍␊b");
     }
 
     #[test]

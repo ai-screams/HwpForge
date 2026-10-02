@@ -14,8 +14,8 @@ use hwpforge_foundation::{
 
 use crate::error::HwpxResult;
 use crate::schema::section::{
-    HxConnectLine, HxCurve, HxEllipse, HxFillBrush, HxLine, HxLineShape, HxPolygon, HxRect,
-    HxTablePos, HxTextArt,
+    textart_text_from_wire, HxConnectLine, HxCurve, HxEllipse, HxFillBrush, HxLine, HxLineShape,
+    HxPolygon, HxRect, HxTablePos, HxTextArt,
 };
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color, DecodeCtx};
@@ -634,7 +634,7 @@ pub(crate) fn decode_textart(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::TextArt {
-            text: text_art.text.clone(),
+            text: textart_text_from_wire(&text_art.text),
             shape,
             font_name: pr.font_name,
             font_style: pr.font_style,
@@ -2057,5 +2057,52 @@ mod tests {
         let out_pos = encoded.pos.expect("encoded pos");
         assert_eq!(out_pos.horz_offset, 500);
         assert_eq!(out_pos.vert_offset, 700);
+    }
+
+    /// Decodes a TextArt whose wire `text` attribute is `wire`.
+    fn text_art_core_text(wire: &str) -> String {
+        let hx = HxTextArt { text: wire.to_string(), ..Default::default() };
+        let run = decode_textart(&hx, CharShapeIndex::new(0), 0).expect("decode");
+        match run.content {
+            RunContent::Control(c) => match *c {
+                Control::TextArt { text, .. } => text,
+                other => panic!("expected TextArt, got {other:?}"),
+            },
+            other => panic!("expected a control run, got {other:?}"),
+        }
+    }
+
+    /// Issue #199: Hancom's `␍␊` is one line break; Core carries it as `\r\n`
+    /// like the HWP5 record does.
+    /// 이것을 실패시키는 것: 디코더가 `␍␊` 를 풀지 않음.
+    #[test]
+    fn textart_hancom_pair_decodes_to_crlf() {
+        assert_eq!(text_art_core_text("위␍␊␍␊아래"), "위\r\n\r\n아래");
+    }
+
+    /// A lone `␍` or `␊` is a symbol the author typed, not a break.
+    /// 이것을 실패시키는 것: 쌍이 아닌 기호도 제어 문자로 풂.
+    #[test]
+    fn textart_lone_symbols_stay_symbols() {
+        assert_eq!(text_art_core_text("a␍b␊c␊␍d"), "a␍b␊c␊␍d");
+    }
+
+    /// The documented collision: the wire cannot tell a typed `␍␊` from a
+    /// break, so Core text holding the literal pair comes back as `\r\n`.
+    /// 이것을 실패시키는 것: 디코더가 `␍␊` 를 풀지 않음.
+    #[test]
+    fn textart_literal_pair_round_trips_as_a_break() {
+        use crate::schema::section::textart_text_to_wire;
+        let wire = textart_text_to_wire("a␍␊b");
+        assert_eq!(wire, "a␍␊b");
+        assert_eq!(text_art_core_text(&wire), "a\r\nb");
+    }
+
+    /// 이것을 실패시키는 것: 끝 줄바꿈을 잘라 냄(로컬 corpus 56개는 `글맵시 1␍␊` 처럼 끝에 붙음).
+    #[test]
+    fn textart_trailing_break_survives_round_trip() {
+        use crate::schema::section::textart_text_to_wire;
+        assert_eq!(textart_text_to_wire("글맵시 1\r\n"), "글맵시 1␍␊");
+        assert_eq!(text_art_core_text("글맵시 1␍␊"), "글맵시 1\r\n");
     }
 }

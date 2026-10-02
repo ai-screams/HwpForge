@@ -2227,7 +2227,7 @@
               "type": "object",
               "properties": {
                 "text": {
-                  "description": "The displayed text content.",
+                  "description": "The displayed text content. A line break is `\\r\\n`, the form the\nHWP5 record uses.\n\nThe HWPX wire writes every break as the visible pair `␍␊`\n(U+240D U+240A), as Hancom does, so a lone `\\r` or `\\n` here comes\nback as `\\r\\n` after an HWPX round trip, and a literal `␍␊` typed\ninto the text comes back as a line break.",
                   "type": "string"
                 },
                 "shape": {
