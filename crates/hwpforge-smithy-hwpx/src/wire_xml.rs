@@ -5,6 +5,9 @@
 //!   control-whitespace references quick-xml 0.42 writes, and
 //!   [`clean_font_name`] cleans font names on both write and read, so a
 //!   decode→encode→decode round trip stays a no-op;
+//! - text-art line breaks: [`textart_text_to_wire`] and
+//!   [`textart_text_from_wire`] convert between Core's `\r\n` and Hancom's
+//!   `␍␊` in `hp:textart@text`;
 //! - whitespace-only text runs: [`preserve_ws_only_text`] marks them before
 //!   quick-xml's serde decode would drop them, and [`strip_ws_sentinel`]
 //!   removes the mark again.
@@ -12,6 +15,41 @@
 //! Every function here scans raw XML text; none of them parses XML.
 
 use std::borrow::Cow;
+
+/// How Hancom writes one TextArt line break inside `<hp:textart text="…">`:
+/// the visible pair `␍␊` (U+240D U+240A). A raw CR/LF would not survive —
+/// XML attribute-value normalization reads it back as a space. Core carries
+/// the break as `\r\n`, the form the HWP5 record uses (issue #199).
+pub(crate) const TEXTART_LINE_BREAK: &str = "\u{240D}\u{240A}";
+
+/// Core → wire: every line break — `\r\n`, a lone `\r` or a lone `\n` —
+/// becomes one [`TEXTART_LINE_BREAK`] pair.
+pub(crate) fn textart_text_to_wire(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push_str(TEXTART_LINE_BREAK);
+            }
+            '\n' => out.push_str(TEXTART_LINE_BREAK),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Wire → Core: each [`TEXTART_LINE_BREAK`] pair becomes `\r\n`. A lone
+/// `␍` or `␊` is a symbol the author typed and stays as it is.
+///
+/// A file from another writer may carry the break as a character reference
+/// (`&#10;`, `&#13;`) that reaches here as a raw `\n` or `\r`; it is folded
+/// to `\r\n` too, so the decoded text has one form and a
+/// decode→encode→decode round trip leaves it unchanged.
+pub(crate) fn textart_text_from_wire(text: &str) -> String {
+    textart_text_to_wire(text).replace(TEXTART_LINE_BREAK, "\r\n")
+}
 
 /// Cleans a font name before it is written (`hh:font@face`,
 /// `hp:equation@font`): control characters are removed and ASCII spaces
@@ -83,8 +121,8 @@ const CONTROL_WS_REFS: [&[u8]; 4] = [b"&#13;&#10;", b"&#9;", b"&#10;", b"&#13;"]
 /// so the font list (`hh:font@face`) and equation font (`hp:equation@font`)
 /// are cleaned before serialization by [`clean_font_name`]. The text-art font
 /// (`hp:textartPr@fontName`) is written by its own escape path and is not
-/// cleaned here; text-art attributes are left as 0.41 wrote them (their line
-/// breaks in the `text` attribute are issue #199).
+/// cleaned here. Line breaks in `hp:textart@text` are converted by
+/// [`textart_text_to_wire`].
 ///
 /// `&#13;&#10;` (one line end) becomes one space; after that each remaining
 /// reference becomes one space. Only quoted attribute values inside start

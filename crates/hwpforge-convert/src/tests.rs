@@ -762,6 +762,46 @@ fn hwp5_to_hwpx_non_image_gso_fixture_matrix_emits_visible_line_and_polygon() {
     }
 }
 
+/// Every `text` attribute of `<hp:textart>` in document order, as written.
+fn textart_wire_texts(section_xml: &str) -> Vec<String> {
+    section_xml
+        .match_indices("<hp:textart ")
+        .map(|(start, _)| {
+            let tag = &section_xml[start..];
+            let tag = &tag[..tag.find('>').expect("textart tag closes")];
+            let value = tag.split(" text=\"").nth(1).expect("textart has a text attribute");
+            value[..value.find('"').expect("text attribute closes")].to_string()
+        })
+        .collect()
+}
+
+/// Issue #199: the HWP5 record carries a TextArt line break as `\r\n`; the
+/// converted HWPX must write it the way Hancom does. The oracle is the
+/// HWPX Hancom saved from the same document, not a hand-written string.
+/// 이것을 실패시키는 것: 인코더가 `\r\n` 을 속성에 그대로 씀(다시 읽으면 공백 — 이 결함).
+#[test]
+fn hwp5_to_hwpx_textart_line_breaks_match_hancom_hwpx() {
+    let read = |name: &str| {
+        let path = fixture_path(name);
+        std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("fixture {} must exist: {e}", path.display()))
+    };
+    let hancom = PackageReader::new(&read("shapes/textart_multiline.hwpx"))
+        .expect("hancom hwpx package")
+        .read_section_xml(0)
+        .expect("hancom section0");
+    let expected = textart_wire_texts(&hancom);
+    assert_eq!(expected.len(), 2, "fixture holds two TextArts: {expected:?}");
+
+    let (bytes, _warnings) =
+        hwp5_to_hwpx_bytes(&read("shapes/textart_multiline.hwp")).expect("convert");
+    let ours = PackageReader::new(&bytes)
+        .expect("converted package")
+        .read_section_xml(0)
+        .expect("converted section0");
+    assert_eq!(textart_wire_texts(&ours), expected);
+}
+
 #[test]
 fn hwp5_to_hwpx_rect_fixture_carries_rect_without_warning() {
     let source = fixture_path("rect_simple.hwp");
