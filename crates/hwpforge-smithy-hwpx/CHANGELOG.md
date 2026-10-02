@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(hwpx)* [#199] fold character-reference TextArt breaks on decode
+- *(hwpx)* HWP 를 HWPX 로 변환할 때 여러 줄 글맵시(TextArt)의 줄바꿈이 공백으로 합쳐지던 문제를 고친다. 줄바꿈은 한컴처럼 `␍␊`(U+240D U+240A)로 쓰고 읽을 때 `\r\n` 으로 푼다. 이전 버전이 만든 HWPX 는 줄바꿈이 이미 공백으로 저장돼 있으므로 원본 HWP 에서 다시 변환해야 한다 (#199)
 
-- *(hwpx)* [#199] write TextArt line breaks the way Hancom does
+- *(hwpx)* `to-json`·MCP·Python 에서 한컴 HWPX 의 글맵시 `text` 가 `␍␊` 대신 `\r\n` 으로 보인다. 예전 JSON 의 `␍␊` 도 계속 줄바꿈으로 읽는다 (#199)
+
+- *(hwpx)* 다른 도구가 글맵시 줄바꿈을 `&#10;`·`&#13;` 로 쓴 HWPX 도 `\r\n` 으로 읽어, 다시 쓰고 읽어도 글자가 바뀌지 않는다 (#199)
 
 
 ## [0.16.8](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.7...hwpforge-smithy-hwpx-v0.16.8) - 2026-10-01
