@@ -656,9 +656,9 @@ HwpForge는 거인들의 어깨 위에 서 있습니다.
 ---
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/mascot-main.png" width="260" alt="쇠부리 Anvilscribe (SoeBuri Anvilscribe)">
+<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/mascot-main.png" width="260" alt="쇠부리 Anvilscribe (SöBuri Anvilscribe)">
 
-쇠부리 Anvilscribe (SoeBuri Anvilscribe)
+쇠부리 Anvilscribe (SöBuri Anvilscribe)
 한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥
 
 <a href="https://buymeacoffee.com/pignuante">
