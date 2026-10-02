@@ -704,7 +704,7 @@ the misspelling for byte-identical compatibility.
 ### Field body cached value (#120/#136)
 
 SUMMERY/PATH fields carry their **resolved value** in the body between
-`<hp:fieldBegin>` and `<hp:fieldEnd>` (e.g. `<hp:t>hanyul</hp:t>`, the
+`<hp:fieldBegin>` and `<hp:fieldEnd>` (e.g. `<hp:t>SoeBuri</hp:t>`, the
 locale-formatted date, the absolute path). An **empty** body triggers
 한컴's "낮은 보안 수준 복구" warning on open + leaves a blank placeholder
 until the user saves.

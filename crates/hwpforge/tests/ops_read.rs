@@ -208,7 +208,7 @@ fn a_field_read_returns_every_field_of_that_name() {
 
     let found = out.fields.expect("a field read returns fields");
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].current, "hanyul.ryu@example.com");
+    assert_eq!(found[0].current, "soeburi.anvilscribe@example.com");
     assert!(out.paragraphs.is_none());
     assert!(out.table.is_none());
 }

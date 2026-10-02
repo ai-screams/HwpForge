@@ -128,7 +128,7 @@ date: "2026-02-17"
     let hwpx_bytes =
         HwpxEncoder::encode(&validated, bridge.style_store(), &images).expect("HWPX encode failed");
 
-    let out_path = "/Users/hanyul/Works/AiScream/HwpForge/Phase4_1_Improvements_Test.hwpx";
+    let out_path = "/Users/soeburi/Works/AiScream/HwpForge/Phase4_1_Improvements_Test.hwpx";
     std::fs::write(out_path, &hwpx_bytes).expect("file write failed");
     println!("✅ Generated: {}", out_path);
     println!("   Size: {} bytes", hwpx_bytes.len());
