@@ -34,11 +34,12 @@ fn resolve_arrow_type_str(arrow_type: &ArrowType) -> String {
 
 use crate::error::HwpxResult;
 use crate::schema::section::{
-    textart_text_to_wire, HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve,
-    HxCurveSegment, HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine, HxLineShape, HxMatrix,
-    HxOffset, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxShadow,
-    HxShapeComment, HxSizeAttr, HxTableMargin, HxTablePos, HxTableSz,
+    HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment,
+    HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine, HxLineShape, HxMatrix, HxOffset, HxPoint,
+    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxShadow, HxShapeComment, HxSizeAttr,
+    HxTableMargin, HxTablePos, HxTableSz,
 };
+use crate::wire_xml::textart_text_to_wire;
 
 use super::escape_xml;
 use super::section::{

@@ -492,36 +492,6 @@ impl<'de> serde::Deserialize<'de> for HxRun {
 
 /// `<hp:textart>` — TextArt (글맵시) decorative warped-text object.
 ///
-/// How Hancom writes one TextArt line break inside `<hp:textart text="…">`:
-/// the visible pair `␍␊` (U+240D U+240A). A raw CR/LF would not survive —
-/// XML attribute-value normalization reads it back as a space. Core carries
-/// the break as `\r\n`, the form the HWP5 record uses (issue #199).
-pub(crate) const TEXTART_LINE_BREAK: &str = "\u{240D}\u{240A}";
-
-/// Core → wire: every line break — `\r\n`, a lone `\r` or a lone `\n` —
-/// becomes one [`TEXTART_LINE_BREAK`] pair.
-pub(crate) fn textart_text_to_wire(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\r' => {
-                chars.next_if_eq(&'\n');
-                out.push_str(TEXTART_LINE_BREAK);
-            }
-            '\n' => out.push_str(TEXTART_LINE_BREAK),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Wire → Core: each [`TEXTART_LINE_BREAK`] pair becomes `\r\n`. A lone
-/// `␍` or `␊` is a symbol the author typed and stays as it is.
-pub(crate) fn textart_text_from_wire(text: &str) -> String {
-    text.replace(TEXTART_LINE_BREAK, "\r\n")
-}
-
 /// Decode-only mirror of [`crate::encoder::shapes::encode_text_art_to_xml`].
 /// Captures only the attributes needed to reconstruct `Control::TextArt`:
 /// the displayed `text`, `instid`, placement (`offset`), size (`sz`), and the

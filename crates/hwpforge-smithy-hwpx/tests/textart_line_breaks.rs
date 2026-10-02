@@ -86,3 +86,48 @@ fn hancom_textart_reencodes_to_the_hancom_wire_form() {
         "HWPX → Core → HWPX → Core keeps every line break"
     );
 }
+
+/// Rewrites the first TextArt `text` attribute of the fixture to `wire`
+/// (raw XML, so character references stay references).
+fn fixture_with_first_text(wire: &str) -> Vec<u8> {
+    use std::io::{Read, Write};
+    let src = fixture_bytes();
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(src)).expect("zip");
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut entry = zin.by_index(i).expect("entry");
+        let name = entry.name().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("read entry");
+        if name == "Contents/section0.xml" {
+            let xml = String::from_utf8(data).expect("utf-8");
+            let from = format!("text=\"{}\"", HANCOM_WIRE[0]);
+            assert!(xml.contains(&from), "fixture holds the Hancom form");
+            data = xml.replacen(&from, &format!("text=\"{wire}\""), 1).into_bytes();
+        }
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        out.start_file(name, opts).expect("start entry");
+        out.write_all(&data).expect("write entry");
+    }
+    out.finish().expect("finish zip").into_inner()
+}
+
+/// A writer other than Hancom may store the break as a character reference.
+/// Decoding must land on the same Core form, and a decode→encode→decode round
+/// trip must not change the text.
+/// 이것을 실패시키는 것: 디코더가 단독 `\n`·`\r` 을 접지 않음 — 첫 디코드는 `\n`, 재디코드는 `\r\n`.
+#[test]
+fn character_reference_breaks_decode_stably() {
+    let bytes = fixture_with_first_text("첫 줄&#10;둘쨰 줄&#13;&#10;셋째 줄&#13;끝");
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    let first = core_textart_texts(&decoded.document);
+    assert_eq!(first[0], "첫 줄\r\n둘쨰 줄\r\n셋째 줄\r\n끝");
+
+    let validated = decoded.document.validate().expect("validate");
+    let again = HwpxEncoder::encode(&validated, &decoded.style_store, &decoded.image_store)
+        .expect("encode");
+    assert_eq!(textart_wire_texts(&section0(&again))[0], "첫 줄␍␊둘쨰 줄␍␊셋째 줄␍␊끝");
+    let redecoded = HwpxDecoder::decode(&again).expect("re-decode");
+    assert_eq!(core_textart_texts(&redecoded.document), first);
+}
