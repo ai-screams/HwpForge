@@ -206,14 +206,28 @@ impl Hwp5Decoder {
     /// 5. Join `DocInfo/BinData` with `/BinData/*` image assets
     /// 6. Assemble `Document<Draft>` via projection
     pub fn decode(bytes: &[u8]) -> Hwp5Result<Hwp5Document> {
+        Self::decode_with_budget_limit(bytes, package::MAX_TOTAL_DECOMPRESSED)
+    }
+
+    /// [`decode`](Self::decode) under an explicit document decompression
+    /// budget.
+    pub(crate) fn decode_with_budget_limit(
+        bytes: &[u8],
+        budget_limit: u64,
+    ) -> Hwp5Result<Hwp5Document> {
         let intermediate = decode_intermediate(bytes)?;
-        let image_assets = crate::join_hwp5_image_assets(bytes, &intermediate)?;
+        let (image_assets, budget) =
+            crate::join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
         let mut warnings = intermediate.warnings;
         let metadata = intermediate.metadata;
 
         // Stage 4: Projection — HWP5 IR → Core Document
         let (mut document, image_store, proj_warnings) =
-            crate::projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
+            crate::projection::project_to_core_with_images(
+                intermediate.sections,
+                &image_assets,
+                budget,
+            )?;
         warnings.extend(proj_warnings);
 
         // Codex(architect) Wave 12o-fixup §Top-4: forward

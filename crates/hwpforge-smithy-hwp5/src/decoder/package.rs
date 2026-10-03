@@ -34,7 +34,56 @@ const MAX_BIN_DATA_ENTRIES: usize = 10_000;
 /// single cap (~128 GiB across sections). This global budget bounds the
 /// aggregate while leaving generous headroom for large legitimate government
 /// documents.
-const MAX_TOTAL_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
+
+// ── DecompressBudget ──────────────────────────────────────────────────────────
+
+/// Cumulative decompression budget for one document.
+///
+/// Tracks the cumulative size of decoded results charged for one document:
+/// the package reader charges the streams it reads, and the same budget then
+/// continues through the image join, the OLE join and chart extraction in
+/// projection, so the total charged across all stages stays within
+/// [`MAX_TOTAL_DECOMPRESSED`]. It bounds that charged total, not peak process
+/// memory (transient buffers and copies made elsewhere are not counted).
+/// Deliberately not `Copy`: each stage must receive the budget the previous
+/// stage left behind, never a stale copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DecompressBudget {
+    used: u64,
+    max: u64,
+}
+
+impl DecompressBudget {
+    /// A fresh budget with nothing charged yet.
+    pub(crate) fn new(max: u64) -> Self {
+        Self { used: 0, max }
+    }
+
+    /// Bytes charged so far.
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> u64 {
+        self.used
+    }
+
+    /// Charges `len` newly resident bytes produced by `what`.
+    ///
+    /// Exceeding the budget is a document error (the same wording as the
+    /// package-open total limit); callers must never demote it to a per-asset
+    /// warning.
+    pub(crate) fn charge(&mut self, len: u64, what: &str) -> Hwp5Result<()> {
+        self.used = self.used.saturating_add(len);
+        if self.used > self.max {
+            return Err(Hwp5Error::Cfb {
+                detail: format!(
+                    "total decompressed data ({} bytes) after '{what}' exceeds limit of {}",
+                    self.used, self.max
+                ),
+            });
+        }
+        Ok(())
+    }
+}
 
 // ── PackageReader ─────────────────────────────────────────────────────────────
 
@@ -53,6 +102,8 @@ pub(crate) struct PackageReader {
     /// `None` when the stream is absent (third-party authors may omit it);
     /// callers downgrade to `Metadata::default()` in that case.
     summary_info_data: Option<Vec<u8>>,
+    /// Decompression budget after every stream above was charged.
+    budget: DecompressBudget,
 }
 
 /// Detects common file signatures that prove the input is not an HWP5 OLE2/CFB
@@ -95,9 +146,9 @@ impl PackageReader {
         Self::open_with_budget(bytes, MAX_TOTAL_DECOMPRESSED)
     }
 
-    /// Internal worker for [`open`] with an explicit cumulative-decompression
-    /// budget so tests can verify the global bound with a small value.
-    fn open_with_budget(bytes: &[u8], max_total_decompressed: u64) -> Hwp5Result<Self> {
+    /// [`open`](Self::open) with an explicit cumulative-decompression budget
+    /// so tests can verify the global bound with a small value.
+    pub(crate) fn open_with_budget(bytes: &[u8], max_total_decompressed: u64) -> Hwp5Result<Self> {
         // Surface a clear, actionable error for inputs that are obviously not
         // HWP5 OLE2/CFB containers before the raw CFB magic-number failure.
         if let Some(detail) = detect_non_hwp5_signature(bytes) {
@@ -109,19 +160,10 @@ impl PackageReader {
             .map_err(|e| Hwp5Error::Cfb { detail: format!("open: {e}") })?;
 
         // Cumulative decompressed-size budget across every stream of this
-        // package. Tracked locally to keep the helper-fn signatures clean.
-        let mut total_decompressed: u64 = 0;
-        let mut charge = |path: &str, len: usize| -> Hwp5Result<()> {
-            total_decompressed = total_decompressed.saturating_add(len as u64);
-            if total_decompressed > max_total_decompressed {
-                return Err(Hwp5Error::Cfb {
-                    detail: format!(
-                        "total decompressed data ({total_decompressed} bytes) after '{path}' exceeds limit of {max_total_decompressed}"
-                    ),
-                });
-            }
-            Ok(())
-        };
+        // package; kept on the reader so later stages continue from it.
+        let mut budget = DecompressBudget::new(max_total_decompressed);
+        let mut charge =
+            |path: &str, len: usize| -> Hwp5Result<()> { budget.charge(len as u64, path) };
 
         // 1. FileHeader
         let header_bytes = read_stream(&mut comp, "/FileHeader")?;
@@ -131,7 +173,7 @@ impl PackageReader {
         // 2. DocInfo
         let doc_info_raw = read_stream(&mut comp, "/DocInfo")?;
         let doc_info_data = if file_header.flags.compressed {
-            decompress_checked(&doc_info_raw, "/DocInfo")?
+            decompress_ratio_checked(&doc_info_raw, "/DocInfo")?
         } else {
             doc_info_raw
         };
@@ -144,7 +186,7 @@ impl PackageReader {
             match read_stream(&mut comp, &path) {
                 Ok(raw) => {
                     let data = if file_header.flags.compressed {
-                        decompress_checked(&raw, &path)?
+                        decompress_ratio_checked(&raw, &path)?
                     } else {
                         raw
                     };
@@ -203,7 +245,15 @@ impl PackageReader {
             Err(e) => return Err(e),
         };
 
-        Ok(Self { file_header, doc_info_data, sections_data, bin_data, summary_info_data })
+        Ok(Self { file_header, doc_info_data, sections_data, bin_data, summary_info_data, budget })
+    }
+
+    /// The document budget left after this package's streams were charged.
+    ///
+    /// Later decompression (images, OLE, chart extraction) continues from
+    /// here so the whole document shares one limit.
+    pub(crate) fn remaining_budget(&self) -> DecompressBudget {
+        self.budget.clone()
     }
 
     /// Raw bytes of the `\x05HwpSummaryInformation` OLE2 PropertySet
@@ -270,8 +320,13 @@ fn read_stream(comp: &mut CompoundFile<Cursor<&[u8]>>, path: &str) -> Hwp5Result
     Ok(buf)
 }
 
-/// Decompress a stream and enforce the decompression-ratio safety limit.
-fn decompress_checked(data: &[u8], path: &str) -> Hwp5Result<Vec<u8>> {
+/// Decompress a stream under the per-stream cap and the decompression-ratio
+/// limit ([`MAX_DECOMPRESSION_RATIO`]).
+///
+/// Used for document streams and OLE BinData. Images do not use it: legitimate
+/// uncompressed BMPs reach ratios near 100, so a ratio limit would reject
+/// valid documents.
+pub(crate) fn decompress_ratio_checked(data: &[u8], path: &str) -> Hwp5Result<Vec<u8>> {
     let decompressed = decompress_stream(data)?;
     let ratio = if data.is_empty() { 0 } else { decompressed.len() as u64 / data.len() as u64 };
     if ratio > MAX_DECOMPRESSION_RATIO {
@@ -558,6 +613,54 @@ mod tests {
         // Same package within a generous budget loads both BinData entries.
         let pkg = PackageReader::open_with_budget(&bytes, 4096).expect("within budget");
         assert_eq!(pkg.bin_data().len(), 2);
+    }
+
+    // 이것을 실패시키는 것: `charge` 의 `self.used > self.max` 를 `>=` 로 바꾸기
+    // (정확히 상한까지 쓴 예산이 거부된다).
+    #[test]
+    fn decompress_budget_accepts_exact_limit_and_rejects_one_more_byte() {
+        let mut budget = DecompressBudget::new(10);
+        budget.charge(4, "a").expect("4 of 10");
+        budget.charge(6, "b").expect("exactly at the limit");
+        let err = budget.charge(1, "c").unwrap_err();
+        assert!(matches!(err, Hwp5Error::Cfb { .. }), "got: {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("total decompressed data (11 bytes) after 'c'"), "got: {msg}");
+    }
+
+    // 이것을 실패시키는 것: `remaining_budget` 이 open 사용량을 버리고
+    // `DecompressBudget::new(max)` 를 돌려주기.
+    #[test]
+    fn remaining_budget_continues_from_package_open_usage() {
+        // FileHeader 256 + DocInfo 18 + Section0 17 = 291 bytes charged at open.
+        let bytes = make_test_cfb(
+            make_version(5, 0, 2, 5),
+            0x00,
+            b"test doc info data",
+            b"test section data",
+        );
+        let pkg = PackageReader::open_with_budget(&bytes, 300).expect("291 <= 300");
+        let mut budget = pkg.remaining_budget();
+        assert_eq!(budget.used(), 291);
+        budget.charge(9, "rest").expect("291 + 9 = 300 is within the limit");
+        assert!(budget.charge(1, "over").is_err(), "301 > 300 must fail");
+    }
+
+    // 이것을 실패시키는 것: `decompress_ratio_checked` 의 압축비 비교 제거.
+    #[test]
+    fn decompress_ratio_checked_rejects_ratio_over_limit() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![0u8; 200_000]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(200_000 / compressed.len() > 100, "precondition: ratio over 100");
+
+        let err = decompress_ratio_checked(&compressed, "/BinData/BIN0001.OLE").unwrap_err();
+        assert!(err.to_string().contains("decompression ratio"), "got: {err}");
+        // The plain stream decompressor (images) has no ratio limit.
+        assert_eq!(decompress_stream(&compressed).unwrap().len(), 200_000);
     }
 
     #[test]

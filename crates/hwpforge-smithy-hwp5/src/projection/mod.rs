@@ -31,14 +31,15 @@ use crate::ctrl_ids::{
     CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY,
     CTRL_ID_HYPERLINK, CTRL_ID_MEMO_INLINE, CTRL_ID_PAGE_NUMBER, CTRL_ID_SECD,
 };
-use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
+use crate::decoder::chart_ole::{extract_chart_payload_from_inflated, ChartOleError};
+use crate::decoder::package::{DecompressBudget, MAX_TOTAL_DECOMPRESSED};
 use crate::decoder::section::{
     Hwp5Control, Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl,
     Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
     Hwp5Table, Hwp5TableCell, Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
-use crate::error::Hwp5Result;
+use crate::error::{Hwp5Error, Hwp5Result};
 use crate::numeric::positive_i32_from_u32;
 use crate::schema::section::Hwp5DutmalControl;
 use crate::schema::section::{
@@ -251,16 +252,24 @@ enum ActiveField {
 pub(crate) fn project_to_core(
     sections: Vec<SectionResult>,
 ) -> Hwp5Result<(Document<Draft>, Vec<Hwp5Warning>)> {
-    let (document, _image_store, warnings) = project_to_core_internal(sections, None, None)?;
+    let (document, _image_store, warnings) = project_to_core_internal(
+        sections,
+        None,
+        None,
+        DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+    )?;
     Ok((document, warnings))
 }
 
 /// Project decoded HWP5 sections into Core with the current image slice enabled.
+///
+/// `budget` is the document decompression budget left by the image join.
 pub(crate) fn project_to_core_with_images(
     sections: Vec<SectionResult>,
     image_assets: &Hwp5JoinedImageAssetPlan,
+    budget: DecompressBudget,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
-    project_to_core_internal(sections, Some(image_assets), None)
+    project_to_core_internal(sections, Some(image_assets), None, budget)
 }
 
 /// Project decoded HWP5 sections into Core with both image and OLE asset plans.
@@ -268,22 +277,27 @@ pub(crate) fn project_to_core_with_images(
 /// Used by [`crate::decode_hwp5_to_core`] so the projection layer can attempt
 /// chart payload extraction from `/BinData/BIN*.OLE` entries and emit
 /// [`hwpforge_core::Control::EmbeddedChart`] runs (Wave 4c carry).
+///
+/// `budget` is the document decompression budget left by the OLE join; every
+/// chart extraction is charged to it, and exhausting it fails the document.
 pub(crate) fn project_to_core_with_images_and_ole(
     sections: Vec<SectionResult>,
     image_assets: &Hwp5JoinedImageAssetPlan,
     ole_assets: &Hwp5OleAssetPlan,
+    budget: DecompressBudget,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
-    project_to_core_internal(sections, Some(image_assets), Some(ole_assets))
+    project_to_core_internal(sections, Some(image_assets), Some(ole_assets), budget)
 }
 
 fn project_to_core_internal(
     sections: Vec<SectionResult>,
     image_assets: Option<&Hwp5JoinedImageAssetPlan>,
     ole_assets: Option<&Hwp5OleAssetPlan>,
+    budget: DecompressBudget,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
     let mut doc = Document::<Draft>::new();
     let mut all_warnings: Vec<Hwp5Warning> = Vec::new();
-    let mut projection_images = ProjectionImageState::new(image_assets, ole_assets);
+    let mut projection_images = ProjectionImageState::new(image_assets, ole_assets, budget);
 
     for section_result in sections {
         // Collect warnings from decoding.
@@ -479,6 +493,13 @@ fn project_to_core_internal(
         });
     }
 
+    // Chart extraction runs deep inside `Option<Run>`/`Paragraph` returning
+    // helpers, so a document-budget overrun is parked in the shared state and
+    // surfaced here. No partial document is returned.
+    if let Some(err) = projection_images.budget_error.take() {
+        return Err(err);
+    }
+
     all_warnings.extend(projection_images.warnings);
     Ok((doc, projection_images.image_store, all_warnings))
 }
@@ -508,6 +529,12 @@ struct ProjectionImageState<'a> {
     /// 폭탄도 무경고도 금지 — corpus 실측: `%fmu` 531회·`pghd` 1,013회가
     /// 이 지점에서 소리 없이 사라졌었다).
     dropped_unknown: std::collections::BTreeMap<u32, usize>,
+    /// Document decompression budget continued from the OLE join; every chart
+    /// extraction charges the bytes it makes resident.
+    budget: DecompressBudget,
+    /// First document-budget overrun. Once set, no further chart extraction
+    /// runs, and `project_to_core_internal` returns it as the document error.
+    budget_error: Option<Hwp5Error>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,6 +547,7 @@ impl<'a> ProjectionImageState<'a> {
     fn new(
         image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
         ole_assets: Option<&'a Hwp5OleAssetPlan>,
+        budget: DecompressBudget,
     ) -> Self {
         Self {
             image_assets,
@@ -527,13 +555,19 @@ impl<'a> ProjectionImageState<'a> {
             image_store: ImageStore::new(),
             warnings: Vec::new(),
             dropped_unknown: std::collections::BTreeMap::new(),
+            budget,
+            budget_error: None,
         }
     }
 
-    /// Look up raw `/BinData/BIN*.OLE` bytes by `binary_data_id`, if a plan
-    /// was supplied. `None` means no OLE plan is wired (e.g. inspect path).
-    fn ole_bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
-        self.ole_assets.and_then(|plan| plan.bytes_for_binary_data_id(binary_data_id))
+    /// Look up the inflated `/BinData/BIN*.OLE` entry by `binary_data_id`, if
+    /// a plan was supplied. `None` means no OLE plan is wired (e.g. inspect
+    /// path) or the plan has no such entry.
+    fn ole_inflated_for_binary_data_id(
+        &self,
+        binary_data_id: u16,
+    ) -> Option<&'a Result<Vec<u8>, ChartOleError>> {
+        self.ole_assets.and_then(|plan| plan.inflated_for_binary_data_id(binary_data_id))
     }
 
     fn build_image(
@@ -2943,7 +2977,13 @@ fn project_ole_object_run(
     ole: &Hwp5OleObjectControl,
     projection_images: &mut ProjectionImageState<'_>,
 ) -> Option<Run> {
-    let Some(raw_bytes) = projection_images.ole_bytes_for_binary_data_id(ole.binary_data_id) else {
+    // The document budget is already exhausted: the document will fail, so
+    // skip every further extraction instead of allocating more.
+    if projection_images.budget_error.is_some() {
+        return None;
+    }
+    let Some(inflated) = projection_images.ole_inflated_for_binary_data_id(ole.binary_data_id)
+    else {
         projection_images.warnings.push(Hwp5Warning::DroppedControl {
             control: "ole_object",
             reason: format!("ole_bin_data_unavailable binary_data_id={}", ole.binary_data_id),
@@ -2951,8 +2991,23 @@ fn project_ole_object_run(
         return None;
     };
 
-    match extract_chart_payload(raw_bytes) {
+    let extracted = match inflated {
+        Ok(inflated) => extract_chart_payload_from_inflated(inflated, inflated.len() as u64),
+        Err(err) => Err(err.clone()),
+    };
+    match extracted {
         Ok(payload) => {
+            // Every extraction (each control referencing the same asset too)
+            // makes a new copy of the chart XML and the inner OLE bytes
+            // resident, so each one is charged.
+            let extracted_len = (payload.chart_xml.len() + payload.ole_bytes.len()) as u64;
+            if let Err(err) = projection_images.budget.charge(
+                extracted_len,
+                &format!("chart binary_data_id={} (extracted)", ole.binary_data_id),
+            ) {
+                projection_images.budget_error = Some(err);
+                return None;
+            }
             // Dimensions come from the wrapping `gso ` CtrlHeader geometry
             // ([16..24] = display frame width/height in HWPUNIT) — the
             // `ShapeComponentOle` extent fields hold the OLE's *internal
@@ -3727,7 +3782,11 @@ mod tests {
                 paragraphs: Vec::new(),
                 list_header_properties: None,
             };
-            let mut state = ProjectionImageState::new(None, None);
+            let mut state = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
             let control = project_group_child(&child, &mut state).expect("rect child projects");
             let Control::Rect { placement, .. } = control else {
                 panic!("rect child must project to Control::Rect");
@@ -3817,7 +3876,8 @@ mod tests {
             list_header_properties: Some(1 << 5),
             ctrl_properties: 0,
         };
-        let mut images = ProjectionImageState::new(None, None);
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
         let run = project_textbox_run(&textbox, &mut images);
         match run.content.as_control().unwrap().clone() {
             Control::TextBox { text_vertical_align, .. } => {
@@ -3841,7 +3901,8 @@ mod tests {
             list_header_properties: None,
             ctrl_properties: 0,
         };
-        let mut images = ProjectionImageState::new(None, None);
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
         let run = project_textbox_run(&textbox, &mut images);
         match run.content.as_control().unwrap().clone() {
             Control::TextBox { text_vertical_align, .. } => {
@@ -4288,8 +4349,12 @@ mod tests {
             vec![0x89, 0x50, 0x4E, 0x47],
         )]);
 
-        let (document, image_store, warnings) =
-            project_to_core_with_images(vec![section], &image_assets).unwrap();
+        let (document, image_store, warnings) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(image_store.len(), 1);
         assert_eq!(image_store.get("BIN0001.png"), Some(&[0x89, 0x50, 0x4E, 0x47][..]));
@@ -4368,8 +4433,12 @@ mod tests {
         let image_assets =
             image_plan([(7, "BIN0007.png", Hwp5SemanticImageFormat::Png, vec![1, 2, 3, 4])]);
 
-        let (document, image_store, _) =
-            project_to_core_with_images(vec![section], &image_assets).unwrap();
+        let (document, image_store, _) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         let section = &document.sections()[0];
         let header = section.headers.first().expect("header should be projected");
         let footer = section.footers.first().expect("footer should be projected");
@@ -4441,8 +4510,12 @@ mod tests {
         let image_assets =
             image_plan([(3, "BIN0003.png", Hwp5SemanticImageFormat::Png, vec![9, 8, 7])]);
 
-        let (document, image_store, warnings) =
-            project_to_core_with_images(vec![section], &image_assets).unwrap();
+        let (document, image_store, warnings) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(image_store.get("BIN0003.png"), Some(&[9, 8, 7][..]));
 
@@ -4507,8 +4580,12 @@ mod tests {
             None,
         );
 
-        let (document, image_store, warnings) =
-            project_to_core_with_images(vec![section], &image_plan([])).unwrap();
+        let (document, image_store, warnings) = project_to_core_with_images(
+            vec![section],
+            &image_plan([]),
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         assert!(image_store.is_empty());
         assert_eq!(document.sections()[0].paragraphs[0].runs.len(), 1);
         assert_eq!(document.sections()[0].paragraphs[0].text_content(), "");
@@ -4558,8 +4635,12 @@ mod tests {
             vec![0x89, 0x50, 0x4E, 0x47],
         );
 
-        let (document, image_store, warnings) =
-            project_to_core_with_images(vec![section], &image_assets).unwrap();
+        let (document, image_store, warnings) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         assert!(warnings.is_empty());
         assert_eq!(image_store.get("BIN0005.png"), Some(&[0x89, 0x50, 0x4E, 0x47][..]));
 
@@ -4601,8 +4682,12 @@ mod tests {
 
         let image_assets = image_plan([(6, "BIN0006.png", Hwp5SemanticImageFormat::Png, vec![1])]);
 
-        let (document, image_store, warnings) =
-            project_to_core_with_images(vec![section], &image_assets).unwrap();
+        let (document, image_store, warnings) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
         assert!(image_store.is_empty());
         assert_eq!(document.sections()[0].paragraphs[0].runs.len(), 1);
         assert_eq!(document.sections()[0].paragraphs[0].text_content(), "");
@@ -5833,7 +5918,11 @@ mod tests {
                 ctrl_id: 0x6174_6E6F,
                 raw_flag,
             });
-            let mut images = ProjectionImageState::new(None, None);
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
             let run = project_control_run(
                 &ctrl,
                 &mut images,
@@ -5878,7 +5967,11 @@ mod tests {
                 kind_raw,
                 number,
             });
-            let mut images = ProjectionImageState::new(None, None);
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
             let run = project_control_run(
                 &ctrl,
                 &mut images,
@@ -5921,7 +6014,11 @@ mod tests {
         let project = |mask: u32| -> (Control, Vec<Hwp5Warning>) {
             let ctrl =
                 Hwp5Control::PageHiding(Hwp5PageHidingControl { ctrl_id: 0x7067_6864, mask });
-            let mut images = ProjectionImageState::new(None, None);
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
             let run = project_control_run(
                 &ctrl,
                 &mut images,
@@ -6000,5 +6097,208 @@ mod tests {
             ),
             "date command → not time mode",
         );
+    }
+
+    // ── R0-2: chart extraction is charged to the document budget ─────────
+
+    fn chart_ole_control(binary_data_id: u16) -> Hwp5Control {
+        Hwp5Control::OleObject(Hwp5OleObjectControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 30_000,
+                height: 20_000,
+            },
+            binary_data_id,
+            extent_width: 7_200,
+            extent_height: 7_200,
+        })
+    }
+
+    fn paragraph_with_controls(controls: Vec<Hwp5Control>) -> Hwp5Paragraph {
+        Hwp5Paragraph { controls, ..make_paragraph("", 0, 0) }
+    }
+
+    /// OLE plan whose every id maps to the inflated chart fixture.
+    fn chart_ole_plan(ids: &[u16]) -> Hwp5OleAssetPlan {
+        let inflated = crate::decoder::chart_ole::tests::chart_fixture_inflated();
+        Hwp5OleAssetPlan {
+            assets_by_binary_data_id: ids.iter().map(|id| (*id, Ok(inflated.clone()))).collect(),
+        }
+    }
+
+    /// Bytes one extraction of the fixture chart makes resident.
+    fn one_chart_extraction_len() -> u64 {
+        let inflated = crate::decoder::chart_ole::tests::chart_fixture_inflated();
+        let payload = extract_chart_payload_from_inflated(&inflated, inflated.len() as u64)
+            .expect("fixture chart extracts");
+        (payload.chart_xml.len() + payload.ole_bytes.len()) as u64
+    }
+
+    fn project_charts(
+        sections: Vec<SectionResult>,
+        ole_ids: &[u16],
+        budget_max: u64,
+    ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
+        project_to_core_with_images_and_ole(
+            sections,
+            &image_plan([]),
+            &chart_ole_plan(ole_ids),
+            DecompressBudget::new(budget_max),
+        )
+    }
+
+    fn embedded_chart_count(doc: &Document<Draft>) -> usize {
+        doc.sections()
+            .iter()
+            .flat_map(|section| section.paragraphs.iter())
+            .flat_map(|paragraph| paragraph.runs.iter())
+            .filter(|run| matches!(run.content.as_control(), Some(Control::EmbeddedChart { .. })))
+            .count()
+    }
+
+    fn reset_extract_calls() {
+        crate::decoder::chart_ole::EXTRACT_CALLS.with(|calls| calls.set(0));
+    }
+
+    fn extract_calls() -> usize {
+        crate::decoder::chart_ole::EXTRACT_CALLS.with(|calls| calls.get())
+    }
+
+    fn assert_budget_error(
+        result: Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("document budget overrun must fail the document");
+        assert!(matches!(err, Hwp5Error::Cfb { .. }), "got: {err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("total decompressed data"), "got: {msg}");
+        assert!(msg.contains(needle), "expected {needle:?} in: {msg}");
+    }
+
+    // 이것을 실패시키는 것: `project_ole_object_run` 의 추출 charge 제거
+    // (두 번째 차트도 성공해 문서가 `Ok`).
+    #[test]
+    fn chart_extractions_are_charged_and_overrun_fails_the_document() {
+        let one = one_chart_extraction_len();
+        let section = || {
+            make_section(
+                vec![paragraph_with_controls(vec![chart_ole_control(1), chart_ole_control(2)])],
+                None,
+            )
+        };
+
+        let (doc, _, _) =
+            project_charts(vec![section()], &[1, 2], 2 * one).expect("two charts fit exactly");
+        assert_eq!(embedded_chart_count(&doc), 2);
+
+        assert_budget_error(
+            project_charts(vec![section()], &[1, 2], 2 * one - 1),
+            "chart binary_data_id=2",
+        );
+    }
+
+    // 이것을 실패시키는 것: 같은 binary_data_id 는 처음 한 번만 charge 하기
+    // (자산당 1회로 세면 두 번째 참조가 예산 밖에서 할당된다).
+    #[test]
+    fn repeated_references_to_one_chart_asset_are_charged_per_reference() {
+        let one = one_chart_extraction_len();
+        let section = || {
+            make_section(
+                vec![paragraph_with_controls(vec![chart_ole_control(1), chart_ole_control(1)])],
+                None,
+            )
+        };
+
+        let (doc, _, _) =
+            project_charts(vec![section()], &[1], 2 * one).expect("two references fit exactly");
+        assert_eq!(embedded_chart_count(&doc), 2);
+
+        assert_budget_error(
+            project_charts(vec![section()], &[1], 2 * one - 1),
+            "chart binary_data_id=1",
+        );
+    }
+
+    /// One section holding a single chart (`binary_data_id`) inside the named
+    /// container.
+    fn section_with_chart_in(container: &str, binary_data_id: u16) -> SectionResult {
+        let chart_paragraph = || paragraph_with_controls(vec![chart_ole_control(binary_data_id)]);
+        let control = match container {
+            "body" => return make_section(vec![chart_paragraph()], None),
+            "table_cell" => {
+                let mut cell = grid_test_cell(0, 0, 1, 1);
+                cell.paragraphs = vec![chart_paragraph()];
+                return make_section(vec![grid_test_table_paragraph(1, 1, vec![cell])], None);
+            }
+            "header" => Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
+                ctrl_id: 0x6865_6164,
+                properties_raw: 0,
+                instance_id: 0,
+                paragraphs: vec![chart_paragraph()],
+            }),
+            "textbox" => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                ctrl_id: 0x6773_6F20,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 8_000,
+                    height: 6_000,
+                },
+                paragraphs: vec![chart_paragraph()],
+                list_header_properties: None,
+                ctrl_properties: 0,
+            }),
+            other => panic!("unknown container {other}"),
+        };
+        make_section(vec![paragraph_with_controls(vec![control])], None)
+    }
+
+    // 이것을 실패시키는 것: `project_to_core_internal` 의 `Ok` 직전
+    // `budget_error` 검사 제거 (네 컨테이너 모두 문서가 `Ok` 로 반환된다).
+    #[test]
+    fn chart_budget_overrun_in_any_container_fails_the_document() {
+        let one = one_chart_extraction_len();
+        for container in ["body", "table_cell", "header", "textbox"] {
+            // Positive control: the container path really reaches extraction.
+            reset_extract_calls();
+            project_charts(vec![section_with_chart_in(container, 1)], &[1], one)
+                .unwrap_or_else(|err| panic!("{container}: one chart fits exactly: {err}"));
+            assert_eq!(extract_calls(), 1, "{container}: chart must be extracted once");
+
+            assert_budget_error(
+                project_charts(vec![section_with_chart_in(container, 1)], &[1], one - 1),
+                "chart binary_data_id=1",
+            );
+        }
+    }
+
+    // 이것을 실패시키는 것: `project_ole_object_run` 첫머리의
+    // `budget_error.is_some()` 조기 반환 제거 (초과 뒤에도 표 셀·글상자의
+    // 차트를 계속 추출해 호출 수가 3이 되고, 마지막 오류가 첫 오류를 덮는다).
+    #[test]
+    fn extraction_stops_after_budget_overrun_and_first_error_is_kept() {
+        let one = one_chart_extraction_len();
+        let sections = || {
+            vec![
+                section_with_chart_in("body", 1),
+                section_with_chart_in("table_cell", 2),
+                section_with_chart_in("textbox", 3),
+            ]
+        };
+
+        // Positive control: with room for all three, each reference is
+        // extracted exactly once.
+        reset_extract_calls();
+        project_charts(sections(), &[1, 2, 3], 3 * one).expect("three charts fit");
+        assert_eq!(extract_calls(), 3);
+
+        reset_extract_calls();
+        assert_budget_error(
+            project_charts(sections(), &[1, 2, 3], one - 1),
+            "chart binary_data_id=1",
+        );
+        assert_eq!(extract_calls(), 1, "no extraction may run after the budget is exhausted");
     }
 }
