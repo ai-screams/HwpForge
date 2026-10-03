@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(hwpx)* [#199] write TextArt line breaks the way Hancom does
+- *(core)* `Control::TextArt.text` 의 줄바꿈 형식(`\r\n`)과 HWPX 왕복 규칙을 문서화한다. `Display` 는 글맵시 글자를 이스케이프해 여러 줄 글맵시도 진단 출력 한 줄로 나온다 (#199)
 
 
 ## [0.16.8](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.7...hwpforge-core-v0.16.8) - 2026-10-01

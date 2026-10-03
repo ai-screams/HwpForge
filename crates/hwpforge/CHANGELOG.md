@@ -9,7 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- *(hwpx)* [#199] write TextArt line breaks the way Hancom does
+- *(hwpx)* HWP 를 HWPX 로 변환할 때 여러 줄 글맵시(TextArt)의 줄바꿈이 공백으로 합쳐지던 문제를 고친다. 줄바꿈은 한컴처럼 `␍␊`(U+240D U+240A)로 쓰고 읽을 때 `\r\n` 으로 푼다. 이전 버전이 만든 HWPX 는 줄바꿈이 이미 공백으로 저장돼 있으므로 원본 HWP 에서 다시 변환해야 한다 (#199)
+
+- *(hwpx)* `to-json`·MCP·Python 에서 한컴 HWPX 의 글맵시 `text` 가 `␍␊` 대신 `\r\n` 으로 보인다. 예전 JSON 의 `␍␊` 도 계속 줄바꿈으로 읽는다 (#199)
+
+### Changed
+
+- 워크스페이스 MSRV 를 Rust 1.89 로 올린다. 간접 의존성 `uuid` 1.27 이 rustc 1.89 를 요구한다 (krilla 경로의 네 크레이트는 그대로 1.92)
 
 
 ## [0.16.8](https://github.com/ai-screams/HwpForge/compare/v0.16.7...v0.16.8) - 2026-10-01
