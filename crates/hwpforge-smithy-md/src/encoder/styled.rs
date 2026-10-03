@@ -13,7 +13,7 @@ use hwpforge_core::{
 use hwpforge_foundation::UnderlineType;
 
 use super::list_format::{format_list_continuation, format_list_item};
-use crate::eqn::eqn_to_latex;
+use crate::eqn::{render_equation, EqnRender};
 use crate::internal_styles::parse_list_continuation_style_name;
 
 /// Output of style-aware markdown encoding.
@@ -468,7 +468,13 @@ fn encode_control_styled(
                 .join(" ");
             body.trim().to_string()
         }
-        Control::Equation { script, .. } => eqn_to_latex(script),
+        Control::Equation { script, .. } => match render_equation(script) {
+            EqnRender::Latex(latex) => latex,
+            // Written as ordinary text (whitespace already collapsed):
+            // Markdown-escaped here, and table cells apply their usual cell
+            // escaping on top, like text runs.
+            EqnRender::RawFallback(raw) => escape_markdown(&raw),
+        },
         Control::Chart { .. } => "<!-- chart -->".to_string(),
         Control::Line { .. } => String::new(),
         Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
@@ -873,18 +879,27 @@ fn extract_paragraph_text_html(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
+                // Equations: LaTeX is written verbatim; a script too deep to
+                // convert is ordinary cell text (whitespace collapsed),
+                // HTML-escaped like `wrap_html` does.
+                if let Control::Equation { script, .. } = &**control {
+                    match render_equation(script) {
+                        EqnRender::Latex(latex) => output.push_str(&latex),
+                        EqnRender::RawFallback(raw) => output.push_str(&escape_html(&raw)),
+                    }
+                    continue;
+                }
                 let mut ctrl_images = HashMap::new();
                 let ctrl_output =
                     encode_control_styled(control, styles, &mut ctrl_images, footnotes);
                 images.extend(ctrl_images);
                 // HTML-escape text-bearing control output in HTML table context.
                 // Only structural/safe outputs (footnote markers, hyperlinks,
-                // equations, chart comments, empty shapes) skip escaping.
+                // chart comments, empty shapes) skip escaping.
                 let escaped = match &**control {
                     Control::Hyperlink { .. }
                     | Control::Footnote { .. }
                     | Control::Endnote { .. }
-                    | Control::Equation { .. }
                     | Control::Chart { .. }
                     | Control::Line { .. }
                     | Control::Arc { .. }
