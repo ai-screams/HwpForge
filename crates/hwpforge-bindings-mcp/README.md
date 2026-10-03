@@ -64,7 +64,13 @@ Add to `.vscode/mcp.json`:
 
 ### Claude Code
 
-Add to `.claude/settings.json`:
+Register the server with the CLI (`.claude/settings.json` is not read for MCP servers):
+
+```bash
+claude mcp add hwpforge -- hwpforge-mcp
+```
+
+Or, to share it with a project, put the same JSON shape in `.mcp.json` at the project root:
 
 ```json
 {

@@ -5,7 +5,7 @@
 
 - 생성일: 2026-05-23
 - 변환 도구: `hwpforge convert-hwp5`
-- 변환 결과: **35개 전부 성공, 0 warnings** (Wave 4c chart carry 포함)
+- 변환 결과: 생성일 기준 **전부 성공, 0 warnings** (Wave 4c chart carry 포함). 현재 추적 중인 변환 `.hwpx`는 38개이며 아래 목록이 전부 담습니다
 
 ## 비교 방법
 
@@ -13,13 +13,15 @@
 
 | 파일      | 위치                                      | 의미                                    |
 | --------- | ----------------------------------------- | --------------------------------------- |
-| 원본 HWP5 | `tests/fixtures/user_samples/<name>.hwp`  | 한컴이 만든 원본                        |
-| 정답 HWPX | `tests/fixtures/user_samples/<name>.hwpx` | 한컴이 만든 HWPX (정답)                 |
+| 원본 HWP5 | `tests/fixtures/` 아래 `<name>.hwp`       | 한컴이 만든 원본                        |
+| 정답 HWPX | `tests/fixtures/` 아래 `<name>.hwpx`      | 한컴이 만든 HWPX (정답)                 |
 | 변환 HWPX | `examples/hwp5_review/<name>.hwpx`        | **HwpForge가 .hwp → .hwpx 변환한 결과** |
+
+원본과 정답은 `user_samples/`(하위 디렉터리 포함) 또는 `charts/`·`shapes/`·`mixed/`에 있습니다 (`find tests/fixtures -name '<name>.hwp'`로 찾습니다).
 
 가장 의미 있는 비교: **정답 HWPX vs 변환 HWPX**를 한컴에서 나란히 열어 시각 차이를 확인.
 
-## 변환 목록 (31개)
+## 변환 목록 (38개)
 
 ### CharShape (Wave 1)
 
@@ -45,7 +47,7 @@
 ### Field/Object (Wave 4)
 
 - `sample-field-footnote.hwpx` — 각주 4개 (Wave 4b)
-- `sample-field-hyperlink-*.hwpx`, `sample-field-bookmark-crossref-basic.hwpx`
+- `sample-field-hyperlink-*.hwpx`, `sample-field-bookmark-crossref-basic.hwpx`, `sample-field-bookmark-crossref-v2.hwpx`
 - `sample-field-page-number-basic.hwpx`
 - `rect_simple.hwpx` — `Control::Rect` (Wave 4a)
 - `chart_01_single_column.hwpx`, `chart_02_single_pie.hwpx`, `chart_03_line_or_scatter.hwpx` — OOXML chart 통과 (Wave 4c)
@@ -54,7 +56,7 @@
 ### Table / Tab / Text
 
 - `sample-table-cell.hwpx`, `sample-tab.hwpx`, `sample-table-tab.hwpx`
-- `sample-text-tab-linebreak-basic.hwpx`, `sample-empty.hwpx`, `sample-fwspace.hwpx`
+- `sample-text-tab-linebreak-basic.hwpx`, `sample-empty.hwpx`, `sample-fwspace.hwpx`, `sample-fwspace-fixed.hwpx`
 
 ## 알려진 한계
 
