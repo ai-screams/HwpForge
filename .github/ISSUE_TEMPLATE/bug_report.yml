@@ -40,6 +40,9 @@ body:
         - hwpforge-smithy-hwp5
         - hwpforge-bindings-py
         - hwpforge-bindings-cli
+        - hwpforge-bindings-mcp
+        - hwpforge-convert
+        - hwpforge-smithy-pdf
         - Not sure
     validations:
       required: true

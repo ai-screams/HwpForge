@@ -13,7 +13,7 @@ blueprint (foundation + core)
     ↓
 smithy-hwpx, smithy-md (foundation + core + blueprint) · smithy-hwp5, smithy-pdf (foundation + core only)
     ↓
-convert (core + foundation + smithy-hwp5 + smithy-hwpx — HWP5→HWPX 오케스트레이터)
+convert (core + foundation + smithy-hwp5 + smithy-hwpx + smithy-pdf — HWP5→HWPX 오케스트레이터)
     ↓
 bindings-py, bindings-cli (+ convert, + smithy-pdf), bindings-mcp
 ```

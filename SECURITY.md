@@ -54,7 +54,7 @@ HwpForge employs the following safeguards:
 
 - **`#![deny(unsafe_code)]`** declared in `hwpforge-core`, `hwpforge-foundation`, `hwpforge-blueprint`, `hwpforge-smithy-hwpx`, `hwpforge-smithy-md`, and `hwpforge-smithy-hwp5`. The remaining six crates (`hwpforge`, `hwpforge-convert`, `hwpforge-bindings-py`, `hwpforge-bindings-cli`, `hwpforge-bindings-mcp`, `hwpforge-smithy-pdf`) do not declare the attribute, but contain no `unsafe` code either — the workspace has zero unsafe blocks in total.
 - **ZIP bomb defense** — 50 MB per entry, 500 MB total, 10,000 entry limit.
-- **`cargo-deny`** — license and advisory audits run in CI (weekly + every PR).
+- **`cargo-deny`** — license and advisory audits run in the CI merge queue (not on every PR) and in the weekly advisory scan.
 - **Dependabot** — automated dependency update PRs.
 - **Nightly canary** — weekly beta/nightly toolchain builds catch regressions early.
 
