@@ -154,6 +154,9 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험. (`release-plz-v0.3.159` 는 **CLI**(`release-plz/release-plz`) 릴리스 태그이며, `.github/workflows/release-plz.yml` 이 실제로 고정하는 `release-plz/action@…v0.5.131` 과는 버전 계열이 다르다 — action 이 내부적으로 vendor 하는 CLI 버전은 별개이므로, 재현 시 `gh release list --repo release-plz/release-plz --limit 5` 로 최신 CLI 태그를 다시 조회할 것.)
 - **npm 은 Trusted Publishing(OIDC) 전용**: `@hwpforge/mcp` 와 플랫폼 패키지 5개가 npmjs.com Settings → Trusted Publisher 에서 `ai-screams/HwpForge` · `npm-publish.yml` · Allow `npm publish` 를 신뢰한다(2026-10-01 등록). 워크플로는 토큰을 넘기지 않으므로, 이 신뢰가 없는 패키지는 publish 단계에서 실패한다 — 새 플랫폼 패키지를 추가하면 그 패키지에도 같은 신뢰를 등록해야 한다. 설정은 수정 불가(지우고 다시 만듦). 실패한 npm 잡은 이미 올라간 버전을 건너뛰므로 등록을 고친 뒤 재실행해도 안전하다. 재실행은 태그 시점의 워크플로 파일로 돈다.
 - **`npm view` 는 publish 직후 캐시로 옛 버전을 보일 수 있다** (0.16.7 에서 몇 분간 0.16.6) — 판정은 `curl -s https://registry.npmjs.org/@hwpforge%2fmcp` 의 `dist-tags` 로.
+- **MSRV 검사는 큐에서만 돈다** (PR 단계 skip). `Cargo.lock` 미추적이라 간접 의존성의 rust-version 상향(예: uuid 1.27 → rustc 1.89)이 코드 변경 없이 모든 큐 실행을 깨뜨린다. 진단 = `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo +<msrv> generate-lockfile` (PR #224).
+- **필수 검사는 ruleset 이 아니라 classic branch protection**(`branches/main/protection/required_status_checks`)에 있다 — CI job 이름을 바꾸면 여기도 PATCH 해야 큐가 멈추지 않는다 (MSRV job 은 버전 없는 `Verify › MSRV`).
+- **Release PR 의 CHANGELOG 손 보완은 큐 등록 직전에** — main 이 움직이면 release-plz 가 Release PR 을 닫고 새 브랜치로 다시 만들어 보완 커밋이 버려진다 (#223 → #225).
 
 ---
 
