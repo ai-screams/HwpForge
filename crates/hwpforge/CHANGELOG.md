@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(hwpx)* `to-json`·MCP·Python 에서 한컴 HWPX 의 글맵시 `text` 가 `␍␊` 대신 `\r\n` 으로 보인다. 예전 JSON 의 `␍␊` 도 계속 줄바꿈으로 읽는다 (#199)
 
+### Changed
+
+- 워크스페이스 MSRV 를 Rust 1.89 로 올린다. 간접 의존성 `uuid` 1.27 이 rustc 1.89 를 요구한다 (krilla 경로의 네 크레이트는 그대로 1.92)
+
 
 ## [0.16.8](https://github.com/ai-screams/HwpForge/compare/v0.16.7...v0.16.8) - 2026-10-01
 
