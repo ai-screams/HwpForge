@@ -2,7 +2,7 @@
 
 `hwpforge-mcp`는 HwpForge의 [MCP](https://modelcontextprotocol.io/) 서버입니다. Claude Code 같은 MCP 지원 AI 도구가 한글 문서를 직접 만들고 읽고 편집할 수 있도록 도구 19개, 리소스 4개, 프롬프트 3개를 노출합니다. 이 장의 이름과 매개변수는 `crates/hwpforge-bindings-mcp/src`의 정의에서 옮겼습니다.
 
-모든 도구는 `{ data, summary, next }` 3층 출력 형식을 씁니다. 파일은 경로로 주고받으며, 실패는 오류 응답(`CallToolResult::error`)으로 돌아옵니다.
+모든 도구는 `{ data, summary, next }` 3층 출력 형식을 씁니다. 파일은 대부분 경로로 주고받으며(예외: `hwpforge_convert`는 `is_file: false`로 Markdown을 인라인으로 받고, `hwpforge_to_json`은 `output_path` 없이 JSON을 인라인으로 돌려주고, `hwpforge_diff`는 `output_path` 없이 보고서를 인라인으로 돌려주며, `hwpforge_from_json`은 JSON을 `structure` 문자열로 받습니다), 실패는 오류 응답(`CallToolResult::error`)으로 돌아옵니다.
 
 ## 등록
 
@@ -58,18 +58,18 @@ crates.io 패키지 이름은 `hwpforge-bindings-mcp`이고 설치되는 바이�
 
 ## 도구
 
-표의 `(.hwpx)`는 그 `output_path`가 `.hwpx`로 끝나야 한다는 표시입니다.
+표의 `(.hwpx)`는 그 `output_path`가 `.hwpx`로 끝나야 한다는 표시입니다. 이 확장자 검사는 `hwpforge_convert`·`hwpforge_from_json`·`hwpforge_restyle`·`hwpforge_fill`·`hwpforge_set_cell`·`hwpforge_patch`·`hwpforge_stamp`에 있고, `hwpforge_insert_para`·`hwpforge_delete_para`에는 없습니다. `hwpforge_to_json`의 `output_path`는 `.json`으로 끝나야 합니다.
 
 ### 만들기 · 변환
 
-| 도구                 | 용도                                                     | 매개변수                                                                                                       |
-| -------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `hwpforge_convert`   | Markdown을 HWPX로 변환합니다                             | `markdown`(파일 경로 또는 인라인 내용), `is_file`(기본 `true`), `output_path`(.hwpx), `preset`(기본 `default`) |
-| `hwpforge_to_json`   | HWPX를 편집용 JSON으로 내보냅니다                        | `file_path`, `section`(선택, 0부터), `output_path`(선택, 없으면 JSON을 응답에 인라인으로 돌려줌)               |
-| `hwpforge_from_json` | JSON(`ExportedDocument` 스키마)으로 HWPX를 직접 만듭니다 | `structure`(JSON 문자열), `output_path`(.hwpx)                                                                 |
-| `hwpforge_to_md`     | HWPX를 Markdown으로 변환합니다                           | `file_path`, `output_dir`(선택, 기본값은 입력과 같은 디렉터리)                                                 |
-| `hwpforge_restyle`   | 기존 HWPX에 다른 스타일 프리셋을 적용합니다              | `file_path`, `preset`, `output_path`(.hwpx)                                                                    |
-| `hwpforge_templates` | 스타일 프리셋 목록을 돌려줍니다                          | `name`(선택, 프리셋 이름 필터)                                                                                 |
+| 도구                 | 용도                                                     | 매개변수                                                                                                                |
+| -------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `hwpforge_convert`   | Markdown을 HWPX로 변환합니다                             | `markdown`(파일 경로 또는 인라인 내용), `is_file`(기본 `true`), `output_path`(.hwpx), `preset`(기본 `default`)          |
+| `hwpforge_to_json`   | HWPX를 편집용 JSON으로 내보냅니다                        | `file_path`, `section`(선택, 0부터), `output_path`(선택, `.json`으로 끝나야 함, 없으면 JSON을 응답에 인라인으로 돌려줌) |
+| `hwpforge_from_json` | JSON(`ExportedDocument` 스키마)으로 HWPX를 직접 만듭니다 | `structure`(JSON 문자열), `output_path`(.hwpx)                                                                          |
+| `hwpforge_to_md`     | HWPX를 Markdown으로 변환합니다                           | `file_path`, `output_dir`(선택, 기본값은 입력과 같은 디렉터리)                                                          |
+| `hwpforge_restyle`   | 기존 HWPX에 다른 스타일 프리셋을 적용합니다              | `file_path`, `preset`, `output_path`(.hwpx)                                                                             |
+| `hwpforge_templates` | 스타일 프리셋 목록을 돌려줍니다                          | `name`(선택, 프리셋 이름 필터)                                                                                          |
 
 `hwpforge_to_json`의 인라인 응답은 직렬화된 응답이 1 MB 미만일 때만 가능하며, 더 큰 내보내기는 `OUTPUT_TOO_LARGE`로 거부되므로 `output_path`를 주세요. 전체 문서 내보내기는 `hwpforge_from_json`이, `section`을 준 내보내기는 `hwpforge_patch`가 읽습니다.
 
@@ -92,13 +92,13 @@ crates.io 패키지 이름은 `hwpforge-bindings-mcp`이고 설치되는 바이�
 | ---------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `hwpforge_fill`        | 이름 있는 누름틀을 이름→값 맵으로 채웁니다(전부 성공하거나 전부 취소) | `file_path`, `values`(이름→값 맵), `output_path`(.hwpx)                                                                                                         |
 | `hwpforge_set_cell`    | 표 셀을 논리 격자 주소로 편집합니다                                   | `file_path`, `specs`(셀 명세 배열: 표 순번 + `at {row,col}` / `right_of` / `below` + `text`), `output_path`(.hwpx)                                              |
-| `hwpforge_patch`       | 섹션 하나를 편집한 JSON으로 교체합니다(텍스트 전용)                   | `base_path`, `section`, `section_json_path`, `output_path`                                                                                                      |
+| `hwpforge_patch`       | 섹션 하나를 편집한 JSON으로 교체합니다(텍스트 전용)                   | `base_path`, `section`, `section_json_path`, `output_path`(.hwpx)                                                                                               |
 | `hwpforge_insert_para` | 기준 문단 앞뒤에 새 최상위 문단을 삽입합니다                          | `file_path`, `section`, `anchor`, `before`(기본 `false`), `text` 또는 `texts` 중 정확히 하나, `output_path`                                                     |
 | `hwpforge_delete_para` | 최상위 본문 문단을 인덱스로 삭제합니다                                | `file_path`, `section`, `indices`, `output_path`                                                                                                                |
 | `hwpforge_stamp_plan`  | 자리표시자 후보를 찾습니다                                            | `file_path`                                                                                                                                                     |
 | `hwpforge_stamp`       | 승인된 명세로 자리표시자를 누름틀로 승격합니다                        | `file_path`, `specs`(텍스트 명세), `cells`(셀 명세), `source_sha256`(`cells`를 쓰면 필수), `output_path`(.hwpx), `manifest_path`(기본 `<output>.manifest.json`) |
 
-편집 도구의 동작 규칙은 [CLI 레퍼런스](./cli.md)의 같은 이름 명령과 같습니다. 주의할 점은 다음과 같습니다.
+편집 도구의 동작 규칙은 [CLI 레퍼런스](./cli.md)의 대응하는 명령(예: `hwpforge_insert_para`는 `insert-para`)과 같습니다. 주의할 점은 다음과 같습니다.
 
 - `hwpforge_patch`는 문단 구조를 바꾸지 못합니다. 의미 텍스트 슬롯의 개수나 경로가 다르면 거부되며, 문단 추가·삭제는 `hwpforge_insert_para`·`hwpforge_delete_para`, 표 셀은 `hwpforge_set_cell`, 구조가 바뀐 문서 재구성은 `hwpforge_from_json`을 씁니다.
 - `hwpforge_delete_para`·`hwpforge_insert_para`·`hwpforge_set_cell`·`hwpforge_stamp`는 왕복 안전한 입력만 편집합니다. 인코더가 ZIP 엔트리를 모두 실어 보낼 수 없는 문서, 곧 한컴이 저장하며 `Preview/*`와 `META-INF/container.rdf`를 더한 문서는 거부됩니다. 이런 문서에도 `hwpforge_to_json` + `hwpforge_patch`(텍스트)와 `hwpforge_fill`(누름틀)은 쓸 수 있습니다.

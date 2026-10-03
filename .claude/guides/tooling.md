@@ -30,7 +30,7 @@
 - **zsh 는 미인용 변수를 word-split 하지 않음** — `CMD="node /x.mjs"; $CMD status` 는 전체가 하나의 명령명 (조용한 command-not-found → 루프/조건 오탐). 스크립트에서 명령을 변수에 담지 말고 인라인 전체 경로로 (`for x in $VAR` 미분리와 동계열).
 - Bash 작업 디렉터리는 **호출 간 지속** — 앞서 `cd` 한 상태에서 레포-루트 상대 경로(git add 등)를 쓰면 pathspec fatal. 커밋/스테이지 명령은 절대 경로 또는 루트 복귀 후 실행.
 - **`Cargo.lock` 은 gitignore** — `git add` 에 넣으면 커밋이 통째로 실패한다. CI 는 매번 새로 해석하므로 간접 의존성 변화가 코드 변경 없이 게이트를 깨뜨릴 수 있다 (`RELEASING.md` §8 MSRV 항목).
-- **public 타입 rustdoc 변경 = JSON schema 스냅샷 변경** — `hwpforge::ops_schema` 는 `--features ops-hwpx,schemars` 에서만 컴파일되므로 `cargo nextest run -p hwpforge --all-features` 로 확인하고, 스냅샷은 `ops_schema.rs` 머리말 절차대로 CLI `hwpforge schema <kind>` 로 다시 만든다 (PR #221).
+- **public 타입 rustdoc 변경 = JSON schema 스냅샷 변경** — `crates/hwpforge/tests/ops_schema.rs` 통합 테스트(`--features ops-hwpx,schemars` 에서만 컴파일)가 스냅샷을 대조하므로 `cargo nextest run -p hwpforge --all-features` 로 확인하고, 스냅샷은 `ops_schema.rs` 머리말 절차대로 CLI `hwpforge schema <kind>` 로 다시 만든다 (PR #221).
 - **merge 대기는 백그라운드 2시간 한도에 걸려 조용히 끝난다** — 큐 상태는 PR timeline(`added_to_merge_queue`/`removed_from_merge_queue`)과 `gh run list --event merge_group` 로 실측하고, 루프는 네트워크 오류에 끝나지 않게 짠다.
 
 ## Watch Mode

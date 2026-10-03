@@ -133,7 +133,7 @@ hwpforge fields form.hwpx                                    # 채울 수 있는
 hwpforge fill form.hwpx --set 회사명=HwpForge -o filled.hwpx   # 나머지 패키지는 바이트 그대로
 ```
 
-**PDF 내보내기**는 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`). 조판 캐시가 없는 문단이 하나라도 있으면 거부하려면 `--partial-cache-reject`를 줍니다(기본은 경고 후 그 문단을 건너뜀).
+**PDF 내보내기는** 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`). 조판 캐시가 없는 문단이 하나라도 있으면 거부하려면 `--partial-cache-reject`를 줍니다(기본은 경고 후 그 문단을 건너뜀).
 
 ```bash
 hwpforge to-pdf hancom-saved.hwpx -o report.pdf     # 한컴이 저장한 문서
@@ -448,7 +448,7 @@ HwpForge는 레이어를 나눠서 생각하는 프로젝트입니다.
 - `core`: 포맷 독립 문서 모델과 shared semantics
 - `blueprint`: 스타일 정의와 템플릿 계층
 - `smithy-*`: 포맷별 codec과 bridge (각 크레이트는 단일 포맷만 담당)
-- `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)와 PDF 렌더 연산(`ops::pdf`)
+- `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)와 PDF 렌더 연산(`ops::to_pdf`)
 - `bindings-*`: CLI / MCP / Python 진입점
 
 `hwpforge`(umbrella crate)의 `ops` 모듈과 `hwpforge-convert`의 `ops` 모듈은 세 바인딩이 공유하는 연산 계층입니다 — CLI·MCP·Python 모두 이 계층을 거쳐 호출합니다. 아래 그림의 화살표는 각 크레이트 `Cargo.toml`의 `[dependencies]` 직접 의존을 따르며, 모든 크레이트가 의존하는 `foundation`과 바인딩의 `core` 직접 의존은 생략했습니다.

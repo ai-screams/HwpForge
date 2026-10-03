@@ -62,7 +62,7 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 ## 8. 릴리스 (release-plz 소유)
 
 - Release PR 머지 후 release-plz·npm-publish·pypi-publish workflow 셋 다 success + crates.io sparse index·
-  GitHub Release·npm·PyPI 레지스트리 버전을 **실측 검증**한다 (추측 보고 금지).
+  GitHub Release·npm·PyPI 레지스트리 버전을 **실측 검증한다** (추측 보고 금지).
 - 버전/태그/publish 수동 조작 금지 (`RELEASING.md` canonical).
 
 ## 9. 기록

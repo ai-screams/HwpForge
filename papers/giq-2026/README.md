@@ -11,8 +11,8 @@ Submitted to Government Information Quarterly (GIQ).
 ```
 papers/giq-2026/
 ├── eval/
-│   ├── e1_bulk_conversion.py     # E1: Large-scale document conversion (5,411 docs)
-│   ├── e2_run_experiment.py      # E2: AI policy query accuracy (25 questions, 5 documents)
+│   ├── e1_bulk_conversion.py     # E1: Large-scale conversion with hwpforge (5,411 docs)
+│   ├── e2_run_experiment.py      # E2: AI policy query accuracy (25 questions, 5 documents; calls model APIs only)
 │   ├── input_preparer.py         # Input preparation utility (see Known issues)
 │   └── config.example.py         # Configuration template (see Known issues)
 ├── questions/
@@ -26,13 +26,13 @@ papers/giq-2026/
 
 ### Prerequisites
 
-- HwpForge CLI (`hwpforge`) built from this repository in release mode (`target/release/hwpforge`; both scripts look for that path)
+- HwpForge CLI (`hwpforge`) built from this repository in release mode (`target/release/hwpforge`). Only `e1_bulk_conversion.py` runs it; `e2_run_experiment.py` never calls `hwpforge`
 - Python 3.10+
 - API key for each model you run in E2, as an environment variable (see below)
 
 ### E1: Document Conversion at Scale
 
-`e1_bulk_conversion.py` does not read `config.py`. It reads the corpus from `ref/hwp/corpus/bulk` under `papers/giq-2026/` (the `BULK_DIR` constant in the script) and writes results to `plan/results` under the same directory. Neither directory is committed. Adjust the constants at the top of the script if your corpus lives elsewhere.
+`e1_bulk_conversion.py` runs the `hwpforge` binary through `subprocess`: `to-md` for each `.hwpx`, and `convert-hwp5` followed by `to-md` for each `.hwp`. It does not read `config.py`. It reads the per-ministry folders `보도자료_<ministry>` under `ref/hwp/corpus/bulk` in `papers/giq-2026/` (the `BULK_DIR` constant in the script) and writes results to `plan/results` under the same directory. Neither directory is committed. Adjust the constants at the top of the script if your corpus lives elsewhere.
 
 ```bash
 python eval/e1_bulk_conversion.py              # full run
@@ -42,7 +42,7 @@ python eval/e1_bulk_conversion.py --ministry 행안부
 
 ### E2: AI Policy Query Accuracy
 
-`e2_run_experiment.py` does not read `config.py` either. The questions are embedded in the script (`QUESTIONS`), and API keys come from environment variables. The default model is `claude`; pass `--models` to add others. The script compares two conditions (raw XML vs. Markdown from `hwpforge to-md`) per question.
+`e2_run_experiment.py` does not read `config.py` either. The questions are embedded in the script (`QUESTIONS`), and API keys come from environment variables. The default model is `claude`; pass `--models` to add others. The script does not run `hwpforge` and does not run `to-md`. For each of the five documents it builds two inputs per question: condition A is the raw XML (the `section*.xml` parts) extracted from the `.hwpx` zip, and condition B is a Markdown file that was made beforehand (`hwpforge to-md` output, read as-is from `preview/*.md`). It then sends both to the model API.
 
 | `--models` value | Model id                   | Environment variable |
 | ---------------- | -------------------------- | -------------------- |
@@ -59,7 +59,7 @@ python eval/e2_run_experiment.py --models claude,gpt4 # several models
 python eval/e2_run_experiment.py --doc 1 --dry-run    # one document, no API calls
 ```
 
-The script reads documents from `ref/hwp/corpus/{preview,hwpx}` and writes timestamped results to `plan/results/e2/` under `papers/giq-2026/` (also not committed).
+Under `papers/giq-2026/`, the script reads the `.hwpx` files from `ref/hwp/corpus/hwpx` and the matching pre-made Markdown from `ref/hwp/corpus/preview` (document 5 reads its `.hwpx` from `examples/interop/hwpx_md_convert/hwpx2md/` in this repository, with its Markdown still from `preview/`), and writes timestamped results to `plan/results/e2/` under `papers/giq-2026/` (also not committed).
 
 ## Results in this repository
 

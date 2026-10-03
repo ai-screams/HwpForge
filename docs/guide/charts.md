@@ -52,7 +52,7 @@ let chart = Control::Chart {
 };
 ```
 
-`Control::Chart`에는 위 7개 외에 차트 종류별 옵션 필드 9개(`bar_shape`, `explosion`, `of_pie_type`, `radar_style`, `wireframe`, `bubble_3d`, `scatter_style`, `show_markers`, `stock_variant`)가 있습니다. 모두 `Option`이며 `None`이면 해당 차트의 기본 모양입니다. 제목·크기 등을 바꿀 필요가 없다면 기본값 생성자 `Control::chart(chart_type, data)`가 더 간단합니다(너비 약 114mm, 높이 약 66mm, 제목 없음, 범례 오른쪽, 묶은 세로 그룹).
+`Control::Chart`에는 위 7개 외에 차트 종류별 옵션 필드 9개(`bar_shape`, `explosion`, `of_pie_type`, `radar_style`, `wireframe`, `bubble_3d`, `scatter_style`, `show_markers`, `stock_variant`)가 있습니다. 모두 `Option`이며 `None`이면 해당 차트의 기본 모양입니다. 제목·크기 등을 바꿀 필요가 없다면 기본값 생성자 `Control::chart(chart_type, data)`가 더 간단합니다(너비 약 114mm, 높이 약 66mm, 제목 없음, 범례 오른쪽, 그룹 방식 `ChartGrouping::Clustered`(기본값, 계열을 나란히 배치)).
 
 ## ChartData: Category vs Xy 방식
 
