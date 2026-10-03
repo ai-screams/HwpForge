@@ -35,7 +35,7 @@ keywords = ["hwp", "hwpx", "hancom", "hangul", "korean"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/ai-screams/HwpForge"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # === XML Processing ===

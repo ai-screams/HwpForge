@@ -12,9 +12,9 @@ publish = false
 readme.workspace = true
 repository.workspace = true
 # `ops::to_pdf` consumes hwpforge-smithy-pdf, whose krilla 0.8 dependency
-# requires 1.92 — so this crate exceeds the workspace MSRV (1.88) exactly the
+# requires 1.92 — so this crate exceeds the workspace MSRV (1.89) exactly the
 # way smithy-pdf and bindings-cli already do. publish = false, so there is no
-# MSRV consumer contract; the CI `msrv` job excludes this crate from the 1.88
+# MSRV consumer contract; the CI `msrv` job excludes this crate from the 1.89
 # lane and checks it in the 1.92 step instead (design §2.2 "HWP5·PDF 작업의 자리").
 rust-version = "1.92"
 description = "Cross-format conversion orchestrator for HwpForge (HWP5 -> HWPX)"

@@ -14,7 +14,7 @@ repository.workspace = true
 # `to_pdf` reaches smithy-pdf through hwpforge-convert, whose krilla 0.8
 # dependency requires 1.92 — the same MSRV exception smithy-pdf, convert and
 # bindings-cli already take. publish = false, so there is no MSRV consumer
-# contract; CI's 1.88 lane excludes this crate and the 1.92 step checks it.
+# contract; CI's 1.89 lane excludes this crate and the 1.92 step checks it.
 rust-version = "1.92"
 description = "Tongs — Python bindings for HwpForge via PyO3"
 

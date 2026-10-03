@@ -40,7 +40,7 @@ help:
 	@echo "  make cov              Code coverage (llvm-cov, fail-under-lines=90)"
 	@echo "  make deny             Dependency license/advisory check"
 	@echo "  make machete          Find unused dependencies"
-	@echo "  make msrv             MSRV compatibility check (Rust 1.88)"
+	@echo "  make msrv             MSRV compatibility check (Rust 1.89)"
 	@echo "  make msrv-pdf         MSRV check for the 1.92 crates + fuzz smoke"
 	@echo ""
 	@echo "Python bindings (uv):"
@@ -162,11 +162,11 @@ deny:
 machete:
 	cargo machete
 
-# ci.yml `Verify › MSRV (1.88)` 와 같은 제외 목록 — 1.92 를 선언한 네 크레이트는
+# ci.yml `Verify › MSRV` 와 같은 제외 목록 — 1.92 를 선언한 네 크레이트는
 # 전부 publish=false 라 MSRV 소비자 계약이 없다. 목록이 어긋나면 로컬만 통과하고
 # 큐에서 깨지므로 두 곳을 함께 고친다.
 msrv:
-	cargo +1.88 check --workspace --all-features \
+	cargo +1.89 check --workspace --all-features \
 	  --exclude hwpforge-smithy-pdf \
 	  --exclude hwpforge-bindings-cli \
 	  --exclude hwpforge-convert \

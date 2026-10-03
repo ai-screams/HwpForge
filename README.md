@@ -16,7 +16,7 @@
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
 [![Docs site](https://img.shields.io/badge/docs-ai--scream.ai-blue.svg?logo=mdbook)](https://ai-scream.ai/HwpForge/)
 ![crates.io downloads](https://img.shields.io/crates/d/hwpforge.svg?label=downloads\&logo=rust\&color=orange)
-![MSRV](https://img.shields.io/badge/MSRV-1.88+-orange.svg?logo=rust)
+![MSRV](https://img.shields.io/badge/MSRV-1.89+-orange.svg?logo=rust)
 ![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
 
 ![MCP Ready](https://img.shields.io/badge/MCP-ready-blueviolet.svg?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMiA3bDEwIDVMMjIgN3oiIGZpbGw9IndoaXRlIi8+PHBhdGggZD0iTTIgMTdsMTAgNSAxMC01IiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC43Ii8+PHBhdGggZD0iTTIgMTJsMTAgNSAxMC01IiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC44NSIvPjwvc3ZnPg==)
@@ -86,7 +86,7 @@ hwpforge = "0.16"
 
 ### 🔨 Hammer — CLI로 시작하기
 
-CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다. `hwpforge-bindings-cli`는 crates.io에 배포되지 않으므로(`publish = false`), git 또는 로컬 경로에서 설치합니다. `hwpforge-smithy-pdf`(krilla) 의존으로 워크스페이스 MSRV(1.88)보다 높은 **Rust 1.92+가** 필요합니다.
+CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다. `hwpforge-bindings-cli`는 crates.io에 배포되지 않으므로(`publish = false`), git 또는 로컬 경로에서 설치합니다. `hwpforge-smithy-pdf`(krilla) 의존으로 워크스페이스 MSRV(1.89)보다 높은 **Rust 1.92+가** 필요합니다.
 
 ```cpp
 cargo install --git https://github.com/ai-screams/HwpForge hwpforge-bindings-cli
@@ -556,15 +556,15 @@ flowchart LR
 
 ### 필수 요구사항
 
-- Rust 1.88+ (워크스페이스 MSRV) — `hwpforge-bindings-cli` CLI를 직접 빌드/설치하려면 krilla 의존으로 1.92+ 필요
+- Rust 1.89+ (워크스페이스 MSRV) — `hwpforge-bindings-cli` CLI를 직접 빌드/설치하려면 krilla 의존으로 1.92+ 필요
 - (권장) [cargo-nextest](https://nexte.st/) — 병렬 테스트 실행
 - (선택) [pre-commit](https://pre-commit.com/) — git hook 자동화
 
 ### MSRV 정책
 
-- 워크스페이스 기본 MSRV는 **Rust 1.88이며**, **stable에서 4 릴리스 뒤처진 버전을** 기본 정책으로 유지합니다.
-- krilla 의존 경로에 있는 네 크레이트(`hwpforge-smithy-pdf`·`hwpforge-convert`·`hwpforge-bindings-cli`·`hwpforge-bindings-py`)는 **Rust 1.92+가** 필요합니다(`rust-version`을 크레이트별로 상향 지정). CI의 `Verify › MSRV (1.88)` job은 이 넷을 1.88 검증 패스에서는 제외하지만, 같은 job 안에서 `cargo +1.92 check`로 따로 검증합니다 — 검증 대상에서 빠지는 것이 아닙니다.
-- 각 크레이트의 `Cargo.toml`의 `rust-version`이 그 크레이트의 실제 MSRV이며, CI의 `Verify › MSRV` job이 워크스페이스 기본값(1.88)을 검증합니다.
+- 워크스페이스 기본 MSRV는 **Rust 1.89이며**, **stable에서 4 릴리스 뒤처진 버전을** 기본 정책으로 유지합니다.
+- krilla 의존 경로에 있는 네 크레이트(`hwpforge-smithy-pdf`·`hwpforge-convert`·`hwpforge-bindings-cli`·`hwpforge-bindings-py`)는 **Rust 1.92+가** 필요합니다(`rust-version`을 크레이트별로 상향 지정). CI의 `Verify › MSRV` job은 이 넷을 1.89 검증 패스에서는 제외하지만, 같은 job 안에서 `cargo +1.92 check`로 따로 검증합니다 — 검증 대상에서 빠지는 것이 아닙니다.
+- 각 크레이트의 `Cargo.toml`의 `rust-version`이 그 크레이트의 실제 MSRV이며, CI의 `Verify › MSRV` job이 워크스페이스 기본값(1.89)을 검증합니다.
 - MSRV 상향이 필요하면 PR에서 이유를 명시하고, `Cargo.toml`, CI, CHANGELOG를 함께 갱신합니다.
 - 개발용 기본 툴체인은 더 최신일 수 있습니다. 호환성 판단 기준은 최신 stable이 아니라 **MSRV + CI 통과 여부입니다**.
 

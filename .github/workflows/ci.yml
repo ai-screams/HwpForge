@@ -319,7 +319,7 @@ jobs:
         run: scripts/build_site.sh
 
   msrv:
-    name: "Verify › MSRV (1.88)"
+    name: "Verify › MSRV"
     needs: [plan, lint-format, lint-clippy]
     if: >-
       always() && !failure() && !cancelled() &&
@@ -328,20 +328,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - name: Install MSRV toolchain (1.88)
-        run: rustup toolchain install 1.88 --profile minimal
+      - name: Install MSRV toolchain (1.89)
+        run: rustup toolchain install 1.89 --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - name: cargo +1.88 check
+      - name: cargo +1.89 check
         # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
-        # 계약이 없다 — 1.88 레인에서 제외하고 아래 1.92 스텝이 커버한다.
+        # 계약이 없다 — 1.89 레인에서 제외하고 아래 1.92 스텝이 커버한다.
         #   smithy-pdf     krilla 0.8 가 1.92 요구 (W2 계획 §6-7)
         #   bindings-cli   W6a 부터 smithy-pdf 소비
         #   convert        ops::to_pdf 가 smithy-pdf 소비 (Python 바인딩 에픽 §2.2)
         #   bindings-py    convert 소비
         run: >-
-          cargo +1.88 check --workspace --all-features
+          cargo +1.89 check --workspace --all-features
           --exclude hwpforge-smithy-pdf
           --exclude hwpforge-bindings-cli
           --exclude hwpforge-convert

@@ -47,7 +47,7 @@ This prevents duplicated effort and ensures the change aligns with the project d
 
 ### Prerequisites
 
-- **Rust 1.88+** (MSRV) — `rustup show` to verify
+- **Rust 1.89+** (MSRV) — `rustup show` to verify
 - [cargo-nextest](https://nexte.st/) — parallel test runner (recommended)
 - [pre-commit](https://pre-commit.com/) — git hook automation (optional)
 
@@ -246,7 +246,7 @@ Documentation changes follow the same review bar as code changes.
 
 ## MSRV Policy
 
-The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). Four crates require **Rust 1.92+** along the krilla dependency path — `hwpforge-smithy-pdf`, `hwpforge-convert`, `hwpforge-bindings-cli` and `hwpforge-bindings-py` — and set their own crate-level `rust-version`; the `Verify › MSRV (1.88)` CI job excludes them from the 1.88 pass, then checks them separately in the same job with `cargo +1.92 check`.
+The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.89). Four crates require **Rust 1.92+** along the krilla dependency path — `hwpforge-smithy-pdf`, `hwpforge-convert`, `hwpforge-bindings-cli` and `hwpforge-bindings-py` — and set their own crate-level `rust-version`; the `Verify › MSRV (1.89)` CI job excludes them from the 1.89 pass, then checks them separately in the same job with `cargo +1.92 check`.
 
 Rules:
 
