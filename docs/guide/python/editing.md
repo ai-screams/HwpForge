@@ -46,8 +46,8 @@ print(result.document.read(field="user_email")["fields"][0]["current"])
 # kim@example.com
 ```
 
-- 이름이 없는 필드는 `FIELD_NOT_FOUND`(메시지에 사용 가능한 이름 목록이 붙습니다), 채울 수 없는 필드는 `FIELD_NOT_FILLABLE`, 빈 문자열은 `EMPTY_FIELD_VALUE`입니다. 값은 문자열이어야 하며 다른 형은 `TypeError`입니다.
-- 같은 이름의 필드가 여럿이면 전부 채워지고 `filled`에 각각 한 줄씩 나옵니다.
+- 이름이 없는 필드는 `FIELD_NOT_FOUND`(메시지에 사용 가능한 이름 목록이 붙습니다), 채울 수 없는 필드는 `FIELD_NOT_FILLABLE`, 빈 문자열은 `EMPTY_FIELD_VALUE`, 값 맵이 비어 있으면 `NO_VALUES`입니다. 값은 문자열이어야 하며 다른 형은 `TypeError`입니다.
+- 같은 이름의 필드가 문서에 둘 이상이면 어느 쪽인지 모호하므로 자동으로 전부 채우지 않고 `FIELD_NAME_AMBIGUOUS`로 거부합니다(아무것도 쓰지 않습니다). 문서에서 이름을 유일하게 만든 뒤 다시 채우세요.
 - `fill`은 바꾼 문단의 조판 캐시만 무효화하고 나머지는 보존하므로, 한컴 저장 문서에서도 안전합니다.
 
 ```python

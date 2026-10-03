@@ -16,6 +16,8 @@
 
 파일 확장자와 매직 바이트로 포맷을 감지합니다.
 
+이 장의 예제는 디렉터리 순회에 `walkdir` 크레이트를 씁니다. 따라 하려면 `cargo add walkdir`로 의존성을 추가하세요.
+
 ```rust,no_run
 use std::path::{Path, PathBuf};
 

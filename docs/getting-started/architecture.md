@@ -5,44 +5,63 @@ HwpForge는 **대장간(Forge) 메타포를** 기반으로 설계된 계층형 �
 
 ## Forge 메타포
 
-| 계층               | 역할                        | 비유               |
-| ------------------ | --------------------------- | ------------------ |
-| Foundation (기반)  | 원시 타입, 단위, 인덱스     | 쇠못과 금속 소재   |
-| Core (핵심)        | 형식 독립 문서 모델         | 도면 위의 설계도   |
-| Blueprint (청사진) | YAML 스타일 템플릿          | 피그마 디자인 토큰 |
-| Smithy (대장간)    | 형식별 인코더/디코더        | 용광로와 망치      |
-| Convert (변환)     | 포맷 간 변환 오케스트레이터 | 단조 작업 지휘     |
-| Bindings (바인딩)  | Python, CLI, MCP 인터페이스 | 완성된 제품 포장   |
+| 계층               | 역할                                          | 비유               |
+| ------------------ | --------------------------------------------- | ------------------ |
+| Foundation (기반)  | 원시 타입, 단위, 인덱스                       | 쇠못과 금속 소재   |
+| Core (핵심)        | 형식 독립 문서 모델                           | 도면 위의 설계도   |
+| Blueprint (청사진) | YAML 스타일 템플릿                            | 피그마 디자인 토큰 |
+| Smithy (대장간)    | 형식별 인코더/디코더 (PDF는 쓰기 전용 렌더러) | 용광로와 망치      |
+| Convert (변환)     | 포맷 간 변환 오케스트레이터                   | 단조 작업 지휘     |
+| Bindings (바인딩)  | Python, CLI, MCP 인터페이스                   | 완성된 제품 포장   |
 
 ## 크레이트 의존성 그래프
 
 ```mermaid
 graph TD
     F[hwpforge-foundation<br/>원시 타입] --> C[hwpforge-core<br/>문서 모델]
-    C --> B[hwpforge-blueprint<br/>스타일 템플릿]
-    B --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
-    B --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
-    C --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
-    C --> SPDF[hwpforge-smithy-pdf<br/>레이아웃 캐시 재생 렌더러]
-    F --> SPDF
-    C --> CONV["hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터"]
+    F --> B[hwpforge-blueprint<br/>스타일 템플릿]
+    C --> B
+    F --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
+    C --> SH
+    B --> SH
+    F --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
+    C --> SM
+    B --> SM
+    F --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
+    C --> S5
+    F --> SPDF[hwpforge-smithy-pdf<br/>레이아웃 캐시 재생 렌더러]
+    C --> SPDF
+    F --> CONV["hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터"]
+    C --> CONV
     SH --> CONV
     S5 --> CONV
-    SH --> U[hwpforge<br/>umbrella crate]
+    SPDF --> CONV
+    F --> U[hwpforge<br/>umbrella crate]
+    C --> U
+    B --> U
+    SH --> U
     SM --> U
-    CONV --> CLI["hwpforge-bindings-cli<br/>CLI (shipped)"]
-    S5 --> CLI
+    F --> CLI["hwpforge-bindings-cli<br/>CLI (shipped)"]
+    C --> CLI
+    U --> CLI
     SH --> CLI
     SM --> CLI
+    S5 --> CLI
     SPDF --> CLI
-    SH --> MCP["hwpforge-bindings-mcp<br/>MCP (shipped)"]
+    CONV --> CLI
+    F --> MCP["hwpforge-bindings-mcp<br/>MCP (shipped)"]
+    C --> MCP
+    U --> MCP
+    SH --> MCP
     SM --> MCP
-    U --> PY["hwpforge-bindings-py<br/>Python"]
+    F --> PY["hwpforge-bindings-py<br/>Python"]
+    U --> PY
     CONV --> PY
-    F --> PY
     SPDF --> PY
 ```
 
+> 화살표는 `Cargo.toml`의 `[dependencies]` 직접 의존을 나타내며(`A --> B`는 B가 A에 의존), 개발용 의존성(`[dev-dependencies]`)은 제외했습니다. umbrella의 `hwpforge-smithy-hwpx`·`hwpforge-smithy-md` 의존은 각각 feature `hwpx`·`md`가 켜질 때만 생깁니다.
+>
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
 > 따라서 `foundation`은 최소한으로 유지합니다.
 
@@ -54,7 +73,7 @@ graph TD
 
 HwpForge는 HTML + CSS의 관계처럼 **문서 구조와** **스타일 정의를** 완전히 분리합니다.
 
-```
+```text
 Core (구조)           Blueprint (스타일)
 ─────────────         ──────────────────
 Paragraph             font: "맑은 고딕"
@@ -74,11 +93,18 @@ Paragraph             font: "맑은 고딕"
 `Document`는 컴파일 타임에 상태를 추적하는 타입스테이트 패턴을 사용합니다.
 
 ```rust,no_run
-use hwpforge::core::{Document, Draft};
+use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Run, Section};
+use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
 
 // Draft 상태: 편집 가능, 저장 불가
 let mut doc = Document::<Draft>::new();
-doc.add_section(/* ... */);
+doc.add_section(Section::with_paragraphs(
+    vec![Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )],
+    PageSettings::a4(),
+));
 
 // validate()를 호출해야만 Validated 상태로 전이
 let validated = doc.validate().unwrap();

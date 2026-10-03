@@ -40,7 +40,7 @@ HwpForge의 핵심 설계 원칙은 **Core DOM이 포맷에 독립적**이라는
            ▼               ▼               ▼
     ┌──────────┐    ┌──────────┐    ┌──────────┐
     │ HWP5     │    │ HWPX     │    │ Markdown │
-    │ CLI/전용 │    │ ✅ 구현   │    │ ✅ 구현   │
+    │ 미지원   │    │ ✅ 구현   │    │ ✅ 구현   │
     └──────────┘    └──────────┘    └──────────┘
 ```
 
@@ -144,7 +144,7 @@ std::fs::write("output.md", &markdown_out).unwrap();
 ```rust,no_run
 use hwpforge_smithy_hwp5::Hwp5Decoder;
 use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
-use hwpforge::core::ImageStore;
+use hwpforge::core::{Document, Draft, ImageStore};
 
 let hwp5_result = Hwp5Decoder::decode_file("legacy.hwp").unwrap();
 let doc: Document<Draft> = hwp5_result.document;
@@ -166,7 +166,7 @@ hwpforge census-hwp5 legacy.hwp --json
 
 ## CLI에서 포맷 처리
 
-현재 CLI는 HWPX와 Markdown을 지원합니다.
+CLI(`hwpforge`)는 변환·검사·편집·검증용 23개 명령을 제공합니다. 전체 목록은 `hwpforge --help`로 확인하세요. 이 장에서 다루는 포맷 변환 명령은 다음과 같습니다.
 
 ```bash
 # Markdown → HWPX 변환
@@ -181,20 +181,27 @@ hwpforge to-json report.hwpx -o report.json
 hwpforge from-json report.json -o updated.hwpx
 
 # HWPX → Markdown (읽기용)
-# Rust API: MdEncoder::encode_lossy(&validated)
+hwpforge to-md report.hwpx
+
+# HWPX/HWP5 → PDF
+hwpforge to-pdf report.hwpx -o report.pdf
 ```
+
+HWPX → Markdown은 Rust API(`MdEncoder::encode_lossy(&validated)`)로도 할 수 있습니다.
 
 ## 크레이트 역할 분담
 
-| 크레이트               | 역할                                            | 포맷 의존성               |
-| ---------------------- | ----------------------------------------------- | ------------------------- |
-| `hwpforge-foundation`  | 원시 타입 (HwpUnit, Color, Index)               | 없음                      |
-| `hwpforge-core`        | 포맷 독립 문서 모델 (IR)                        | 없음                      |
-| `hwpforge-blueprint`   | YAML 스타일 템플릿                              | 없음                      |
-| `hwpforge-smithy-hwpx` | HWPX ↔ Core 코덱                                | HWPX (ZIP+XML)            |
-| `hwpforge-smithy-hwp5` | HWP5 decode/projection                          | HWP5 (OLE/CFB)            |
-| `hwpforge-smithy-md`   | Markdown ↔ Core 코덱                            | Markdown (텍스트)         |
-| `hwpforge-convert`     | HWP5 → HWPX 변환 오케스트레이터 + audit helpers | HWP5 + HWPX (smithy 경유) |
+| 크레이트                                 | 역할                                                            | 포맷 의존성                     |
+| ---------------------------------------- | --------------------------------------------------------------- | ------------------------------- |
+| `hwpforge-foundation`                    | 원시 타입 (HwpUnit, Color, Index)                               | 없음                            |
+| `hwpforge-core`                          | 포맷 독립 문서 모델 (IR)                                        | 없음                            |
+| `hwpforge-blueprint`                     | YAML 스타일 템플릿                                              | 없음                            |
+| `hwpforge-smithy-hwpx`                   | HWPX ↔ Core 코덱                                                | HWPX (ZIP+XML)                  |
+| `hwpforge-smithy-hwp5`                   | HWP5 decode/projection                                          | HWP5 (OLE/CFB)                  |
+| `hwpforge-smithy-md`                     | Markdown ↔ Core 코덱                                            | Markdown (텍스트)               |
+| `hwpforge-smithy-pdf`                    | PDF 렌더러 (쓰기 전용, 코덱 아님)                               | PDF (출력만)                    |
+| `hwpforge-convert`                       | HWP5 → HWPX 변환 오케스트레이터 + audit helpers + PDF 렌더 연산 | HWP5 + HWPX + PDF (smithy 경유) |
+| `hwpforge-bindings-cli` / `-mcp` / `-py` | CLI / MCP / Python 진입점 (공유 연산 계층 `hwpforge::ops` 호출) | 없음                            |
 
 **핵심 원칙**: Core 이하 계층은 어떤 파일 포맷도 모릅니다. Smithy 계층만 특정 포맷을 이해하고, `convert`는 두 Smithy를 엮어 포맷 간 변환을 지휘합니다(자체 포맷 파싱 없음).
 
