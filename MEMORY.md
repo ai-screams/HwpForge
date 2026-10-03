@@ -16,7 +16,7 @@
 | Workspace version                        | `0.6.0` in Cargo.toml (= last released; Wave 12 breaking → next `0.7.0`) |
 | Last released line                       | `0.6.0` (GitHub Release `v0.6.0`, 2026-05-29)                            |
 | Active local branch                      | `feat/phase12-hwp5-gso-shapes` (21+ commits ahead of `main`)             |
-| MSRV / Dev Toolchain                     | `1.88 / 1.93`                                                            |
+| MSRV / Dev Toolchain                     | `1.89 / 1.93`                                                            |
 | Workspace packages                       | `10`                                                                     |
 | Tracked Rust `src` files under `crates/` | `146`                                                                    |
 | Tracked Rust `src` LOC under `crates/`   | `100,796`                                                                |
@@ -160,7 +160,7 @@ make clippy      # cargo clippy --workspace --all-targets --all-features -- -D w
 make fmt         # cargo fmt --all -- --check
 make deny        # cargo deny --all-features check
 make doc         # cargo doc --workspace --all-features --no-deps --open
-make msrv        # cargo +1.88 check --workspace --all-features
+make msrv        # cargo +1.89 check --workspace --all-features
 make ci-fast     # fmt + clippy + test + deny + lint-md
 make ci-full     # ci-fast + coverage + msrv
 ```

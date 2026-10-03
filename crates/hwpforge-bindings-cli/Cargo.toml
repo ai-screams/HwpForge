@@ -7,7 +7,7 @@ license.workspace = true
 publish = false
 readme.workspace = true
 repository.workspace = true
-# smithy-pdf(krilla) 의존으로 워크스페이스 MSRV(1.88) 초과 — ci.yml MSRV 레인 분리.
+# smithy-pdf(krilla) 의존으로 워크스페이스 MSRV(1.89) 초과 — ci.yml MSRV 레인 분리.
 rust-version = "1.92"
 description = "Hammer — AI-first CLI for HwpForge document generation and editing"
 

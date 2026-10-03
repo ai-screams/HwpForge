@@ -33,7 +33,7 @@
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.7` (quick-xml 0.42 이행, 2026-10-01) · MSRV `1.88` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
+- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.7` (quick-xml 0.42 이행, 2026-10-01) · MSRV `1.89` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
 - `crates/` 추적 src `.rs` 파일 `264` · nextest(make ci) \~`4,087` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `6`
 
 ---
