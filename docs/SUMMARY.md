@@ -30,6 +30,8 @@
 
 # 레퍼런스
 
+- [CLI 레퍼런스](reference/cli.md)
+- [MCP 서버 레퍼런스](reference/mcp.md)
 - [API 레퍼런스 (rustdoc)](reference/api.md)
 
 ---
