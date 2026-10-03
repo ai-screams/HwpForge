@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) — 버전별 릴리스 노트, canonical
 - 커밋이 귀속된 크레이트별 CHANGELOG (release-plz 는 커밋 없는 크레이트는 건너뛴다): [`hwpforge-core`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-core/CHANGELOG.md) · [`hwpforge-smithy-hwpx`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-hwpx/CHANGELOG.md) · [`hwpforge-smithy-md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-md/CHANGELOG.md) · [`hwpforge-bindings-mcp`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-bindings-mcp/CHANGELOG.md)
-- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md) 는 `0.5.0`(2026-03-22) 이후 갱신이 없다 — 참조하지 말 것
+- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md) 는 `0.5.0`(2026-03-22) 뒤 공백이 있다가 `0.16.5` 부터 release-plz 가 다시 채운다 — 사용자용 릴리스 노트의 1순위다
 
 아래는 `0.6.0`~`0.9.0` 수동 관리 이전 이력이다.
 

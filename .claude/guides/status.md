@@ -2,7 +2,7 @@
 
 > 이 파일은 CLAUDE.md 로딩 맵에서 필요 시 로드된다 (자동 로드 아님).
 
-**Current Status** (snapshot — 2026-10-01):
+**Current Status** (snapshot — 2026-10-03):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
@@ -15,8 +15,10 @@
 - **PDF Export 에픽 배포** (2026-07-26~08-12, `0.12.0`→`0.13.1`): smithy-pdf 신설 — 조판 캐시 **재생**(계산 금지) 렌더: 표·머리말/꼬리말·쪽번호·폰트 파이프라인(face 축·fsType)·CLI `to-pdf`(스니핑·3채널 경고 DTO). 에픽 canonical = `.docs/planning/2026-07-26-pdf-export-epic.md`.
 - **이미지/글상자 렌더 에픽 W1b\~W5 배포** (2026-08-14\~25, `0.14.0`→**`0.16.0`**): W1b 좌표 ledger(가시 textpos 통일, `0.15.0`) · W2 인라인 이미지(`0.15.1`) · W3 표 셀 이미지+축약점 earliest-preimage(`0.15.2`) · W4 글상자 렌더+**ObjectPlacement 공용화(breaking — 도형 11종 hp:pos 캐리)** · W5 글상자 내부 인라인+body 앵커 렌더+HWP5 앵커 비트 byte-ground → **`0.16.0`** (트리거 3막 사고 — `RELEASING.md` §8 필수 조건 2건 참조). 에픽 canonical = `.docs/planning/2026-08-13-image-textbox-epic.md` (잔여: sub-line-height 인라인 이미지 · W6 마감 · CI 다이어트 제안 `.docs/planning/2026-08-25-ci-diet-proposal.md`).
 - **각주/미주 MD 브리지 에픽 완주** (2026-08-27\~28, **`0.16.4`**): `[^N]`/`[^eN]` 양방향 왕복 (다문단·명명 라벨·표 셀·인라인 서식) + autoNum 번호 머리(**대칭 쌍 계약** — WG#34) + 편집 표면 fail-closed. 한컴 native fixture F1\~F7 게이트 · 시각 게이트 3회 · 적대 리뷰 8라운드 수렴. 에픽 canonical = `.docs/planning/2026-08-27-footnote-endnote-md-bridge.md` (HITL 4건 백로그: ON_SECTION 정책·note format 승격·validate 값 범위·편집기 warning API).
-- **Python 바인딩 에픽 완주** (2026-09-16\~22, **`0.16.5`**→**`0.16.6`**): W1 PyPI `hwpforge` 첫 wheel(5 wheel + sdist, cp39-abi3 Linux/macOS/Windows, `0.16.5`) → 세 창구(CLI 20 명령·MCP 19 도구·Python)를 공유 연산 계층 `hwpforge::ops`/`hwpforge_convert::ops` 위로 이전(W2\~W3 — 릴리스된 code·hint·종료코드는 호환 층의 동결 스냅샷으로 고정) · 디코더 경고 채널 + CLI `validate`(W5) · 감사 상환 — 유계 입력 읽기·MCP `validate` 오류화·`inspect` 단일 디코드·힌트 단일 경로·요청 DTO 재노출(W6) · 사용 흐름 안내 정합(W7) → **`0.16.6`** (crates.io·npm·PyPI 3채널 실측). 에픽 canonical = `.docs/planning/2026-09-16-python-bindings-epic.md` (후속은 `.docs/followups.md`: 한컴 저장 HWPX 의 구조 편집 4종 거부(#143 후반부)·힌트 문구 창구 합의·주석 이력 서술 정리 등).
+- **Python 바인딩 에픽 완주** (2026-09-16\~22, **`0.16.5`**→**`0.16.6`**): W1 PyPI `hwpforge` 첫 wheel(5 wheel + sdist, cp39-abi3 Linux/macOS/Windows, `0.16.5`) → 세 창구(CLI 23 명령·MCP 19 도구·Python)를 공유 연산 계층 `hwpforge::ops`/`hwpforge_convert::ops` 위로 이전(W2\~W3 — 릴리스된 code·hint·종료코드는 호환 층의 동결 스냅샷으로 고정) · 디코더 경고 채널 + CLI `validate`(W5) · 감사 상환 — 유계 입력 읽기·MCP `validate` 오류화·`inspect` 단일 디코드·힌트 단일 경로·요청 DTO 재노출(W6) · 사용 흐름 안내 정합(W7) → **`0.16.6`** (crates.io·npm·PyPI 3채널 실측). 에픽 canonical = `.docs/planning/2026-09-16-python-bindings-epic.md` (후속은 `.docs/followups.md`: 한컴 저장 HWPX 의 구조 편집 4종 거부(#143 후반부)·힌트 문구 창구 합의·주석 이력 서술 정리 등).
 - **quick-xml 0.42 이행** (2026-10-01, **`0.16.7`**, PR #208): 한컴이 읽는 결과는 0.41 과 같게 — serde 단일 진입점 `xml_from_str` 에 재귀 한도 224(= 7 × 32, 잠정)·namespace 128 · 속성 값 제어 공백은 공백으로 기록 · 공백 문자 참조만 든 run 보존 + wire map 이 표시 문자를 세지 않아 줄 조판 캐시 유지 · 글꼴 이름 읽기·쓰기 정리(제어 문자 제거, 앞뒤 ASCII 공백). helper 는 `smithy-hwpx/src/wire_xml.rs`. 최적화 빌드 1 MiB 스택 계약은 `tests/decode_stack.rs`(release 전용 — `make ci` 밖, CI `Verify › Python`). 후속 #205(입력 버퍼 한도, 보안)·#206·#207.
+- **작은 결함 묶음** (2026-10-01, **`0.16.8`**): 메모·묶음 글상자의 탭·줄바꿈·하이퍼링크 치환 문자열 수리(#195) · 금지 제어 문자 제거 + `XML_FORBIDDEN_CHARS_REMOVED` 경고(#198) · 33겹 이상 묶음 도형 `InvalidStructure` 거부(#196) · 무손실 Markdown 왕복의 `&`·`<`·`>`·따옴표 보존(#197) · 이미지 여럿 문서의 HWPX 바이트 결정성(#200) · `census-hwp5 --companion` 깨진 section 을 `HWPX_CENSUS_FAILED` 로 종료(#201). 출처 = `crates/hwpforge/CHANGELOG.md`.
+- **글맵시 줄바꿈 + MSRV 1.89** (2026-10-03, **`0.16.9`**): HWP→HWPX 변환에서 여러 줄 글맵시(TextArt)의 줄바꿈을 `␍␊`(U+240D U+240A)로 쓰고 읽을 때 `\r\n` 으로 푼다(#199). 워크스페이스 MSRV 를 1.89 로 올림(간접 의존성 `uuid` 1.27 이 rustc 1.89 요구, krilla 경로 4크레이트는 1.92 유지).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) + 커밋이 귀속된 크레이트별 `crates/*/CHANGELOG.md`(canonical — `hwpforge-core`·`hwpforge-smithy-hwpx`·`hwpforge-smithy-md`·`hwpforge-bindings-mcp` 등, release-plz 는 커밋 없는 크레이트는 건너뛴다) 와 Claude auto-memory `MEMORY.md` / `phase11_wave_history.md`. umbrella `crates/hwpforge/CHANGELOG.md` 는 `0.5.0`(2026-03-22) 뒤 공백이 있다가 `0.16.5` 부터 release-plz 가 다시 채운다 — `0.6.0`\~`0.16.4` 구간은 크레이트별 CHANGELOG·GitHub Releases 로 (루트 `CHANGELOG.md` 는 0.9.0 이후 정지).
@@ -33,7 +35,7 @@
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.7` (quick-xml 0.42 이행, 2026-10-01) · MSRV `1.89` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
+- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.9` (2026-10-03) · MSRV `1.89` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
 - `crates/` 추적 src `.rs` 파일 `264` · nextest(make ci) \~`4,087` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `6`
 
 ---

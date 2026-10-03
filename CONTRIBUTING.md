@@ -192,8 +192,8 @@ If any of these apply, call them out in the PR description:
 ### Review process
 
 - Branch protection does not require a minimum number of approving reviews (`required_approving_review_count: 0`), but a review is still strongly encouraged before merge.
-- Merge happens through the merge queue only, gated on required status checks (format, clippy, test, docs lint, MSRV, dependency policy, workflow lint, coverage ≥ 90%).
-- Squash merge is the default strategy.
+- Merge happens through the merge queue only, gated on the nine required status checks (format, clippy, test, docs lint, dependency policy, workflow lint, coverage ≥ 90%, Python, MSRV).
+- The merge queue merges with a merge commit (merge method `MERGE`), so each PR lands as a `Merge pull request #N` commit and its individual commits stay in `main`.
 
 ## Testing
 
@@ -246,7 +246,7 @@ Documentation changes follow the same review bar as code changes.
 
 ## MSRV Policy
 
-The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.89). Four crates require **Rust 1.92+** along the krilla dependency path — `hwpforge-smithy-pdf`, `hwpforge-convert`, `hwpforge-bindings-cli` and `hwpforge-bindings-py` — and set their own crate-level `rust-version`; the `Verify › MSRV (1.89)` CI job excludes them from the 1.89 pass, then checks them separately in the same job with `cargo +1.92 check`.
+The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.89). Four crates require **Rust 1.92+** along the krilla dependency path — `hwpforge-smithy-pdf`, `hwpforge-convert`, `hwpforge-bindings-cli` and `hwpforge-bindings-py` — and set their own crate-level `rust-version`; the `Verify › MSRV` CI job excludes them from the 1.89 pass, then checks them separately in the same job with `cargo +1.92 check`.
 
 Rules:
 

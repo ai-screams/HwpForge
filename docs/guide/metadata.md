@@ -4,7 +4,9 @@ HwpForge의 모든 문서는 `Metadata` 구조체를 통해 제목, 작성자, �
 
 ## Metadata 구조체
 
-```rust
+```rust,ignore
+use std::collections::BTreeMap;
+
 #[non_exhaustive]
 pub struct Metadata {
     pub title: Option<String>,               // 문서 제목
@@ -21,7 +23,7 @@ pub struct Metadata {
 
 모든 필드는 선택적입니다. `Metadata::default()`는 모든 필드가 비어 있는 상태를 반환합니다.
 
-`Metadata`는 `#[non_exhaustive]`입니다 — 향후 버전에서 필드가 추가될 수 있으므로, 구조체 리터럴로 생성할 때는 반드시 `..Default::default()` (또는 `..Metadata::default()`)를 함께 사용해야 합니다.
+`Metadata`는 `#[non_exhaustive]`입니다 — 향후 버전에서 필드가 추가될 수 있으므로, 외부 크레이트에서는 `..Default::default()`를 붙여도 구조체 리터럴로 생성할 수 없습니다. `Metadata::new()`에서 시작하는 빌더(`with_title`, `with_author`, `with_subject`, `with_description`, `with_last_saved_by`, `with_keywords`, `with_created`, `with_modified`, `with_extra`)를 사용하세요. 이미 만들어진 값의 필드는 `doc.metadata_mut().title = ...`처럼 직접 대입할 수 있습니다.
 
 ## 기존 HWPX 파일에서 메타데이터 읽기
 
@@ -129,13 +131,11 @@ doc.metadata_mut().created = Some("2026-03-06".to_string());
 doc.metadata_mut().subject = Some("신규 사업 제안".to_string());
 doc.metadata_mut().keywords = vec!["사업".to_string(), "제안".to_string()];
 
-// 또는 Metadata 구조체를 직접 생성하여 설정
-let meta = Metadata {
-    title: Some("제안서".to_string()),
-    author: Some("홍길동".to_string()),
-    created: Some("2026-03-06".to_string()),
-    ..Metadata::default()
-};
+// 또는 빌더로 Metadata를 만들어 한 번에 설정
+let meta = Metadata::new()
+    .with_title("제안서")
+    .with_author("홍길동")
+    .with_created("2026-03-06");
 doc.set_metadata(meta);
 
 // 섹션 추가 후 검증/인코딩
@@ -162,7 +162,7 @@ hwpforge inspect document.hwpx
 #   Title:  분기 보고서
 #   Author: 김철수
 #   Sections: 1
-#     [0] 5 paras, 1 tables, 0 images, 0 charts | header=false footer=false pagenum=false
+#     [0] 2 paras (deep 2), 0 tables, 0 images, 0 charts | header=false footer=false pagenum=false
 ```
 
 ```bash
@@ -176,7 +176,20 @@ hwpforge inspect document.hwpx --json
 #     "title": "분기 보고서",
 #     "author": "김철수"
 #   },
-#   "sections": [...]
+#   "sections": [
+#     {
+#       "index": 0,
+#       "paragraphs": 2,
+#       "deep_paragraphs": 2,
+#       "tables": 0,
+#       "images": 0,
+#       "charts": 0,
+#       "has_header": false,
+#       "has_footer": false,
+#       "has_page_number": false,
+#       ...
+#     }
+#   ]
 # }
 ```
 
@@ -196,9 +209,12 @@ hwpforge to-json document.hwpx -o doc.json
       "title": "분기 보고서",
       "author": "김철수",
       "subject": null,
+      "description": null,
+      "last_saved_by": null,
       "keywords": [],
       "created": "2026-03-06",
-      "modified": null
+      "modified": null,
+      "extras": {}
     }
   },
   "styles": {...}
@@ -227,5 +243,5 @@ hwpforge from-json doc.json -o updated.hwpx
 
 ## 현재 제한사항
 
-- **HWPX 네이티브 메타데이터**: 한글 프로그램으로 작성된 HWPX 파일의 `META-INF/` 내 네이티브 메타데이터 추출은 아직 지원하지 않습니다. Markdown Frontmatter로 설정된 메타데이터와 `to-json`/`from-json` 라운드트립을 통한 메타데이터만 보존됩니다.
+- **HWPX 네이티브 메타데이터**: 디코더는 한글 프로그램이 저장한 HWPX의 `Contents/content.hpf` (`<opf:metadata>`)를 읽어 제목(`<opf:title>`)과 `<opf:meta name="...">` 항목 중 작성자(`creator`)·주제(`subject`)·설명(`description`)·마지막 저장자(`lastsaveby`)·작성일(`CreatedDate`)·수정일(`ModifiedDate`)·키워드(`keyword`, 세미콜론 구분)를 `Metadata`에 채웁니다. 아직 타입 필드가 없는 `<opf:meta>` 항목은 `extras`에 보존됩니다.
 - **타임스탬프 형식**: `created`/`modified`는 `Option<String>` (ISO 8601 문자열)입니다. `chrono` 등 날짜 라이브러리와 연동 시 직접 파싱이 필요합니다.

@@ -33,24 +33,28 @@ println!("문단 수: {}", section.paragraphs.len());
 
 ## HwpxDocument 결과 구조
 
-`HwpxDecoder::decode_file()`은 `HwpxDocument`를 반환합니다. 세 가지 필드로 구성됩니다.
+`HwpxDecoder::decode_file()`은 `HwpxDocument`를 반환합니다. 네 가지 필드로 구성됩니다. `HwpxDocument`는 `#[non_exhaustive]`라서 구조 분해(`let HwpxDocument { .. } = ...`) 대신 필드로 접근합니다.
 
 ```rust,no_run
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxDocument};
 
-let HwpxDocument { document, style_store, image_store } =
-    HwpxDecoder::decode_file("document.hwpx").unwrap();
+let result: HwpxDocument = HwpxDecoder::decode_file("document.hwpx").unwrap();
 
-// document: Document<Draft> — 문서 DOM (섹션/문단/런 트리)
-// style_store: HwpxStyleStore — 폰트, 글자 모양, 문단 모양, 스타일
-// image_store: ImageStore — 임베드된 이미지 바이너리 데이터
+// result.document: Document<Draft> — 문서 DOM (섹션/문단/런 트리)
+// result.style_store: HwpxStyleStore — 폰트, 글자 모양, 문단 모양, 스타일
+// result.image_store: ImageStore — 임베드된 이미지 바이너리 데이터
+// result.warnings: Vec<DecodeWarning> — 디코드 중 표면화된 비치명 경고
+for warning in &result.warnings {
+    println!("경고: {warning:?}");
+}
 ```
 
-| 필드          | 타입              | 설명                          |
-| ------------- | ----------------- | ----------------------------- |
-| `document`    | `Document<Draft>` | 섹션, 문단, 런 트리           |
-| `style_store` | `HwpxStyleStore`  | 폰트/글자모양/문단모양/스타일 |
-| `image_store` | `ImageStore`      | 이미지 바이너리 저장소        |
+| 필드          | 타입                 | 설명                           |
+| ------------- | -------------------- | ------------------------------ |
+| `document`    | `Document<Draft>`    | 섹션, 문단, 런 트리            |
+| `style_store` | `HwpxStyleStore`     | 폰트/글자모양/문단모양/스타일  |
+| `image_store` | `ImageStore`         | 이미지 바이너리 저장소         |
+| `warnings`    | `Vec<DecodeWarning>` | 디코드 중 표면화된 비치명 경고 |
 
 ### 메타데이터 접근
 

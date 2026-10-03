@@ -15,7 +15,7 @@
 2. `target/debug/incremental` (최대 덩어리 — 단 **cargo 빌드 진행 중엔
    보류**, 진행 빌드를 깨뜨림. 빌드 종료 직후 삭제)
 3. standalone 워크스페이스 산출물: `fuzz/target` ·
-   `.docs/papers/EAAI/eval/oracle-rs/target`
+   `.docs/papers/self-repair/eval/oracle-rs/target`
 
 ## 보존 (삭제 금지)
 

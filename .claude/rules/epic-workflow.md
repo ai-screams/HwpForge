@@ -6,7 +6,7 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 ## 0. 사전 확인 (ground truth)
 
-- root `AGENTS.md` → `crates/AGENTS.md` → 대상 크레이트 로컬 `AGENTS.md` 순으로 읽는다.
+- root `AGENTS.md` → `crates/AGENTS.md` → 대상 크레이트 로컬 `AGENTS.md` 순으로 읽는다 (추적 파일이 아닌 로컬 파일 — 클론·CI 에는 없을 수 있다).
 - 로드맵/브랜치 prose 를 믿지 말고 **코드·매니페스트·git** 에서 현재 상태를 확인한다.
 - workspace grep 으로 **이미 구현된 레이어**를 확인한다 (중복 구현 방지).
 - HWP5 가 새 semantic 을 드러내면 공유 모델(Core)이 carry 가능한지부터 확인한다 (shared-model first).
@@ -61,8 +61,8 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 ## 8. 릴리스 (release-plz 소유)
 
-- Release PR 머지 후 release-plz·npm-publish workflow success + crates.io sparse index·
-  GitHub Release·npm 레지스트리 버전을 **실측 검증**한다 (추측 보고 금지).
+- Release PR 머지 후 release-plz·npm-publish·pypi-publish workflow 셋 다 success + crates.io sparse index·
+  GitHub Release·npm·PyPI 레지스트리 버전을 **실측 검증한다** (추측 보고 금지).
 - 버전/태그/publish 수동 조작 금지 (`RELEASING.md` canonical).
 
 ## 9. 기록

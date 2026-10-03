@@ -40,8 +40,19 @@ let chart = Control::Chart {
     grouping: ChartGrouping::Clustered,
     width: HwpUnit::from_mm(120.0).unwrap(),
     height: HwpUnit::from_mm(80.0).unwrap(),
+    bar_shape: None,
+    explosion: None,
+    of_pie_type: None,
+    radar_style: None,
+    wireframe: None,
+    bubble_3d: None,
+    scatter_style: None,
+    show_markers: None,
+    stock_variant: None,
 };
 ```
+
+`Control::Chart`에는 위 7개 외에 차트 종류별 옵션 필드 9개(`bar_shape`, `explosion`, `of_pie_type`, `radar_style`, `wireframe`, `bubble_3d`, `scatter_style`, `show_markers`, `stock_variant`)가 있습니다. 모두 `Option`이며 `None`이면 해당 차트의 기본 모양입니다. 제목·크기 등을 바꿀 필요가 없다면 기본값 생성자 `Control::chart(chart_type, data)`가 더 간단합니다(너비 약 114mm, 높이 약 66mm, 제목 없음, 범례 오른쪽, 그룹 방식 `ChartGrouping::Clustered`(기본값, 계열을 나란히 배치)).
 
 ## ChartData: Category vs Xy 방식
 
@@ -108,23 +119,18 @@ let xy_series = XySeries {
 
 ```rust,no_run
 use hwpforge_core::control::Control;
-use hwpforge_core::chart::{ChartType, ChartData, ChartGrouping, LegendPosition};
+use hwpforge_core::chart::{ChartType, ChartData};
 use hwpforge_core::run::Run;
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, HwpUnit};
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
-let chart_control = Control::Chart {
-    chart_type: ChartType::Column,
-    data: ChartData::category(
+let chart_control = Control::chart(
+    ChartType::Column,
+    ChartData::category(
         &["A", "B", "C"],
         &[("값", &[10.0, 20.0, 30.0])],
     ),
-    title: None,
-    legend: LegendPosition::Right,
-    grouping: ChartGrouping::Clustered,
-    width: HwpUnit::from_mm(100.0).unwrap(),
-    height: HwpUnit::from_mm(70.0).unwrap(),
-};
+);
 
 let para = Paragraph::with_runs(
     vec![Run::control(chart_control, CharShapeIndex::new(0))],
@@ -159,6 +165,15 @@ let chart = Control::Chart {
     grouping: ChartGrouping::Clustered,
     width: HwpUnit::from_mm(140.0).unwrap(),
     height: HwpUnit::from_mm(90.0).unwrap(),
+    bar_shape: None,
+    explosion: None,
+    of_pie_type: None,
+    radar_style: None,
+    wireframe: None,
+    bubble_3d: None,
+    scatter_style: None,
+    show_markers: None,
+    stock_variant: None,
 };
 
 let mut doc = Document::new();
@@ -198,6 +213,15 @@ let chart = Control::Chart {
     grouping: ChartGrouping::Standard, // Pie는 Standard 사용
     width: HwpUnit::from_mm(100.0).unwrap(),
     height: HwpUnit::from_mm(80.0).unwrap(),
+    bar_shape: None,
+    explosion: None,
+    of_pie_type: None,
+    radar_style: None,
+    wireframe: None,
+    bubble_3d: None,
+    scatter_style: None,
+    show_markers: None,
+    stock_variant: None,
 };
 ```
 

@@ -19,7 +19,7 @@
 - **commit 출력도 `| tail` 로 자르지 말 것** — 실패한 훅 라인·exit code 가 사라져 "커밋됐다" 오판. 파일 리다이렉트 후 grep (push 파이프 금지 규칙과 동일 계열).
 - **커밋 전 touched 크레이트만 `cargo clippy --all-targets -- -D warnings` 사전 점검** — 훅 거부 1회 = 2분+ 재사이클 (nextest/build 는 clippy lint 를 안 잡음).
 - `rm` 은 대화형 alias — stale `.git/index.lock`(0바이트·git 프로세스 없음 확인 후) 등 스크립트 삭제는 `rm -f`.
-- 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/EAAI/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지. **디스크 고갈 시 우선 삭제 = `target/debug/incremental`(94GB 실사고)·`target/llvm-cov-target`** — `target/debug/deps`(warm 의존성 캐시)는 보존해 cold 재빌드를 피한다.
+- 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/self-repair/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지. **디스크 고갈 시 우선 삭제 = `target/debug/incremental`(94GB 실사고)·`target/llvm-cov-target`** — `target/debug/deps`(warm 의존성 캐시)는 보존해 cold 재빌드를 피한다.
 - pre-commit 은 **미스테이지 변경을 stash 하고 staged 트리만 검사** — 다파일 수정에서 하나라도 `git add` 누락하면 staged 트리가 컴파일 실패로 거부됨 (원인이 "숨은 미스테이지 파일"이라 오진하기 쉬움). 커밋 전 `git status --short` 로 관련 파일 전부 staged(`M`) 확인.
 - **`git add -u` 는 신규 파일을 안 잡는다** — 신규 모듈 포함 커밋에서 스테이징 후 `git status --short` 의 `??` 잔존 확인 필수. **훅 clippy 는 디스크 파일을 봐서 이 누락을 못 잡음** → "훅 통과 + clean-checkout 컴파일 불가 커밋" 사고 (placement.rs 실사고, reset --mixed 재구성으로 복구).
 - **stale `.git/index.lock` 은 반복 사고** — 백그라운드 에이전트/세션이 강제 종료될 때 0바이트 lock 잔존. `ls -la .git/index.lock`(0바이트) + git 프로세스 없음 확인 후 `rm -f`.
@@ -29,6 +29,9 @@
 - 백그라운드 executor 가 API 단절로 죽으면: **작업 트리 diff 부터 확인** — 변경 0 이면 전체 스펙으로 재시작, 부분 진행이면 SendMessage 로 재개(transcript 컨텍스트 보존). 죽을 때 stale `.git/index.lock` 을 남기는 일이 잦다.
 - **zsh 는 미인용 변수를 word-split 하지 않음** — `CMD="node /x.mjs"; $CMD status` 는 전체가 하나의 명령명 (조용한 command-not-found → 루프/조건 오탐). 스크립트에서 명령을 변수에 담지 말고 인라인 전체 경로로 (`for x in $VAR` 미분리와 동계열).
 - Bash 작업 디렉터리는 **호출 간 지속** — 앞서 `cd` 한 상태에서 레포-루트 상대 경로(git add 등)를 쓰면 pathspec fatal. 커밋/스테이지 명령은 절대 경로 또는 루트 복귀 후 실행.
+- **`Cargo.lock` 은 gitignore** — `git add` 에 넣으면 커밋이 통째로 실패한다. CI 는 매번 새로 해석하므로 간접 의존성 변화가 코드 변경 없이 게이트를 깨뜨릴 수 있다 (`RELEASING.md` §8 MSRV 항목).
+- **public 타입 rustdoc 변경 = JSON schema 스냅샷 변경** — `crates/hwpforge/tests/ops_schema.rs` 통합 테스트(`--features ops-hwpx,schemars` 에서만 컴파일)가 스냅샷을 대조하므로 `cargo nextest run -p hwpforge --all-features` 로 확인하고, 스냅샷은 `ops_schema.rs` 머리말 절차대로 CLI `hwpforge schema <kind>` 로 다시 만든다 (PR #221).
+- **merge 대기는 백그라운드 2시간 한도에 걸려 조용히 끝난다** — 큐 상태는 PR timeline(`added_to_merge_queue`/`removed_from_merge_queue`)과 `gh run list --event merge_group` 로 실측하고, 루프는 네트워크 오류에 끝나지 않게 짠다.
 
 ## Watch Mode
 

@@ -7,10 +7,8 @@
 <div align="center">
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
-![codecov](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-3%2C476_passed-success.svg?logo=checkmarx)
+![coverage gate](https://img.shields.io/badge/coverage_gate-%E2%89%A590%25-brightgreen.svg?logo=codecov)
 ![unsafe: 0 blocks](https://img.shields.io/badge/unsafe-0_blocks-success.svg?logo=rust)
-![Lines of Code](https://img.shields.io/badge/LOC-~114%2C421-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
@@ -135,7 +133,7 @@ hwpforge fields form.hwpx                                    # 채울 수 있는
 hwpforge fill form.hwpx --set 회사명=HwpForge -o filled.hwpx   # 나머지 패키지는 바이트 그대로
 ```
 
-**PDF 내보내기**는 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`).
+**PDF 내보내기는** 문서에 들어 있는 조판 캐시를 재생하는 방식이라, 캐시가 있는 문서만 렌더할 수 있습니다. 캐시의 출처는 둘입니다 — 한컴이 저장한 HWPX, 그리고 HWP5에서 캐시를 실어 변환한 HWPX(`convert-hwp5 --carry-layout-cache`). `to-pdf`는 `.hwp`를 직접 받아 그 변환을 대신해 주기도 합니다. 반면 `convert`나 `from-json`이 새로 만든 문서에는 캐시가 없어 `PDF_RENDER_FAILED`로 거부됩니다. 문서가 쓰는 폰트도 호스트에 있어야 합니다(`--font-dir`·`--discovery`로 지정, 없는 폰트를 대체 글꼴로 렌더하려면 `--degraded`). 조판 캐시가 없는 문단이 하나라도 있으면 거부하려면 `--partial-cache-reject`를 줍니다(기본은 경고 후 그 문단을 건너뜀).
 
 ```bash
 hwpforge to-pdf hancom-saved.hwpx -o report.pdf     # 한컴이 저장한 문서
@@ -167,8 +165,8 @@ claude mcp add hwpforge -- npx -y @hwpforge/mcp
 # Cargo (Rust 개발자용)
 cargo install hwpforge-bindings-mcp && claude mcp add hwpforge hwpforge-mcp
 
-# 모든 프로젝트에서 사용 (글로벌)
-claude mcp add --global hwpforge -- npx -y @hwpforge/mcp
+# 모든 프로젝트에서 사용 (user 범위)
+claude mcp add --scope user hwpforge -- npx -y @hwpforge/mcp
 ```
 
 </details>
@@ -410,33 +408,37 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ## Feature Flags
 
-| Feature | 기본값 | 설명                 |
-| ------- | ------ | -------------------- |
-| `hwpx`  | Yes    | HWPX encoder/decoder |
-| `md`    | —      | Markdown ↔ Core 변환 |
-| `full`  | —      | 모든 기능 포함       |
+| Feature    | 기본값 | 설명                                                                         |
+| ---------- | ------ | ---------------------------------------------------------------------------- |
+| `hwpx`     | Yes    | HWPX encoder/decoder                                                         |
+| `md`       | —      | Markdown ↔ Core 변환                                                         |
+| `ops-hwpx` | —      | HWPX 전용 표면(inspect·exchange·read·edit·diff·stamp·style)의 공유 연산 계층 |
+| `ops-md`   | —      | `ops`에 Markdown 연산(`convert_md`, `to_md`) 추가 (`ops-hwpx` + `md` 포함)   |
+| `ops`      | —      | 전체 연산 계층의 별칭 (`ops-md`와 같음)                                      |
+| `schemars` | —      | `ops`가 소유한 wire DTO와 exchange DTO에 `JsonSchema` derive 추가            |
+| `full`     | —      | `hwpx` + `md` + `ops` (`schemars`는 포함하지 않음)                           |
 
 ```toml
-# Markdown 지원 포함
+# Markdown 지원과 공유 연산 계층 포함 (schemars 제외)
 hwpforge = { version = "0.16", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠
 
-| 카테고리      | 요소                                                                          |
-| ------------- | ----------------------------------------------------------------------------- |
-| 텍스트        | Run, character shape, paragraph shape, style (22개 한컴 기본 스타일)          |
-| 구조          | Table (중첩), Image (바이너리 + 경로), TextBox, Caption                       |
-| 레이아웃      | 다단, 페이지 설정, 가로/세로 방향, 제본 여백, master page                     |
-| 머리글/바닥글 | Header, Footer, 쪽번호 (autoNum)                                              |
-| 각주/미주     | 각주, 미주                                                                    |
-| 도형          | 선, 타원, 다각형, 호, 곡선, 연결선 (채움, 회전, 화살표 지원)                  |
-| 수식          | HancomEQN script 형식                                                         |
-| 차트          | 18종 chart type (OOXML 호환)                                                  |
-| 참조          | 책갈피, 상호 참조, 필드 (날짜/시간/요약), 메모, 색인                          |
-| 덧말/겹침     | 덧말 (dutmal), 글자 겹침                                                      |
-| Markdown      | GFM decode, lossy + lossless encode, YAML frontmatter                         |
-| PDF 내보내기  | 한컴 조판 캐시 재생(계산 아님) 렌더 — 표·머리글/바닥글·쪽번호·폰트 파이프라인 |
+| 카테고리      | 요소                                                                                               |
+| ------------- | -------------------------------------------------------------------------------------------------- |
+| 텍스트        | Run, character shape, paragraph shape, style (한컴 기본 스타일 18/22/23개, 스타일 세트별)          |
+| 구조          | Table (중첩), Image (바이너리 + 경로), TextBox, Caption                                            |
+| 레이아웃      | 다단, 페이지 설정, 가로/세로 방향, 제본 여백, master page                                          |
+| 머리글/바닥글 | Header, Footer, 쪽번호 (autoNum)                                                                   |
+| 각주/미주     | 각주, 미주                                                                                         |
+| 도형          | 선, 사각형, 타원, 다각형, 호, 곡선, 연결선, 묶음(Group), 글맵시(TextArt) (채움, 회전, 화살표 지원) |
+| 수식          | HancomEQN script 형식                                                                              |
+| 차트          | 18종 chart type (OOXML 호환)                                                                       |
+| 참조          | 책갈피, 상호 참조, 필드 (날짜/시간/요약), 메모, 색인                                               |
+| 덧말/겹침     | 덧말 (dutmal), 글자 겹침                                                                           |
+| Markdown      | GFM decode, lossy + lossless encode, YAML frontmatter                                              |
+| PDF 내보내기  | 한컴 조판 캐시 재생(계산 아님) 렌더 — 표·머리글/바닥글·쪽번호·폰트 파이프라인                      |
 
 ## 아키텍처
 
@@ -446,10 +448,10 @@ HwpForge는 레이어를 나눠서 생각하는 프로젝트입니다.
 - `core`: 포맷 독립 문서 모델과 shared semantics
 - `blueprint`: 스타일 정의와 템플릿 계층
 - `smithy-*`: 포맷별 codec과 bridge (각 크레이트는 단일 포맷만 담당)
-- `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)
+- `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)와 PDF 렌더 연산(`ops::to_pdf`)
 - `bindings-*`: CLI / MCP / Python 진입점
 
-`hwpforge`(umbrella crate)의 `ops` 모듈과 `hwpforge-convert`의 `ops` 모듈은 세 바인딩이 공유하는 연산 계층입니다 — CLI·MCP·Python 모두 이 계층을 거쳐 호출합니다.
+`hwpforge`(umbrella crate)의 `ops` 모듈과 `hwpforge-convert`의 `ops` 모듈은 세 바인딩이 공유하는 연산 계층입니다 — CLI·MCP·Python 모두 이 계층을 거쳐 호출합니다. 아래 그림의 화살표는 각 크레이트 `Cargo.toml`의 `[dependencies]` 직접 의존을 따르며, 모든 크레이트가 의존하는 `foundation`과 바인딩의 `core` 직접 의존은 생략했습니다.
 
 ### 레이어 구조
 
@@ -465,7 +467,8 @@ flowchart TB
     SMD["smithy-md<br/>Markdown bridge"]:::smithy
     SPDF["smithy-pdf<br/>layout-cache replay renderer"]:::smithy
 
-    CONV["convert<br/>HWP5 → HWPX orchestrator"]:::convert
+    HWPF["hwpforge<br/>umbrella crate + ops<br/>(feature: hwpx / md / ops)"]:::umbrella
+    CONV["convert<br/>HWP5 → HWPX + PDF ops"]:::convert
 
     CLI["bindings-cli<br/>Hammer"]:::binding
     MCP["bindings-mcp<br/>Anvil MCP Server"]:::binding
@@ -476,21 +479,29 @@ flowchart TB
     C --> SHX
     C --> SH5
     C --> SMD
-    F --> SPDF
     C --> SPDF
+    C --> CONV
+    C --> HWPF
     B --> SHX
     B --> SMD
-    C --> CONV
+    B --> HWPF
+    SHX --> HWPF
+    SMD --> HWPF
     SHX --> CONV
     SH5 --> CONV
+    SPDF --> CONV
+    HWPF --> CLI
     SHX --> CLI
     SH5 --> CLI
     SMD --> CLI
     SPDF --> CLI
     CONV --> CLI
+    HWPF --> MCP
     SHX --> MCP
     SMD --> MCP
-    SHX --> PY
+    HWPF --> PY
+    CONV --> PY
+    SPDF --> PY
 
     classDef file fill:#FFFDE7,stroke:#F9A825,color:#5D4037
     classDef smithy fill:#FFF3E0,stroke:#FB8C00,color:#E65100
@@ -498,6 +509,7 @@ flowchart TB
     classDef core fill:#E3F2FD,stroke:#42A5F5,color:#0D47A1
     classDef blueprint fill:#F3E5F5,stroke:#AB47BC,color:#4A148C
     classDef foundation fill:#FAFAFA,stroke:#BDBDBD,color:#424242
+    classDef umbrella fill:#FFFFFF,stroke:#6D4C41,color:#3E2723
     classDef binding fill:#E8F5E9,stroke:#43A047,color:#1B5E20
 ```
 
@@ -515,7 +527,7 @@ flowchart LR
     SMD <--> CORE
     CORE --> SHX
 
-    CONV["convert<br/>HWP5→HWPX 오케스트레이션"]:::convert --> SH5
+    CONV["convert<br/>HWP5→HWPX 오케스트레이션 + PDF"]:::convert --> SH5
     CONV --> SHX
 
     CLI["CLI"]:::binding --> CONV
@@ -542,15 +554,12 @@ flowchart LR
 
 ## 프로젝트 현황
 
-| 지표                   | 값                                                                  |
-| ---------------------- | ------------------------------------------------------------------- |
-| Tracked Rust `src` LOC | ~114,421                                                            |
-| 테스트                 | ~3,476 passed + 14 skipped (cargo-nextest, 2026-08-28 make ci 기준) |
-| 소스 파일              | 228 .rs                                                             |
-| Crate 수               | 12개                                                                |
-| 커버리지               | 90%+                                                                |
-| Clippy 경고            | 0                                                                   |
-| Unsafe 코드            | 0                                                                   |
+| 지표        | 값                           |
+| ----------- | ---------------------------- |
+| Crate 수    | 12개                         |
+| 커버리지    | CI 게이트 90% 이상 (줄 기준) |
+| Clippy 경고 | 0                            |
+| Unsafe 코드 | 0                            |
 
 ## 개발
 

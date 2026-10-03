@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `HwpxDecoder::decode_file`은 경로를 받아 ZIP을 열고 XML을 파싱합니다.
-반환값에는 `document`(문서 구조), `style_store`(글꼴/문단 스타일), `image_store`(이미지)가 포함됩니다.
+반환값에는 `document`(문서 구조), `style_store`(글꼴/문단 스타일), `image_store`(이미지), `warnings`(디코드 중 표면화된 비치명 경고)가 포함됩니다.
 `document.metadata()`로 제목, 작성자 등의 메타데이터에 접근할 수 있습니다.
 
 ---

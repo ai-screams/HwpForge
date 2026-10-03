@@ -134,11 +134,11 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 
 - [ ] **버전/태그를 손대지 않는다.** Release PR 머지만 한다.
 - [ ] **CHANGELOG의 한글(CJK) 표.** 편집 후 dprint pre-commit이 거부하면
-      `dprint fmt CHANGELOG.md` 수동 실행 → 재-stage (CLAUDE.md Tooling Gotchas).
+      `dprint fmt CHANGELOG.md` 수동 실행 → 재-stage (`.claude/guides/tooling.md`).
 - [ ] **breaking은 반드시 `type!:` 로 표기.** 안 하면 0.x에서 patch로 잘못 bump.
 - [ ] **로컬에서 태그 기반 검증 시 `git fetch --tags` 먼저.** 로컬 클론에 최신 태그가
       없으면 잘못된 baseline으로 거짓 통과한다 (PR #78에서 겪은 함정).
-- [ ] **release 전 `make ci-full` + `make py-all` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선 — CI 다이어트 P2). `make ci` 는 `ci-fast` 별칭이라 coverage 와 MSRV 가 빠지고, `make ci-full` 도 그 둘만 더한다 — CI 의 HWP5 Audit Gate·Docs Build·Python·Workflow Lint 는 여전히 로컬 타깃에 없으므로, 그 레인들은 머지 큐 실행 결과로 확인한다.
+- [ ] **release 전 `make ci-full` + `make py-all` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선 — CI 다이어트 P2). `make ci` 는 `ci-fast` 별칭이라 coverage 와 MSRV 가 빠지고, `make ci-full` 도 그 둘만 더한다 — CI 의 HWP5 Audit Gate·Docs Build 는 `make audit-hwp5-gate`·`make site-check`, Python 은 `make py-all` 로 로컬에서 따로 돌릴 수 있다. 로컬 타깃이 없는 것은 Workflow Lint 뿐이므로 그 레인은 머지 큐 실행 결과로 확인한다.
 - [ ] umbrella만 GitHub Release를 만든다 — npm/pages는 거기에 매달려 있다. umbrella가
       bump되지 않으면 npm·문서 배포도 안 일어난다는 점을 기억.
 
@@ -151,9 +151,12 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - **breaking/릴리스 트리거 커밋의 2대 필수 조건** (0.16.0 3막 사고): (1) subject 는 `type(scope)!:` (**`type!(scope):` 는 release_commits regex 불일치로 통째 무시**) (2) **대상 크레이트의 파일을 실제로 변경해야** 함 — 커밋→패키지 귀속은 변경 파일 경로 기반이라 빈 커밋·publish=false 크레이트만 건드린 PR 은 발화하지 않는다.
 - **릴리스 완주 판정**: GitHub Release 는 release-plz 실행 **도중** 먼저 게시되고, 그 이벤트가 npm-publish 와 pypi-publish 를 **함께** 트리거한다 → release-plz·npm-publish·pypi-publish **셋 다 success** + 세 레지스트리 실측까지 확인해야 완료: sparse index(`index.crates.io/hw/pf/<crate>`) · npm(`npm view @hwpforge/mcp version`) · PyPI(`curl -s https://pypi.org/pypi/hwpforge/json | jq '.info.version, (.urls[].filename)'` — 버전이 맞고 파일이 wheel 5 + sdist 인지). **Release PR 생성 여부도 실측**: release-plz 로그의 `release_pr_output` 이 `{"prs":[]}` 면 미발화 (0.16.0 사고 — 2회 미발화 후 발견).
 - **publish 검증**: crates.io API 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>` 로 확인.
-- **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험. (`release-plz-v0.3.159` 는 **CLI**(`release-plz/release-plz`) 릴리스 태그이며, `.github/workflows/release-plz.yml` 이 실제로 고정하는 `release-plz/action@…v0.5.131` 과는 버전 계열이 다르다 — action 이 내부적으로 vendor 하는 CLI 버전은 별개이므로, 재현 시 `gh release list --repo release-plz/release-plz --limit 5` 로 최신 CLI 태그를 다시 조회할 것.)
+- **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험. (`release-plz-v0.3.159` 는 **CLI**(`release-plz/release-plz`) 릴리스 태그이며, `.github/workflows/release-plz.yml` 이 실제로 고정하는 `release-plz/action@…v0.5.139` 과는 버전 계열이 다르다 — action 이 내부적으로 vendor 하는 CLI 버전은 별개이므로, 재현 시 `gh release list --repo release-plz/release-plz --limit 5` 로 최신 CLI 태그를 다시 조회할 것.)
 - **npm 은 Trusted Publishing(OIDC) 전용**: `@hwpforge/mcp` 와 플랫폼 패키지 5개가 npmjs.com Settings → Trusted Publisher 에서 `ai-screams/HwpForge` · `npm-publish.yml` · Allow `npm publish` 를 신뢰한다(2026-10-01 등록). 워크플로는 토큰을 넘기지 않으므로, 이 신뢰가 없는 패키지는 publish 단계에서 실패한다 — 새 플랫폼 패키지를 추가하면 그 패키지에도 같은 신뢰를 등록해야 한다. 설정은 수정 불가(지우고 다시 만듦). 실패한 npm 잡은 이미 올라간 버전을 건너뛰므로 등록을 고친 뒤 재실행해도 안전하다. 재실행은 태그 시점의 워크플로 파일로 돈다.
 - **`npm view` 는 publish 직후 캐시로 옛 버전을 보일 수 있다** (0.16.7 에서 몇 분간 0.16.6) — 판정은 `curl -s https://registry.npmjs.org/@hwpforge%2fmcp` 의 `dist-tags` 로.
+- **MSRV 검사는 큐에서만 돈다** (PR 단계 skip). `Cargo.lock` 미추적이라 간접 의존성의 rust-version 상향(예: uuid 1.27 → rustc 1.89)이 코드 변경 없이 모든 큐 실행을 깨뜨린다. 진단 = `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo +<msrv> generate-lockfile` (PR #224).
+- **필수 검사는 ruleset 이 아니라 classic branch protection**(`branches/main/protection/required_status_checks`)에 있다 — CI job 이름을 바꾸면 여기도 PATCH 해야 큐가 멈추지 않는다 (MSRV job 은 버전 없는 `Verify › MSRV`).
+- **Release PR 의 CHANGELOG 손 보완은 큐 등록 직전에** — main 이 움직이면 release-plz 가 Release PR 을 닫고 새 브랜치로 다시 만들어 보완 커밋이 버려진다 (#223 → #225).
 
 ---
 

@@ -13,11 +13,12 @@ Document
 ├── Metadata (title, author, created, ...)
 ├── Section 0
 │   ├── PageSettings (용지 크기, 여백)
-│   ├── Header / Footer / PageNumber (선택)
+│   ├── headers / footers (Vec, 비어 있을 수 있음) / PageNumber (선택)
 │   ├── Paragraph 0
 │   │   ├── para_shape (문단 스타일 인덱스)
 │   │   └── Run[]
 │   │       ├── Run { content: Text("본문 텍스트"), char_shape }
+│       ├── Run { content: InlineText(...), char_shape }   (탭 등 속성이 있는 텍스트)
 │   │       ├── Run { content: Table(...), char_shape }
 │   │       ├── Run { content: Image(...), char_shape }
 │   │       └── Run { content: Control(Footnote/TextBox/...), char_shape }
@@ -29,14 +30,17 @@ Document
 └── ...
 ```
 
+`RunContent`는 `#[non_exhaustive]`라서 `match`에는 마지막에 `_ => {}` 팔이 필요합니다. 텍스트만 필요하다면 `Text`와 `InlineText`를 모두 처리하는 `run.content.plain_text()`(`Option<Cow<str>>`) 또는 문단 단위의 `paragraph.text_content()`를 쓰는 것이 안전합니다. `RunContent::Text`만 읽으면 `InlineText` 런의 텍스트가 조용히 빠집니다.
+
 핵심 타입:
 
-| 타입                                | 설명                                       |
-| ----------------------------------- | ------------------------------------------ |
-| `RunContent::Text(String)`          | 일반 텍스트                                |
-| `RunContent::Table(Box<Table>)`     | 인라인 표                                  |
-| `RunContent::Image(Image)`          | 인라인 이미지                              |
-| `RunContent::Control(Box<Control>)` | 컨트롤 (글상자, 하이퍼링크, 각주, 도형 등) |
+| 타입                                 | 설명                                                  |
+| ------------------------------------ | ----------------------------------------------------- |
+| `RunContent::Text(String)`           | 일반 텍스트                                           |
+| `RunContent::InlineText(InlineText)` | 탭처럼 속성이 있는 텍스트 (`plain_text()`로 문자열화) |
+| `RunContent::Table(Box<Table>)`      | 인라인 표                                             |
+| `RunContent::Image(Image)`           | 인라인 이미지                                         |
+| `RunContent::Control(Box<Control>)`  | 컨트롤 (글상자, 하이퍼링크, 각주, 도형 등)            |
 
 ## 기본 텍스트 추출
 
@@ -44,19 +48,14 @@ Document
 
 ```rust,no_run
 use hwpforge::hwpx::HwpxDecoder;
-use hwpforge::core::run::RunContent;
 
 let result = HwpxDecoder::decode_file("document.hwpx").unwrap();
 let doc = &result.document;
 
 for section in doc.sections() {
     for paragraph in &section.paragraphs {
-        for run in &paragraph.runs {
-            if let RunContent::Text(ref text) = run.content {
-                print!("{}", text);
-            }
-        }
-        println!(); // 문단 끝 줄바꿈
+        // Text 와 InlineText 런의 텍스트를 이어 붙인 문자열
+        println!("{}", paragraph.text_content());
     }
 }
 ```
@@ -83,10 +82,11 @@ if let Some(title) = &meta.title {
 for (sec_idx, section) in doc.sections().iter().enumerate() {
     println!("\n--- 섹션 {} ---", sec_idx + 1);
 
-    // 머리글 텍스트
-    if let Some(header) = &section.header {
+    // 머리글 텍스트 (적용 쪽 종류별로 여러 개일 수 있음)
+    for header in &section.headers {
         print!("[머리글] ");
         extract_paragraphs(&header.paragraphs);
+        println!();
     }
 
     // 본문 문단
@@ -95,9 +95,10 @@ for (sec_idx, section) in doc.sections().iter().enumerate() {
     }
 
     // 바닥글 텍스트
-    if let Some(footer) = &section.footer {
+    for footer in &section.footers {
         print!("[바닥글] ");
         extract_paragraphs(&footer.paragraphs);
+        println!();
     }
 }
 
@@ -109,6 +110,7 @@ fn extract_paragraph(para: &Paragraph, indent: usize) {
     for run in &para.runs {
         match &run.content {
             RunContent::Text(text) => print!("{}", text),
+            RunContent::InlineText(inline) => print!("{}", inline.plain_text()),
             RunContent::Table(table) => {
                 println!("\n{}[표 {}x{}]", prefix, table.row_count(), table.col_count());
                 for (r, row) in table.rows.iter().enumerate() {
@@ -119,19 +121,21 @@ fn extract_paragraph(para: &Paragraph, indent: usize) {
                 }
             }
             RunContent::Image(img) => {
-                print!("[이미지: {}]", img.source_path);
+                print!("[이미지: {}]", img.path);
             }
             RunContent::Control(ctrl) => {
-                extract_control(ctrl, indent);
+                extract_control(ctrl);
             }
+            // RunContent 는 #[non_exhaustive] — 이후 추가될 변형은 건너뜀
+            _ => {}
         }
     }
     println!();
 }
 
 /// 컨트롤 요소에서 텍스트 추출
-fn extract_control(ctrl: &Control, indent: usize) {
-    match ctrl.as_ref() {
+fn extract_control(ctrl: &Control) {
+    match ctrl {
         Control::TextBox { paragraphs, .. } => {
             print!("[글상자] ");
             extract_paragraphs(paragraphs);
@@ -157,11 +161,7 @@ fn extract_control(ctrl: &Control, indent: usize) {
 /// 문단 목록에서 텍스트 추출 (헬퍼)
 fn extract_paragraphs(paragraphs: &[Paragraph]) {
     for para in paragraphs {
-        for run in &para.runs {
-            if let RunContent::Text(ref text) = run.content {
-                print!("{}", text);
-            }
-        }
+        print!("{}", para.text_content());
     }
 }
 ```
@@ -182,9 +182,9 @@ for (i, section) in result.document.sections().iter().enumerate() {
         i, section.paragraphs.len(), counts.tables, counts.images, counts.charts
     );
     println!(
-        "  머리글={} 바닥글={} 쪽번호={}",
-        section.header.is_some(),
-        section.footer.is_some(),
+        "  머리글={}개 바닥글={}개 쪽번호={}",
+        section.headers.len(),
+        section.footers.len(),
         section.page_number.is_some()
     );
 }
@@ -238,19 +238,13 @@ println!("{}", markdown);
 
 ```rust,no_run
 use hwpforge_smithy_hwp5::Hwp5Decoder;
-use hwpforge_core::run::RunContent;
 
 let result = Hwp5Decoder::decode_file("legacy.hwp").unwrap();
 let doc = &result.document;
 
 for section in doc.sections() {
     for paragraph in &section.paragraphs {
-        for run in &paragraph.runs {
-            if let RunContent::Text(ref text) = run.content {
-                print!("{}", text);
-            }
-        }
-        println!();
+        println!("{}", paragraph.text_content());
     }
 }
 ```
