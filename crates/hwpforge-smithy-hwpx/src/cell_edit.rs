@@ -547,7 +547,10 @@ impl HwpxCellEditor {
     ///
     /// # Errors
     ///
-    /// See [`CellEditError`].
+    /// See [`CellEditError`]. The layout-cache carry step
+    /// decompresses every package entry, including ones the decoder never
+    /// reads, so a package with an entry over 50 MiB, or over 500 MiB in total,
+    /// is refused.
     pub fn set_cells(base: &[u8], specs: &[CellSpec]) -> Result<CellEditResult, CellEditError> {
         Self::set_cells_with_diagnostics(base, specs)
             .map(crate::diagnostics::WithCodecWarnings::into_value)
@@ -587,7 +590,10 @@ impl HwpxCellEditor {
     ///
     /// # Errors
     ///
-    /// See [`CellEditError`].
+    /// See [`CellEditError`]. The layout-cache carry step
+    /// decompresses every package entry, including ones the decoder never
+    /// reads, so a package with an entry over 50 MiB, or over 500 MiB in total,
+    /// is refused.
     pub fn set_cells_with_diagnostics(
         base: &[u8],
         specs: &[CellSpec],

@@ -277,7 +277,8 @@ impl HwpxStructuralEditor {
     ///
     /// # Errors
     ///
-    /// See [`StructuralEditError`].
+    /// See [`StructuralEditError`] and
+    /// [`Self::delete_paragraphs_with_diagnostics`] for the package size limits.
     pub fn delete_paragraphs(
         base: &[u8],
         targets: &[ParagraphLocator],
@@ -305,7 +306,10 @@ impl HwpxStructuralEditor {
     ///
     /// # Errors
     ///
-    /// See [`StructuralEditError`].
+    /// See [`StructuralEditError`]. Every package entry is read and counted,
+    /// including ones the decoder ignores: an entry past 50 MiB, or a package
+    /// past 500 MiB decompressed, is refused with
+    /// [`StructuralEditError::Codec`].
     pub fn delete_paragraphs_with_diagnostics(
         base: &[u8],
         targets: &[ParagraphLocator],
@@ -477,7 +481,8 @@ impl HwpxStructuralEditor {
     /// # Errors
     ///
     /// See [`StructuralEditError`]; each text must be a single paragraph
-    /// (no newline), else [`StructuralEditError::MultiParagraphText`].
+    /// (no newline), else [`StructuralEditError::MultiParagraphText`]. Package
+    /// size limits: see [`Self::insert_paragraphs_with_diagnostics`].
     pub fn insert_paragraphs(
         base: &[u8],
         anchor: ParagraphLocator,
@@ -505,7 +510,10 @@ impl HwpxStructuralEditor {
     /// # Errors
     ///
     /// See [`StructuralEditError`]; each text must be a single paragraph
-    /// (no newline), else [`StructuralEditError::MultiParagraphText`].
+    /// (no newline), else [`StructuralEditError::MultiParagraphText`]. Every
+    /// package entry is read and counted, including ones the decoder ignores:
+    /// an entry past 50 MiB, or a package past 500 MiB decompressed, is
+    /// refused with [`StructuralEditError::Codec`].
     pub fn insert_paragraphs_with_diagnostics(
         base: &[u8],
         anchor: ParagraphLocator,

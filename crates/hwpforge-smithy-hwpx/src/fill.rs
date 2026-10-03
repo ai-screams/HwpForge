@@ -299,7 +299,9 @@ impl HwpxFiller {
     ///
     /// # Errors
     ///
-    /// [`FillError`] 의 각 variant 문서를 참조.
+    /// [`FillError`] 의 각 variant 문서를 참조. 패키지의 모든 엔트리(디코더가
+    /// 읽지 않는 것 포함)를 해제하므로 엔트리 하나가 50 MiB, 전체가 500 MiB 를
+    /// 넘으면 거부한다.
     pub fn fill(base: &[u8], values: &BTreeMap<String, String>) -> Result<FillOutcome, FillError> {
         Self::fill_with_diagnostics(base, values)
             .map(crate::diagnostics::WithDecodeWarnings::into_value)
@@ -320,7 +322,9 @@ impl HwpxFiller {
     ///
     /// # Errors
     ///
-    /// [`FillError`] 의 각 variant 문서를 참조.
+    /// [`FillError`] 의 각 variant 문서를 참조. 패키지의 모든 엔트리(디코더가
+    /// 읽지 않는 것 포함)를 해제하므로 엔트리 하나가 50 MiB, 전체가 500 MiB 를
+    /// 넘으면 거부한다.
     pub fn fill_with_diagnostics(
         base: &[u8],
         values: &BTreeMap<String, String>,

@@ -316,7 +316,10 @@ impl HwpxStamper {
     ///
     /// # Errors
     ///
-    /// See [`StamperError`].
+    /// See [`StamperError`]. The layout-cache carry step
+    /// decompresses every package entry, including ones the decoder never
+    /// reads, so a package with an entry over 50 MiB, or over 500 MiB in total,
+    /// is refused.
     pub fn stamp(base: &[u8], specs: &[StampSpec]) -> Result<StampResult, StamperError> {
         Self::stamp_with_diagnostics(base, specs)
             .map(crate::diagnostics::WithCodecWarnings::into_value)
@@ -359,7 +362,10 @@ impl HwpxStamper {
     ///
     /// # Errors
     ///
-    /// See [`StamperError`].
+    /// See [`StamperError`]. The layout-cache carry step
+    /// decompresses every package entry, including ones the decoder never
+    /// reads, so a package with an entry over 50 MiB, or over 500 MiB in total,
+    /// is refused.
     pub fn stamp_with_diagnostics(
         base: &[u8],
         specs: &[StampSpec],
