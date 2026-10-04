@@ -569,3 +569,204 @@ fn set_cell_names_the_part_of_the_section_holding_the_table() {
         }]
     );
 }
+
+// ── stamp ───────────────────────────────────────────────────────────
+
+/// v1: the one `(   )` candidate of the stale-cache fixture, stamped as a
+/// field `name` with `hint`.
+fn stamp_v1(
+    name: &str,
+    hint: &str,
+) -> Result<
+    hwpforge_smithy_hwpx::WithCodecWarnings<hwpforge_smithy_hwpx::stamp::StampResult>,
+    hwpforge_smithy_hwpx::stamp::StamperError,
+> {
+    use hwpforge_smithy_hwpx::stamp::{HwpxStamper, StampAction, StampSpec};
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/stale-line-cache.hwpx");
+    let base = std::fs::read(path).expect("fixture");
+    let specs: Vec<StampSpec> = HwpxStamper::plan_bytes_v2(&base)
+        .expect("plan")
+        .text
+        .into_iter()
+        .map(|c| StampSpec {
+            section: c.section,
+            path: c.path,
+            span: c.span,
+            marker: c.marker,
+            action: StampAction::Field { name: name.to_string(), hint: Some(hint.to_string()) },
+        })
+        .collect();
+    HwpxStamper::stamp_with_diagnostics(&base, &specs)
+}
+
+fn field_hint(bytes: &[u8], name: &str) -> Option<String> {
+    HwpxFiller::list_fields(bytes)
+        .expect("fields")
+        .into_iter()
+        .find(|f| f.name.as_deref() == Some(name))
+        .expect("stamped field")
+        .hint
+}
+
+#[test]
+fn stamp_removes_a_control_from_a_hint() {
+    // Before this change the attribute escape dropped it without a warning.
+    // 이것을 실패시키는 것: v1 입구의 `clean_text_hints` 를 빼는 것.
+    let diagnosed = stamp_v1("ok", "H\u{1}I").expect("stamp");
+
+    assert_eq!(field_hint(&diagnosed.value.bytes, "ok").as_deref(), Some("HI"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'ok' hint", 1)]);
+}
+
+#[test]
+fn stamp_removes_nul_from_a_hint() {
+    // 이것을 실패시키는 것: 판정 범위를 `'\u{1}'..` 로 좁히는 것 (NUL 이 속성에 남는다).
+    let diagnosed = stamp_v1("ok", "H\u{0}I").expect("stamp");
+
+    assert!(!section_xml(&diagnosed.value.bytes).contains('\u{0}'));
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'ok' hint", 1)]);
+}
+
+#[test]
+fn stamp_keeps_a_hint_of_only_controls_as_an_empty_hint() {
+    // 이것을 실패시키는 것: v1 입구의 `clean_text_hints` 를 빼는 것 (경고가 사라진다).
+    let diagnosed = stamp_v1("ok", "\u{1}\u{2}").expect("stamp");
+
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'ok' hint", 2)]);
+}
+
+#[test]
+fn stamp_leaves_a_name_with_a_control_to_fail_closed() {
+    // Names are identifiers the manifest re-reads; they are not cleaned.
+    // 이것을 실패시키는 것: 이름까지 정리하는 것 (`AB` 로 조용히 이름이 바뀌어 성공한다).
+    let error = stamp_v1("A\u{1}B", "hint").unwrap_err();
+
+    assert!(error.to_string().contains("missing from output"), "{error}");
+}
+
+/// v2: a one-row table `[성명 | (empty)]`, its empty cell stamped as a
+/// field `f` with `hint`.
+fn stamp_cell(
+    hint: &str,
+) -> Result<
+    hwpforge_smithy_hwpx::WithCodecWarnings<hwpforge_smithy_hwpx::stamp::StampResultV2>,
+    hwpforge_smithy_hwpx::stamp::StamperError,
+> {
+    use hwpforge_core::table::grid::GridCoord;
+    use hwpforge_core::table::{Table, TableCell, TableRow};
+    use hwpforge_foundation::HwpUnit;
+    use hwpforge_smithy_hwpx::stamp::{
+        CellStampAction, CellStampSpec, HwpxStamper, StampRequestV2, STAMP_MAP_VERSION,
+    };
+
+    let width = HwpUnit::new(8000).unwrap();
+    let row = TableRow::new(vec![
+        TableCell::with_span(vec![text_para("성명")], width, 1, 1),
+        TableCell::with_span(vec![text_para("")], width, 1, 1),
+    ]);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(Table::new(vec![row]), CharShapeIndex::new(0)));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+    let styles = hwpforge_smithy_hwpx::style_store_for_preset("default").expect("preset");
+    let base =
+        HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::default())
+            .expect("encode");
+
+    let plan = HwpxStamper::plan_bytes_v2(&base).expect("plan");
+    let request = StampRequestV2 {
+        schema_version: STAMP_MAP_VERSION,
+        source_sha256: plan.source_sha256,
+        text: Vec::new(),
+        cells: vec![CellStampSpec {
+            table: 0,
+            at: GridCoord::new(0, 1),
+            label: None,
+            action: CellStampAction::Field { name: "f".to_string(), hint: hint.to_string() },
+        }],
+    };
+    HwpxStamper::stamp_v2_with_diagnostics(&base, &request)
+}
+
+#[test]
+fn stamp_v2_removes_a_control_from_a_cell_hint() {
+    // 이것을 실패시키는 것: v2 입구의 `clean_cell_hints` 를 빼는 것.
+    let diagnosed = stamp_cell("H\u{1}I").expect("stamp");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("<hp:t>HI</hp:t>"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'f' hint", 1)]);
+}
+
+#[test]
+fn stamp_v2_keeps_u001f_in_a_cell_hint_as_a_fixed_width_space() {
+    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것.
+    let diagnosed = stamp_cell("H\u{1F}I").expect("stamp");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("H<hp:fwSpace/>I"));
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
+fn stamp_v2_reports_a_control_mixed_with_a_tab() {
+    // 이것을 실패시키는 것: v2 입구의 `clean_cell_hints` 를 빼는 것 (탭 경로 escape 가 무경고로 지움).
+    let diagnosed = stamp_cell("H\t\u{1}I").expect("stamp");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("H<hp:tab/>I"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'f' hint", 1)]);
+}
+
+#[test]
+fn stamp_v2_refuses_a_cell_hint_of_only_controls_as_blank() {
+    // 이것을 실패시키는 것: 정리를 빈 hint 검사 뒤로 미루는 것 (빈 hint 로 성공한다).
+    let error = stamp_cell("\u{1}\u{2}").unwrap_err();
+
+    assert!(error.to_string().contains("hint must not be blank"), "{error}");
+}
+
+#[test]
+fn stamp_v2_removes_a_control_from_a_text_hint() {
+    // 이것을 실패시키는 것: v2 입구에서 text spec 의 `clean_text_hints` 를 빼는 것.
+    use hwpforge_smithy_hwpx::stamp::{
+        CellStampAction, CellStampSpec, HwpxStamper, StampAction, StampRequestV2, StampSpec,
+        STAMP_MAP_VERSION,
+    };
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/stale-line-cache.hwpx");
+    let base = std::fs::read(path).expect("fixture");
+    let plan = HwpxStamper::plan_bytes_v2(&base).expect("plan");
+    let request = StampRequestV2 {
+        schema_version: STAMP_MAP_VERSION,
+        source_sha256: plan.source_sha256,
+        text: plan
+            .text
+            .clone()
+            .into_iter()
+            .map(|c| StampSpec {
+                section: c.section,
+                path: c.path,
+                span: c.span,
+                marker: c.marker,
+                action: StampAction::Field {
+                    name: "ok".to_string(),
+                    hint: Some("H\u{1}I".to_string()),
+                },
+            })
+            .collect(),
+        cells: plan
+            .cells
+            .iter()
+            .map(|c| CellStampSpec {
+                table: c.table,
+                at: c.at,
+                label: None,
+                action: CellStampAction::Ignore,
+            })
+            .collect(),
+    };
+
+    let diagnosed = HwpxStamper::stamp_v2_with_diagnostics(&base, &request).expect("stamp");
+
+    assert_eq!(field_hint(&diagnosed.value.bytes, "ok").as_deref(), Some("HI"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed("field 'ok' hint", 1)]);
+}

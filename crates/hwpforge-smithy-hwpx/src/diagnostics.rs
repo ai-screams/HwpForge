@@ -114,10 +114,12 @@ impl<T> WithEncodeWarnings<T> {
 /// and the non-semantic warnings of the encode that produced the output.
 ///
 /// Returned by the twins of the regenerating editors that do both halves in
-/// one call — today [`HwpxStamper::stamp_with_diagnostics`](crate::stamp::HwpxStamper::stamp_with_diagnostics)
-/// and its v2 sibling. A facade that only decodes uses
-/// [`WithDecodeWarnings`]; one whose only internal codec pass is the encode
-/// uses [`WithEncodeWarnings`].
+/// one call — [`HwpxStamper::stamp_with_diagnostics`](crate::stamp::HwpxStamper::stamp_with_diagnostics),
+/// its v2 sibling and [`HwpxCellEditor::set_cells_with_diagnostics`](crate::HwpxCellEditor::set_cells_with_diagnostics)
+/// — and by the `*_with_codec_diagnostics` twins of the preserve-first
+/// editors (fill, preserving patch, paragraph insert). A facade that only
+/// decodes uses [`WithDecodeWarnings`]; one whose only internal codec pass is
+/// the encode uses [`WithEncodeWarnings`].
 ///
 /// # Scope
 ///
@@ -131,6 +133,14 @@ impl<T> WithEncodeWarnings<T> {
 /// `encode_warnings` keeps the contract [`WithEncodeWarnings`] documents:
 /// semantic loss never appears here, because it is the fail-closed path and
 /// produces no bytes at all.
+///
+/// Every editor also cleans the caller's text values at its entry, removing
+/// characters XML 1.0 cannot represent, and reports each cleaned value as an
+/// [`EncodeWarning::XmlForbiddenCharsRemoved`] at the head of
+/// `encode_warnings`. For a preserve-first editor, which splices XML instead
+/// of encoding the package, those are the only encode warnings: the
+/// `location` names the edited value (a field, a text slot, a new paragraph)
+/// rather than an element.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct WithCodecWarnings<T> {

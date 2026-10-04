@@ -20,7 +20,7 @@ use super::apply::{apply, StampAction, StampError, StampOutcome, StampSpec};
 use super::apply_cells::{commit_cells, preflight_cells, CellStampError, CellStampOutcome};
 use super::cells::plan_cells;
 use super::plan::{plan, StampCandidate};
-use super::request::{CellLabelClaim, StampRequestV2};
+use super::request::{CellLabelClaim, CellStampAction, CellStampSpec, StampRequestV2};
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::encoder::HwpxEncoder;
 use crate::fill::{FieldInfo, HwpxFiller};
@@ -360,6 +360,15 @@ impl HwpxStamper {
     /// it" — see [`HwpxCellEditor::set_cells_with_diagnostics`](crate::HwpxCellEditor::set_cells_with_diagnostics)
     /// for the same contract stated in full.
     ///
+    /// Ahead of the encoder's warnings come the ones for the caller's hints:
+    /// each hint has the characters XML 1.0 cannot represent removed before
+    /// stamping (the C0 controls other than TAB, LF, CR and U+001F, plus
+    /// U+FFFE/U+FFFF), and each hint that lost any adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
+    /// located at `field 'NAME' hint`. Field names are not cleaned: a name
+    /// holding such a character fails the output manifest check instead of
+    /// being renamed. The v2 twin does the same for its text and cell specs.
+    ///
     /// # Errors
     ///
     /// See [`StamperError`]. The layout-cache carry step
@@ -382,10 +391,13 @@ impl HwpxStamper {
 
         // ── apply on the admitted decode ────────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
-        let outcome = apply(&mut document, specs)?;
+        let mut encode_warnings = Vec::new();
+        let specs = clean_text_hints(specs, &mut encode_warnings);
+        let outcome = apply(&mut document, &specs)?;
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let (bytes, encode_warnings) = encode_fail_closed(&validated, &style_store, &image_store)?;
+        let (bytes, others) = encode_fail_closed(&validated, &style_store, &image_store)?;
+        encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -458,6 +470,9 @@ impl HwpxStamper {
 
         // ── unified preflight, then mutate ──────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
+        let mut encode_warnings = Vec::new();
+        let text_specs = clean_text_hints(&request.text, &mut encode_warnings);
+        let cell_specs = clean_cell_hints(&document, &request.cells, &mut encode_warnings);
         let reserved: HashSet<String> = request
             .text
             .iter()
@@ -470,8 +485,8 @@ impl HwpxStamper {
         // internally atomic; cell commit is mechanical — so a failure at
         // any point leaves no partially-stamped output (combined
         // atomicity).
-        let cell_plan = preflight_cells(&mut document, &request.cells, &reserved)?;
-        let text_outcome = apply(&mut document, &request.text)?;
+        let cell_plan = preflight_cells(&mut document, &cell_specs, &reserved)?;
+        let text_outcome = apply(&mut document, &text_specs)?;
         // Text-only reference for the reverse-delta gate (before cells).
         let text_only = HwpxDocument {
             warnings: Vec::new(),
@@ -483,7 +498,8 @@ impl HwpxStamper {
 
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let (bytes, encode_warnings) = encode_fail_closed(&validated, &style_store, &image_store)?;
+        let (bytes, others) = encode_fail_closed(&validated, &style_store, &image_store)?;
+        encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -512,6 +528,62 @@ impl HwpxStamper {
             encode_warnings,
         ))
     }
+}
+
+/// The text specs with each caller-given hint cleaned of the characters XML
+/// 1.0 cannot represent, one warning per cleaned hint (`field 'NAME' hint`).
+/// The hint is the caller's text; the name is an identifier the output
+/// manifest re-reads, so a name holding such a character is left to fail
+/// there rather than be silently renamed.
+fn clean_text_hints(
+    specs: &[StampSpec],
+    warnings: &mut Vec<crate::EncodeWarning>,
+) -> Vec<StampSpec> {
+    specs
+        .iter()
+        .map(|spec| {
+            let mut spec = spec.clone();
+            if let StampAction::Field { name, hint: Some(hint) } = &mut spec.action {
+                *hint = crate::wire_xml::sanitize_edit_text(
+                    hint,
+                    &crate::patch::section_path(spec.section),
+                    &format!("field '{name}' hint"),
+                    warnings,
+                );
+            }
+            spec
+        })
+        .collect()
+}
+
+/// [`clean_text_hints`] for the v2 cell specs; the part is the section of
+/// the targeted table (an ordinal preflight will reject falls back to
+/// section 0 — its warning never reaches the caller).
+fn clean_cell_hints(
+    document: &hwpforge_core::Document<hwpforge_core::Draft>,
+    specs: &[CellStampSpec],
+    warnings: &mut Vec<crate::EncodeWarning>,
+) -> Vec<CellStampSpec> {
+    let sections: Vec<usize> = crate::table_inventory::tables_in_document(document)
+        .iter()
+        .map(|entry| entry.section)
+        .collect();
+    specs
+        .iter()
+        .map(|spec| {
+            let mut spec = spec.clone();
+            if let CellStampAction::Field { name, hint } = &mut spec.action {
+                let section = sections.get(spec.table).copied().unwrap_or(0);
+                *hint = crate::wire_xml::sanitize_edit_text(
+                    hint,
+                    &crate::patch::section_path(section),
+                    &format!("field '{name}' hint"),
+                    warnings,
+                );
+            }
+            spec
+        })
+        .collect()
 }
 
 /// Verifies each stamped cell in the re-decoded output and reverses the
