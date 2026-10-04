@@ -501,11 +501,46 @@ impl HwpxStructuralEditor {
     /// [`Self::delete_paragraphs_with_diagnostics`] spells out; inserting has
     /// no advisory scan of its own, so that decode is the whole list.
     ///
-    /// There is no encoder channel here even though this path encodes the
-    /// declared delta. That encode exists only to source the new paragraphs'
-    /// bytes, which are then spliced into the original XML; the package it
-    /// produced is thrown away, so its diagnostics would describe something
-    /// the caller never receives.
+    /// This is itself a thin wrapper over
+    /// [`Self::insert_paragraphs_with_codec_diagnostics`] that drops the
+    /// encode channel — the warnings for characters removed from the texts.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::insert_paragraphs_with_codec_diagnostics`].
+    pub fn insert_paragraphs_with_diagnostics(
+        base: &[u8],
+        anchor: ParagraphLocator,
+        position: InsertPosition,
+        texts: &[String],
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+        Self::insert_paragraphs_with_codec_diagnostics(base, anchor, position, texts).map(
+            |diagnosed| {
+                crate::diagnostics::WithDecodeWarnings::new(
+                    diagnosed.value,
+                    diagnosed.decode_warnings,
+                )
+            },
+        )
+    }
+
+    /// Inserts a block, keeping both warning channels.
+    ///
+    /// Same bytes as [`Self::insert_paragraphs`]. `decode_warnings` is the
+    /// admission gate's read of `base`, as in
+    /// [`Self::insert_paragraphs_with_diagnostics`].
+    ///
+    /// `encode_warnings` covers the texts alone. This path encodes the
+    /// declared delta only to source the new paragraphs' bytes and throws
+    /// that package away, so its diagnostics are not reported. What is
+    /// reported is the entry clean-up: each text has the characters XML 1.0
+    /// cannot represent removed (the C0 controls other than TAB, LF, CR and
+    /// U+001F, plus U+FFFE/U+FFFF), and each text that lost any adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
+    /// located at `new paragraph N` (its index in the section after the
+    /// insert). The cleaned text is the one inserted and the one the
+    /// self-verify expects; a text left empty is inserted as an empty
+    /// paragraph.
     ///
     /// # Errors
     ///
@@ -514,12 +549,30 @@ impl HwpxStructuralEditor {
     /// package entry is read and counted, including ones the decoder ignores:
     /// an entry past 50 MiB, or a package past 500 MiB decompressed, is
     /// refused with [`StructuralEditError::Codec`].
-    pub fn insert_paragraphs_with_diagnostics(
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
+    ///
+    /// let base = std::fs::read("report.hwpx")?;
+    /// let diagnosed = HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+    ///     &base,
+    ///     ParagraphLocator { section: 0, index: 2 },
+    ///     InsertPosition::After,
+    ///     &["새 문단".to_string()],
+    /// )?;
+    /// for warning in &diagnosed.encode_warnings {
+    ///     eprintln!("{warning}");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn insert_paragraphs_with_codec_diagnostics(
         base: &[u8],
         anchor: ParagraphLocator,
         position: InsertPosition,
         texts: &[String],
-    ) -> Result<crate::diagnostics::WithDecodeWarnings<Vec<u8>>, StructuralEditError> {
+    ) -> Result<crate::diagnostics::WithCodecWarnings<Vec<u8>>, StructuralEditError> {
         for text in texts {
             if text.contains('\n') || text.contains('\r') {
                 return Err(StructuralEditError::MultiParagraphText);
@@ -529,7 +582,11 @@ impl HwpxStructuralEditor {
         // empty-target behaviour; binding surfaces nudge with their own
         // "no text" errors).
         if texts.is_empty() {
-            return Ok(crate::diagnostics::WithDecodeWarnings::new(base.to_vec(), Vec::new()));
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
+                base.to_vec(),
+                Vec::new(),
+                Vec::new(),
+            ));
         }
 
         // ── input admission ──
@@ -556,6 +613,26 @@ impl HwpxStructuralEditor {
             .runs
             .first()
             .map_or(hwpforge_foundation::CharShapeIndex::new(0), |r| r.char_shape_id);
+        let insert_index = match position {
+            InsertPosition::Before => anchor.index,
+            InsertPosition::After => anchor.index + 1,
+        };
+        // Each text is cleaned once here; the cleaned text is what is encoded,
+        // spliced and expected by the self-verify below.
+        let path = section_path(anchor.section);
+        let mut encode_warnings = Vec::new();
+        let texts: Vec<String> = texts
+            .iter()
+            .enumerate()
+            .map(|(offset, text)| {
+                crate::wire_xml::sanitize_edit_text(
+                    text,
+                    &path,
+                    &format!("new paragraph {}", insert_index + offset),
+                    &mut encode_warnings,
+                )
+            })
+            .collect();
         let new_paras: Vec<Paragraph> = texts
             .iter()
             .map(|text| {
@@ -567,11 +644,6 @@ impl HwpxStructuralEditor {
                 p
             })
             .collect();
-
-        let insert_index = match position {
-            InsertPosition::Before => anchor.index,
-            InsertPosition::After => anchor.index + 1,
-        };
 
         // ── declared delta: the new paragraphs spliced into the Core doc ──
         let mut expected = d0.document.clone();
@@ -597,7 +669,6 @@ impl HwpxStructuralEditor {
         .map_err(map_admission)?;
         let encoded_pkg =
             RawPackage::read(&encoded).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let path = section_path(anchor.section);
         let encoded_xml = encoded_pkg
             .read_text_entry(&path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
@@ -671,7 +742,7 @@ impl HwpxStructuralEditor {
         };
         self_verify(&bytes, &expected_doc)?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(bytes, decode_warnings))
+        Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
 }
 

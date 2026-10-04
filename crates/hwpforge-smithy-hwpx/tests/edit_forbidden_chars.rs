@@ -355,3 +355,90 @@ fn the_older_fill_twins_return_the_same_outcome() {
     assert_eq!(texts(&decode.value.bytes), texts(&plain.bytes));
     assert_eq!(codec.decode_warnings, decode.warnings);
 }
+
+// ── insert-para ─────────────────────────────────────────────────────
+
+fn insert(
+    text: &str,
+) -> Result<
+    hwpforge_smithy_hwpx::WithCodecWarnings<Vec<u8>>,
+    hwpforge_smithy_hwpx::StructuralEditError,
+> {
+    hwpforge_smithy_hwpx::HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+        &clean(),
+        hwpforge_smithy_hwpx::ParagraphLocator { section: 0, index: 2 },
+        hwpforge_smithy_hwpx::InsertPosition::After,
+        &[text.to_string()],
+    )
+}
+
+const NEW_PARA: &str = "new paragraph 3";
+
+#[test]
+fn insert_removes_a_control_and_passes_its_self_verify() {
+    // Before this change the self-verify compared the output with the raw
+    // text and refused the edit.
+    // 이것을 실패시키는 것: 새 문단 구성·expected delta 에 정리 전 원문을 쓰는 것 (`DeltaMismatch`).
+    let diagnosed = insert("A\u{1}B").expect("insert");
+
+    assert_eq!(texts(&diagnosed.value)[3], "AB");
+    assert_eq!(diagnosed.encode_warnings, vec![removed(NEW_PARA, 1)]);
+}
+
+#[test]
+fn insert_removes_nul() {
+    // 이것을 실패시키는 것: 판정 범위를 `'\u{1}'..` 로 좁히는 것 (NUL 이 남아 self-verify 가 어긋남).
+    let diagnosed = insert("A\u{0}B").expect("insert");
+
+    assert!(!section_xml(&diagnosed.value).contains('\u{0}'));
+    assert_eq!(diagnosed.encode_warnings, vec![removed(NEW_PARA, 1)]);
+}
+
+#[test]
+fn insert_keeps_u001f_as_a_fixed_width_space() {
+    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것.
+    let diagnosed = insert("A\u{1F}B").expect("insert");
+
+    assert!(section_xml(&diagnosed.value).contains("A<hp:fwSpace/>B"));
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
+fn insert_reports_a_control_mixed_with_a_tab() {
+    // 이것을 실패시키는 것: insert 입구 정리를 빼는 것.
+    let diagnosed = insert("A\t\u{1}B").expect("insert");
+
+    assert!(section_xml(&diagnosed.value).contains("A<hp:tab/>B"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed(NEW_PARA, 1)]);
+}
+
+#[test]
+fn insert_writes_an_empty_paragraph_for_a_text_of_only_controls() {
+    // 이것을 실패시키는 것: insert 입구 정리를 빼는 것.
+    let diagnosed = insert("\u{1}\u{2}").expect("insert");
+
+    assert_eq!(texts(&diagnosed.value)[3], "");
+    assert_eq!(diagnosed.encode_warnings, vec![removed(NEW_PARA, 2)]);
+}
+
+#[test]
+fn the_older_insert_twins_return_the_same_bytes() {
+    // 이것을 실패시키는 것: 래퍼가 정리 전 원문으로 따로 삽입하는 것.
+    use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
+    let base = clean();
+    let anchor = ParagraphLocator { section: 0, index: 2 };
+    let texts_in = ["A\u{1}B".to_string()];
+
+    let codec = HwpxStructuralEditor::insert_paragraphs_with_codec_diagnostics(
+        &base,
+        anchor,
+        InsertPosition::After,
+        &texts_in,
+    )
+    .expect("codec twin");
+    let plain =
+        HwpxStructuralEditor::insert_paragraphs(&base, anchor, InsertPosition::After, &texts_in)
+            .expect("plain");
+
+    assert_eq!(codec.value, plain);
+}
