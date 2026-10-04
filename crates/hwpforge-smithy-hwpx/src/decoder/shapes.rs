@@ -1128,38 +1128,11 @@ fn decode_nested_container(
     }))
 }
 
-/// Corners of a decoded group child's box, relative to its parent group, as
-/// the encoder places it (its offset, then the rotation/mirror matrix
-/// `build_shape_common` writes; a nested group is an unrotated box).
+/// Corners of a decoded group child's box, relative to its parent group,
+/// at its exact Core position (a nested group is an unrotated box).
 fn core_child_corners(child: &Control) -> Vec<(f64, f64)> {
-    use super::group_geometry::{corners, Affine};
-    let Some((w, h, placement)) = (match child {
-        Control::TextBox { width, height, placement, .. }
-        | Control::Rect { width, height, placement, .. }
-        | Control::Ellipse { width, height, placement, .. }
-        | Control::Arc { width, height, placement, .. }
-        | Control::Polygon { width, height, placement, .. }
-        | Control::Curve { width, height, placement, .. }
-        | Control::ConnectLine { width, height, placement, .. }
-        | Control::Line { width, height, placement, .. }
-        | Control::Group { width, height, placement, .. } => {
-            Some((width.as_i32(), height.as_i32(), placement))
-        }
-        _ => None,
-    }) else {
-        return Vec::new();
-    };
-    let (x, y) =
-        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
-    let rot = match child {
-        Control::Group { .. } => Affine::IDENTITY,
-        _ => Affine::from_hx(
-            &crate::encoder::shapes::build_shape_common(child).rendering_info.rot_matrix,
-        )
-        .unwrap_or(Affine::IDENTITY),
-    };
-    let map = Affine::translate(f64::from(x), f64::from(y)).then_after(rot);
-    corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect()
+    use hwpforge_core::control::geometry::{emitted_corners, EmissionPolicy};
+    emitted_corners(child, &EmissionPolicy::exact()).map_or_else(Vec::new, |c| c.to_vec())
 }
 
 /// Moves a group child by `(dx, dy)` inside its parent group.
@@ -1257,260 +1230,51 @@ fn leaf_bounds(container: &crate::schema::section::HxContainer) -> Option<(f64, 
     bounds(&pts)
 }
 
-/// Whether a point-based shape carries something that turns with it (text,
-/// a caption, or a directional fill), so it must keep its own rotation.
-fn point_shape_has_content(control: &Control) -> bool {
-    use hwpforge_core::control::Fill;
-    let (paragraphs_empty, caption, style) = match control {
-        Control::Polygon { paragraphs, caption, style, .. } => {
-            (paragraphs.is_empty(), caption.is_some(), style)
-        }
-        Control::Line { caption, style, .. }
-        | Control::Curve { caption, style, .. }
-        | Control::ConnectLine { caption, style, .. } => (true, caption.is_some(), style),
-        _ => return true,
-    };
-    let directional_fill = matches!(
-        style.as_ref().and_then(|s| s.fill.as_ref()),
-        Some(Fill::Gradient { .. } | Fill::Pattern { .. } | Fill::Image { .. })
-    );
-    !paragraphs_empty || caption || directional_fill
-}
-
-/// Mutable views of a child's defining points (wire-local on entry).
-fn defining_points(control: &mut Control) -> Vec<&mut hwpforge_core::control::ShapePoint> {
-    match control {
-        Control::Line { start, end, .. } => vec![start, end],
-        Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
-        Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
-            vec![center, axis1, axis2, start1, end1, start2, end2]
-        }
-        Control::Polygon { vertices, .. } => vertices.iter_mut().collect(),
-        Control::Curve { points, .. } => points.iter_mut().collect(),
-        Control::ConnectLine { start, end, control_points, .. } => {
-            let mut v = vec![start, end];
-            v.extend(control_points.iter_mut());
-            v
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn set_size_and_placement(control: &mut Control, w: i32, h: i32, x: i32, y: i32) {
-    let placement_value = group_child_placement(x, y);
-    let (width, height, placement) = match control {
-        Control::TextBox { width, height, placement, .. }
-        | Control::Rect { width, height, placement, .. }
-        | Control::Ellipse { width, height, placement, .. }
-        | Control::Arc { width, height, placement, .. }
-        | Control::Polygon { width, height, placement, .. }
-        | Control::Curve { width, height, placement, .. }
-        | Control::ConnectLine { width, height, placement, .. }
-        | Control::Line { width, height, placement, .. } => (width, height, placement),
-        _ => return,
-    };
-    *width = HwpUnit::new(w).unwrap_or(HwpUnit::ZERO);
-    *height = HwpUnit::new(h).unwrap_or(HwpUnit::ZERO);
-    *placement = placement_value;
-}
-
-fn style_mut(control: &mut Control) -> Option<&mut Option<ShapeStyle>> {
-    match control {
-        Control::TextBox { style, .. }
-        | Control::Rect { style, .. }
-        | Control::Ellipse { style, .. }
-        | Control::Arc { style, .. }
-        | Control::Polygon { style, .. }
-        | Control::Curve { style, .. }
-        | Control::ConnectLine { style, .. }
-        | Control::Line { style, .. } => Some(style),
-        _ => None,
-    }
-}
-
-/// Replaces the wire's `rotationInfo`/`flip` (which inside a group describe
-/// nothing about the shape's own geometry) with the rotation and mirror
-/// derived from the matrices.
-fn set_rotation_and_flip(control: &mut Control, angle: i32, flip: bool) {
-    let Some(style) = style_mut(control) else { return };
-    let mut s = style.take().unwrap_or_default();
-    s.rotation = (angle != 0).then_some(angle as f32);
-    s.flip = flip.then_some(Flip::Horizontal);
-    *style = (s != ShapeStyle::default()).then_some(s);
-}
-
-/// Folds one child's wire map into Core geometry relative to `origin`, then
-/// checks the result against the wire point by point. `None` = dropped (its
-/// `ContentLost` is already reported).
+/// Folds one child's wire map into exact Core geometry relative to `origin`
+/// with the shared Core definition
+/// ([`fold_group_child`](hwpforge_core::control::geometry::fold_group_child)),
+/// reporting what it cannot carry. `None` = dropped (its `ContentLost` is
+/// already reported).
 fn normalize_group_child(
     wire: WireChild,
     origin: (f64, f64),
     ctx: &mut DecodeCtx,
 ) -> Option<Control> {
-    use super::group_geometry::{corners, decompose_box, max_residual, Affine, SHEAR_TOLERANCE};
+    use hwpforge_core::control::geometry::{
+        fold_group_child, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts,
+    };
 
-    let WireChild { mut control, map, org, picture_fill } = wire;
+    let WireChild { control, map, org, picture_fill } = wire;
     let Some(m) = map else {
         ctx.content_lost("group_child_transform", "unparseable transform matrix");
         return None;
     };
     if picture_fill {
         // The picture is not carried; the shape still is, and a picture
-        // fill turns with it, so it takes the box rule below.
+        // fill turns with it, so it takes the box rule.
         ctx.content_lost("group_child_fill", "picture fill not carried by Core");
     }
-    let point_based = matches!(
-        control,
-        Control::Line { .. }
-            | Control::Polygon { .. }
-            | Control::Curve { .. }
-            | Control::ConnectLine { .. }
-    );
-    let wire_local: Vec<(f64, f64)> =
-        defining_points(&mut control).iter().map(|p| (f64::from(p.x), f64::from(p.y))).collect();
-    let wire_world: Vec<(f64, f64)> = wire_local.iter().map(|&p| m.apply(p)).collect();
-
-    if point_based && !picture_fill && !point_shape_has_content(&control) {
-        // The whole map goes onto the points; no rotation or flip remains.
-        let Some((min_x, min_y, _, _)) = super::group_geometry::bounds(&wire_world) else {
-            ctx.content_lost("group_child_degenerate", "shape has no points");
-            return None;
-        };
-        let x = round_i32(min_x - origin.0);
-        let y = round_i32(min_y - origin.1);
-        let base = (origin.0 + f64::from(x), origin.1 + f64::from(y));
-        let local: Vec<(i32, i32)> = wire_world
-            .iter()
-            .map(|&(wx, wy)| (round_i32(wx - base.0), round_i32(wy - base.1)))
-            .collect();
-        let w = local.iter().map(|p| p.0).max().unwrap_or(0).max(0);
-        let h = local.iter().map(|p| p.1).max().unwrap_or(0).max(0);
-        if matches!(control, Control::Polygon { .. }) && (w == 0 || h == 0) {
-            ctx.content_lost("group_child_degenerate", format!("polygon collapses to {w}x{h}"));
-            return None;
-        }
-        if !fits_hwpunit(&[w, h, x, y]) {
-            report_out_of_range(ctx);
-            return None;
-        }
-        for (p, (lx, ly)) in defining_points(&mut control).into_iter().zip(&local) {
-            p.x = *lx;
-            p.y = *ly;
-        }
-        set_size_and_placement(&mut control, w, h, x, y);
-        set_rotation_and_flip(&mut control, 0, false);
-        // Rebuilt from what the control now holds, not from the values above.
-        let (_, _, fx, fy) = final_box(&control);
-        let enc: Vec<(f64, f64)> = defining_points(&mut control)
-            .iter()
-            .map(|p| (origin.0 + f64::from(fx + p.x), origin.1 + f64::from(fy + p.y)))
-            .collect();
-        report_residual(ctx, max_residual(&wire_world, &enc));
-        return Some(control);
-    }
-
-    // Box rule: scale along the shape's own axes, rotation and mirror move
-    // to the style.
-    let Some(d) = decompose_box(m) else {
-        ctx.content_lost("group_child_degenerate", "transform collapses an axis to zero");
-        return None;
+    let input = FoldInput::new(m.to_transform(), org, origin)
+        .with_geometry_facts(GeometryFacts::new(picture_fill));
+    let (kept, losses) = match fold_group_child(control, &input) {
+        FoldOutcome::Kept { control, losses } => (Some(*control), losses),
+        FoldOutcome::Dropped { losses } => (None, losses),
+        _ => (None, Vec::new()),
     };
-    let sheared = d.shear > SHEAR_TOLERANCE;
-    if sheared {
-        ctx.content_lost("group_child_transform", format!("sheared transform ({:.4})", d.shear));
+    for loss in losses {
+        let kind = match loss.kind() {
+            FoldLossKind::Degenerate => "group_child_degenerate",
+            _ => "group_child_transform",
+        };
+        ctx.content_lost(kind, loss.detail().to_string());
     }
-    let w = round_i32(org.0 * d.sx);
-    let h = round_i32(org.1 * d.sy);
-    if w == 0 || h == 0 {
-        ctx.content_lost("group_child_degenerate", format!("shape collapses to {w}x{h}"));
-        return None;
-    }
-    let scaled: Vec<(i32, i32)> =
-        wire_local.iter().map(|&(px, py)| (round_i32(px * d.sx), round_i32(py * d.sy))).collect();
-    for (p, (sx, sy)) in defining_points(&mut control).into_iter().zip(&scaled) {
-        p.x = *sx;
-        p.y = *sy;
-    }
-    let angle = round_i32(d.angle).rem_euclid(360);
-    set_rotation_and_flip(&mut control, angle, d.flip);
-
-    // The matrix the encoder writes for this Core value (shared builder).
-    set_size_and_placement(&mut control, w, h, 0, 0);
-    let enc_rot = Affine::from_hx(
-        &crate::encoder::shapes::build_shape_common(&control).rendering_info.rot_matrix,
-    )
-    .unwrap_or(Affine::IDENTITY);
-    // Offset so the box's own origin corner lands where the wire puts it.
-    let x = round_i32(m.c - enc_rot.c - origin.0);
-    let y = round_i32(m.f - enc_rot.f - origin.1);
-    if !fits_hwpunit(&[w, h, x, y]) {
-        report_out_of_range(ctx);
-        return None;
-    }
-    set_size_and_placement(&mut control, w, h, x, y);
-
-    // Rebuilt from what the control now holds, not from the values above.
-    let (fw, fh, fx, fy) = final_box(&control);
-    let final_rot = Affine::from_hx(
-        &crate::encoder::shapes::build_shape_common(&control).rendering_info.rot_matrix,
-    )
-    .unwrap_or(Affine::IDENTITY);
-    let enc_map =
-        Affine::translate(origin.0 + f64::from(fx), origin.1 + f64::from(fy)).then_after(final_rot);
-    let mut wire_check: Vec<(f64, f64)> =
-        corners(org.0, org.1).iter().map(|&p| m.apply(p)).collect();
-    wire_check.extend(&wire_world);
-    let mut enc_check: Vec<(f64, f64)> =
-        corners(f64::from(fw), f64::from(fh)).iter().map(|&p| enc_map.apply(p)).collect();
-    enc_check.extend(
-        defining_points(&mut control)
-            .iter()
-            .map(|p| enc_map.apply((f64::from(p.x), f64::from(p.y)))),
-    );
-    // A sheared child is already reported; its residual says nothing new.
-    if !sheared {
-        report_residual(ctx, max_residual(&wire_check, &enc_check));
-    }
-    Some(control)
+    kept
 }
 
 /// Whether every value is a valid [`HwpUnit`] (which a Core size or offset
 /// must be — an invalid one would be stored as 0).
 fn fits_hwpunit(values: &[i32]) -> bool {
     values.iter().all(|&v| HwpUnit::new(v).is_ok())
-}
-
-fn report_out_of_range(ctx: &mut DecodeCtx) {
-    ctx.content_lost("group_child_transform", "size or offset outside the HWPUNIT range");
-}
-
-/// `(width, height, x, y)` a decoded group child holds.
-fn final_box(control: &Control) -> (i32, i32, i32, i32) {
-    match control {
-        Control::TextBox { width, height, placement, .. }
-        | Control::Rect { width, height, placement, .. }
-        | Control::Ellipse { width, height, placement, .. }
-        | Control::Arc { width, height, placement, .. }
-        | Control::Polygon { width, height, placement, .. }
-        | Control::Curve { width, height, placement, .. }
-        | Control::ConnectLine { width, height, placement, .. }
-        | Control::Line { width, height, placement, .. } => {
-            let (x, y) = placement
-                .as_ref()
-                .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
-            (width.as_i32(), height.as_i32(), x, y)
-        }
-        _ => (0, 0, 0, 0),
-    }
-}
-
-fn report_residual(ctx: &mut DecodeCtx, residual: f64) {
-    if super::group_geometry::exceeds_tolerance(residual) {
-        ctx.content_lost(
-            "group_child_transform",
-            format!("re-encoded geometry is off by {residual:.2} HWPUNIT"),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -3347,6 +3111,26 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["group_child_transform"]);
     }
 
+    /// A nested group is sized by its children at their exact Core position:
+    /// a 10,000 × 1,000 rect turned 30.4° spans 9131.2 × 5922.9 (±1 for the
+    /// integer offset and bounds), not the 9160 × 5866 of the whole-degree
+    /// matrix HWPX would store.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음 상자를 정확한 정의 대신 HWPX 방출 정책
+    /// (정수 도·6자리)으로 계산하는 것.
+    #[test]
+    fn nested_group_box_uses_the_exact_child_geometry() {
+        let leaf = rect((10_000, 1_000), &ri(ID, &[(ID, ID), (ID, ID), (ID, rot(30.4))]));
+        let own = ri(ID, &[(ID, ID), (ID, ID)]);
+        let (g, _) = decode(&container((30_000, 30_000), &nested((10_000, 1_000), &own, &leaf)));
+        let g = g.unwrap();
+        let (w, h, _) = size_and_offset(&children(&g)[0]);
+        assert!(
+            (f64::from(w) - 9131.2).abs() <= 1.0 && (f64::from(h) - 5922.9).abs() <= 1.0,
+            "{w}x{h}"
+        );
+    }
+
     /// A nested group whose own box does not match its shapes.
     ///
     /// 이것을 실패시키는 것: 중첩 묶음의 자기 상자 비교를 지우는 것.
@@ -3741,7 +3525,10 @@ mod group_tests {
         for c in children(&g) {
             match c {
                 Control::Rect { .. } | Control::Ellipse { .. } => {
-                    assert_eq!(rotation(c), (Some(30.0), None), "{c:?}");
+                    // The exact angle of Hancom's six-digit matrices, not a
+                    // whole degree (30.000011).
+                    let (angle, flip) = rotation(c);
+                    assert!((angle.unwrap() - 30.0).abs() < 1e-3 && flip.is_none(), "{c:?}");
                 }
                 Control::Polygon { vertices, placement, .. } => {
                     assert_eq!(rotation(c), (None, None));
@@ -3989,17 +3776,39 @@ mod group_tests {
         }
     }
 
-    /// A sheared child cannot be carried exactly; stamping (both request
-    /// versions) and cell editing regenerate the package, so they refuse it.
+    /// A child the group slants (a shear with no rotation) is kept as the
+    /// nearest box and reported. Its no-op round trip is stable, so stamping
+    /// (both request versions) and cell editing reach the decode-loss check
+    /// and refuse it there.
     ///
     /// 이것을 실패시키는 것: `stamp_with_diagnostics`·`stamp_v2_with_diagnostics`·
     /// `set_cells_with_diagnostics` 의 `reject_input_content_loss` 호출을 하나씩
     /// 지우는 것 (그 표면만 다른 결과가 된다).
     #[test]
-    fn editors_refuse_an_input_with_a_sheared_group_child() {
-        let doc = HwpxDecoder::decode(&fixture("group-sheared-child.hwpx")).unwrap();
+    fn editors_refuse_an_input_with_a_slanted_group_child() {
+        let doc = HwpxDecoder::decode(&fixture("group-slanted-child.hwpx")).unwrap();
         assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
-        assert_refused_by_stamp_and_set_cell("group-sheared-child.hwpx", "group_child_transform");
+        assert_refused_by_stamp_and_set_cell("group-slanted-child.hwpx", "group_child_transform");
+    }
+
+    /// A sheared child is kept as the nearest box and reported. Its exact
+    /// angle is not a whole degree, so the no-op round trip through HWPX
+    /// already differs and the older admission check refuses it first.
+    #[test]
+    fn editors_refuse_an_input_with_a_sheared_group_child() {
+        use crate::stamp::{HwpxStamper, StamperError};
+        use crate::{CellEditError, HwpxCellEditor};
+        let bytes = fixture("group-sheared-child.hwpx");
+        let doc = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
+        assert!(matches!(
+            HwpxStamper::stamp(&bytes, &[]),
+            Err(StamperError::NotRoundTripSafe { .. })
+        ));
+        assert!(matches!(
+            HwpxCellEditor::set_cells(&bytes, &[]),
+            Err(CellEditError::NotRoundTripSafe { .. })
+        ));
     }
 
     /// A table inside a grouped text box is refused too. Here the no-op
@@ -4049,7 +3858,7 @@ mod group_tests {
     fn uncarried_entries_keep_their_code_over_lost_content() {
         use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
         use crate::{CellEditError, HwpxCellEditor};
-        let bytes = with_uncarried_entry(&fixture("group-sheared-child.hwpx"));
+        let bytes = with_uncarried_entry(&fixture("group-slanted-child.hwpx"));
         let doc = HwpxDecoder::decode(&bytes).unwrap();
         assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
 
