@@ -767,34 +767,48 @@ pub(crate) fn decode_container(
     let own = match container.rendering_info.as_ref() {
         None => Affine::IDENTITY,
         Some(ri) => wire_chain(ri).unwrap_or_else(|| {
-            // Children are placed against this box; an unreadable matrix
-            // leaves the origin a guess.
+            // The group's own frame is unknown; the stored file is not
+            // what this decoder reads it as.
             ctx.content_lost("group_transform", "unparseable group transform matrix");
             Affine::IDENTITY
         }),
     };
+    // `<hp:pos>` places the origin of the outermost space: Hancom's ungroup
+    // puts every shape at `pos` + its chained coordinates. In rotflip-group
+    // (turned 20° and mirrored) the group's own frame starts at
+    // (−1680, −3359) and its shapes at (−1679, 0), yet each ungrouped shape
+    // sits exactly at `pos` + its chain. The displayed size `<hp:sz>` is the
+    // extent of the shapes (there 39231 × 15541), not of the turned frame
+    // (40910 × 23514).
+    let origin = (0.0, 0.0);
     let own_box: Vec<(f64, f64)> = corners(org_w, org_h).iter().map(|&p| own.apply(p)).collect();
-    let (min_x, min_y, max_x, max_y) = bounds(&own_box).unwrap_or((0.0, 0.0, org_w, org_h));
+    let (min_x, min_y, max_x, max_y) =
+        leaf_bounds(container).or_else(|| bounds(&own_box)).unwrap_or((0.0, 0.0, org_w, org_h));
+    // `sz` is either the shapes' own extent (what Hancom writes) or a box
+    // from the origin that holds them (what this crate's writer gives a
+    // group whose point shapes sit inside their old boxes).
+    let extent = (max_x - min_x, max_y - min_y);
     let (width, height) = match container.sz.as_ref() {
         Some(sz) => (sz.width, sz.height),
-        None => (round_i32(max_x - min_x), round_i32(max_y - min_y)),
+        None => (round_i32(max_x - min_x.min(0.0)), round_i32(max_y - min_y.min(0.0))),
     };
-    let size_error =
-        ((max_x - min_x) - f64::from(width)).abs().max(((max_y - min_y) - f64::from(height)).abs());
+    let (w, h) = (f64::from(width), f64::from(height));
+    let extent_error = (extent.0 - w).abs().max((extent.1 - h).abs());
+    let overflow = (-min_x).max(-min_y).max(max_x - w).max(max_y - h).max(0.0);
+    let size_error = extent_error.min(overflow);
     if !fits_hwpunit(&[width, height]) {
         ctx.content_lost("group_display_size", "displayed size outside the HWPUNIT range");
     } else if size_error > EXACT_TOLERANCE {
         ctx.content_lost(
             "group_display_size",
             format!(
-                "displayed size {width}x{height} differs from the group's own transform by \
+                "displayed size {width}x{height} differs from the bounds of its shapes by \
                  {size_error:.2}"
             ),
         );
     }
 
-    let Some(children) =
-        decode_group_children(container, (min_x, min_y), char_shape_id, depth, ctx)?
+    let Some(children) = decode_group_children(container, origin, char_shape_id, depth, ctx)?
     else {
         return Ok(None);
     };
@@ -2732,7 +2746,7 @@ mod group_tests {
             kind,
             corners: corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect(),
             points: pts.iter().map(|p| map.apply((f64::from(p.x), f64::from(p.y)))).collect(),
-            angle: style.as_ref().and_then(|s| s.rotation).map_or(0, |r| r as i32),
+            angle: style.as_ref().and_then(|s| s.rotation).map_or(0, |r| r.round() as i32),
             flip: style.as_ref().and_then(|s| s.flip) == Some(Flip::Horizontal),
         });
     }
@@ -2748,10 +2762,27 @@ mod group_tests {
     fn assert_matches_ungrouped(grouped: &str, ungrouped: &str) {
         let doc = HwpxDecoder::decode(&fixture(grouped)).unwrap();
         assert!(doc.warnings.is_empty(), "{grouped}: {:?}", doc.warnings);
-        let (_, g) = grouped_shapes(&fixture(grouped));
+        assert_leaves_match(grouped, ungrouped, 0, &[]);
+    }
+
+    /// Every leaf of the first group of `grouped` against Hancom's ungrouped
+    /// shapes, except the leaves of `skip` kinds; `extra` = shapes outside the
+    /// group, present in both files.
+    fn assert_leaves_match(grouped: &str, ungrouped: &str, extra: usize, skip: &[&str]) {
+        assert_bytes_match(grouped, &fixture(grouped), ungrouped, extra, skip);
+    }
+
+    fn assert_bytes_match(
+        grouped: &str,
+        bytes: &[u8],
+        ungrouped: &str,
+        extra: usize,
+        skip: &[&str],
+    ) {
+        let (_, g) = grouped_shapes(bytes);
         let mut u = ungrouped_shapes(&fixture(ungrouped));
-        assert_eq!(g.len(), u.len(), "{grouped}: leaf count");
-        for leaf in &g {
+        assert_eq!(g.len() + extra, u.len(), "{grouped}: leaf count");
+        for leaf in g.iter().filter(|l| !skip.contains(&l.kind)) {
             let box_kind = matches!(leaf.kind, "rect" | "ellipse");
             let score = |s: &PageShape| {
                 if s.kind != leaf.kind {
@@ -2793,6 +2824,8 @@ mod group_tests {
     /// 자식의 `rotationInfo`·`flip` 에서 읽는 것 (g2·g3 가 어긋난다).
     #[test]
     fn f1_groups_match_hancom_ungroup_per_child() {
+        // (see the F9, F10 and F8 tests below for turned, sheared and
+        // point-edited groups)
         for (g, u) in [
             ("group-f1-g1-scaled.hwpx", "group-f1-g1-ungrouped.hwpx"),
             ("group-f1-g2-rotated.hwpx", "group-f1-g2-ungrouped.hwpx"),
@@ -2801,6 +2834,73 @@ mod group_tests {
         ] {
             assert_matches_ungrouped(g, u);
         }
+    }
+
+    /// F9: rect A (turned 30° then mirrored), triangle B (turned 30° then
+    /// mirrored top-bottom) and ellipse C (mirrored) grouped, the group turned
+    /// 20° and mirrored. Hancom's ungroup gives A 10°, B 10° mirrored both
+    /// ways, C 340°; every leaf lands within 2 HWPUNIT of it, A and C with the
+    /// same angle and mirror. D and E stay outside the group in both files.
+    ///
+    /// 이것을 실패시키는 것: 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(묶음의 반사·회전이
+    /// 자식 자신의 것보다 먼저 적용됨), 최상위 묶음 원점을 묶음 자기 frame 의
+    /// 최솟값으로 되돌리는 것. (여기 자식들은 반사가 둘씩 겹쳐 상쇄되므로 반사
+    /// 판정은 `box_child_mirrored_and_turned_is_carried` 가 잡는다.)
+    #[test]
+    fn f9_turned_and_mirrored_group_matches_hancom_ungroup() {
+        let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        assert_leaves_match("rotflip-group.hwpx", "rotflip-group-ungrouped.hwpx", 2, &[]);
+    }
+
+    /// The same F9 group decoded, written by this crate and decoded again:
+    /// still within 2 HWPUNIT of Hancom's ungroup, leaf by leaf, with no
+    /// warning. (The leaves here are placed with the writer's own matrix, so
+    /// a writer bug that the decoder folds back is caught by
+    /// `writer_matrix_matches_hancom_at_the_native_size` instead.)
+    ///
+    /// 이것을 실패시키는 것: 최상위 묶음 원점을 묶음 자기 frame 의 최솟값으로
+    /// 되돌리는 것.
+    #[test]
+    fn f9_group_survives_our_writer() {
+        let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
+        let bytes = encode(&doc);
+        let back = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+        assert_bytes_match("ours", &bytes, "rotflip-group-ungrouped.hwpx", 2, &[]);
+    }
+
+    /// F10: a rect and a triangle turned 30° and a line turned 45° on their
+    /// own, then the group stretched along x only. Hancom's ungroup keeps the
+    /// shear in each shape's own `scaMatrix`; Core boxes cannot, so the rect
+    /// is reported once, while the triangle and line (points only) land
+    /// within 2 HWPUNIT of Hancom's.
+    ///
+    /// 이것을 실패시키는 것: 내용 없는 점 기반 도형을 상자 규칙으로 보내는 것.
+    /// (shear 판정만 지우면 같은 사각형이 잔차로 보고되어 살아남는다 — shear
+    /// 자체는 core `fold_box_refuses_what_it_cannot_place` 가 잡는다.)
+    #[test]
+    fn f10_sheared_group_keeps_points_and_reports_the_box() {
+        let doc = HwpxDecoder::decode(&fixture("group-f10-rot-then-scale.hwpx")).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
+        assert_leaves_match(
+            "group-f10-rot-then-scale.hwpx",
+            "group-f10-rot-then-scale-ungrouped.hwpx",
+            0,
+            &["rect"],
+        );
+    }
+
+    /// F8: a point-edited pentagon (Hancom re-bases its points onto
+    /// `[0, orgSz]`) grouped with a rect, the group scaled ×1.5 by ×0.5.
+    ///
+    /// 이것을 실패시키는 것: 다각형 점에 묶음 scale 을 적용하지 않는 것.
+    #[test]
+    fn f8_point_edited_polygon_matches_hancom_ungroup() {
+        assert_matches_ungrouped(
+            "group-f8-poly-margin.hwpx",
+            "group-f8-poly-margin-ungrouped.hwpx",
+        );
     }
 
     // ── synthetic wire ─────────────────────────────────────────────
@@ -2864,14 +2964,26 @@ mod group_tests {
     }
 
     /// A top-level container with identity matrices whose box is `org`.
+    /// A top-level group without `<hp:sz>`: its box is then the bounds of
+    /// its shapes, as Hancom's always is (the synthetic children here do not
+    /// fill the group's frame).
     fn container(org: (i32, i32), children: &str) -> String {
-        container_with(org, org, &ri(ID, &[(ID, ID)]), children)
+        container_xml(org, None, &ri(ID, &[(ID, ID)]), children)
     }
 
     fn container_with(org: (i32, i32), sz: (i32, i32), own: &str, children: &str) -> String {
+        container_xml(org, Some(sz), own, children)
+    }
+
+    fn container_xml(org: (i32, i32), sz: Option<(i32, i32)>, own: &str, children: &str) -> String {
+        let sz = sz.map_or_else(String::new, |(w, h)| {
+            format!(
+                r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#
+            )
+        });
         format!(
-            r#"<hp:container id="9" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="LARGEST_ONLY" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="900"><hp:offset x="0" y="0"/><hp:orgSz width="{}" height="{}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{own}{children}<hp:sz width="{}" widthRelTo="ABSOLUTE" height="{}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="0" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PAPER" horzRelTo="PAPER" vertAlign="TOP" horzAlign="LEFT" vertOffset="5000" horzOffset="6000"/></hp:container>"#,
-            org.0, org.1, sz.0, sz.1
+            r#"<hp:container id="9" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="LARGEST_ONLY" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="900"><hp:offset x="0" y="0"/><hp:orgSz width="{}" height="{}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{own}{children}{sz}<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="0" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PAPER" horzRelTo="PAPER" vertAlign="TOP" horzAlign="LEFT" vertOffset="5000" horzOffset="6000"/></hp:container>"#,
+            org.0, org.1
         )
     }
 
@@ -3000,12 +3112,11 @@ mod group_tests {
         assert_eq!(size_and_offset(&children(&g)[0]).0, 1000);
     }
 
-    /// A rect mirrored and turned 30° by its group: the encoder writes the
-    /// mirror and the rotation in one matrix, as Hancom does, so the child is
-    /// carried exactly.
+    /// A rect mirrored and turned 30° by its group folds to a 30° turn with a
+    /// horizontal mirror, carried without loss (the writer side is pinned by
+    /// `f9_group_survives_our_writer` and `shape_rotation_flip`).
     ///
-    /// 이것을 실패시키는 것: 인코더가 회전과 함께 있는 반사를 반사만 쓰는 것
-    /// (재인코드 잔차로 `ContentLost`).
+    /// 이것을 실패시키는 것: 접기에서 반사(행렬식 음수) 판정을 지우는 것.
     #[test]
     fn box_child_mirrored_and_turned_is_carried() {
         let mirror = [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0];
@@ -3351,9 +3462,19 @@ mod group_tests {
                 .collect()
         };
         let boxy = rect((1000, 400), &ri(far, &[(ID, ID), (ID, ID)]));
-        let (g, w) = decode(&container((1000, 500), &format!("{keep}{boxy}")));
+        let own = ri(ID, &[(ID, ID)]);
+        // `sz` given, so the far child's extent shows only as its own loss and
+        // as a displayed size that does not hold it.
+        let (g, w) =
+            decode(&container_with((1000, 500), (1000, 500), &own, &format!("{keep}{boxy}")));
         assert_eq!(children(&g.unwrap()).len(), 1);
-        assert_eq!(reasons(&w), ["size or offset outside the HWPUNIT range"]);
+        let child_and_box = |w: &[crate::DecodeWarning]| {
+            let r = reasons(w);
+            assert_eq!(r.len(), 2, "{r:?}");
+            assert!(r[0].starts_with("displayed size 1000x500 differs"), "{r:?}");
+            assert_eq!(r[1], "size or offset outside the HWPUNIT range");
+        };
+        child_and_box(&w);
 
         let pointy = polygon(
             (1000, 600),
@@ -3361,8 +3482,9 @@ mod group_tests {
             &[(0, 600), (500, 0), (1000, 600)],
             "",
         );
-        let (_, w) = decode(&container((1000, 500), &format!("{keep}{pointy}")));
-        assert_eq!(reasons(&w), ["size or offset outside the HWPUNIT range"]);
+        let (_, w) =
+            decode(&container_with((1000, 500), (1000, 500), &own, &format!("{keep}{pointy}")));
+        child_and_box(&w);
 
         let huge = container_with((1000, 500), (200_000_000, 500), &ri(ID, &[(ID, ID)]), &keep);
         let (_, w) = decode(&huge);
@@ -3394,17 +3516,23 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["pic", "pic", "group"]);
     }
 
-    /// The container's own `sz` must agree with its matrices.
+    /// The container's `sz` must describe its shapes: their extent (Hancom)
+    /// or a box from the origin that holds them (this crate's writer). A
+    /// size that cuts a shape off is reported.
     ///
-    /// 이것을 실패시키는 것: 표시 크기 비교를 지우는 것.
+    /// 이것을 실패시키는 것: 표시 크기 비교를 지우는 것(800 이 통과), 또는
+    /// 원점에서 시작해 도형을 담는 상자를 받아들이지 않는 것(1500 이 손실).
     #[test]
-    fn display_size_disagreeing_with_own_matrices_is_content_lost() {
+    fn display_size_that_cuts_off_a_shape_is_content_lost() {
         let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)]));
-        let (g, w) =
-            decode(&container_with((1000, 1000), (1500, 1000), &ri(ID, &[(ID, ID)]), &leaf));
+        let own = ri(ID, &[(ID, ID)]);
+        let (g, w) = decode(&container_with((1000, 1000), (800, 1000), &own, &leaf));
         let (width, height, _) = size_and_offset(&g.unwrap());
-        assert_eq!((width, height), (1500, 1000), "displayed size is `sz`");
+        assert_eq!((width, height), (800, 1000), "displayed size is `sz`");
         assert_eq!(lost_kinds(&w), ["group_display_size"]);
+
+        let (_, w) = decode(&container_with((1000, 1000), (1500, 1000), &own, &leaf));
+        assert!(w.is_empty(), "{w:?}");
     }
 
     // ── fixtures and round trips ───────────────────────────────────
