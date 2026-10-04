@@ -778,3 +778,57 @@ fn control_whitespace_in_a_style_name_is_written_as_spaces_without_a_warning() {
     assert_eq!(style["name"], "A B");
     assert_eq!(style["eng_name"], "C D E F");
 }
+
+/// A cache inside a master page is reported at the master page's real path —
+/// `masterpage[N]` numbered across the package, as the encoder names the part
+/// — not at the bare section.
+///
+/// 이것을 실패시키는 것: 바탕쪽 번호에 앞 구역의 바탕쪽 수를 더하지 않기
+/// (`masterpage[0]`), 또는 바탕쪽 안 문단 경로를 빼고 바탕쪽에서 멈추기.
+#[test]
+fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::section::MasterPage;
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{ApplyPageType, CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let para = |text: &str| {
+        Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    };
+    let mut cached = para("master");
+    cached.layout_cache = Some(LayoutCache::new(vec![LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    }]));
+
+    let mut first = Section::with_paragraphs(vec![para("one")], PageSettings::a4());
+    first.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![para("plain")])]);
+    let mut second = Section::with_paragraphs(vec![para("two")], PageSettings::a4());
+    second.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![cached])]);
+    let mut document = Document::new();
+    document.add_section(first);
+    document.add_section(second);
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+
+    let dropped: Vec<String> = out
+        .meta()
+        .warnings
+        .into_iter()
+        .filter(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .map(|w| w.message)
+        .collect();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert!(dropped[0].contains("section[1].masterpage[1].npara[0]"), "{}", dropped[0]);
+}

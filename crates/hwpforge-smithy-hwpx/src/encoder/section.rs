@@ -203,6 +203,8 @@ pub(crate) struct EncodeSink {
     path: Vec<crate::decoder::PathSeg>,
     /// 지금 쓰는 패키지 part 의 실제 이름 — 이 sink 의 모든 part 경고가 쓴다.
     part: String,
+    /// 바탕쪽 part 를 쓰는 중인지 — 바탕쪽이 담지 못하는 차트를 경고로 뺀다.
+    in_master_page: bool,
 }
 
 impl EncodeSink {
@@ -211,6 +213,21 @@ impl EncodeSink {
             warnings: Vec::new(),
             path: vec![crate::decoder::PathSeg::Section(section_index)],
             part: format!("Contents/section{section_index}.xml"),
+            in_master_page: false,
+        }
+    }
+
+    /// 구역 `section_index` 의 바탕쪽 part `Contents/masterpage{global}.xml`
+    /// 용 sink. `global` 은 패키지 전역 바탕쪽 번호(파일 번호)다.
+    pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
+        Self {
+            warnings: Vec::new(),
+            path: vec![
+                crate::decoder::PathSeg::Section(section_index),
+                crate::decoder::PathSeg::MasterPage(global),
+            ],
+            part: format!("Contents/masterpage{global}.xml"),
+            in_master_page: true,
         }
     }
 
@@ -435,8 +452,10 @@ pub(crate) fn encode_section_with_note_counters(
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
     enriched = apply_run_xml_replacements(enriched, &run_xml_replacements)?;
 
-    // Generate masterpage XML files
-    let master_pages = build_masterpage_entries(section, masterpage_offset);
+    // Master pages are parts of their own: each gets its own sink, marker
+    // list and forbidden-character scan (see `build_masterpage_entries`).
+    let master_pages =
+        build_masterpage_entries(section, section_index, masterpage_offset, options, &mut sink)?;
 
     // #198: serde writes XML-forbidden characters as they are; scan the
     // assembled part so memo, header/footer and shape fragments are covered.
@@ -1060,6 +1079,23 @@ fn build_runs(
                     Control::Equation { .. } => {
                         ledger.span(8, 0);
                         equations.push(encode_equation_to_hx(ctrl)?);
+                    }
+                    Control::Chart { .. } | Control::EmbeddedChart { .. }
+                        if sink.in_master_page =>
+                    {
+                        // 바탕쪽 part 의 차트 부품을 패키지에 올리는 경로가 없다
+                        // (sublist 의 차트 목록은 버려지고, 번호도 본문 차트와
+                        // 겹친다). 참조를 쓰지 않고 손실로 보고한다.
+                        // 이것을 실패시키는 것: 이 갈래를 지우기
+                        // (`master_page_chart_is_reported_not_referenced`).
+                        sink.content_lost(
+                            ctrl.kind_name(),
+                            "a chart inside a master page cannot be written; left out of the \
+                             output"
+                                .to_string(),
+                        );
+                        ledger.mark_cache_inadmissible("unencodable control skipped");
+                        continue;
                     }
                     Control::Chart { .. } => {
                         // 디코더가 chart 를 문단 꼬리로 재배치 (W1a 문서화)
@@ -4170,6 +4206,235 @@ mod tests {
         assert_eq!(path, "Contents/masterpage5.xml");
         assert!(xml.contains(r#"id="masterpage5""#));
         assert!(xml.contains(r#"type="EVEN""#));
+    }
+
+    // ── Master pages go through the paragraph encoder (R1-2) ─────
+
+    fn master_section(mp: hwpforge_core::section::MasterPage) -> Section {
+        let mut section = simple_section("body");
+        section.master_pages = Some(vec![mp]);
+        section
+    }
+
+    fn master_part(section: &Section) -> (String, String, Vec<crate::EncodeWarning>) {
+        let result = encode_section(section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+        let (path, xml) = result.master_pages[0].clone();
+        (path, xml, result.warnings)
+    }
+
+    fn sample_chart() -> Control {
+        use hwpforge_core::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+        Control::Chart {
+            chart_type: ChartType::Bar,
+            data: ChartData::category(&["A", "B"], &[("Series1", [1.0, 2.0].as_slice())]),
+            width: HwpUnit::new(10000).unwrap(),
+            height: HwpUnit::new(8000).unwrap(),
+            title: None,
+            legend: LegendPosition::default(),
+            grouping: ChartGrouping::Clustered,
+            bar_shape: None,
+            explosion: None,
+            of_pie_type: None,
+            radar_style: None,
+            wireframe: None,
+            bubble_3d: None,
+            scatter_style: None,
+            show_markers: None,
+            stock_variant: None,
+        }
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 part 의 `apply_run_xml_replacements` 를
+    // 건너뛰기 (`HWPTXT` 마커가 남고 `<hp:tab` 이 없음).
+    #[test]
+    fn master_page_text_gets_tab_and_line_break_elements() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mp = MasterPage::new(ApplyPageType::Both, vec![text_paragraph("L\tR\n2 A&B", 0, 0)]);
+        let (_, xml, _) = master_part(&master_section(mp));
+        assert!(xml.contains("<hp:tab"), "{xml}");
+        assert!(xml.contains("<hp:lineBreak/>"), "{xml}");
+        assert!(xml.contains("A&amp;B"), "escaped once: {xml}");
+        assert!(!xml.contains("&amp;amp;"), "{xml}");
+        assert!(!xml.contains("HWPTXT"), "marker left in the part: {xml}");
+        assert!(!xml.contains(marker_salt()), "{xml}");
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 문단에서 글자 아닌 run 을 빼고 인코드하기
+    // (종전 `_ => {}`).
+    #[test]
+    fn master_page_keeps_shape_runs() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let rect = Control::rect(HwpUnit::new(5000).unwrap(), HwpUnit::new(3000).unwrap()).unwrap();
+        let para = Paragraph::with_runs(
+            vec![
+                Run::control(rect, CharShapeIndex::new(0)),
+                Run::text("뒤", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let (_, xml, warnings) =
+            master_part(&master_section(MasterPage::new(ApplyPageType::Both, vec![para])));
+        assert_eq!(xml.matches("<hp:rect").count(), 1, "{xml}");
+        assert!(xml.contains("<hp:t>뒤</hp:t>"), "{xml}");
+        assert!(warnings.iter().all(|w| w.code() != "CONTENT_LOST"), "{warnings:?}");
+    }
+
+    // 이것을 실패시키는 것: 빈 글자 run 을 생략해 run 0개 문단을 쓰기.
+    #[test]
+    fn master_page_empty_paragraph_keeps_a_run() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let para = Paragraph::with_runs(
+            vec![Run::text("", CharShapeIndex::new(3))],
+            ParaShapeIndex::new(0),
+        );
+        let (_, xml, _) =
+            master_part(&master_section(MasterPage::new(ApplyPageType::Both, vec![para])));
+        assert!(xml.contains(r#"<hp:run charPrIDRef="3""#), "{xml}");
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 루트·subList 값을 하드코딩하기 —
+    // 범위 표 하나(LAST_PAGE·OPTIONAL_PAGE·EVEN), `pageNumber`·`pageDuplicate`·
+    // `pageFront`·`vertAlign` 고정, `textWidth`/`textHeight` 고정, 0 일 때의
+    // 기본값 제거.
+    #[test]
+    fn master_page_root_and_area_attributes_round_out() {
+        use hwpforge_core::section::{MasterPage, MasterPageSpecial};
+        use hwpforge_foundation::{ApplyPageType, VerticalAlign};
+        let mut mp = MasterPage::new(ApplyPageType::Both, vec![text_paragraph("x", 0, 0)]);
+        mp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+        mp.page_duplicate = true;
+        mp.page_front = true;
+        mp.vert_align = VerticalAlign::Bottom;
+        mp.text_width = HwpUnit::new(49892).unwrap();
+        mp.text_height = HwpUnit::new(67181).unwrap();
+        let (_, xml, _) = master_part(&master_section(mp));
+        assert!(
+            xml.contains(r#"type="OPTIONAL_PAGE" pageNumber="3" pageDuplicate="1" pageFront="1">"#),
+            "{xml}"
+        );
+        assert!(xml.contains(r#"vertAlign="BOTTOM""#), "{xml}");
+        assert!(xml.contains(r#"textWidth="49892" textHeight="67181""#), "{xml}");
+
+        let mut last = MasterPage::new(ApplyPageType::Both, vec![text_paragraph("x", 0, 0)]);
+        last.special = Some(MasterPageSpecial::LastPage);
+        let (_, xml, _) = master_part(&master_section(last));
+        assert!(
+            xml.contains(r#"type="LAST_PAGE" pageNumber="0" pageDuplicate="0" pageFront="0">"#),
+            "{xml}"
+        );
+        // 크기를 모르면 종전 출력 그대로.
+        assert!(xml.contains(r#"textWidth="42520" textHeight="65762""#), "{xml}");
+
+        let even = MasterPage::new(ApplyPageType::Even, vec![text_paragraph("x", 0, 0)]);
+        let (_, xml, _) = master_part(&master_section(even));
+        assert!(xml.contains(r#"type="EVEN" pageNumber="0""#), "{xml}");
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 part 의 금지 문자 제거를 건너뛰기, 또는
+    // 경고 part 를 구역 part 이름으로 쓰기.
+    #[test]
+    fn master_page_forbidden_chars_are_removed_and_reported_on_its_part() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mp = MasterPage::new(ApplyPageType::Both, vec![text_paragraph("a\u{1}b", 0, 0)]);
+        let (_, xml, warnings) = master_part(&master_section(mp));
+        assert!(!xml.contains('\u{1}'), "{xml}");
+        assert!(
+            warnings.iter().any(|w| matches!(
+                w,
+                crate::EncodeWarning::XmlForbiddenCharsRemoved { part, .. }
+                    if part == "Contents/masterpage0.xml"
+            )),
+            "{warnings:?}"
+        );
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 sink 의 part 를 구역 part 로 두기, 또는 전역
+    // 번호 대신 구역 안 순번을 쓰기.
+    #[test]
+    fn master_page_losses_name_the_real_master_page_part() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let lost = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Unknown { tag: "zzq".into(), data: None },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+        let mut s1 = simple_section("second");
+        s1.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![lost])]);
+        // 구역 0 이 바탕쪽 하나를 앞에서 차지했다 → 이 바탕쪽은 masterpage1.
+        let result = encode_section(&s1, 1, 0, 1, 0, EncodeOptions::default()).unwrap();
+        assert_eq!(result.master_pages[0].0, "Contents/masterpage1.xml");
+        let lost: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::EncodeWarning::ContentLost { part, path, kind, .. } => {
+                    Some((part.as_str(), path.to_string(), kind.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            lost,
+            [(
+                "Contents/masterpage1.xml",
+                "section[1].masterpage[1].npara[0]".to_string(),
+                "unknown"
+            )]
+        );
+    }
+
+    // 이것을 실패시키는 것: 바탕쪽 차트 갈래를 지우기 — 바탕쪽 part 가 본문
+    // 첫 차트와 같은 `Chart/chart1.xml` 을 가리키고 경고가 없다.
+    #[test]
+    fn master_page_chart_is_reported_not_referenced() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let chart_para = |c: Control| {
+            Paragraph::with_runs(
+                vec![Run::control(c, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let embedded = Control::EmbeddedChart {
+            chart_xml: "<?xml version=\"1.0\"?><c:chartSpace/>".to_string(),
+            ole_bytes: vec![1, 2, 3],
+            width: HwpUnit::new(10000).unwrap(),
+            height: HwpUnit::new(8000).unwrap(),
+            placement: None,
+        };
+        let mut section =
+            Section::with_paragraphs(vec![chart_para(sample_chart())], PageSettings::a4());
+        section.master_pages = Some(vec![MasterPage::new(
+            ApplyPageType::Both,
+            vec![chart_para(sample_chart()), chart_para(embedded)],
+        )]);
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+        assert_eq!(result.charts.len(), 1, "only the body chart is packaged");
+        assert!(result.embedded_oles.is_empty());
+        let (_, mp_xml) = &result.master_pages[0];
+        assert!(!mp_xml.contains("chartIDRef"), "{mp_xml}");
+        assert!(!mp_xml.contains("binaryItemIDRef=\"ole"), "{mp_xml}");
+        let kinds: Vec<_> = result
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::EncodeWarning::ContentLost { part, kind, .. } => {
+                    Some((part.as_str(), kind.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [("Contents/masterpage0.xml", "chart"), ("Contents/masterpage0.xml", "embedded_chart")]
+        );
     }
 
     #[test]

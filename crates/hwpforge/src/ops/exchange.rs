@@ -419,10 +419,9 @@ impl FromJsonOutput {
 /// [`Section::for_each_paragraph`] deliberately does not visit (see
 /// [`hwpforge_core::document::Document::for_each_paragraph_mut`]) but the
 /// encoder drops that cache too, so a bare `section[i]` marker would miss
-/// it silently. The one exception is a cache inside a master page: the
-/// encoder itself keeps no path there (master pages never reach the
-/// per-paragraph encode path that tracks one), so the warning still stops
-/// at the bare section marker in that case.
+/// it silently. A cache inside a master page is reported at
+/// `section[i].masterpage[N]…`, `N` being the package-wide master page
+/// number the encoder writes it under.
 ///
 /// # Errors
 ///
@@ -470,13 +469,18 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     // would serialize (including image captions — see its doc), so one
     // warning per section that carries at least one non-empty cache, with
     // `path` naming the first such paragraph rather than just the section.
+    // Master pages are numbered across the package (`masterpage{N}`), as
+    // the encoder numbers them.
+    let mut masterpage_offset = 0usize;
     let layout_cache_warnings: Vec<OpsWarning> = exported
         .document
         .sections()
         .iter()
         .enumerate()
         .filter_map(|(index, section)| {
-            first_layout_cache_path(section, index).map(|path| {
+            let offset = masterpage_offset;
+            masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
+            first_layout_cache_path(section, index, offset).map(|path| {
                 OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
                     path,
                     reason: "layout cache present in the JSON was not re-emitted — from_json \
@@ -534,16 +538,22 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
 /// `hwpforge-smithy-hwpx::encoder`, so the path this returns reads the
 /// same way a real encoder-side `LayoutCacheDropped` warning would.
 ///
-/// One spot the encoder itself never path-tracks falls back to a bare
-/// `section[i]` path instead of inventing a segment it never emits: master
-/// pages (`build_masterpage_entries` never receives a sink). A memo's
-/// `anchor_runs` get a similar fallback but one step deeper — the memo's own
-/// path rather than the section's — because the encoder flattens
-/// `anchor_runs` to plain text and never recurses into a non-text run there
-/// (see [`first_in_control`]), yet a cache nested inside one is still real
-/// and still dropped, so it must still be found, just reported at the
-/// nearest real container instead of a path the encoder never builds.
-fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<ParagraphPath> {
+/// Master pages get `MasterPage(masterpage_offset + i)` — the package-wide
+/// number the encoder gives this section's `i`-th master page — followed by
+/// `NestedParagraph`, as the encoder's master page sink builds them.
+///
+/// One spot the encoder itself never path-tracks falls back to the nearest
+/// real container: a memo's `anchor_runs` report the memo's own path,
+/// because the encoder flattens `anchor_runs` to plain text and never
+/// recurses into a non-text run there (see [`first_in_control`]), yet a
+/// cache nested inside one is still real and still dropped, so it must
+/// still be found, just reported at the nearest real container instead of
+/// a path the encoder never builds.
+fn first_layout_cache_path(
+    section: &Section,
+    section_index: usize,
+    masterpage_offset: usize,
+) -> Option<ParagraphPath> {
     let base = vec![PathSeg::Section(section_index)];
 
     first_in_paragraphs(&section.paragraphs, &base, PathSeg::BodyParagraph)
@@ -562,17 +572,11 @@ fn first_layout_cache_path(section: &Section, section_index: usize) -> Option<Pa
             })
         })
         .or_else(|| {
-            // The encoder never path-tracks master pages (see this
-            // function's doc), so there is no real segment to append here
-            // — but the *detection* must still recurse into runs (table
-            // cells, captions, …), not just check each top-level paragraph
-            // directly, or a cache nested one level deeper than before
-            // would stop being caught at all (a real narrowing, not just
-            // an imprecise path).
-            let carries_cache = section.master_pages.iter().flatten().any(|mp| {
-                mp.paragraphs.iter().any(|p| first_in_paragraph(p, base.clone()).is_some())
-            });
-            carries_cache.then(|| ParagraphPath(base.clone()))
+            section.master_pages.iter().flatten().enumerate().find_map(|(i, mp)| {
+                let mut path = base.clone();
+                path.push(PathSeg::MasterPage(masterpage_offset + i));
+                first_in_paragraphs(&mp.paragraphs, &path, PathSeg::NestedParagraph)
+            })
         })
 }
 
@@ -722,8 +726,7 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
                 // it either. `first_in_run` is reused only to *detect* a
                 // cache there (same descent as everywhere else); the path
                 // it would have built is discarded in favour of the memo's
-                // own path, the nearest real container — the same fallback
-                // shape master pages use above, one level deeper.
+                // own path, the nearest real container.
                 anchor_runs
                     .iter()
                     .any(|run| first_in_run(run, &memo_path).is_some())
