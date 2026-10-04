@@ -764,7 +764,15 @@ pub(crate) fn decode_container(
     use super::group_geometry::{bounds, corners, wire_chain, Affine, EXACT_TOLERANCE};
 
     let (org_w, org_h) = container_org_size(container);
-    let own = container.rendering_info.as_ref().and_then(wire_chain).unwrap_or(Affine::IDENTITY);
+    let own = match container.rendering_info.as_ref() {
+        None => Affine::IDENTITY,
+        Some(ri) => wire_chain(ri).unwrap_or_else(|| {
+            // Children are placed against this box; an unreadable matrix
+            // leaves the origin a guess.
+            ctx.content_lost("group_transform", "unparseable group transform matrix");
+            Affine::IDENTITY
+        }),
+    };
     let own_box: Vec<(f64, f64)> = corners(org_w, org_h).iter().map(|&p| own.apply(p)).collect();
     let (min_x, min_y, max_x, max_y) = bounds(&own_box).unwrap_or((0.0, 0.0, org_w, org_h));
     let (width, height) = match container.sz.as_ref() {
@@ -773,7 +781,9 @@ pub(crate) fn decode_container(
     };
     let size_error =
         ((max_x - min_x) - f64::from(width)).abs().max(((max_y - min_y) - f64::from(height)).abs());
-    if size_error > EXACT_TOLERANCE {
+    if !fits_hwpunit(&[width, height]) {
+        ctx.content_lost("group_display_size", "displayed size outside the HWPUNIT range");
+    } else if size_error > EXACT_TOLERANCE {
         ctx.content_lost(
             "group_display_size",
             format!(
@@ -877,6 +887,13 @@ struct WireChild {
     control: Control,
     map: Option<super::group_geometry::Affine>,
     org: (f64, f64),
+    /// The wire shape has a picture fill (`<hc:imgBrush>`), which Core
+    /// cannot carry.
+    picture_fill: bool,
+}
+
+fn has_picture_fill(fill: Option<&HxFillBrush>) -> bool {
+    fill.is_some_and(|f| f.img_brush.is_some())
 }
 
 /// Decodes the children of `container` in wire order, folding each child's
@@ -959,6 +976,7 @@ fn decode_group_child(
                 control,
                 map: child_chain(r.rendering_info.as_ref(), r.offset.as_ref()),
                 org: org_size(r.org_sz.as_ref(), r.cur_sz.as_ref()),
+                picture_fill: has_picture_fill(r.fill_brush.as_ref()),
             })
         }
         K::Line => {
@@ -967,6 +985,7 @@ fn decode_group_child(
                 control,
                 map: child_chain(l.rendering_info.as_ref(), l.offset.as_ref()),
                 org: org_size(l.org_sz.as_ref(), l.cur_sz.as_ref()),
+                picture_fill: has_picture_fill(l.fill_brush.as_ref()),
             })
         }
         K::Ellipse => {
@@ -980,6 +999,7 @@ fn decode_group_child(
                 control,
                 map: child_chain(e.rendering_info.as_ref(), e.offset.as_ref()),
                 org: org_size(e.org_sz.as_ref(), e.cur_sz.as_ref()),
+                picture_fill: has_picture_fill(e.fill_brush.as_ref()),
             })
         }
         K::Polygon => {
@@ -988,6 +1008,7 @@ fn decode_group_child(
                 control,
                 map: child_chain(p.rendering_info.as_ref(), p.offset.as_ref()),
                 org: org_size(p.org_sz.as_ref(), p.cur_sz.as_ref()),
+                picture_fill: has_picture_fill(p.fill_brush.as_ref()),
             })
         }
         K::Curve => {
@@ -996,6 +1017,7 @@ fn decode_group_child(
                 control,
                 map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
                 org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
+                picture_fill: has_picture_fill(c.fill_brush.as_ref()),
             })
         }
         K::ConnectLine => {
@@ -1005,6 +1027,7 @@ fn decode_group_child(
                     control,
                     map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
                     org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
+                    picture_fill: has_picture_fill(c.fill_brush.as_ref()),
                 }
             })
         }
@@ -1091,10 +1114,15 @@ fn decode_nested_container(
     let origin = (provisional.0 + f64::from(dx), provisional.1 + f64::from(dy));
     let x = round_i32(origin.0 - parent_origin.0);
     let y = round_i32(origin.1 - parent_origin.1);
+    let (w, h) = (round_i32(bx1 - f64::from(dx)), round_i32(by1 - f64::from(dy)));
+    if !fits_hwpunit(&[w, h, x, y]) {
+        ctx.content_lost("nested_group_placement", "size or offset outside the HWPUNIT range");
+        return Ok(None);
+    }
     Ok(Some(Control::Group {
         children,
-        width: HwpUnit::new(round_i32(bx1 - f64::from(dx))).unwrap_or(HwpUnit::ZERO),
-        height: HwpUnit::new(round_i32(by1 - f64::from(dy))).unwrap_or(HwpUnit::ZERO),
+        width: HwpUnit::new(w).unwrap_or(HwpUnit::ZERO),
+        height: HwpUnit::new(h).unwrap_or(HwpUnit::ZERO),
         placement: group_child_placement(x, y),
         inst_id: container_inst_id(nested),
     }))
@@ -1334,11 +1362,16 @@ fn normalize_group_child(
 ) -> Option<Control> {
     use super::group_geometry::{corners, decompose_box, max_residual, Affine, SHEAR_TOLERANCE};
 
-    let WireChild { mut control, map, org } = wire;
+    let WireChild { mut control, map, org, picture_fill } = wire;
     let Some(m) = map else {
         ctx.content_lost("group_child_transform", "unparseable transform matrix");
         return None;
     };
+    if picture_fill {
+        // The picture is not carried; the shape still is, and a picture
+        // fill turns with it, so it takes the box rule below.
+        ctx.content_lost("group_child_fill", "picture fill not carried by Core");
+    }
     let point_based = matches!(
         control,
         Control::Line { .. }
@@ -1350,7 +1383,7 @@ fn normalize_group_child(
         defining_points(&mut control).iter().map(|p| (f64::from(p.x), f64::from(p.y))).collect();
     let wire_world: Vec<(f64, f64)> = wire_local.iter().map(|&p| m.apply(p)).collect();
 
-    if point_based && !point_shape_has_content(&control) {
+    if point_based && !picture_fill && !point_shape_has_content(&control) {
         // The whole map goes onto the points; no rotation or flip remains.
         let Some((min_x, min_y, _, _)) = super::group_geometry::bounds(&wire_world) else {
             ctx.content_lost("group_child_degenerate", "shape has no points");
@@ -1369,15 +1402,21 @@ fn normalize_group_child(
             ctx.content_lost("group_child_degenerate", format!("polygon collapses to {w}x{h}"));
             return None;
         }
+        if !fits_hwpunit(&[w, h, x, y]) {
+            report_out_of_range(ctx);
+            return None;
+        }
         for (p, (lx, ly)) in defining_points(&mut control).into_iter().zip(&local) {
             p.x = *lx;
             p.y = *ly;
         }
         set_size_and_placement(&mut control, w, h, x, y);
         set_rotation_and_flip(&mut control, 0, false);
-        let enc: Vec<(f64, f64)> = local
+        // Rebuilt from what the control now holds, not from the values above.
+        let (_, _, fx, fy) = final_box(&control);
+        let enc: Vec<(f64, f64)> = defining_points(&mut control)
             .iter()
-            .map(|&(lx, ly)| (base.0 + f64::from(lx), base.1 + f64::from(ly)))
+            .map(|p| (origin.0 + f64::from(fx + p.x), origin.1 + f64::from(fy + p.y)))
             .collect();
         report_residual(ctx, max_residual(&wire_world, &enc));
         return Some(control);
@@ -1417,21 +1456,68 @@ fn normalize_group_child(
     // Offset so the box's own origin corner lands where the wire puts it.
     let x = round_i32(m.c - enc_rot.c - origin.0);
     let y = round_i32(m.f - enc_rot.f - origin.1);
+    if !fits_hwpunit(&[w, h, x, y]) {
+        report_out_of_range(ctx);
+        return None;
+    }
     set_size_and_placement(&mut control, w, h, x, y);
 
+    // Rebuilt from what the control now holds, not from the values above.
+    let (fw, fh, fx, fy) = final_box(&control);
+    let style = style_mut(&mut control).and_then(|s| s.clone());
+    let final_rot = Affine::from_hx(
+        &crate::encoder::shapes::build_shape_common(fw, fh, style.as_ref())
+            .rendering_info
+            .rot_matrix,
+    )
+    .unwrap_or(Affine::IDENTITY);
     let enc_map =
-        Affine::translate(origin.0 + f64::from(x), origin.1 + f64::from(y)).then_after(enc_rot);
+        Affine::translate(origin.0 + f64::from(fx), origin.1 + f64::from(fy)).then_after(final_rot);
     let mut wire_check: Vec<(f64, f64)> =
         corners(org.0, org.1).iter().map(|&p| m.apply(p)).collect();
     wire_check.extend(&wire_world);
     let mut enc_check: Vec<(f64, f64)> =
-        corners(f64::from(w), f64::from(h)).iter().map(|&p| enc_map.apply(p)).collect();
-    enc_check.extend(scaled.iter().map(|&(sx, sy)| enc_map.apply((f64::from(sx), f64::from(sy)))));
+        corners(f64::from(fw), f64::from(fh)).iter().map(|&p| enc_map.apply(p)).collect();
+    enc_check.extend(
+        defining_points(&mut control)
+            .iter()
+            .map(|p| enc_map.apply((f64::from(p.x), f64::from(p.y)))),
+    );
     // A sheared child is already reported; its residual says nothing new.
     if !sheared {
         report_residual(ctx, max_residual(&wire_check, &enc_check));
     }
     Some(control)
+}
+
+/// Whether every value is a valid [`HwpUnit`] (which a Core size or offset
+/// must be — an invalid one would be stored as 0).
+fn fits_hwpunit(values: &[i32]) -> bool {
+    values.iter().all(|&v| HwpUnit::new(v).is_ok())
+}
+
+fn report_out_of_range(ctx: &mut DecodeCtx) {
+    ctx.content_lost("group_child_transform", "size or offset outside the HWPUNIT range");
+}
+
+/// `(width, height, x, y)` a decoded group child holds.
+fn final_box(control: &Control) -> (i32, i32, i32, i32) {
+    match control {
+        Control::TextBox { width, height, placement, .. }
+        | Control::Rect { width, height, placement, .. }
+        | Control::Ellipse { width, height, placement, .. }
+        | Control::Arc { width, height, placement, .. }
+        | Control::Polygon { width, height, placement, .. }
+        | Control::Curve { width, height, placement, .. }
+        | Control::ConnectLine { width, height, placement, .. }
+        | Control::Line { width, height, placement, .. } => {
+            let (x, y) = placement
+                .as_ref()
+                .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+            (width.as_i32(), height.as_i32(), x, y)
+        }
+        _ => (0, 0, 0, 0),
+    }
 }
 
 fn report_residual(ctx: &mut DecodeCtx, residual: f64) {
@@ -1505,6 +1591,7 @@ mod tests {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         }
     }
 
@@ -1871,6 +1958,7 @@ mod tests {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         });
         let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
         match style.fill.unwrap() {
@@ -1894,6 +1982,7 @@ mod tests {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         });
         let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
         match style.fill.unwrap() {
@@ -1915,6 +2004,7 @@ mod tests {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         });
         let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
         match style.fill.unwrap() {
@@ -1936,6 +2026,7 @@ mod tests {
                 alpha: 0,
             }),
             gradation: None,
+            img_brush: None,
         });
         let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
         assert!(style.fill.is_none(), "no hatchStyle → no Fill::Pattern");
@@ -1966,6 +2057,7 @@ mod tests {
                     crate::schema::shapes::HxGradColor { value: "#0000FF".to_string() },
                 ],
             }),
+            img_brush: None,
         });
         let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
         assert!(matches!(style.fill, Some(Fill::Gradient { .. })));
@@ -3404,6 +3496,128 @@ mod group_tests {
         let (g, w) = decode(&container((3000, 3000), &format!("{keep}{pics_only}")));
         assert_eq!(children(&g.unwrap()).len(), 1);
         assert_eq!(lost_kinds(&w), ["pic", "group"]);
+    }
+
+    const SWITCH: &str = r#"<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/ooxmlchart"/></hp:switch>"#;
+
+    fn sublist(run_inner: &str) -> String {
+        format!(
+            r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{run_inner}</hp:run></hp:p></hp:subList>"#
+        )
+    }
+
+    fn text_box(run_inner: &str, level: u32) -> String {
+        format!(
+            r#"{}<hp:drawText lastWidth="0" name="" editable="0">{}</hp:drawText></hp:rect>"#,
+            shape_head("rect", (1000, 400), &ri(ID, &vec![(ID, ID); level as usize + 1]))
+                .replace(r#"groupLevel="1""#, &format!(r#"groupLevel="{level}""#)),
+            sublist(run_inner)
+        )
+    }
+
+    /// A chart switch (or an element we do not know) inside a group child's
+    /// text box, caption, or a nested group's text box is lost; nothing
+    /// recovers it later inside a group. Outside groups it stays as before.
+    ///
+    /// 이것을 실패시키는 것: `convert_run` 의 `Switch`·`Other` 갈래에서
+    /// `note_unsupported_in_group_child` 호출을 지우는 것, 또는 그 안의 깊이
+    /// 조건을 `true` 로 바꾸는 것 (묶음 밖 글상자에도 경고).
+    #[test]
+    fn unsupported_run_inside_group_content_is_reported() {
+        let in_box = text_box(SWITCH, 1);
+        let (_, w) = decode(&container((1000, 400), &in_box));
+        assert_eq!(lost_kinds(&w), ["group_nested_switch"]);
+
+        let caption = format!(
+            r#"{}<hp:caption side="BOTTOM" fullSz="0" width="1000" gap="850" lastWidth="1000">{}</hp:caption></hp:rect>"#,
+            shape_head("rect", (1000, 400), &ri(ID, &[(ID, ID), (ID, ID)])),
+            sublist("<hp:futureThing/>")
+        );
+        let (_, w) = decode(&container((1000, 400), &caption));
+        assert_eq!(lost_kinds(&w), ["group_nested_unknown"]);
+
+        let nested_box = text_box(SWITCH, 2);
+        let (_, w) = decode(&container(
+            (1000, 400),
+            &nested((1000, 400), &ri(ID, &[(ID, ID), (ID, ID)]), &nested_box),
+        ));
+        assert_eq!(lost_kinds(&w), ["group_nested_switch"]);
+
+        // A text box that is not in a group: no warning.
+        let free = text_box(SWITCH, 0);
+        let (_, w) = decode(&free);
+        assert!(lost_kinds(&w).is_empty(), "{w:?}");
+    }
+
+    /// A polygon filled with a picture: Core has no picture fill for shapes,
+    /// so the fill is reported, and the polygon keeps its own rotation
+    /// (a picture turns with its shape) instead of folding it into points.
+    ///
+    /// 이것을 실패시키는 것: 그림 채우기 방출을 지우는 것, 또는 점 기반 분기
+    /// 조건에서 `!picture_fill` 을 빼는 것 (회전이 점에 접힌다).
+    #[test]
+    fn picture_filled_child_is_reported_and_keeps_its_rotation() {
+        let fill = r#"<hc:fillBrush><hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/></hc:imgBrush></hc:fillBrush>"#;
+        let child = polygon(
+            (1000, 600),
+            &ri(ID, &[(ID, rot(30.0)), (ID, ID)]),
+            &[(0, 600), (500, 0), (1000, 600)],
+            fill,
+        );
+        let (g, w) = decode(&container((3000, 3000), &child));
+        assert_eq!(lost_kinds(&w), ["group_child_fill"]);
+        assert_eq!(rotation(&children(&g.unwrap())[0]), (Some(30.0), None));
+    }
+
+    /// Sizes and offsets outside the HWPUNIT range cannot be stored (they
+    /// would become 0): the child is dropped and reported, on both the box
+    /// and the point path, and so is a group size outside it.
+    ///
+    /// 이것을 실패시키는 것: 상자 경로·점 경로의 범위 검사(`fits_hwpunit`) 중
+    /// 하나를 지우는 것 (각각 따로 — 사유 문구가 잔차로 바뀌거나 경고가 없다),
+    /// 또는 최상위 크기 범위 검사를 지우는 것.
+    #[test]
+    fn out_of_range_geometry_is_reported() {
+        let far = [1.0, 0.0, 100_000_001.0, 0.0, 1.0, 0.0];
+        let keep = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let reasons = |w: &[crate::DecodeWarning]| -> Vec<String> {
+            w.iter()
+                .filter_map(|w| match w {
+                    crate::DecodeWarning::ContentLost { reason, .. } => Some(reason.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let boxy = rect((1000, 400), &ri(far, &[(ID, ID), (ID, ID)]));
+        let (g, w) = decode(&container((1000, 500), &format!("{keep}{boxy}")));
+        assert_eq!(children(&g.unwrap()).len(), 1);
+        assert_eq!(reasons(&w), ["size or offset outside the HWPUNIT range"]);
+
+        let pointy = polygon(
+            (1000, 600),
+            &ri(far, &[(ID, ID), (ID, ID)]),
+            &[(0, 600), (500, 0), (1000, 600)],
+            "",
+        );
+        let (_, w) = decode(&container((1000, 500), &format!("{keep}{pointy}")));
+        assert_eq!(reasons(&w), ["size or offset outside the HWPUNIT range"]);
+
+        let huge = container_with((1000, 500), (200_000_000, 500), &ri(ID, &[(ID, ID)]), &keep);
+        let (_, w) = decode(&huge);
+        assert_eq!(reasons(&w), ["displayed size outside the HWPUNIT range"]);
+    }
+
+    /// A top-level group whose own matrix does not parse: its children are
+    /// placed against a guessed origin, so that is reported.
+    ///
+    /// 이것을 실패시키는 것: 최상위 묶음 행렬 해석 실패를 조용히 항등으로 두는 것.
+    #[test]
+    fn unparseable_group_matrix_is_reported() {
+        let own = ri(ID, &[(ID, ID)]).replacen(r#"e1="1""#, r#"e1="NaN""#, 1);
+        let keep = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let (g, w) = decode(&container_with((500, 500), (500, 500), &own, &keep));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["group_transform"]);
     }
 
     /// A group of pictures only: Core has no group child for them yet, so

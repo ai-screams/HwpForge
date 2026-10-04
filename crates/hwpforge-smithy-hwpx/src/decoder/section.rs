@@ -307,6 +307,18 @@ impl DecodeCtx {
     /// 묶음 인코더가 자식 fragment 의 `<hp:sz>`·`<hp:pos>` 를 깊이와 상관없이
     /// 지우므로, 그런 입력을 재인코드하면 안쪽 개체의 크기·배치가 사라진다.
     /// 인코더가 그 둘을 보존하게 되면 이 경고는 없어진다.
+    /// 묶음 자식 안의 run 에서 디코더가 담지 못하는 요소(`switch` 의 차트·
+    /// OLE, 미지 요소)를 만나면 손실 경고를 남긴다. 최상위 문단의 차트는
+    /// 구역 디코드가 따로 되살리지만 묶음 안에는 그 경로가 없다.
+    fn note_unsupported_in_group_child(&mut self, kind: &str) {
+        if self.group_child_depth > 0 {
+            self.content_lost(
+                format!("group_nested_{kind}"),
+                "element inside a group child is not carried by Core",
+            );
+        }
+    }
+
     fn note_object_in_group_child(&mut self) {
         if self.group_child_depth > 0 {
             self.content_lost(
@@ -764,11 +776,16 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
             // secPr/titleMark 는 구역·문단 수준에서 소비, switch 는 차트
             // 전용 경로 소유, Other/StrayText 는 미지 요소 자리 — run
             // 방출 없음 (ledger 가 fail-closed 신호로 소비).
-            HxRunChildKind::SecPr
-            | HxRunChildKind::TitleMark
-            | HxRunChildKind::Switch
-            | HxRunChildKind::Other
-            | HxRunChildKind::StrayText => {}
+            // Inside a group child nothing recovers these later (charts are
+            // picked up from top-level paragraphs only), so there they are
+            // reported as lost.
+            HxRunChildKind::Switch | HxRunChildKind::Other => {
+                ctx.note_unsupported_in_group_child(match kind {
+                    HxRunChildKind::Switch => "switch",
+                    _ => "unknown",
+                });
+            }
+            HxRunChildKind::SecPr | HxRunChildKind::TitleMark | HxRunChildKind::StrayText => {}
         }
     }
 
