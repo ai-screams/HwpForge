@@ -1270,14 +1270,23 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
 /// those encoders. Returns `None` for controls that have no flat-shape
 /// representation (these are dropped — the decoder already warns for degraded
 /// nested groups).
+///
+/// `parent_origin` is where the parent group's box starts in the outermost
+/// group's space. Hancom maps every shape of a nested group straight into
+/// the outermost group's space, so a child's `transMatrix`/`<hp:offset>` is
+/// `parent_origin` + the child's own offset (for a top-level group the
+/// origin is `(0, 0)`).
 fn encode_group_child_xml(
     child: &Control,
     depth: usize,
     group_level: u32,
+    parent_origin: (i32, i32),
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<Option<String>> {
+    let (dx, dy) = group_child_offset(child);
+    let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
     // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
     // `encode_group_to_xml` bakes the correct `groupLevel` into the opening
     // tag directly, so we must NOT run `set_group_level` afterward (it patches
@@ -1287,8 +1296,8 @@ fn encode_group_child_xml(
     // `offset`/`transMatrix`/`curSz`, and the children's `sz`/`pos` were
     // already stripped during their own recursion.
     if let Control::Group { .. } = child {
-        let (x, y) = group_child_offset(child);
-        let raw = encode_group_to_xml(child, depth, group_level, hyperlink_entries, options, sink)?;
+        let raw =
+            encode_group_at(child, depth, group_level, (x, y), hyperlink_entries, options, sink)?;
         let raw = set_group_child_offset(&raw, x, y);
         let raw = set_group_child_translate(&raw, x, y);
         let raw = zero_cur_sz(&raw);
@@ -1335,7 +1344,6 @@ fn encode_group_child_xml(
         // a container child yet — drop it rather than fabricate.
         _ => return Ok(None),
     };
-    let (x, y) = group_child_offset(child);
     // 한컴 positions a container child by its transform-matrix translation;
     // `<hp:offset>` mirrors it (native carries both). Identity matrices render
     // every child at the group origin (overlap) — verified visually.
@@ -1363,6 +1371,20 @@ pub(crate) fn encode_group_to_xml(
     ctrl: &Control,
     depth: usize,
     group_level: u32,
+    hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
+    sink: &mut EncodeSink,
+) -> HwpxResult<String> {
+    encode_group_at(ctrl, depth, group_level, (0, 0), hyperlink_entries, options, sink)
+}
+
+/// [`encode_group_to_xml`] for a group whose box starts at `origin` in the
+/// outermost group's space (`(0, 0)` for the outermost group itself).
+fn encode_group_at(
+    ctrl: &Control,
+    depth: usize,
+    group_level: u32,
+    origin: (i32, i32),
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
@@ -1395,8 +1417,15 @@ pub(crate) fn encode_group_to_xml(
     let mut emitted_idx = 0usize;
     for child in children {
         sink.enter(PathSeg::GroupChild(emitted_idx));
-        let child_result =
-            encode_group_child_xml(child, depth, group_level + 1, hyperlink_entries, options, sink);
+        let child_result = encode_group_child_xml(
+            child,
+            depth,
+            group_level + 1,
+            origin,
+            hyperlink_entries,
+            options,
+            sink,
+        );
         sink.leave();
         if let Some(xml) = child_result? {
             children_xml.push_str(&xml);
@@ -1428,9 +1457,10 @@ pub(crate) fn encode_group_to_xml(
     let id = generate_instid();
     let instid = inst_id.map_or_else(generate_instid, |v| v.to_string());
     Ok(format!(
-        r#"<hp:container id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="{group_level}" instid="{instid}">{common}{children_xml}{sz}{pos}{out_margin}{shape_comment}</hp:container>"#,
+        r#"<hp:container id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="{flow}" lock="0" dropcapstyle="None" href="" groupLevel="{group_level}" instid="{instid}">{common}{children_xml}{sz}{pos}{out_margin}{shape_comment}</hp:container>"#,
         numbering = shape_numbering_type(placement),
         wrap = shape_text_wrap(placement),
+        flow = shape_text_flow(placement),
     ))
 }
 

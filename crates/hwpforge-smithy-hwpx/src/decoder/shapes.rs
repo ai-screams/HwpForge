@@ -3336,6 +3336,22 @@ mod group_tests {
             .expect("a group")
     }
 
+    fn replace_first_group(doc: &mut crate::HwpxDocument, group: Control) {
+        let mut slot = Some(group);
+        for p in &mut doc.document.sections_mut()[0].paragraphs {
+            for r in &mut p.runs {
+                if let RunContent::Control(c) = &mut r.content {
+                    if matches!(**c, Control::Group { .. }) {
+                        if let Some(g) = slot.take() {
+                            **c = g;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(slot.is_none(), "no group to replace");
+    }
+
     fn encode(doc: &crate::HwpxDocument) -> Vec<u8> {
         let validated = doc.document.clone().validate().expect("validate");
         crate::HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store).expect("encode")
@@ -3384,6 +3400,26 @@ mod group_tests {
         assert!(xml.contains(r#"vertOffset="11339" horzOffset="8504""#));
     }
 
+    /// The container's `textFlow` survives decode → encode → decode.
+    ///
+    /// 이것을 실패시키는 것: 인코더의 `textFlow="BOTH_SIDES"` 하드코딩 복귀, 또는
+    /// 디코더가 container 의 `textFlow` 를 읽지 않는 것.
+    #[test]
+    fn group_text_flow_round_trips() {
+        use hwpforge_core::placement::ObjectTextFlow;
+        let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
+        let mut g = first_group(&doc);
+        if let Control::Group { placement: Some(p), .. } = &mut g {
+            p.text_flow = ObjectTextFlow::LargestOnly;
+        }
+        replace_first_group(&mut doc, g);
+        let bytes = encode(&doc);
+        assert!(section0_xml(&bytes).contains(r#"textFlow="LARGEST_ONLY""#));
+        let back = first_group(&HwpxDecoder::decode(&bytes).unwrap());
+        let Control::Group { placement: Some(p), .. } = &back else { panic!("{back:?}") };
+        assert_eq!(p.text_flow, ObjectTextFlow::LargestOnly);
+    }
+
     /// F1 g2 (group turned 30°): the Core group is an unrotated
     /// 33001 × 23144 box; the rect and ellipse carry the 30°, the polygon and
     /// line hold it in their points. Expected points come from applying the
@@ -3418,6 +3454,58 @@ mod group_tests {
                 other => panic!("unexpected child {other:?}"),
             }
         }
+    }
+
+    /// A nested group written by us: every shape's `transMatrix` is in the
+    /// outermost group's space (parent offsets added up), and decoding it
+    /// back gives the same places with no warning.
+    ///
+    /// 이것을 실패시키는 것: 인코더가 누적 원점 인수를 무시하는 것 (안쪽 사각형이
+    /// 원점에 놓여 `nested_group_placement`, transMatrix 단언 실패).
+    #[test]
+    fn nested_group_round_trips_in_outer_coordinates() {
+        use hwpforge_foundation::HwpUnit;
+        let at = |x, y| super::group_child_placement(x, y);
+        let rect = |w, h, placement| Control::Rect {
+            width: HwpUnit::new(w).unwrap(),
+            height: HwpUnit::new(h).unwrap(),
+            placement,
+            caption: None,
+            style: None,
+        };
+        let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
+        let Control::Group { placement, inst_id, .. } = first_group(&doc) else { unreachable!() };
+        let group = Control::Group {
+            children: vec![
+                rect(1000, 500, at(100, 50)),
+                Control::Group {
+                    children: vec![rect(800, 600, None)],
+                    width: HwpUnit::new(800).unwrap(),
+                    height: HwpUnit::new(600).unwrap(),
+                    placement: at(2000, 3000),
+                    inst_id: None,
+                },
+            ],
+            width: HwpUnit::new(2800).unwrap(),
+            height: HwpUnit::new(3600).unwrap(),
+            placement,
+            inst_id,
+        };
+        replace_first_group(&mut doc, group);
+        let bytes = encode(&doc);
+        let xml = section0_xml(&bytes);
+        let inner = &xml[xml.find(r#"groupLevel="1""#).unwrap()..];
+        let inner_rect = &inner[inner.find(r#"<hp:rect"#).unwrap()..];
+        assert!(inner_rect
+            .contains(r#"<hc:transMatrix e1="1" e2="0" e3="2000" e4="0" e5="1" e6="3000"/>"#));
+
+        let back = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+        let g = first_group(&back);
+        assert_eq!(size_and_offset(&children(&g)[0]), (1000, 500, (100.0, 50.0)));
+        let n = &children(&g)[1];
+        assert_eq!(size_and_offset(n), (800, 600, (2000.0, 3000.0)));
+        assert_eq!(size_and_offset(&children(n)[0]), (800, 600, (0.0, 0.0)));
     }
 
     /// A group converted from HWP5 by us decodes to a document that
