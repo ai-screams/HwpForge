@@ -516,6 +516,39 @@ fn decode_warnings_keep_the_attribute_and_the_decode_stage() {
     assert_eq!(info.message, "hp:header@applyPageType: \"WEIRD\" unknown — fell back to BOTH");
 }
 
+/// Every decode warning sample from the decoder: the two variants the CLI has
+/// always printed keep their output (`LayoutCacheDropped` stays `OTHER` with
+/// its Debug text), every newer one reports the decoder's own code, wording
+/// and location.
+///
+/// 이것을 실패시키는 것: `decode_warning_parts` 의 마지막 갈래를
+/// `(OTHER, Debug, None)` 으로 되돌리는 것.
+#[test]
+fn decode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge_smithy_hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::decode() {
+        let parts = ConvertOpsWarning::Decode(warning.clone()).parts();
+        match &warning {
+            DecodeWarning::UnknownEnumValue { .. } => {
+                assert_eq!(parts.code, "UNKNOWN_ENUM_VALUE");
+                assert_eq!(parts.location.as_deref(), Some("hp:header@applyPageType"));
+            }
+            DecodeWarning::LayoutCacheDropped { .. } => {
+                assert_eq!(parts.code, "OTHER");
+                assert_eq!(parts.message, format!("{warning:?}"));
+                assert_eq!(parts.location, None);
+            }
+            other => {
+                assert_eq!(parts.code, other.code(), "{other:?}");
+                assert_ne!(parts.code, "OTHER", "{other:?}");
+                assert_eq!(parts.message, other.to_string());
+                assert_eq!(parts.location, other.location());
+            }
+        }
+    }
+}
+
 #[test]
 fn every_known_render_warning_has_a_code_and_the_render_stage() {
     let location = || "s0/p1".to_string();

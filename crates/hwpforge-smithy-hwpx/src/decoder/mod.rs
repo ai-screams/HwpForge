@@ -132,6 +132,143 @@ pub enum DecodeWarning {
         /// 구체 사유 (ledger 실패 원인 또는 문제 textpos).
         reason: String,
     },
+    /// 입력에 있던 내용을 Core 가 담지 못해 디코드 결과에서 빠졌거나
+    /// 근사됐다.
+    ///
+    /// 디코드는 계속되지만, 이 결과를 다시 인코드하면 손실이 굳는다. 그래서
+    /// 입력을 재인코드해 돌려주는 편집기(stamp·set-cell·restyle)는 이 경고가
+    /// 있는 입력을 거부한다 ([`DecodeWarning::is_content_loss`]).
+    ContentLost {
+        /// 손실이 난 패키지 part 이름 (예: `Contents/section0.xml`).
+        part: String,
+        /// part 안에서 손실이 난 자리의 중첩 경로.
+        path: ParagraphPath,
+        /// 무엇이 빠졌는지 — wire 요소 이름(`pic`, `ole` …) 또는 손실 분류
+        /// (`group_child_transform`, `group_nested_object` …).
+        kind: String,
+        /// 사람이 읽는 사유 (근사 오차 등).
+        reason: String,
+    },
+}
+
+impl DecodeWarning {
+    /// 이 경고의 안정 코드.
+    ///
+    /// 하류(ops·convert·CLI)가 자기 매핑표에 없는 변형을 만나면 이 값을
+    /// 그대로 보고한다. 기존 변형의 하류 출력 코드는 각 하류의 표가 정한다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{DecodeWarning, ParagraphPath};
+    ///
+    /// let w = DecodeWarning::ContentLost {
+    ///     part: "Contents/section0.xml".into(),
+    ///     path: ParagraphPath::default(),
+    ///     kind: "pic".into(),
+    ///     reason: "unsupported group child".into(),
+    /// };
+    /// assert_eq!(w.code(), "CONTENT_LOST");
+    /// ```
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
+            Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
+            Self::ContentLost { .. } => "CONTENT_LOST",
+        }
+    }
+
+    /// 경고가 가리키는 패키지 part 이름. part 를 싣지 않는 변형은 `None`.
+    #[must_use]
+    pub fn part(&self) -> Option<&str> {
+        match self {
+            Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => None,
+            Self::ContentLost { part, .. } => Some(part),
+        }
+    }
+
+    /// 경고가 가리키는 자리를 사람이 읽는 한 줄로.
+    ///
+    /// `UnknownEnumValue` 는 `요소@속성`, `LayoutCacheDropped` 는 문단 경로,
+    /// `ContentLost` 는 `part:경로`.
+    #[must_use]
+    pub fn location(&self) -> Option<String> {
+        match self {
+            Self::UnknownEnumValue { attribute, .. } => Some((*attribute).to_string()),
+            Self::LayoutCacheDropped { path, .. } => Some(path.to_string()),
+            Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
+        }
+    }
+
+    /// 입력 내용이 디코드에서 빠졌거나 근사됐음을 뜻하는 경고인지.
+    ///
+    /// `true` 인 경고가 있는 입력을 재인코드하면 손실이 굳으므로, 입력을
+    /// 다시 써서 돌려주는 편집기는 그 입력을 거부한다. 판정 정의는 이
+    /// 메서드 하나다.
+    #[must_use]
+    pub fn is_content_loss(&self) -> bool {
+        match self {
+            Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => false,
+            Self::ContentLost { .. } => true,
+        }
+    }
+}
+
+impl std::fmt::Display for DecodeWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownEnumValue { attribute, raw, fallback } => {
+                write!(f, "{attribute}: \"{raw}\" unknown — fell back to {fallback}")
+            }
+            Self::LayoutCacheDropped { path, reason } => {
+                write!(f, "layout cache dropped at {path}: {reason}")
+            }
+            Self::ContentLost { part, path, kind, reason } => {
+                write!(f, "{kind} lost at {part}:{path}: {reason}")
+            }
+        }
+    }
+}
+
+/// 경고 변형마다 표본 하나 (테스트 전용, 안정성 보장 없음).
+///
+/// 하류 크레이트의 테스트가 "새 변형이 폴백 코드로 보고되지 않는다"를
+/// 확인하는 데 쓴다. 표본 목록 옆의 와일드카드 없는 `match` 가 변형 추가 시
+/// 컴파일을 깨뜨려 목록 갱신을 강제한다.
+#[cfg(any(test, feature = "test-support"))]
+pub mod warning_samples {
+    use super::{DecodeWarning, ParagraphPath, PathSeg};
+
+    /// 각 [`DecodeWarning`] 변형의 표본 하나씩, 선언 순서대로.
+    #[must_use]
+    pub fn decode() -> Vec<DecodeWarning> {
+        let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
+        let samples = vec![
+            DecodeWarning::UnknownEnumValue {
+                attribute: "hp:header@applyPageType",
+                raw: "SOMETIMES".to_string(),
+                fallback: "BOTH",
+            },
+            DecodeWarning::LayoutCacheDropped { path: path(), reason: "sample".to_string() },
+            DecodeWarning::ContentLost {
+                part: "Contents/section0.xml".to_string(),
+                path: path(),
+                kind: "pic".to_string(),
+                reason: "sample".to_string(),
+            },
+        ];
+        for sample in &samples {
+            // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
+            // 그때 위 표본에도 하나를 더한다.
+            match sample {
+                DecodeWarning::UnknownEnumValue { .. }
+                | DecodeWarning::LayoutCacheDropped { .. }
+                | DecodeWarning::ContentLost { .. } => {}
+            }
+        }
+        samples
+    }
 }
 
 /// 디코드 경고가 가리키는 문단의 중첩 경로 (§1g v5 변경 5).
@@ -178,6 +315,8 @@ pub enum PathSeg {
     GroupChild(usize),
     /// 중첩 sublist 문단 인덱스 (컨테이너 내부 문단).
     NestedParagraph(usize),
+    /// 바탕쪽 인덱스 (패키지 전역 번호).
+    MasterPage(usize),
 }
 
 impl std::fmt::Display for ParagraphPath {
@@ -200,6 +339,7 @@ impl std::fmt::Display for ParagraphPath {
                 PathSeg::Memo => write!(f, "memo")?,
                 PathSeg::GroupChild(n) => write!(f, "group[{n}]")?,
                 PathSeg::NestedParagraph(n) => write!(f, "npara[{n}]")?,
+                PathSeg::MasterPage(n) => write!(f, "masterpage[{n}]")?,
             }
         }
         Ok(())
@@ -901,6 +1041,63 @@ mod tests {
 /// overflow aborts the test process). The documented 1 MiB minimum for
 /// optimized builds is checked by `tests/decode_stack.rs`, which links the
 /// library as it ships.
+#[cfg(test)]
+mod warning_accessor_tests {
+    use super::{warning_samples, DecodeWarning, ParagraphPath, PathSeg};
+
+    fn content_lost() -> DecodeWarning {
+        DecodeWarning::ContentLost {
+            part: "Contents/section1.xml".into(),
+            path: ParagraphPath(vec![PathSeg::Section(1), PathSeg::GroupChild(2)]),
+            kind: "pic".into(),
+            reason: "unsupported group child".into(),
+        }
+    }
+
+    /// 이것을 실패시키는 것: `is_content_loss` 의 `ContentLost` 갈래를 `false` 로
+    /// 바꾸는 것 — 입력 경계 편집기가 손실 입력을 통과시킨다.
+    #[test]
+    fn only_content_lost_is_content_loss() {
+        for w in warning_samples::decode() {
+            assert_eq!(
+                w.is_content_loss(),
+                matches!(w, DecodeWarning::ContentLost { .. }),
+                "{w:?}"
+            );
+        }
+    }
+
+    /// 이것을 실패시키는 것: 표본 목록에서 한 변형을 빼는 것 — 고유 코드 수가
+    /// 갈래 수와 어긋난다.
+    #[test]
+    fn samples_cover_every_code_once() {
+        let codes: std::collections::BTreeSet<&str> =
+            warning_samples::decode().iter().map(DecodeWarning::code).collect();
+        assert_eq!(
+            codes.into_iter().collect::<Vec<_>>(),
+            ["CONTENT_LOST", "LAYOUT_CACHE_DROPPED", "UNKNOWN_ENUM_VALUE"]
+        );
+    }
+
+    #[test]
+    fn content_lost_reports_part_and_place() {
+        let w = content_lost();
+        assert_eq!(w.code(), "CONTENT_LOST");
+        assert_eq!(w.part(), Some("Contents/section1.xml"));
+        assert_eq!(w.location().as_deref(), Some("Contents/section1.xml:section[1].group[2]"));
+        assert_eq!(
+            w.to_string(),
+            "pic lost at Contents/section1.xml:section[1].group[2]: unsupported group child"
+        );
+    }
+
+    #[test]
+    fn master_page_segment_displays() {
+        let path = ParagraphPath(vec![PathSeg::MasterPage(3), PathSeg::NestedParagraph(0)]);
+        assert_eq!(path.to_string(), "masterpage[3].npara[0]");
+    }
+}
+
 #[cfg(test)]
 mod xml_limit_tests {
     use std::collections::HashMap;

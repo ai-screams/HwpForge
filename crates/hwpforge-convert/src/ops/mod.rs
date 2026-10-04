@@ -709,7 +709,12 @@ fn decode_warning_parts(warning: &DecodeWarning) -> (&'static str, String, Optio
             format!("\"{raw}\" unknown — fell back to {fallback}"),
             Some((*attribute).to_string()),
         ),
-        other => (OTHER, format!("{other:?}"), None),
+        // The CLI has always printed this one under `OTHER` with its Debug
+        // text; kept as is (public output contract).
+        DecodeWarning::LayoutCacheDropped { .. } => (OTHER, format!("{warning:?}"), None),
+        // Anything newer reports the decoder's own code, wording and place,
+        // so it never falls back to `OTHER`.
+        other => (other.code(), other.to_string(), other.location()),
     }
 }
 

@@ -291,6 +291,7 @@ const WARNING_MAPPING: Table = &[
         &[
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
+            ("ContentLost", "CONTENT_LOST"),
         ],
     ),
     ("StructuralWarning", &[("IndexMarkRemoved", "INDEX_MARK_REMOVED")]),
@@ -770,6 +771,17 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     reason: "textpos".into(),
                 }),
             ),
+            (
+                // 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "ContentLost",
+                OpsWarning::Decode(DecodeWarning::ContentLost {
+                    part: "Contents/section0.xml".into(),
+                    path: path(),
+                    kind: "pic".into(),
+                    reason: "unsupported group child".into(),
+                }),
+            ),
         ],
     );
     all.insert(
@@ -980,6 +992,41 @@ fn constructed_warnings_produce_the_mapped_code() {
             let info = warning.info();
             assert_eq!(info.code, *expected, "{enum_name}::{variant}");
             assert!(!info.message.is_empty(), "{enum_name}::{variant} has no message");
+        }
+    }
+}
+
+/// Every decode warning the decoder can emit, taken from its own sample list:
+/// the variants `ops` already printed keep their output, every other one
+/// reports the decoder's code and wording instead of `OTHER` or Debug text.
+///
+/// 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+/// `UNCLASSIFIED` 로, 또는 `decode_warning_message` 의 위임 갈래를 Debug
+/// 포맷으로 되돌리는 것.
+#[test]
+fn decode_warning_samples_keep_old_output_and_never_fall_back() {
+    use hwpforge::hwpx::decoder::warning_samples;
+
+    for warning in warning_samples::decode() {
+        let info = OpsWarning::Decode(warning.clone()).info();
+        match &warning {
+            DecodeWarning::UnknownEnumValue { .. } => {
+                assert_eq!(info.code, "UNKNOWN_ENUM_VALUE");
+                assert_eq!(
+                    info.message,
+                    "hp:header@applyPageType: \"SOMETIMES\" unknown — fell back to BOTH"
+                );
+            }
+            DecodeWarning::LayoutCacheDropped { .. } => {
+                assert_eq!(info.code, "LAYOUT_CACHE_DROPPED");
+                assert_eq!(info.message, "layout cache dropped at section[0].para[0]: sample");
+            }
+            other => {
+                assert_eq!(info.code, other.code(), "{other:?}");
+                assert_ne!(info.code, "OTHER", "{other:?}");
+                assert!(!info.message.contains(" {"), "Debug fallback: {}", info.message);
+                assert_eq!(info.message, other.to_string());
+            }
         }
     }
 }

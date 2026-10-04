@@ -830,7 +830,9 @@ fn decode_warning_code(warning: &DecodeWarning) -> &'static str {
     match warning {
         DecodeWarning::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
         DecodeWarning::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
-        _ => UNCLASSIFIED,
+        // A variant without a row above reports the decoder's own code, so a
+        // new warning is never filed under `OTHER`.
+        other => other.code(),
     }
 }
 
@@ -844,7 +846,7 @@ fn decode_warning_message(warning: &DecodeWarning) -> String {
         DecodeWarning::LayoutCacheDropped { path, reason } => {
             format!("layout cache dropped at {path}: {reason}")
         }
-        other => format!("{other:?}"),
+        other => other.to_string(),
     }
 }
 

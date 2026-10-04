@@ -108,7 +108,12 @@ const AUDITED: &[Audited] = &[
     Audited {
         file: "crates/hwpforge-smithy-hwpx/src/decoder/mod.rs",
         enum_name: "DecodeWarning",
-        table: &[("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"), ("LayoutCacheDropped", "OTHER")],
+        table: &[
+            ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
+            ("LayoutCacheDropped", "OTHER"),
+            // Reported under the decoder's own code (`DecodeWarning::code`).
+            ("ContentLost", "CONTENT_LOST"),
+        ],
     },
     Audited {
         file: "crates/hwpforge-smithy-pdf/src/lib.rs",
