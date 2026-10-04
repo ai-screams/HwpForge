@@ -325,8 +325,15 @@ impl GsoGroupBuilder {
             Some(GsoActiveChild::Leaf(leaf)) => leaf,
             None => return,
         };
+        // The child's own shape records and its text list sit one level
+        // below its `ShapeComponent`, its paragraphs' records two levels
+        // below. Anything deeper belongs to an object inside its text (a
+        // table and its cells, a picture): not the child's own shape or
+        // text.
+        let own = level == child.comp_depth.saturating_add(1);
+        let in_paragraph = level == child.comp_depth.saturating_add(2);
         match tag {
-            TagId::ListHeader => {
+            TagId::ListHeader if own => {
                 child.saw_list_header = true;
                 if let Some(bytes) = record.data.get(2..6) {
                     if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
@@ -334,28 +341,37 @@ impl GsoGroupBuilder {
                     }
                 }
             }
-            TagId::ShapeComponentRect => child.saw_shape_rectangle = true,
-            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
+            TagId::ShapeComponentRect if own => child.saw_shape_rectangle = true,
+            TagId::ShapeComponentLine if own => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => child.line = Some(line),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
-                Ok(polygon) => child.polygon = Some(polygon),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
-                Ok(ellipse) => child.ellipse = Some(ellipse),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+            TagId::ShapeComponentPolygon if own => {
+                match Hwp5ShapeComponentPolygon::parse(&record.data) {
+                    Ok(polygon) => child.polygon = Some(polygon),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
+            TagId::ShapeComponentEllipse if own => {
+                match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                    Ok(ellipse) => child.ellipse = Some(ellipse),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
+            TagId::ShapeComponentCurve if own => match Hwp5ShapeComponentCurve::parse(&record.data)
+            {
                 Ok(curve) => child.curve = Some(curve),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeTextArt => {
+            TagId::ShapeTextArt if own => {
                 match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
                     Ok(ta) => child.text_art = Some(ta),
                     Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
@@ -364,17 +380,17 @@ impl GsoGroupBuilder {
                     }),
                 }
             }
-            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
+            TagId::ShapePicture if own => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => child.picture = Some(picture),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
+            TagId::ShapeComponentOle if own => match Hwp5ShapeComponentOle::parse(&record.data) {
                 Ok(ole) => child.ole = Some(ole),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
-            TagId::ParaHeader => {
+            TagId::ParaHeader if own => {
                 if child.saw_list_header {
                     if let Some(buf) = BodyTextParserState::parse_para_header_buf(
                         record.header.tag_id,
@@ -385,7 +401,7 @@ impl GsoGroupBuilder {
                     }
                 }
             }
-            TagId::ParaText => {
+            TagId::ParaText if in_paragraph => {
                 if let Some(text) = BodyTextParserState::parse_para_text_value(
                     record.header.tag_id,
                     &record.data,
@@ -397,7 +413,7 @@ impl GsoGroupBuilder {
                     }
                 }
             }
-            TagId::ParaCharShape => {
+            TagId::ParaCharShape if in_paragraph => {
                 if let Some(runs) = BodyTextParserState::parse_para_char_shape_runs(
                     record.header.tag_id,
                     &record.data,
@@ -408,7 +424,7 @@ impl GsoGroupBuilder {
                     }
                 }
             }
-            TagId::ParaLineSeg => {
+            TagId::ParaLineSeg if in_paragraph => {
                 if let Some(segments) = BodyTextParserState::parse_para_line_segments(
                     record.header.tag_id,
                     &record.data,

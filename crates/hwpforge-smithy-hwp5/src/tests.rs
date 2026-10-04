@@ -547,3 +547,51 @@ fn every_entry_point_charges_image_decompression_to_the_budget() {
         decode(MAX_TOTAL_DECOMPRESSED).unwrap_or_else(|err| panic!("{name}: full budget: {err}"));
     }
 }
+
+/// A group holding a text box with a table and a picture in its text: the
+/// picture's own `ShapeComponent`/`ShapePicture` records and the table
+/// cells' paragraphs sit deeper than the text box's own records. Read as
+/// the text box's own, the picture made it a two-payload `Unknown` (the
+/// whole text box dropped) and the cell text overwrote its paragraphs.
+///
+/// 이것을 실패시키는 것: 자식 도형 기록을 자기 수준으로 제한하지 않는 것(글상자가
+/// 사라짐), 문단 기록을 자기 수준으로 제한하지 않는 것(표 칸 글자가 둘째 문단을
+/// 덮음).
+#[test]
+fn grouped_text_box_keeps_its_own_records_only() {
+    use hwpforge_core::control::Control;
+    use hwpforge_core::run::RunContent;
+    let bytes = std::fs::read(fixture_path("shapes/group-f2-textbox-table.hwp")).unwrap();
+    let doc = decode_hwp5_with_images(&bytes).unwrap();
+    let group = doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .find_map(|r| match &r.content {
+            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
+            _ => None,
+        })
+        .expect("a group");
+    let Control::Group { children, .. } = &group else { unreachable!() };
+    let texts: Vec<Vec<String>> = children
+        .iter()
+        .filter_map(|c| match c {
+            Control::TextBox { paragraphs, .. } => Some(
+                paragraphs
+                    .iter()
+                    .map(|p| {
+                        p.runs
+                            .iter()
+                            .filter_map(|r| match &r.content {
+                                RunContent::Text(t) => Some(t.as_str()),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, [["글상자 안 표", "", "글상자 안 그림", ""]]);
+}
