@@ -299,6 +299,10 @@ pub(crate) struct DecodeCtx {
     /// 패키지 그림의 픽셀 크기 (`binaryItemIDRef` → (너비, 높이)) — `imgDim`
     /// 없는 묶음 그림의 자르기 판정용.
     pub(crate) image_pixels: HashMap<String, (u32, u32)>,
+    /// 바탕쪽 part 를 디코드하는 중인지 — 본문은 차트를 구역 디코드가 따로
+    /// 되살리지만 바탕쪽에는 그 경로가 없어, run 변환이 버리는 요소를 손실로
+    /// 보고한다.
+    in_master_page: bool,
 }
 
 impl DecodeCtx {
@@ -309,6 +313,20 @@ impl DecodeCtx {
             part: format!("Contents/section{section_index}.xml"),
             group_child_depth: 0,
             image_pixels: HashMap::new(),
+            in_master_page: false,
+        }
+    }
+
+    /// 구역 `section_index` 의 바탕쪽 part `Contents/masterpage{global}.xml`
+    /// 용 문맥. `global` 은 패키지 전역 바탕쪽 번호(파일 번호)다.
+    pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
+        Self {
+            warnings: Vec::new(),
+            path: vec![super::PathSeg::Section(section_index), super::PathSeg::MasterPage(global)],
+            part: format!("Contents/masterpage{global}.xml"),
+            group_child_depth: 0,
+            image_pixels: HashMap::new(),
+            in_master_page: true,
         }
     }
 
@@ -325,11 +343,20 @@ impl DecodeCtx {
     /// 묶음 자식 안의 run 에서 디코더가 담지 못하는 요소(`switch` 의 차트·
     /// OLE, 미지 요소)를 만나면 손실 경고를 남긴다. 최상위 문단의 차트는
     /// 구역 디코드가 따로 되살리지만 묶음 안에는 그 경로가 없다.
-    fn note_unsupported_in_group_child(&mut self, kind: &str) {
+    ///
+    /// 바탕쪽(묶음 밖)에서는 같은 요소를 `in_master_page` 종류 이름(`chart`·
+    /// `switch`·`ole`·`unknown_element`)으로 보고한다. 본문의 같은 drop 은
+    /// 아직 경고하지 않는다.
+    fn note_unsupported_run_child(&mut self, in_group: &str, in_master_page: &str) {
         if self.group_child_depth > 0 {
             self.content_lost(
-                format!("group_nested_{kind}"),
+                format!("group_nested_{in_group}"),
                 "element inside a group child is not carried by Core",
+            );
+        } else if self.in_master_page {
+            self.content_lost(
+                in_master_page.to_string(),
+                "element inside a master page is not carried by Core",
             );
         }
     }
@@ -500,7 +527,7 @@ pub(crate) fn build_wire_map_over_runs(
                         return Err("unknown <hp:switch> content".into());
                     }
                 }
-                K::Other => return Err("unknown run child element".into()),
+                K::Other | K::Ole => return Err("unknown run child element".into()),
                 K::StrayText => return Err("stray run-level text".into()),
             }
         }
@@ -774,11 +801,20 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
             // Inside a group child nothing recovers these later (charts are
             // picked up from top-level paragraphs only), so there they are
             // reported as lost.
-            HxRunChildKind::Switch | HxRunChildKind::Other => {
-                ctx.note_unsupported_in_group_child(match kind {
-                    HxRunChildKind::Switch => "switch",
-                    _ => "unknown",
-                });
+            HxRunChildKind::Switch | HxRunChildKind::Other | HxRunChildKind::Ole => {
+                let (in_group, in_master_page) = match kind {
+                    HxRunChildKind::Switch => {
+                        let is_chart = hx
+                            .switches
+                            .get(idx)
+                            .and_then(|sw| sw.case.as_ref())
+                            .is_some_and(|case| case.chart.is_some());
+                        ("switch", if is_chart { "chart" } else { "switch" })
+                    }
+                    HxRunChildKind::Ole => ("unknown", "ole"),
+                    _ => ("unknown", "unknown_element"),
+                };
+                ctx.note_unsupported_run_child(in_group, in_master_page);
             }
             HxRunChildKind::SecPr | HxRunChildKind::TitleMark | HxRunChildKind::StrayText => {}
         }
@@ -2162,6 +2198,110 @@ fn convert_header_footer(
         HeaderFooter::new(Vec::new(), apply_page_type)
     };
     Ok(hf)
+}
+
+/// Decodes one master page part (`Contents/masterpage{global}.xml`) owned by
+/// section `section_index`.
+///
+/// The `<hp:subList>` goes through the common paragraph decoder, so the
+/// master page carries every run kind the body does. Warnings name the real
+/// part and a `section[s].masterpage[global]…` path.
+///
+/// # Errors
+///
+/// [`HwpxError::XmlParse`] naming the part when it is not well-formed or
+/// does not match the master page shape, and paragraph decode failures.
+pub(crate) fn parse_master_page(
+    xml: &str,
+    section_index: usize,
+    global: usize,
+) -> HwpxResult<(hwpforge_core::section::MasterPage, Vec<super::DecodeWarning>)> {
+    use hwpforge_core::section::{MasterPage, MasterPageSpecial};
+
+    let file = format!("Contents/masterpage{global}.xml");
+    let xml = crate::wire_xml::preserve_ws_only_text(xml);
+    let hx: crate::schema::section::HxMasterPage = xml_from_str(&xml)
+        .map_err(|e| HwpxError::XmlParse { file, detail: xml_error_detail(&e) })?;
+    let mut ctx = DecodeCtx::for_master_page(section_index, global);
+
+    // xs:nonNegativeInteger; 결측 = 0. 해석 불가는 아래에서 손실로 보고한다.
+    let page_number = match hx.page_number.trim() {
+        "" => Some(0),
+        s => s.parse::<u32>().ok(),
+    };
+    let (apply_page_type, special) = match hx.page_type.as_str() {
+        "" | "BOTH" => (ApplyPageType::Both, None),
+        "EVEN" => (ApplyPageType::Even, None),
+        "ODD" => (ApplyPageType::Odd, None),
+        "LAST_PAGE" => (ApplyPageType::Both, Some(MasterPageSpecial::LastPage)),
+        "OPTIONAL_PAGE" => (
+            ApplyPageType::Both,
+            Some(MasterPageSpecial::OptionalPage { page_number: page_number.unwrap_or(0) }),
+        ),
+        other => {
+            // 이것을 실패시키는 것: 이 손실 보고를 지우기 — 경고만 남으면 재인코드
+            // 편집기가 거부하지 못하고 그 바탕쪽이 모든 쪽에 번진다
+            // (`an_unknown_master_page_type_is_content_lost_and_set_cell_refuses_it`).
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "masterPage@type",
+                raw: other.to_string(),
+                fallback: "BOTH",
+            });
+            ctx.content_lost(
+                "master_page_apply_type",
+                format!("master page type {other:?} is not carried; it would apply to every page"),
+            );
+            (ApplyPageType::Both, None)
+        }
+    };
+    let is_optional = matches!(special, Some(MasterPageSpecial::OptionalPage { .. }));
+    match page_number {
+        None => ctx.content_lost(
+            "master_page_page_number",
+            format!("pageNumber {:?} is not a page number", hx.page_number),
+        ),
+        Some(n) if n != 0 && !is_optional => ctx.content_lost(
+            "master_page_page_number",
+            format!("pageNumber {n} is only carried for OPTIONAL_PAGE"),
+        ),
+        Some(_) => {}
+    }
+    let page_duplicate = parse_master_page_flag(&hx.page_duplicate, "pageDuplicate", &mut ctx);
+    let page_front = parse_master_page_flag(&hx.page_front, "pageFront", &mut ctx);
+
+    let mut master = match &hx.sub_list {
+        Some(sub_list) => {
+            let paragraphs = decode_sublist_paragraphs(sub_list, 0, &mut ctx)?;
+            let mut master = MasterPage::new(apply_page_type, paragraphs);
+            master.vert_align = parse_vert_align(&sub_list.vert_align, &mut ctx.warnings);
+            master.text_width = HwpUnit::new(i32::try_from(sub_list.text_width).unwrap_or(0))
+                .unwrap_or(HwpUnit::ZERO);
+            master.text_height = HwpUnit::new(i32::try_from(sub_list.text_height).unwrap_or(0))
+                .unwrap_or(HwpUnit::ZERO);
+            master
+        }
+        None => MasterPage::new(apply_page_type, Vec::new()),
+    };
+    master.special = special;
+    master.page_duplicate = page_duplicate;
+    master.page_front = page_front;
+    Ok((master, ctx.warnings))
+}
+
+/// Reads an `xs:boolean` master page attribute (`0`/`1`/`false`/`true`,
+/// missing = false). Any other value falls back to false and is reported.
+fn parse_master_page_flag(raw: &str, name: &'static str, ctx: &mut DecodeCtx) -> bool {
+    match raw.trim() {
+        "" | "0" | "false" => false,
+        "1" | "true" => true,
+        other => {
+            ctx.content_lost(
+                "master_page_flag",
+                format!("masterPage@{name} {other:?} is not a boolean; read as false"),
+            );
+            false
+        }
+    }
 }
 
 /// Parses an HWPX `vertAlign` string into [`hwpforge_foundation::VerticalAlign`].
@@ -3713,6 +3853,38 @@ mod tests {
     }
 
     // ── Parse helper tests ──────────────────────────────────────
+
+    // 이것을 실패시키는 것: 묶음 갈래 뒤의 `else if` 를 `if` 로 바꾸기(바탕쪽 안
+    // 묶음 자식의 같은 손실을 두 번 보고), 또는 바탕쪽 문맥을 본문에도 켜기.
+    #[test]
+    fn a_dropped_run_child_is_reported_once_and_only_where_it_is_lost() {
+        let mut master = DecodeCtx::for_master_page(0, 2);
+        master.enter_group_child();
+        master.note_unsupported_run_child("unknown", "ole");
+        master.leave_group_child();
+        master.note_unsupported_run_child("unknown", "ole");
+        let kinds: Vec<_> = master
+            .warnings
+            .iter()
+            .map(|w| match w {
+                crate::decoder::DecodeWarning::ContentLost { part, kind, .. } => {
+                    (part.as_str(), kind.as_str())
+                }
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("Contents/masterpage2.xml", "group_nested_unknown"),
+                ("Contents/masterpage2.xml", "ole")
+            ]
+        );
+
+        let mut body = DecodeCtx::new(0);
+        body.note_unsupported_run_child("unknown", "ole");
+        assert!(body.warnings.is_empty(), "{:?}", body.warnings);
+    }
 
     #[test]
     fn parse_apply_page_type_values() {

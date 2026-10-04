@@ -973,7 +973,7 @@ fn collect_raw_run_slots(
             }
             // Switch(차트) 는 디코더가 문단 끝에 append — run 꼬리 집계 유지.
             // secPr/titleMark/Other/StrayText 는 run 방출 없음.
-            K::Switch | K::SecPr | K::TitleMark | K::Other | K::StrayText => {}
+            K::Switch | K::SecPr | K::TitleMark | K::Other | K::Ole | K::StrayText => {}
         }
     }
     // trailing self-closing fieldBegin (BOOKMARK span start) — 디코더 거울.

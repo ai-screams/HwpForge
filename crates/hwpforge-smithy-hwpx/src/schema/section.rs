@@ -294,6 +294,9 @@ pub enum HxRunChildKind {
     TextArt,
     /// 미지 요소 (자리 보존용 — 종류별 Vec 에는 미수록).
     Other,
+    /// `<hp:ole>` — 디코더가 담지 않는 OLE 개체. 본문에서는 [`Self::Other`]
+    /// 와 똑같이 다루고, 바탕쪽에서만 손실 종류 이름(`ole`)이 다르다.
+    Ole,
     /// run 직속 stray `$text` — 스키마상 위치가 없어 내용은 드롭하지만
     /// **존재·위치는 기록**한다 (W1b: 캐시 fail-closed 신호, v4 R3#7).
     StrayText,
@@ -361,6 +364,8 @@ enum HxRunChildDe {
     Container(Box<HxContainer>),
     #[serde(rename = "textart")]
     TextArt(Box<HxTextArt>),
+    #[serde(rename = "ole")]
+    Ole(serde::de::IgnoredAny),
     /// run 직속 텍스트 노드 (정상 문서엔 없음 — 방어적 흡수).
     #[serde(rename = "$text")]
     StrayText(String),
@@ -480,6 +485,9 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                     // run 직속 텍스트는 스키마상 없음 — 내용은 버리되
                     // 위치는 사이드카에 기록한다 (W1b fail-closed 관측).
                     run.child_order.push((K::StrayText, 0));
+                }
+                HxRunChildDe::Ole(_) => {
+                    run.child_order.push((K::Ole, 0));
                 }
                 HxRunChildDe::Other => {
                     run.child_order.push((K::Other, 0));
@@ -2118,6 +2126,30 @@ pub struct HxCellSz {
     pub width: i32,
     #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
+}
+
+/// `Contents/masterpage{N}.xml` 의 루트 `<masterPage>` (역직렬화 전용).
+///
+/// 속성은 문자열로 받아 디코더가 해석한다 — XSD 의 `xs:boolean`
+/// (`true`/`1`)·`xs:nonNegativeInteger` 를 serde 가 거부해 문서 전체 디코드가
+/// 실패하지 않게.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxMasterPage {
+    /// `BOTH`·`EVEN`·`ODD`·`LAST_PAGE`·`OPTIONAL_PAGE` (결측 = `BOTH`).
+    #[serde(rename = "@type", default)]
+    pub page_type: String,
+    /// `OPTIONAL_PAGE` 의 쪽 번호.
+    #[serde(rename = "@pageNumber", default)]
+    pub page_number: String,
+    /// 앞 바탕쪽과 겹침.
+    #[serde(rename = "@pageDuplicate", default)]
+    pub page_duplicate: String,
+    /// 바탕쪽 앞으로.
+    #[serde(rename = "@pageFront", default)]
+    pub page_front: String,
+    /// 바탕쪽 내용.
+    #[serde(rename = "subList", default)]
+    pub sub_list: Option<HxSubList>,
 }
 
 /// `<hp:subList>` — container for paragraphs inside a table cell.

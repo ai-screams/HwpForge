@@ -20,7 +20,6 @@ use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::section::{MasterPage, Section};
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::ApplyPageType;
 
 use crate::error::HwpxResult;
 use crate::style_store::HwpxStyleStore;
@@ -568,9 +567,11 @@ impl HwpxDecoder {
         // Step 3: Extract chart XMLs from ZIP
         let chart_xmls = pkg.read_chart_xmls()?;
 
-        // Step 4: Extract masterpage XMLs from ZIP and parse them
-        let masterpage_xmls = pkg.read_masterpage_xmls()?;
-        let parsed_masterpages = parse_masterpages(masterpage_xmls);
+        // Step 4: Extract masterpage XMLs from ZIP, in file-number order.
+        // Each is decoded below by the section that owns it.
+        let mut masterpage_xmls: Vec<(usize, String)> =
+            pkg.read_masterpage_xmls()?.into_iter().collect();
+        masterpage_xmls.sort_by_key(|(idx, _)| *idx);
 
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
@@ -597,8 +598,13 @@ impl HwpxDecoder {
             // Fall back to result.master_pages (parsed inline) if no ZIP files were found.
             let mp_cnt = extract_master_page_cnt(&section_xml);
             let section_master_pages: Option<Vec<MasterPage>> = if mp_cnt > 0 {
-                let end = (masterpage_cursor + mp_cnt).min(parsed_masterpages.len());
-                let slice = parsed_masterpages[masterpage_cursor..end].to_vec();
+                let end = (masterpage_cursor + mp_cnt).min(masterpage_xmls.len());
+                let mut slice = Vec::with_capacity(end - masterpage_cursor);
+                for (global, xml) in &masterpage_xmls[masterpage_cursor..end] {
+                    let (master, mut mp_warnings) = section::parse_master_page(xml, i, *global)?;
+                    warnings.append(&mut mp_warnings);
+                    slice.push(master);
+                }
                 masterpage_cursor = end;
                 if slice.is_empty() {
                     result.master_pages
@@ -659,126 +665,6 @@ impl HwpxDecoder {
 }
 
 // ── Masterpage helpers ────────────────────────────────────────────
-
-/// Parses all masterpage XML strings into [`MasterPage`] structs.
-///
-/// Input is a map from global masterpage index to raw XML.
-/// Returns a `Vec` sorted by index so masterpage 0 comes first.
-fn parse_masterpages(xmls: std::collections::HashMap<usize, String>) -> Vec<MasterPage> {
-    let mut entries: Vec<(usize, String)> = xmls.into_iter().collect();
-    entries.sort_by_key(|(idx, _)| *idx);
-    entries.into_iter().map(|(_, xml)| parse_masterpage_xml(&xml)).collect()
-}
-
-/// Parses a single masterpage XML string into a [`MasterPage`].
-///
-/// Extracts the `applyPageType` attribute from the root `<masterPage>` element
-/// and the paragraph text from `<hp:subList><hp:p><hp:run><hp:t>` descendants.
-/// Unknown `applyPageType` values fall back to `Both`.
-fn parse_masterpage_xml(xml: &str) -> MasterPage {
-    use hwpforge_core::paragraph::Paragraph;
-    use hwpforge_core::run::{Run, RunContent};
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
-
-    // Extract applyPageType attribute
-    let apply_page_type = extract_masterpage_apply_type(xml);
-
-    // Extract paragraphs: find all <hp:p> elements with their attributes.
-    // This is a lightweight scan — masterpage paragraphs typically contain
-    // minimal or no text content.
-    let mut paragraphs = Vec::new();
-    let mut search = xml;
-    while let Some(p_start) = search.find("<hp:p ").or_else(|| search.find("<hp:p>")) {
-        let after_p = &search[p_start..];
-        // Find the end of the opening <hp:p ...> tag
-        let Some(tag_end) = after_p.find('>') else { break };
-        let open_tag = &after_p[..tag_end];
-        let after_tag = &after_p[tag_end + 1..];
-        let Some(p_close) = after_tag.find("</hp:p>") else { break };
-        let p_content = &after_tag[..p_close];
-
-        // Extract paraPrIDRef from the <hp:p> tag
-        let para_pr_id = extract_attr_u32(open_tag, "paraPrIDRef");
-
-        // Collect all text runs within this paragraph
-        let mut runs = Vec::new();
-        let mut run_search = p_content;
-        while let Some(r_start) =
-            run_search.find("<hp:run ").or_else(|| run_search.find("<hp:run>"))
-        {
-            let after_r = &run_search[r_start..];
-            let Some(r_tag_end) = after_r.find('>') else { break };
-            let run_open = &after_r[..r_tag_end];
-            let char_pr_id = extract_attr_u32(run_open, "charPrIDRef");
-
-            // Find text within this run
-            let after_run_tag = &after_r[r_tag_end + 1..];
-            if let Some(t_start) = after_run_tag.find("<hp:t>") {
-                let after_t = &after_run_tag[t_start + "<hp:t>".len()..];
-                if let Some(t_end) = after_t.find("</hp:t>") {
-                    let text = &after_t[..t_end];
-                    if !text.is_empty() {
-                        runs.push(Run {
-                            content: RunContent::Text(text.to_string()),
-                            char_shape_id: CharShapeIndex::new(char_pr_id as usize),
-                        });
-                    }
-                }
-            }
-
-            // Advance past this run
-            let run_end_tag = "</hp:run>";
-            if let Some(re) = after_r.find(run_end_tag) {
-                run_search = &after_r[re + run_end_tag.len()..];
-            } else {
-                break;
-            }
-        }
-
-        let mut para = Paragraph::new(ParaShapeIndex::new(para_pr_id as usize));
-        for run in runs {
-            para.runs.push(run);
-        }
-        paragraphs.push(para);
-
-        // Advance past this </hp:p>
-        search = &after_tag[p_close + "</hp:p>".len()..];
-    }
-
-    MasterPage::new(apply_page_type, paragraphs)
-}
-
-/// Extracts a named u32 attribute value from an XML open-tag string.
-///
-/// Returns 0 if the attribute is not found or cannot be parsed.
-fn extract_attr_u32(open_tag: &str, attr_name: &str) -> u32 {
-    let needle = format!("{attr_name}=\"");
-    if let Some(pos) = open_tag.find(&needle) {
-        let after = &open_tag[pos + needle.len()..];
-        if let Some(end) = after.find('"') {
-            return after[..end].parse().unwrap_or(0);
-        }
-    }
-    0
-}
-
-/// Extracts the `applyPageType` attribute value from a masterpage XML root element.
-fn extract_masterpage_apply_type(xml: &str) -> ApplyPageType {
-    // Look for type="BOTH"|"EVEN"|"ODD" in the <masterPage ...> opening tag.
-    // The encoder writes: <masterPage ... type="BOTH">
-    if let Some(pos) = xml.find("type=\"") {
-        let after = &xml[pos + "type=\"".len()..];
-        if let Some(end) = after.find('"') {
-            return match &after[..end] {
-                "BOTH" => ApplyPageType::Both,
-                "EVEN" => ApplyPageType::Even,
-                "ODD" => ApplyPageType::Odd,
-                _ => ApplyPageType::Both,
-            };
-        }
-    }
-    ApplyPageType::Both
-}
 
 /// Extracts `masterPageCnt` from the `<hp:secPr>` element in a section XML string.
 ///
