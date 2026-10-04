@@ -67,5 +67,5 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 ## 9. 기록
 
-- memory `MEMORY.md` 체크포인트 + `.claude/guides/status.md` 스냅샷 갱신 (릴리스 후 docs PR).
+- `.claude/guides/status.md` 스냅샷·`CLAUDE.md` 배포 버전 줄은 **Release PR 머지 전에 그 PR 안에서** 갱신한다(CHANGELOG 보완과 같은 커밋, 큐 등록 직전 — main 이 움직이면 release-plz 가 PR 을 다시 만든다). memory `MEMORY.md` 체크포인트는 릴리스 실측 뒤.
 - 에픽 상세 이력은 `.docs/planning/` 계획 문서에 남긴다 (status.md 에 wave-by-wave 재축적 금지).
