@@ -57,6 +57,98 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 // ── content.hpf generator ────────────────────────────────────────
 
+/// One `<opf:item>` of the `content.hpf` manifest.
+///
+/// [`manifest_items`] builds the whole list once; the encoder checks it
+/// (id conflicts, unresolved `binaryItemIDRef`) and
+/// [`PackageWriter::write_hwpx_with_manifest`] writes exactly that list, so
+/// the check and the written manifest cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManifestItem {
+    /// `id` attribute — what `binaryItemIDRef` / `idref` name.
+    pub id: String,
+    /// `href` attribute — the ZIP entry the item points at.
+    pub href: String,
+    /// `media-type` attribute.
+    pub media_type: &'static str,
+    /// `isEmbeded` attribute (Hancom's spelling), absent for XML parts.
+    pub is_embeded: Option<&'static str>,
+    /// Whether the item is also listed in `<opf:spine>`.
+    pub in_spine: bool,
+}
+
+impl ManifestItem {
+    fn xml_part(id: String, href: String, in_spine: bool) -> Self {
+        Self { id, href, media_type: "application/xml", is_embeded: None, in_spine }
+    }
+}
+
+/// The manifest items for a package, in the order 한글 writes them: header,
+/// sections, settings, images, master pages, embedded-chart OLE blobs.
+///
+/// Images and OLE blobs are not in the spine. Chart XML parts are not in the
+/// manifest at all (한글 expects `Chart/*.xml` in the ZIP only).
+pub(crate) fn manifest_items(
+    section_count: usize,
+    image_paths: &[String],
+    masterpage_paths: &[String],
+    embedded_ole_ids: &[String],
+) -> Vec<ManifestItem> {
+    let mut items =
+        vec![ManifestItem::xml_part("header".to_string(), "Contents/header.xml".to_string(), true)];
+    for i in 0..section_count {
+        items.push(ManifestItem::xml_part(
+            format!("section{i}"),
+            format!("Contents/section{i}.xml"),
+            true,
+        ));
+    }
+    // settings in manifest (not in spine)
+    items.push(ManifestItem::xml_part("settings".to_string(), "settings.xml".to_string(), false));
+
+    // Image entries (not in spine). The `id` must match the
+    // `binaryItemIDRef` in section XML (filename stem, no extension).
+    // `isEmbeded="1"` (intentional typo matching 한글's output) marks the
+    // binary as embedded.
+    for path in image_paths {
+        // Strip extension: "test_image.png" → "test_image"
+        let stem = match path.rfind('.') {
+            Some(pos) => &path[..pos],
+            None => path.as_str(),
+        };
+        items.push(ManifestItem {
+            id: stem.to_string(),
+            href: format!("BinData/{path}"),
+            media_type: guess_image_media_type(path),
+            is_embeded: Some("1"),
+            in_spine: false,
+        });
+    }
+
+    // Master page entries in manifest and spine.
+    for path in masterpage_paths {
+        // path is like "Contents/masterpage0.xml" — extract id "masterpage0"
+        let stem =
+            path.strip_prefix("Contents/").unwrap_or(path).strip_suffix(".xml").unwrap_or(path);
+        items.push(ManifestItem::xml_part(stem.to_string(), path.clone(), true));
+    }
+
+    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
+    // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
+    // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
+    // matches Hancom's own attribute name).
+    for ole_id in embedded_ole_ids {
+        items.push(ManifestItem {
+            id: ole_id.clone(),
+            href: format!("BinData/{ole_id}.ole"),
+            media_type: "application/ole",
+            is_embeded: Some("0"),
+            in_spine: false,
+        });
+    }
+    items
+}
+
 /// Generates the OPF content manifest listing header, sections, and images.
 ///
 /// Matches the structure produced by 한글: full namespace declarations,
@@ -70,6 +162,7 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 /// `None` values self-close, populated values are sanitized and
 /// XML-escaped. Unknown entries in `metadata.extras` are emitted in
 /// `BTreeMap` (alphabetical) order so output is deterministic.
+#[cfg(test)]
 fn generate_content_hpf(
     metadata: &Metadata,
     section_count: usize,
@@ -78,74 +171,33 @@ fn generate_content_hpf(
     masterpage_paths: &[String],
     embedded_ole_ids: &[String],
 ) -> String {
-    let mut manifest_items = String::from(
-        r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
-    );
-    let mut spine_refs = String::from(r#"<opf:itemref idref="header" linear="yes"/>"#);
-
-    for i in 0..section_count {
-        use std::fmt::Write as _;
-        write!(
-            manifest_items,
-            r#"<opf:item id="section{i}" href="Contents/section{i}.xml" media-type="application/xml"/>"#,
-        )
-        .expect("write to String is infallible");
-        write!(spine_refs, r#"<opf:itemref idref="section{i}" linear="yes"/>"#)
-            .expect("write to String is infallible");
-    }
-
-    // settings in manifest (not in spine)
-    manifest_items
-        .push_str(r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#);
-
-    // Image entries in manifest (not in spine).
-    // The `id` must match the `binaryItemIDRef` in section XML (filename stem, no extension).
-    // `isEmbeded="1"` (intentional typo matching 한글's output) marks the binary as embedded.
-    for path in image_paths {
-        use std::fmt::Write as _;
-        let media_type = guess_image_media_type(path);
-        // Strip extension: "test_image.png" → "test_image"
-        let stem = match path.rfind('.') {
-            Some(pos) => &path[..pos],
-            None => path.as_str(),
-        };
-        write!(
-            manifest_items,
-            r#"<opf:item id="{stem}" href="BinData/{path}" media-type="{media_type}" isEmbeded="1"/>"#,
-        )
-        .expect("write to String is infallible");
-    }
-
-    // Master page entries in manifest and spine
-    for path in masterpage_paths {
-        use std::fmt::Write as _;
-        // path is like "Contents/masterpage0.xml" — extract id "masterpage0"
-        let stem =
-            path.strip_prefix("Contents/").unwrap_or(path).strip_suffix(".xml").unwrap_or(path);
-        write!(
-            manifest_items,
-            r#"<opf:item id="{stem}" href="{path}" media-type="application/xml"/>"#,
-        )
-        .expect("write to String is infallible");
-        write!(spine_refs, r#"<opf:itemref idref="{stem}" linear="yes"/>"#)
-            .expect("write to String is infallible");
-    }
-
     // NOTE: Chart XML files are NOT listed in the manifest.
-    // 한글 expects Chart/*.xml in the ZIP only, not in content.hpf.
     let _ = chart_paths;
+    render_content_hpf(
+        metadata,
+        &manifest_items(section_count, image_paths, masterpage_paths, embedded_ole_ids),
+    )
+}
 
-    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
-    // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
-    // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
-    // matches Hancom's own attribute name).
-    for ole_id in embedded_ole_ids {
-        use std::fmt::Write as _;
-        write!(
-            manifest_items,
-            r#"<opf:item id="{ole_id}" href="BinData/{ole_id}.ole" media-type="application/ole" isEmbeded="0"/>"#,
-        )
-        .expect("write to String is infallible");
+/// Writes `content.hpf` from metadata and an already built manifest list.
+fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) -> String {
+    use std::fmt::Write as _;
+
+    let mut manifest_items = String::new();
+    let mut spine_refs = String::new();
+    for item in items {
+        let ManifestItem { id, href, media_type, is_embeded, in_spine } = item;
+        write!(manifest_items, r#"<opf:item id="{id}" href="{href}" media-type="{media_type}""#)
+            .expect("write to String is infallible");
+        if let Some(flag) = is_embeded {
+            write!(manifest_items, r#" isEmbeded="{flag}""#)
+                .expect("write to String is infallible");
+        }
+        manifest_items.push_str("/>");
+        if *in_spine {
+            write!(spine_refs, r#"<opf:itemref idref="{id}" linear="yes"/>"#)
+                .expect("write to String is infallible");
+        }
     }
 
     let metadata_block = build_metadata_block(metadata);
@@ -314,10 +366,42 @@ fn guess_image_media_type(path: &str) -> &'static str {
 pub(crate) struct PackageWriter;
 
 impl PackageWriter {
+    /// [`Self::write_hwpx_with_manifest`] with the manifest built from the
+    /// same inputs (unit tests of the writer).
+    #[cfg(test)]
+    pub fn write_hwpx(
+        metadata: &Metadata,
+        header_xml: &str,
+        section_xmls: &[String],
+        images: &[(String, Vec<u8>)],
+        charts: &[(String, String)],
+        master_pages: &[(String, String)],
+        embedded_oles: &[(String, Vec<u8>)],
+    ) -> HwpxResult<Vec<u8>> {
+        let manifest = manifest_items(
+            section_xmls.len(),
+            &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        );
+        Self::write_hwpx_with_manifest(
+            metadata,
+            &manifest,
+            header_xml,
+            section_xmls,
+            images,
+            charts,
+            master_pages,
+            embedded_oles,
+        )
+    }
+
     /// Assembles header XML, section XMLs, and optional images into a HWPX ZIP.
     ///
     /// # Arguments
     ///
+    /// * `manifest` — The `content.hpf` manifest, from [`manifest_items`]
+    ///   over the same parts, images and OLE blobs.
     /// * `header_xml` — Serialized `Contents/header.xml` content.
     /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
     /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
@@ -325,8 +409,10 @@ impl PackageWriter {
     /// # Errors
     ///
     /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
-    pub fn write_hwpx(
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_hwpx_with_manifest(
         metadata: &Metadata,
+        manifest: &[ManifestItem],
         header_xml: &str,
         section_xmls: &[String],
         images: &[(String, Vec<u8>)],
@@ -364,19 +450,7 @@ impl PackageWriter {
         // 5. Contents/content.hpf (dynamic manifest)
         zip.start_file("Contents/content.hpf", deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
-        let image_paths: Vec<String> = images.iter().map(|(path, _)| path.clone()).collect();
-        let chart_paths: Vec<String> = charts.iter().map(|(path, _)| path.clone()).collect();
-        let mp_paths: Vec<String> = master_pages.iter().map(|(path, _)| path.clone()).collect();
-        let embedded_ole_ids: Vec<String> =
-            embedded_oles.iter().map(|(id, _)| id.clone()).collect();
-        let content_hpf = generate_content_hpf(
-            metadata,
-            section_xmls.len(),
-            &image_paths,
-            &chart_paths,
-            &mp_paths,
-            &embedded_ole_ids,
-        );
+        let content_hpf = render_content_hpf(metadata, manifest);
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
@@ -537,6 +611,44 @@ mod tests {
             assert!(hpf3.contains(&format!(r#"idref="section{i}""#)), "spine missing section{i}");
         }
         assert!(!hpf3.contains(r#"id="section3""#));
+    }
+
+    /// The whole manifest and spine for every kind of item, as a literal.
+    ///
+    /// 이것을 실패시키는 것: manifest 항목의 순서(header·section·settings·
+    /// 이미지·바탕쪽·OLE)나 한 항목의 속성(`isEmbeded` 값, spine 포함 여부)을
+    /// 바꾸는 것.
+    #[test]
+    fn content_hpf_manifest_and_spine_for_every_item_kind() {
+        let hpf = generate_content_hpf(
+            &Metadata::default(),
+            2,
+            &["image1.png".to_string(), "photo.jpg".to_string()],
+            &["Chart/chart0.xml".to_string()],
+            &["Contents/masterpage0.xml".to_string()],
+            &["ole1".to_string()],
+        );
+        let manifest = hpf.split("<opf:manifest>").nth(1).unwrap();
+        assert_eq!(
+            manifest,
+            concat!(
+                r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="section1" href="Contents/section1.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="image1" href="BinData/image1.png" media-type="image/png" isEmbeded="1"/>"#,
+                r#"<opf:item id="photo" href="BinData/photo.jpg" media-type="image/jpeg" isEmbeded="1"/>"#,
+                r#"<opf:item id="masterpage0" href="Contents/masterpage0.xml" media-type="application/xml"/>"#,
+                r#"<opf:item id="ole1" href="BinData/ole1.ole" media-type="application/ole" isEmbeded="0"/>"#,
+                r#"</opf:manifest>"#,
+                r#"<opf:spine>"#,
+                r#"<opf:itemref idref="header" linear="yes"/>"#,
+                r#"<opf:itemref idref="section0" linear="yes"/>"#,
+                r#"<opf:itemref idref="section1" linear="yes"/>"#,
+                r#"<opf:itemref idref="masterpage0" linear="yes"/>"#,
+                r#"</opf:spine></opf:package>"#,
+            )
+        );
     }
 
     // ── Test: content.hpf includes image entries ────────────────

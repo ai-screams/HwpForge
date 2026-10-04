@@ -1153,8 +1153,15 @@ impl HwpxEncoder {
         // Step 4: Package into ZIP with images, charts, master pages, and
         // embedded-chart OLE blobs. Document.metadata flows into content.hpf
         // <opf:metadata> (Wave 12o Phase 1).
-        let bytes = PackageWriter::write_hwpx(
+        let manifest = package::manifest_items(
+            section_xmls.len(),
+            &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+        );
+        let bytes = PackageWriter::write_hwpx_with_manifest(
             document.metadata(),
+            &manifest,
             &header_xml,
             &section_xmls,
             &images,
