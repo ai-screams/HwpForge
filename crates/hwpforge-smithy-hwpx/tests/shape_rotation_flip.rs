@@ -122,6 +122,64 @@ fn hancom_mirror_and_rotation_reencode_to_the_hancom_matrix() {
     }
 }
 
+/// `(orgSz width, height)` of every shape's common block, in document order.
+fn wire_org_sizes(xml: &str) -> Vec<(i32, i32)> {
+    xml.match_indices("<hp:orgSz ")
+        .map(|(start, _)| {
+            let tag = &xml[start..start + xml[start..].find("/>").unwrap()];
+            let num = |name: &str| -> i32 {
+                let v = tag.split(&format!(" {name}=\"")).nth(1).unwrap();
+                v[..v.find('"').unwrap()].parse().unwrap()
+            };
+            (num("width"), num("height"))
+        })
+        .collect()
+}
+
+/// Each of Hancom's mirrored-and-turned shapes, given to the writer at its
+/// own local size (`orgSz`), angle and flip: all six `rotMatrix`
+/// coefficients match Hancom's — the linear part digit for digit, the
+/// translation within 1.2 (Hancom turns about the centre rounded down to a
+/// whole HWPUNIT, Core about the exact centre) — and so does every corner.
+///
+/// 이것을 실패시키는 것: 이동 성분을 원점 기준 회전으로 계산하는 것, 반사·회전
+/// 순서를 뒤집는 것(`F·R`), 단축 반사에 각도 부호를 바꾸는 것.
+#[test]
+fn writer_matrix_matches_hancom_at_the_native_size() {
+    let xml = section0(&fixture("rotflip-single.hwpx"));
+    let hancom = wire_transforms(&xml);
+    let sizes = wire_org_sizes(&xml);
+    assert_eq!(hancom.len(), sizes.len());
+    for (h, &(w, ht)) in hancom.iter().zip(&sizes) {
+        let flip = match (h.1.as_str(), h.2.as_str()) {
+            ("1", "1") => Some(Flip::Both),
+            ("1", _) => Some(Flip::Horizontal),
+            (_, "1") => Some(Flip::Vertical),
+            _ => None,
+        };
+        let angle: f32 = h.0.parse().unwrap();
+        let (ours_xml, warnings) = encode_one(rect(w, ht, angle, flip));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let ours = &wire_transforms(&ours_xml)[0];
+        let num = |m: &[String; 6]| m.clone().map(|v| v.parse::<f64>().unwrap());
+        let (o, n) = (num(&ours.3), num(&h.3));
+        for i in [0, 1, 3, 4] {
+            assert!((o[i] - n[i]).abs() < 1e-6, "e{}: ours {o:?} hancom {n:?}", i + 1);
+        }
+        for i in [2, 5] {
+            assert!((o[i] - n[i]).abs() <= 1.2, "e{}: ours {o:?} hancom {n:?}", i + 1);
+        }
+        let map = |m: &[f64; 6], (x, y): (f64, f64)| {
+            (m[0] * x + m[1] * y + m[2], m[3] * x + m[4] * y + m[5])
+        };
+        let (fw, fh) = (f64::from(w), f64::from(ht));
+        for p in [(0.0, 0.0), (fw, 0.0), (fw, fh), (0.0, fh)] {
+            let (a, b) = (map(&o, p), map(&n, p));
+            assert!((a.0 - b.0).hypot(a.1 - b.1) <= 2.0, "corner {p:?}: {a:?} vs {b:?}");
+        }
+    }
+}
+
 fn styles() -> HwpxStyleStore {
     let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
     styles.push_char_shape(HwpxCharShape::default());
