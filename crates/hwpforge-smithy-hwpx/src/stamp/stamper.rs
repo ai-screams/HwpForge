@@ -372,6 +372,7 @@ impl HwpxStamper {
     ) -> Result<crate::diagnostics::WithCodecWarnings<StampResult>, StamperError> {
         // ── admission gate ──────────────────────────────────────────
         let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        reject_input_content_loss(&d0.warnings)?;
         let e0 = encode_hwpx(&d0)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1)?;
@@ -445,6 +446,7 @@ impl HwpxStamper {
 
         // ── admission gate (identical to v1) ────────────────────────
         let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        reject_input_content_loss(&d0.warnings)?;
         let e0 = encode_hwpx(&d0)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1)?;
@@ -703,6 +705,31 @@ pub(crate) fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
         .map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
     HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store)
         .map_err(|e| StamperError::Codec(e.to_string()))
+}
+
+/// Refuses an input whose decode reported lost content
+/// ([`DecodeWarning::is_content_loss`](crate::DecodeWarning::is_content_loss)).
+///
+/// The editors regenerate the whole package from the decode, so they would
+/// write that loss into their output. The no-op admission round trip cannot
+/// see it: both of its decodes lose the same thing. The first such warning is
+/// named in the error.
+pub(crate) fn reject_input_content_loss(
+    warnings: &[crate::DecodeWarning],
+) -> Result<(), StamperError> {
+    match warnings.iter().find(|w| w.is_content_loss()) {
+        Some(crate::DecodeWarning::ContentLost { part, path, kind, .. }) => {
+            Err(StamperError::NotRoundTripSafe {
+                component: format!("input decode: CONTENT_LOST {kind}"),
+                diff_path: format!("{part}:{path}"),
+            })
+        }
+        Some(other) => Err(StamperError::NotRoundTripSafe {
+            component: format!("input decode: {}", other.code()),
+            diff_path: other.location().unwrap_or_default(),
+        }),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {

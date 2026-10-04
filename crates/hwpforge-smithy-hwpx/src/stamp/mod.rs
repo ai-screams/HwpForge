@@ -35,7 +35,9 @@ pub use request::{
 // E3 cell editing reuses the stamp admission gate (decode→encode→decode
 // no-op equality + ZIP closed-world) so both mutation facades share one
 // fail-closed contract.
-pub(crate) use stamper::{admission_compare, check_zip_carry, encode_hwpx, first_diff_path};
+pub(crate) use stamper::{
+    admission_compare, check_zip_carry, encode_hwpx, first_diff_path, reject_input_content_loss,
+};
 pub use stamper::{
     HwpxStamper, ManifestField, ManifestFieldV2, StampManifest, StampManifestV2, StampMeta,
     StampOriginV2, StampOutcomeV2, StampPlanV2, StampResult, StampResultV2, StamperError,

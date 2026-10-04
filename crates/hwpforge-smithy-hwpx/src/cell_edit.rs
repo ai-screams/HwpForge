@@ -42,7 +42,9 @@ use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::encoder::HwpxEncoder;
-use crate::stamp::{admission_compare, check_zip_carry, encode_hwpx, StamperError};
+use crate::stamp::{
+    admission_compare, check_zip_carry, encode_hwpx, reject_input_content_loss, StamperError,
+};
 use crate::table_inventory::{for_each_table_mut, tables_in_document, PathSeg};
 
 /// How a [`CellSpec`] addresses a cell inside its table.
@@ -599,6 +601,7 @@ impl HwpxCellEditor {
         specs: &[CellSpec],
     ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
+        reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
         let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;

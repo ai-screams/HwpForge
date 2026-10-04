@@ -283,3 +283,31 @@ fn every_returned_warning_is_non_semantic() {
         assert_ne!(code, "TITLE_MARK_SKIPPED", "{codes:?}");
     }
 }
+
+fn shapes_fixture(name: &str) -> Vec<u8> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
+    std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
+}
+
+/// An input whose decode lost content is refused before encoding: the
+/// regenerated package would make the loss permanent. Both fixtures decode
+/// with exactly one `CONTENT_LOST` (a sheared group child; a table inside a
+/// grouped text box, which the group encoder cannot place yet).
+///
+/// 이것을 실패시키는 것: `restyle` 의 `reject_input_content_loss` 호출을 지우는 것.
+#[test]
+fn input_with_lost_content_is_refused() {
+    for name in ["group-sheared-child.hwpx", "group-nested-table.hwpx"] {
+        let bytes = shapes_fixture(name);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(
+            decoded.warnings.iter().filter(|w| w.is_content_loss()).count(),
+            1,
+            "{name}: {:?}",
+            decoded.warnings
+        );
+        let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).unwrap_err();
+        assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{name}: {err}");
+        assert!(err.to_string().contains("input is not round-trip safe"), "{err}");
+    }
+}

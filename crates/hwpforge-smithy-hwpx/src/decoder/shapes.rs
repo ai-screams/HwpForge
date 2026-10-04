@@ -3592,4 +3592,61 @@ mod group_tests {
         .unwrap();
         assert!(lost_kinds(&r.warnings).is_empty(), "{:?}", r.warnings);
     }
+
+    // ── input boundaries of the regenerating editors ───────────────
+
+    fn assert_refused_by_stamp_and_set_cell(name: &str, kind: &str) {
+        use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
+        use crate::{CellEditError, HwpxCellEditor};
+        let bytes = fixture(name);
+        let expected = format!("input decode: CONTENT_LOST {kind}");
+        let check = |component: &str, diff_path: &str, surface: &str| {
+            assert_eq!(component, expected, "{name} {surface}");
+            assert!(diff_path.starts_with("Contents/section0.xml:"), "{surface}: {diff_path}");
+        };
+
+        match HwpxStamper::stamp(&bytes, &[]) {
+            Err(StamperError::NotRoundTripSafe { component, diff_path }) => {
+                check(&component, &diff_path, "stamp v1");
+            }
+            other => panic!("{name} stamp v1: {other:?}"),
+        }
+        let request = StampRequestV2 {
+            schema_version: STAMP_MAP_VERSION,
+            source_sha256: crate::patch::sha256_hex(&bytes),
+            text: Vec::new(),
+            cells: Vec::new(),
+        };
+        match HwpxStamper::stamp_v2(&bytes, &request) {
+            Err(StamperError::NotRoundTripSafe { component, diff_path }) => {
+                check(&component, &diff_path, "stamp v2");
+            }
+            other => panic!("{name} stamp v2: {other:?}"),
+        }
+        match HwpxCellEditor::set_cells(&bytes, &[]) {
+            Err(CellEditError::NotRoundTripSafe { component, diff_path }) => {
+                check(&component, &diff_path, "set-cell");
+            }
+            other => panic!("{name} set-cell: {other:?}"),
+        }
+    }
+
+    /// A sheared child cannot be carried exactly; stamping (both request
+    /// versions) and cell editing regenerate the package, so they refuse it.
+    ///
+    /// 이것을 실패시키는 것: `stamp_with_diagnostics`·`stamp_v2_with_diagnostics`·
+    /// `set_cells_with_diagnostics` 의 `reject_input_content_loss` 호출을 하나씩
+    /// 지우는 것 (그 표면만 다른 결과가 된다).
+    #[test]
+    fn editors_refuse_an_input_with_a_sheared_group_child() {
+        let doc = HwpxDecoder::decode(&fixture("group-sheared-child.hwpx")).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
+        assert_refused_by_stamp_and_set_cell("group-sheared-child.hwpx", "group_child_transform");
+    }
+
+    /// Same refusal for a table inside a grouped text box.
+    #[test]
+    fn editors_refuse_an_input_with_an_object_inside_a_group_child() {
+        assert_refused_by_stamp_and_set_cell("group-nested-table.hwpx", "group_nested_object");
+    }
 }
