@@ -181,6 +181,25 @@ impl DecodeWarning {
     }
 
     /// 경고가 가리키는 패키지 part 이름. part 를 싣지 않는 변형은 `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{DecodeWarning, ParagraphPath};
+    ///
+    /// let lost = DecodeWarning::ContentLost {
+    ///     part: "Contents/section0.xml".into(),
+    ///     path: ParagraphPath::default(),
+    ///     kind: "pic".into(),
+    ///     reason: "unsupported group child".into(),
+    /// };
+    /// assert_eq!(lost.part(), Some("Contents/section0.xml"));
+    /// let dropped = DecodeWarning::LayoutCacheDropped {
+    ///     path: ParagraphPath::default(),
+    ///     reason: "textpos".into(),
+    /// };
+    /// assert_eq!(dropped.part(), None);
+    /// ```
     #[must_use]
     pub fn part(&self) -> Option<&str> {
         match self {
@@ -193,6 +212,20 @@ impl DecodeWarning {
     ///
     /// `UnknownEnumValue` 는 `요소@속성`, `LayoutCacheDropped` 는 문단 경로,
     /// `ContentLost` 는 `part:경로`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{DecodeWarning, ParagraphPath, PathSeg};
+    ///
+    /// let w = DecodeWarning::ContentLost {
+    ///     part: "Contents/section0.xml".into(),
+    ///     path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::GroupChild(1)]),
+    ///     kind: "pic".into(),
+    ///     reason: "unsupported group child".into(),
+    /// };
+    /// assert_eq!(w.location().as_deref(), Some("Contents/section0.xml:section[0].group[1]"));
+    /// ```
     #[must_use]
     pub fn location(&self) -> Option<String> {
         match self {
@@ -236,6 +269,25 @@ impl DecodeWarning {
     /// `true` 인 경고가 있는 입력을 재인코드하면 손실이 굳으므로, 입력을
     /// 다시 써서 돌려주는 편집기는 그 입력을 거부한다. 판정 정의는 이
     /// 메서드 하나다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{DecodeWarning, ParagraphPath};
+    ///
+    /// let lost = DecodeWarning::ContentLost {
+    ///     part: "Contents/section0.xml".into(),
+    ///     path: ParagraphPath::default(),
+    ///     kind: "pic".into(),
+    ///     reason: "unsupported group child".into(),
+    /// };
+    /// assert!(lost.is_content_loss());
+    /// let dropped = DecodeWarning::LayoutCacheDropped {
+    ///     path: ParagraphPath::default(),
+    ///     reason: "textpos".into(),
+    /// };
+    /// assert!(!dropped.is_content_loss());
+    /// ```
     #[must_use]
     pub fn is_content_loss(&self) -> bool {
         match self {
@@ -271,6 +323,15 @@ pub mod warning_samples {
     use super::{DecodeWarning, ParagraphPath, PathSeg};
 
     /// 각 [`DecodeWarning`] 변형의 표본 하나씩, 선언 순서대로.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::decoder::warning_samples;
+    ///
+    /// let samples = warning_samples::decode();
+    /// assert!(samples.iter().any(|w| w.code() == "CONTENT_LOST"));
+    /// ```
     #[must_use]
     pub fn decode() -> Vec<DecodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
