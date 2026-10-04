@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.9...hwpforge-smithy-hwpx-v0.16.10) - 2026-10-04
+
+### Documentation
+
+- correct the statements a fact check found wrong
+
+- *(readme)* match the READMEs to the code and drop volatile counts
+
+
+### Fixed
+
+- *(hwpx)* bound entry decompression on the editing path
+
+
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.8...hwpforge-smithy-hwpx-v0.16.9) - 2026-10-03
 
 ### Fixed

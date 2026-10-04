@@ -19,7 +19,7 @@ exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
-version = "0.16.9"
+version = "0.16.10"
 authors = ["Pignuante <hanyul.ryu@hanyul.xyz>"]
 categories = [
   "parser-implementations",
