@@ -658,12 +658,13 @@ impl HwpxFiller {
     /// 누름틀을 채우되 **디코더 경고를 함께** 돌려준다.
     ///
     /// 바이트·`filled` 목록은 [`HwpxFiller::fill`] 과 동일하다 — 그쪽이 이
-    /// 함수의 얇은 래퍼라 둘이 어긋날 수 없다.
+    /// 함수의 얇은 래퍼라 둘이 어긋날 수 없다. 이 함수 역시
+    /// [`HwpxFiller::fill_with_codec_diagnostics`] 의 얇은 래퍼로, 인코드
+    /// 채널(값에서 지운 제어 문자 경고)만 버린다.
     ///
     /// # 어느 디코드인가
     ///
-    /// 이름 해석용 **입력 디코드 한 번**의 경고만 싣는다. 채우기는
-    /// preserve-first 라 재인코드가 없고(인코더 경고 없음), 뒤따르는
+    /// 이름 해석용 **입력 디코드 한 번**의 경고만 싣는다. 뒤따르는
     /// preserve 패치는 섹션마다 같은 base 를 다시 디코드하지만 그것은 이미
     /// 보고한 디코드의 재실행이므로 합치면 한 경고가 섹션 수만큼 불어난다.
     /// 그래서 경고 개수는 편집이 건드린 섹션 수와 무관하게 일정하다.
@@ -677,9 +678,55 @@ impl HwpxFiller {
         base: &[u8],
         values: &BTreeMap<String, String>,
     ) -> Result<crate::diagnostics::WithDecodeWarnings<FillOutcome>, FillError> {
-        // ── preflight 1: 값 자체 검증 ──
+        Self::fill_with_codec_diagnostics(base, values).map(|diagnosed| {
+            crate::diagnostics::WithDecodeWarnings::new(diagnosed.value, diagnosed.decode_warnings)
+        })
+    }
+
+    /// 누름틀을 채우되 **디코더 경고와 인코드 경고를 함께** 돌려준다.
+    ///
+    /// 바이트·`filled` 목록은 [`HwpxFiller::fill`] 과 동일하다.
+    /// `decode_warnings` 는 [`HwpxFiller::fill_with_diagnostics`] 와 같은 입력
+    /// 디코드 한 번의 경고다.
+    ///
+    /// 채우기는 preserve-first 라 패키지를 재인코드하지 않는다.
+    /// `encode_warnings` 는 값 자체에 대한 것뿐이다: XML 1.0 이 담을 수 없는
+    /// 문자(TAB·LF·CR 을 뺀 C0 제어 문자 — 단 `<hp:fwSpace/>` 로 쓰는
+    /// U+001F 는 남긴다 — 와 U+FFFE·U+FFFF)는 값에서 지우고, 지운 값마다
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
+    /// 하나(`location` = `field 'NAME'`)를 싣는다. 지운 뒤의 값이 쓰기·"값이
+    /// 바뀌었나" 비교·`filled` 보고에 모두 쓰이므로, 지운 뒤 현재 값과 같으면
+    /// 그 필드는 채우지 않은 것으로 남는다(경고만, 바이트 그대로). 지운 뒤
+    /// 비면 [`FillError::EmptyValue`].
+    ///
+    /// # Errors
+    ///
+    /// [`FillError`] 의 각 variant 문서를 참조. 패키지의 모든 엔트리(디코더가
+    /// 읽지 않는 것 포함)를 해제하므로 엔트리 하나가 50 MiB, 전체가 500 MiB 를
+    /// 넘으면 거부한다.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::collections::BTreeMap;
+    /// use hwpforge_smithy_hwpx::HwpxFiller;
+    ///
+    /// let base = std::fs::read("form.hwpx")?;
+    /// let values = BTreeMap::from([("성명".to_string(), "홍길동".to_string())]);
+    /// let diagnosed = HwpxFiller::fill_with_codec_diagnostics(&base, &values)?;
+    /// for warning in &diagnosed.encode_warnings {
+    ///     eprintln!("{warning}");
+    /// }
+    /// std::fs::write("filled.hwpx", &diagnosed.value.bytes)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn fill_with_codec_diagnostics(
+        base: &[u8],
+        values: &BTreeMap<String, String>,
+    ) -> Result<crate::diagnostics::WithCodecWarnings<FillOutcome>, FillError> {
+        // ── preflight 1: 값 자체 검증 (XML 이 담을 수 없는 문자를 지운 뒤) ──
         for (name, value) in values {
-            if value.is_empty() {
+            if value.chars().all(crate::wire_xml::is_edit_unrepresentable_char) {
                 return Err(FillError::EmptyValue { name: name.clone() });
             }
         }
@@ -729,6 +776,21 @@ impl HwpxFiller {
             }
         }
 
+        // 값마다 입구에서 한 번 정리한다 — 이 값 하나가 쓰기·비교·보고에 쓰인다.
+        let mut encode_warnings = Vec::new();
+        let mut cleaned: BTreeMap<&str, String> = BTreeMap::new();
+        for (name, value) in values {
+            let section =
+                inventory.iter().find(|(n, _, _)| n == name).map_or(0, |(_, section, _)| *section);
+            let value = crate::wire_xml::sanitize_edit_text(
+                value,
+                &crate::patch::section_path(section),
+                &format!("field '{name}'"),
+                &mut encode_warnings,
+            );
+            cleaned.insert(name.as_str(), value);
+        }
+
         // ── 적용: 대상 필드 mutate + 섹션별 preserve-first patch 체이닝 ──
         let original_sections: Vec<Section> = decoded.document.sections().to_vec();
         let mut filled: Vec<FilledField> = Vec::new();
@@ -750,7 +812,7 @@ impl HwpxFiller {
                     let Some(name) = name else {
                         return;
                     };
-                    if let Some(value) = values.get(name.as_str()) {
+                    if let Some(value) = cleaned.get(name.as_str()) {
                         if value == display_text {
                             // 동일 값 = 완전 no-op — mutate/FilledField/
                             // touched/캐시 무효화 전부 생략 (§1g v5 변경 5).
@@ -795,9 +857,10 @@ impl HwpxFiller {
         // 무조건**이다. 문단당 정확히 1회 제거 (이후 재조판은 한글 몫).
         bytes = strip_linesegarray_for_changed_fields(&bytes, &locators, &changed_fields)?;
 
-        Ok(crate::diagnostics::WithDecodeWarnings::new(
+        Ok(crate::diagnostics::WithCodecWarnings::new(
             FillOutcome { bytes, filled },
             decode_warnings,
+            encode_warnings,
         ))
     }
 }

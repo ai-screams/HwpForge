@@ -8,6 +8,7 @@
 //! looked at; a base document that already holds such characters keeps them
 //! in every slot the edit leaves alone.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 
 use hwpforge_core::control::Control;
@@ -18,7 +19,9 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
-use hwpforge_smithy_hwpx::{EncodeWarning, HwpxDecoder, HwpxEncoder, HwpxPatcher};
+use hwpforge_smithy_hwpx::{
+    EncodeWarning, FillError, HwpxDecoder, HwpxEncoder, HwpxFiller, HwpxPatcher,
+};
 
 const SECTION0: &str = "Contents/section0.xml";
 
@@ -192,6 +195,7 @@ fn patch_reports_a_control_mixed_with_a_tab() {
 
 #[test]
 fn patch_writes_an_empty_slot_for_a_value_of_only_controls() {
+    // 이것을 실패시키는 것: patch 사전 판정의 정리 호출을 빼는 것 (빈 slot 은 같지만 경고가 사라진다).
     let diagnosed = patch_para2(&clean(), "\u{1}\u{2}");
 
     assert_eq!(texts(&diagnosed.value.bytes)[2], "");
@@ -254,5 +258,100 @@ fn the_older_patch_twins_return_the_same_bytes_and_drop_only_the_encode_channel(
 
     assert_eq!(codec.value.bytes, plain.bytes);
     assert_eq!(decode.value.bytes, plain.bytes);
+    assert_eq!(codec.decode_warnings, decode.warnings);
+}
+
+// ── fill ────────────────────────────────────────────────────────────
+
+fn fill(
+    base: &[u8],
+    name: &str,
+    value: &str,
+) -> Result<hwpforge_smithy_hwpx::WithCodecWarnings<hwpforge_smithy_hwpx::FillOutcome>, FillError> {
+    let values = BTreeMap::from([(name.to_string(), value.to_string())]);
+    HwpxFiller::fill_with_codec_diagnostics(base, &values)
+}
+
+const F1: &str = "field 'f1'";
+
+#[test]
+fn fill_removes_a_control_and_names_the_field() {
+    // 이것을 실패시키는 것: fill 입구 정리(`sanitize_edit_text`) 대신 원래 값을 쓰는 것.
+    let diagnosed = fill(&clean(), "f1", "A\u{1}B").expect("fill");
+
+    assert_eq!(texts(&diagnosed.value.bytes)[1], "[AB]");
+    assert_eq!(diagnosed.value.filled[0].name, "f1");
+    assert_eq!(diagnosed.encode_warnings, vec![removed(F1, 1)]);
+}
+
+#[test]
+fn fill_removes_nul() {
+    // 이것을 실패시키는 것: 판정 범위를 `'\u{1}'..` 로 좁히는 것.
+    let diagnosed = fill(&clean(), "f1", "A\u{0}B").expect("fill");
+
+    assert!(!section_xml(&diagnosed.value.bytes).contains('\u{0}'));
+    assert_eq!(diagnosed.encode_warnings, vec![removed(F1, 1)]);
+}
+
+#[test]
+fn fill_keeps_u001f_as_a_fixed_width_space() {
+    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것.
+    let diagnosed = fill(&clean(), "f1", "A\u{1F}B").expect("fill");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:fwSpace/>B"));
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
+fn fill_reports_a_control_mixed_with_a_tab() {
+    // 이것을 실패시키는 것: fill 입구 정리를 빼는 것 (탭 경로 escape 가 무경고로 지움).
+    let diagnosed = fill(&clean(), "f1", "A\t\u{1}B").expect("fill");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:tab/>B"));
+    assert_eq!(diagnosed.encode_warnings, vec![removed(F1, 1)]);
+}
+
+#[test]
+fn fill_refuses_a_value_of_only_controls_as_empty() {
+    // 이것을 실패시키는 것: fill 의 빈 값 검사를 정리 전 값(`value.is_empty()`)으로 되돌리는 것.
+    let error = fill(&clean(), "f1", "\u{1}\u{2}").unwrap_err();
+
+    assert!(matches!(&error, FillError::EmptyValue { name } if name == "f1"), "{error:?}");
+}
+
+#[test]
+fn fill_keeps_the_bytes_when_the_cleaned_value_equals_the_current_one() {
+    // 이것을 실패시키는 것: "값이 바뀌었나" 비교를 정리 전 값으로 하는 것.
+    let base = clean();
+    let diagnosed = fill(&base, "f1", "old\u{1}").expect("fill");
+
+    assert_eq!(diagnosed.value.bytes, base);
+    assert!(diagnosed.value.filled.is_empty(), "{:?}", diagnosed.value.filled);
+    assert_eq!(diagnosed.encode_warnings, vec![removed(F1, 1)]);
+}
+
+#[test]
+fn fill_leaves_neighbouring_controls_in_the_base_alone() {
+    // 이것을 실패시키는 것: 검사·정리를 채운 필드 대신 section 전체로 넓히는 것.
+    let diagnosed = fill(&dirty(), "f1", "new").expect("fill");
+
+    let xml = section_xml(&diagnosed.value.bytes);
+    assert!(xml.contains("keep A\u{1}B") && xml.contains("R\u{1}S"), "{xml}");
+    assert_eq!(texts(&diagnosed.value.bytes)[1], "[new]");
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
+fn the_older_fill_twins_return_the_same_outcome() {
+    // 이것을 실패시키는 것: 래퍼가 정리 전 원래 값으로 따로 채우는 것.
+    let base = clean();
+    let values = BTreeMap::from([("f1".to_string(), "A\u{0}B".to_string())]);
+
+    let codec = HwpxFiller::fill_with_codec_diagnostics(&base, &values).expect("codec twin");
+    let decode = HwpxFiller::fill_with_diagnostics(&base, &values).expect("twin");
+    let plain = HwpxFiller::fill(&base, &values).expect("plain");
+
+    assert_eq!(texts(&codec.value.bytes), texts(&plain.bytes));
+    assert_eq!(texts(&decode.value.bytes), texts(&plain.bytes));
     assert_eq!(codec.decode_warnings, decode.warnings);
 }
