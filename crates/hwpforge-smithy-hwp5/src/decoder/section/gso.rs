@@ -43,6 +43,9 @@ pub(super) struct InlineGsoContext {
     text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     shape_component_kind: Option<[u8; 4]>,
+    /// Set when the scope's first `ShapeComponent` is a group (`$con`):
+    /// every deeper record then belongs to the group, as in body paragraphs.
+    group: Option<Box<GsoGroupBuilder>>,
 }
 
 pub(super) struct GsoClassificationInput {
@@ -504,7 +507,48 @@ impl InlineGsoContext {
             curve: None,
             text_art: None,
             shape_component_kind: None,
+            group: None,
         }
+    }
+
+    /// Routes a record into the group this scope holds, opening it on a
+    /// `$con` `ShapeComponent` right under the control header (whose type tag
+    /// is written twice). Returns `true` when the group took the record. A
+    /// group without a recoverable control-header box cannot be placed; it is
+    /// reported and left to the single-shape path, as in body paragraphs.
+    pub(super) fn route_group_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+        warnings: &mut Vec<Hwp5Warning>,
+    ) -> bool {
+        if let Some(group) = self.group.as_mut() {
+            group.handle_record(record, tag, level, warnings);
+            return true;
+        }
+        let opens_group = matches!(tag, TagId::ShapeComponent)
+            && !self.saw_shape_component
+            && level == self.ctrl_depth.saturating_add(1)
+            && record.data.get(..4) == Some(&SHAPE_COMPONENT_TYPE_GROUP);
+        if !opens_group {
+            return false;
+        }
+        let Some(geometry) = self.geometry.clone() else {
+            warnings.push(Hwp5Warning::DroppedControl {
+                control: "gso_group",
+                reason: "group ($con) without recoverable bounding box; \
+                         cannot place <hp:container>"
+                    .to_string(),
+            });
+            return false;
+        };
+        let render = Hwp5ShapeRender::parse(&record.data, true).map_err(|e| e.to_string());
+        self.saw_shape_component = true;
+        self.shape_component_kind = Some(SHAPE_COMPONENT_TYPE_GROUP);
+        self.group =
+            Some(Box::new(GsoGroupBuilder::new(level, geometry, self.instance_id, render)));
+        true
     }
 
     pub(super) fn note_shape_component(&mut self, data: &[u8]) {
@@ -546,7 +590,10 @@ impl InlineGsoContext {
         self.text_art = Some(ta);
     }
 
-    pub(super) fn into_control(self) -> Hwp5Control {
+    pub(super) fn into_control(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        if let Some(group) = self.group {
+            return group.into_control(warnings);
+        }
         classify_gso_control(GsoClassificationInput {
             ctrl_id: self.ctrl_id,
             saw_shape_component: self.saw_shape_component,

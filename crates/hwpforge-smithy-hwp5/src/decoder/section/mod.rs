@@ -226,8 +226,12 @@ impl TableContext {
         }
     }
 
-    fn flush_inline_gso(&mut self) {
-        attach_inline_gso_control(&mut self.current_cell_para, self.inline_cell_gso_ctx.take());
+    fn flush_inline_gso(&mut self, warnings: &mut Vec<Hwp5Warning>) {
+        attach_inline_gso_control(
+            &mut self.current_cell_para,
+            self.inline_cell_gso_ctx.take(),
+            warnings,
+        );
     }
 
     fn flush_current_cell_paragraph(&mut self) {
@@ -250,8 +254,8 @@ impl TableContext {
         }
     }
 
-    fn finalize(mut self) -> Hwp5Control {
-        self.flush_inline_gso();
+    fn finalize(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        self.flush_inline_gso(warnings);
         self.flush_current_cell_paragraph();
         self.finish_active_cell_if_ready();
         Hwp5Control::Table(self.table)
@@ -801,7 +805,7 @@ impl BodyTextParserState {
             .is_some_and(|ctx| level <= ctx.ctrl_depth)
         {
             if let Some(ctx) = self.table_stack.last_mut() {
-                ctx.flush_inline_gso();
+                ctx.flush_inline_gso(&mut self.warnings);
             }
         }
 
@@ -809,6 +813,7 @@ impl BodyTextParserState {
             attach_inline_gso_control(
                 &mut self.current_subtree_para,
                 self.inline_subtree_gso_ctx.take(),
+                &mut self.warnings,
             );
         }
 
@@ -816,7 +821,7 @@ impl BodyTextParserState {
             let ctx =
                 self.table_stack.pop().expect("table_stack.last().is_some() implies pop succeeds");
             let over_cap = ctx.over_cap;
-            let finished = ctx.finalize();
+            let finished = ctx.finalize(&mut self.warnings);
             // Over-cap tables are tracked only to keep pop/cell balance; their
             // finalized control is dropped (a `DroppedControl` warning was
             // already emitted at push time) so they cannot corrupt the parent
@@ -835,6 +840,7 @@ impl BodyTextParserState {
             attach_inline_gso_control(
                 &mut self.current_subtree_para,
                 self.inline_subtree_gso_ctx.take(),
+                &mut self.warnings,
             );
             flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
             attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
@@ -849,6 +855,7 @@ impl BodyTextParserState {
         if Self::handle_inline_gso_record(
             record,
             tag,
+            level,
             &mut self.warnings,
             self.table_stack.last_mut().and_then(|table| table.inline_cell_gso_ctx.as_mut()),
         ) {
@@ -1067,6 +1074,7 @@ impl BodyTextParserState {
         if Self::handle_inline_gso_record(
             record,
             tag,
+            level,
             &mut self.warnings,
             self.inline_subtree_gso_ctx.as_mut(),
         ) {
@@ -1958,7 +1966,7 @@ impl BodyTextParserState {
         self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
             let over_cap = ctx.over_cap;
-            let finished = ctx.finalize();
+            let finished = ctx.finalize(&mut self.warnings);
             // See `prepare_for_record`: over-cap tables are dropped, not
             // attached (E1 #3).
             if !over_cap {
@@ -1973,6 +1981,7 @@ impl BodyTextParserState {
         attach_inline_gso_control(
             &mut self.current_subtree_para,
             self.inline_subtree_gso_ctx.take(),
+            &mut self.warnings,
         );
         flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
         attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
@@ -2061,12 +2070,18 @@ impl BodyTextParserState {
     fn handle_inline_gso_record(
         record: &Record,
         tag: TagId,
+        level: u16,
         warnings: &mut Vec<Hwp5Warning>,
         inline_gso_ctx: Option<&mut InlineGsoContext>,
     ) -> bool {
         let Some(ctx) = inline_gso_ctx else {
             return false;
         };
+        // A group (`$con`) in a table cell or another object's text takes the
+        // same group path as one in a body paragraph.
+        if ctx.route_group_record(record, tag, level, warnings) {
+            return true;
+        }
 
         match tag {
             TagId::ShapeComponent => ctx.note_shape_component(&record.data),
@@ -2401,12 +2416,14 @@ fn attach_finished_subtree(
 fn attach_inline_gso_control(
     current_para: &mut Option<ParaBuf>,
     inline_gso_ctx: Option<InlineGsoContext>,
+    warnings: &mut Vec<Hwp5Warning>,
 ) {
     let Some(ctx) = inline_gso_ctx else {
         return;
     };
+    let control = ctx.into_control(warnings);
     if let Some(buf) = current_para.as_mut() {
-        buf.controls.push(ctx.into_control());
+        buf.controls.push(control);
     }
 }
 
@@ -3115,6 +3132,146 @@ mod tests {
         assert_eq!(result.paragraphs[0].controls.len(), 1);
         assert_eq!(result.paragraphs[1].controls.len(), 0);
         assert_eq!(result.paragraphs[1].text, "hello");
+    }
+
+    /// A `ShapeComponent` payload with the rendering block: `repeated` writes
+    /// the type tag twice (a component right under a `gso` control header).
+    fn shape_component_render_data(
+        tag: &[u8; 4],
+        repeated: bool,
+        group_level: u16,
+        initial: (u32, u32),
+        x: f64,
+    ) -> Vec<u8> {
+        let mut d = Vec::new();
+        if repeated {
+            d.extend_from_slice(tag);
+        }
+        d.extend_from_slice(tag);
+        d.extend_from_slice(&[0u8; 8]);
+        d.extend_from_slice(&group_level.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&initial.0.to_le_bytes());
+        d.extend_from_slice(&initial.1.to_le_bytes());
+        d.extend_from_slice(&[0u8; 22]);
+        d.extend_from_slice(&(group_level + 1).to_le_bytes());
+        let id = [1.0f64, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let trans = [1.0f64, 0.0, x, 0.0, 1.0, 0.0];
+        for m in
+            std::iter::once(trans).chain(std::iter::repeat_n(id, 2 * usize::from(group_level + 1)))
+        {
+            for v in m {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        // line information + fill kind 0 (no fill)
+        d.extend_from_slice(&[0u8; 17]);
+        d
+    }
+
+    /// A group in a table cell paragraph takes the group path, as one in a
+    /// body paragraph does: its two rects become group children. On the
+    /// single-shape path the scope's two rect records made one rect the size
+    /// of the whole group.
+    ///
+    /// 이것을 실패시키는 것: 표 칸 gso 문맥에서 묶음 경로를 타지 않는 것(평면 경로가
+    /// 가짜 사각형 하나를 낸다).
+    #[test]
+    fn group_in_a_table_cell_takes_the_group_path() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0x20,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 9000,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: Some(7),
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            3,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                4,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 5, &[0u8; 9]));
+        }
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(1, 0)));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else {
+            panic!("expected a table, got {:?}", result.paragraphs[0].controls);
+        };
+        let controls = &table.cells[0].paragraphs[0].controls;
+        let [Hwp5Control::Group(group)] = &controls[..] else {
+            panic!("expected one group in the cell, got {controls:?}");
+        };
+        assert!(group.render.is_ok(), "{:?}", group.render);
+        assert_eq!(group.children.len(), 2);
+        for child in &group.children {
+            assert!(matches!(child.control, Hwp5Control::Rect(_)), "{:?}", child.control);
+            assert!(child.render.is_ok());
+        }
+    }
+
+    /// A group in a text box's text (the other object-text context) takes the
+    /// group path too.
+    ///
+    /// 이것을 실패시키는 것: 글상자 문단(하위 트리) gso 문맥에서 묶음 경로를 타지
+    /// 않는 것.
+    #[test]
+    fn group_in_a_text_box_takes_the_group_path() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 8000, 6000)));
+        stream.extend(make_record(TagId::ShapeComponentRect, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            3,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                4,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 5, &[0u8; 9]));
+        }
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Hwp5Control::TextBox(textbox) = &result.paragraphs[0].controls[0] else {
+            panic!("expected a text box, got {:?}", result.paragraphs[0].controls);
+        };
+        let controls = &textbox.paragraphs[0].controls;
+        let [Hwp5Control::Group(group)] = &controls[..] else {
+            panic!("expected one group in the text box, got {controls:?}");
+        };
+        assert_eq!(group.children.len(), 2);
     }
 
     /// Build a stream of `depth` tables nested table-in-cell-in-table.
@@ -3895,7 +4052,7 @@ mod tests {
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
         );
 
-        match ctx.into_control() {
+        match ctx.into_control(&mut Vec::new()) {
             Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous gso payload, got {:?}", other),
         }

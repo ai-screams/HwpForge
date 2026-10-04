@@ -473,6 +473,17 @@ Drawing shapes follow the chain with line information (13 bytes) and a fill
 kind u32 (bit 0 = colour + hatch, pattern kind i32 at +12 with `-1` = none;
 bit 1 = picture; bit 2 = gradient — the `DocInfo` border-fill layout).
 
+**Groups outside body paragraphs.** A `gso` in a table cell paragraph or in
+another object's text (a text box, a header or footer) is collected by the
+single-shape `InlineGsoContext`; when its first `ShapeComponent` right under
+the control header is `$con` (type tag written twice), the same
+`GsoGroupBuilder` as in body paragraphs takes every deeper record. Before,
+the single-shape path folded such a group into one shape the size of the
+group (when one payload kind appeared) or dropped it as `Unknown` (corpus:
+259 groups in 83 documents' table cells). A group in a text box that itself
+sits in a cell or header is still not reached (the inline context keeps no
+paragraphs), nor one on a master page.
+
 **Child record levels.** A child's own shape sub-records and `LIST_HEADER` /
 `PARA_HEADER` sit one level below its `ShapeComponent`; its paragraphs'
 `PARA_TEXT` / `PARA_CHAR_SHAPE` / `PARA_LINE_SEG` and inline `CtrlHeader`s two
