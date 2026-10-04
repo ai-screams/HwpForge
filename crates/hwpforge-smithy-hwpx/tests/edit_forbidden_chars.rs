@@ -239,26 +239,51 @@ fn patch_without_an_edit_returns_the_dirty_base_unchanged() {
     assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
 }
 
+/// The base for the older-twin tests: it warns on decode, so a wrapper that
+/// dropped the decode channel would be seen.
+fn warning_base() -> Vec<u8> {
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/layout/stale-line-cache.hwpx");
+    std::fs::read(path).expect("fixture")
+}
+
 #[test]
 fn the_older_patch_twins_return_the_same_bytes_and_drop_only_the_encode_channel() {
-    // 이것을 실패시키는 것: 래퍼가 정리 전 원문으로 따로 패치하는 것.
-    let base = clean();
+    // 이것을 실패시키는 것: 두 옛 patch twin 래퍼(`patch_section_preserving_with_diagnostics`·
+    // `patch_exported_section_with_diagnostics`) 중 하나가 `decode_warnings` 를 버리는 것.
+    let base = warning_base();
     let mut exported =
         HwpxPatcher::export_section_for_edit(&base, 0, false).expect("export").exported;
-    let RunContent::Text(slot) = &mut exported.section.paragraphs[2].runs[0].content else {
-        panic!("paragraph 2 is plain text");
-    };
-    *slot = "A\u{0}B".to_string();
+    let slot =
+        exported.section.paragraphs.iter_mut().flat_map(|p| p.runs.iter_mut()).find_map(|r| {
+            match &mut r.content {
+                RunContent::Text(t) if !t.is_empty() => Some(t),
+                _ => None,
+            }
+        });
+    slot.expect("a text run").push_str("Z\u{0}");
 
     let codec = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &exported)
         .expect("codec twin");
     let decode =
         HwpxPatcher::patch_exported_section_with_diagnostics(&base, 0, &exported).expect("twin");
     let plain = HwpxPatcher::patch_exported_section(&base, 0, &exported).expect("plain");
+    let lower = HwpxPatcher::patch_section_preserving_with_diagnostics(
+        &base,
+        0,
+        &exported.section,
+        None,
+        exported.preservation.as_ref(),
+    )
+    .expect("lower twin");
 
+    assert!(!codec.decode_warnings.is_empty(), "the premise: the base warns on decode");
+    assert_eq!(codec.encode_warnings.len(), 1, "{:?}", codec.encode_warnings);
     assert_eq!(codec.value.bytes, plain.bytes);
     assert_eq!(decode.value.bytes, plain.bytes);
+    assert_eq!(lower.value, plain.bytes);
     assert_eq!(codec.decode_warnings, decode.warnings);
+    assert_eq!(codec.decode_warnings, lower.warnings);
 }
 
 // ── fill ────────────────────────────────────────────────────────────
@@ -343,16 +368,18 @@ fn fill_leaves_neighbouring_controls_in_the_base_alone() {
 
 #[test]
 fn the_older_fill_twins_return_the_same_outcome() {
-    // 이것을 실패시키는 것: 래퍼가 정리 전 원래 값으로 따로 채우는 것.
-    let base = clean();
-    let values = BTreeMap::from([("f1".to_string(), "A\u{0}B".to_string())]);
+    // 이것을 실패시키는 것: `fill_with_diagnostics` 래퍼가 `decode_warnings` 를 버리는 것.
+    let base = warning_base();
+    let values = BTreeMap::from([("user_email".to_string(), "A\u{0}B".to_string())]);
 
     let codec = HwpxFiller::fill_with_codec_diagnostics(&base, &values).expect("codec twin");
     let decode = HwpxFiller::fill_with_diagnostics(&base, &values).expect("twin");
     let plain = HwpxFiller::fill(&base, &values).expect("plain");
 
-    assert_eq!(texts(&codec.value.bytes), texts(&plain.bytes));
-    assert_eq!(texts(&decode.value.bytes), texts(&plain.bytes));
+    assert!(!codec.decode_warnings.is_empty(), "the premise: the base warns on decode");
+    assert_eq!(codec.encode_warnings.len(), 1, "{:?}", codec.encode_warnings);
+    assert_eq!(section_xml(&codec.value.bytes), section_xml(&plain.bytes));
+    assert_eq!(section_xml(&decode.value.bytes), section_xml(&plain.bytes));
     assert_eq!(codec.decode_warnings, decode.warnings);
 }
 
@@ -423,9 +450,9 @@ fn insert_writes_an_empty_paragraph_for_a_text_of_only_controls() {
 
 #[test]
 fn the_older_insert_twins_return_the_same_bytes() {
-    // 이것을 실패시키는 것: 래퍼가 정리 전 원문으로 따로 삽입하는 것.
+    // 이것을 실패시키는 것: `insert_paragraphs_with_diagnostics` 래퍼가 `decode_warnings` 를 버리는 것.
     use hwpforge_smithy_hwpx::{HwpxStructuralEditor, InsertPosition, ParagraphLocator};
-    let base = clean();
+    let base = warning_base();
     let anchor = ParagraphLocator { section: 0, index: 2 };
     let texts_in = ["A\u{1}B".to_string()];
 
@@ -436,11 +463,22 @@ fn the_older_insert_twins_return_the_same_bytes() {
         &texts_in,
     )
     .expect("codec twin");
+    let decode = HwpxStructuralEditor::insert_paragraphs_with_diagnostics(
+        &base,
+        anchor,
+        InsertPosition::After,
+        &texts_in,
+    )
+    .expect("twin");
     let plain =
         HwpxStructuralEditor::insert_paragraphs(&base, anchor, InsertPosition::After, &texts_in)
             .expect("plain");
 
+    assert!(!codec.decode_warnings.is_empty(), "the premise: the base warns on decode");
+    assert_eq!(codec.encode_warnings.len(), 1, "{:?}", codec.encode_warnings);
     assert_eq!(codec.value, plain);
+    assert_eq!(decode.value, plain);
+    assert_eq!(codec.decode_warnings, decode.warnings);
 }
 
 // ── set-cell ────────────────────────────────────────────────────────
