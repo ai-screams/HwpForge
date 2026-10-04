@@ -442,3 +442,130 @@ fn the_older_insert_twins_return_the_same_bytes() {
 
     assert_eq!(codec.value, plain);
 }
+
+// ── set-cell ────────────────────────────────────────────────────────
+
+fn set_cell(
+    text: &str,
+) -> hwpforge_smithy_hwpx::WithCodecWarnings<hwpforge_smithy_hwpx::CellEditResult> {
+    let path =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/tables/merged_grid_form.hwpx");
+    let base = std::fs::read(path).expect("fixture");
+    let spec = hwpforge_smithy_hwpx::CellSpec {
+        table: 0,
+        target: hwpforge_smithy_hwpx::CellTarget::At(hwpforge_core::table::grid::GridCoord::new(
+            0, 0,
+        )),
+        text: text.to_string(),
+    };
+    hwpforge_smithy_hwpx::HwpxCellEditor::set_cells_with_diagnostics(&base, &[spec])
+        .expect("set-cell")
+}
+
+fn cell00(bytes: &[u8]) -> String {
+    let table = hwpforge_smithy_hwpx::HwpxReader::read_table(bytes, 0).expect("table");
+    table.cells.iter().find(|c| c.row == 0 && c.col == 0).expect("cell (0, 0)").text.clone()
+}
+
+/// The cell clean-up warnings, without whatever the encoder reports about
+/// the rest of the fixture.
+fn cell_removals(warnings: &[EncodeWarning]) -> Vec<EncodeWarning> {
+    warnings
+        .iter()
+        .filter(|w| matches!(w, EncodeWarning::XmlForbiddenCharsRemoved { .. }))
+        .cloned()
+        .collect()
+}
+
+const CELL00: &str = "table 0 cell (0, 0)";
+
+#[test]
+fn set_cell_removes_a_control_and_names_the_cell() {
+    // Before this change the encoder's part scan reported it as `hp:t`.
+    // 이것을 실패시키는 것: set-cell 입구 정리를 빼는 것 (경고 위치가 `hp:t` 로 돌아간다).
+    let diagnosed = set_cell("A\u{1}B");
+
+    assert_eq!(cell00(&diagnosed.value.bytes), "AB");
+    assert_eq!(cell_removals(&diagnosed.encode_warnings), vec![removed(CELL00, 1)]);
+}
+
+#[test]
+fn set_cell_removes_nul() {
+    // 이것을 실패시키는 것: 판정 범위를 `'\u{1}'..` 로 좁히는 것 (경고 위치가 `hp:t` 로 바뀐다).
+    let diagnosed = set_cell("A\u{0}B");
+
+    assert!(!section_xml(&diagnosed.value.bytes).contains('\u{0}'));
+    assert_eq!(cell_removals(&diagnosed.encode_warnings), vec![removed(CELL00, 1)]);
+}
+
+#[test]
+fn set_cell_keeps_u001f_as_a_fixed_width_space() {
+    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것.
+    let diagnosed = set_cell("A\u{1F}B");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:fwSpace/>B"));
+    assert!(
+        cell_removals(&diagnosed.encode_warnings).is_empty(),
+        "{:?}",
+        diagnosed.encode_warnings
+    );
+}
+
+#[test]
+fn set_cell_reports_a_control_mixed_with_a_tab() {
+    // The tab sends the text down the mixed-content path, whose escape used to
+    // drop the control before the part scan could see it: no warning at all.
+    // 이것을 실패시키는 것: set-cell 입구 정리를 빼는 것.
+    let diagnosed = set_cell("A\t\u{1}B");
+
+    assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:tab/>B"));
+    assert_eq!(cell_removals(&diagnosed.encode_warnings), vec![removed(CELL00, 1)]);
+}
+
+#[test]
+fn set_cell_clears_the_cell_for_a_text_of_only_controls() {
+    // 이것을 실패시키는 것: set-cell 입구 정리를 빼는 것 (`cleared` 가 거짓).
+    let diagnosed = set_cell("\u{1}\u{2}");
+
+    assert_eq!(cell00(&diagnosed.value.bytes), "");
+    assert!(diagnosed.value.outcome.cells[0].cleared);
+    assert_eq!(cell_removals(&diagnosed.encode_warnings), vec![removed(CELL00, 2)]);
+}
+
+#[test]
+fn set_cell_names_the_part_of_the_section_holding_the_table() {
+    // 이것을 실패시키는 것: 경고 part 를 표가 든 section 대신 `section0` 으로 고정하는 것.
+    use hwpforge_core::table::{Table, TableCell, TableRow};
+    use hwpforge_foundation::HwpUnit;
+
+    let cell = TableCell::with_span(vec![text_para("x")], HwpUnit::new(8000).unwrap(), 1, 1);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0)));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![text_para("first")], PageSettings::default()));
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+    let styles = hwpforge_smithy_hwpx::style_store_for_preset("default").expect("preset");
+    let base =
+        HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::default())
+            .expect("encode");
+
+    let spec = hwpforge_smithy_hwpx::CellSpec {
+        table: 0,
+        target: hwpforge_smithy_hwpx::CellTarget::At(hwpforge_core::table::grid::GridCoord::new(
+            0, 0,
+        )),
+        text: "A\u{1}B".to_string(),
+    };
+    let diagnosed =
+        hwpforge_smithy_hwpx::HwpxCellEditor::set_cells_with_diagnostics(&base, &[spec])
+            .expect("set-cell");
+
+    assert_eq!(
+        cell_removals(&diagnosed.encode_warnings),
+        vec![EncodeWarning::XmlForbiddenCharsRemoved {
+            part: "Contents/section1.xml".to_string(),
+            location: CELL00.to_string(),
+            count: 1,
+        }]
+    );
+}

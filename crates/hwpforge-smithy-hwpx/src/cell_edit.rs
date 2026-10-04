@@ -41,7 +41,7 @@ use hwpforge_core::table::{Table, TableCell};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
-use crate::encoder::HwpxEncoder;
+use crate::encoder::{EncodeWarning, HwpxEncoder};
 use crate::stamp::{
     admission_compare, check_zip_carry, encode_hwpx, reject_input_content_loss, StamperError,
 };
@@ -590,6 +590,14 @@ impl HwpxCellEditor {
     /// paths the carry restored, and a dropped-then-restored cache is still
     /// worth telling the caller about.
     ///
+    /// Ahead of the encoder's warnings come the ones for the texts
+    /// themselves: each text has the characters XML 1.0 cannot represent
+    /// removed before the edit (the C0 controls other than TAB, LF, CR and
+    /// U+001F, plus U+FFFE/U+FFFF — including inside a text that also holds
+    /// a tab), and each text that lost any adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`] located at
+    /// `table T cell (ROW, COL)`, the anchor the edit landed on.
+    ///
     /// # Errors
     ///
     /// See [`CellEditError`]. The layout-cache carry step
@@ -610,7 +618,33 @@ impl HwpxCellEditor {
         reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
 
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
-        let outcome = apply_set_cells(&mut document, specs)?;
+        // Each text is cleaned once, before the edit, so the cell holds the
+        // cleaned text and the encoder's part scan finds nothing left of it to
+        // report. The warning names the anchor the edit resolved to, which is
+        // known only after the edit.
+        let table_sections: Vec<usize> =
+            tables_in_document(&document).iter().map(|e| e.section).collect();
+        let (specs, removed): (Vec<CellSpec>, Vec<usize>) = specs
+            .iter()
+            .map(|spec| {
+                let (text, count) = crate::wire_xml::clean_edit_text(&spec.text);
+                (CellSpec { text, ..spec.clone() }, count)
+            })
+            .unzip();
+        let outcome = apply_set_cells(&mut document, &specs)?;
+        let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
+        for (cell, count) in outcome.cells.iter().zip(removed) {
+            if count > 0 {
+                encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
+                    part: crate::patch::section_path(table_sections[cell.table]),
+                    location: format!(
+                        "table {} cell ({}, {})",
+                        cell.table, cell.anchor.row, cell.anchor.col
+                    ),
+                    count,
+                });
+            }
+        }
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
         let encode_outcome = HwpxEncoder::encode_with_diagnostics(
@@ -632,6 +666,7 @@ impl HwpxCellEditor {
         // the two editors cannot drift apart.
         let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
             .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
+        encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -639,7 +674,7 @@ impl HwpxCellEditor {
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },
             decode_warnings,
-            others,
+            encode_warnings,
         ))
     }
 }

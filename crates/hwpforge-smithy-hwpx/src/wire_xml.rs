@@ -245,16 +245,26 @@ pub(crate) fn sanitize_edit_text(
     location: &str,
     warnings: &mut Vec<crate::EncodeWarning>,
 ) -> String {
+    let (cleaned, count) = clean_edit_text(text);
+    if count > 0 {
+        warnings.push(crate::EncodeWarning::XmlForbiddenCharsRemoved {
+            part: part.to_string(),
+            location: location.to_string(),
+            count,
+        });
+    }
+    cleaned
+}
+
+/// The removal half of [`sanitize_edit_text`], for a surface that learns the
+/// value's location only after using the cleaned value: the cleaned text and
+/// how many characters left it.
+pub(crate) fn clean_edit_text(text: &str) -> (String, usize) {
     let count = text.chars().filter(|&c| is_edit_unrepresentable_char(c)).count();
     if count == 0 {
-        return text.to_string();
+        return (text.to_string(), 0);
     }
-    warnings.push(crate::EncodeWarning::XmlForbiddenCharsRemoved {
-        part: part.to_string(),
-        location: location.to_string(),
-        count,
-    });
-    text.chars().filter(|&c| !is_edit_unrepresentable_char(c)).collect()
+    (text.chars().filter(|&c| !is_edit_unrepresentable_char(c)).collect(), count)
 }
 
 /// Copies `s` into `out` without its forbidden characters; returns how many
@@ -884,7 +894,8 @@ mod edit_text_tests {
 
     #[test]
     fn u001f_tab_lf_cr_stay_because_the_inline_encoder_carries_them() {
-        // 이것을 실패시키는 것: `is_edit_unrepresentable_char` 에서 U+001F 제외를 빼는 것.
+        // 이것을 실패시키는 것: `is_edit_unrepresentable_char` 에서 U+001F 제외를 빼는 것,
+        // 또는 `sanitize_edit_text` 의 `count > 0` 가드를 빼는 것 (지운 것 없는 값이 경고가 된다).
         assert_eq!(run("A\u{1F}B\tC\nD\rE"), ("A\u{1F}B\tC\nD\rE".to_string(), Vec::new()));
     }
 
