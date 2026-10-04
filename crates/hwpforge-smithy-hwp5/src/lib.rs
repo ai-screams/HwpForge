@@ -60,6 +60,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::decoder::chart_ole::ChartOleError;
+use crate::decoder::package::{DecompressBudget, MAX_TOTAL_DECOMPRESSED};
 use crate::numeric::positive_i32_from_u32;
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::document::{Document, Draft};
@@ -114,21 +116,25 @@ impl Hwp5JoinedImageAssetPlan {
 
 /// Per-document plan of OLE-backed BinData entries, keyed by `binary_data_id`.
 ///
-/// This carries the raw (still DEFLATE-compressed) `/BinData/BIN*.OLE` bytes
-/// so the projection layer can attempt chart extraction without re-opening
-/// the source CFB. Non-OLE entries are excluded; image entries are handled
-/// separately via [`Hwp5JoinedImageAssetPlan`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// This carries the inflated `/BinData/BIN*.OLE` bytes so the projection layer
+/// can attempt chart extraction without re-opening the source CFB. Non-OLE
+/// entries are excluded; image entries are handled separately via
+/// [`Hwp5JoinedImageAssetPlan`].
+#[derive(Debug, Default)]
 pub(crate) struct Hwp5OleAssetPlan {
-    /// Raw `/BinData/*` bytes by `binary_data_id`. Always DEFLATE-compressed
-    /// (HWP5 OLE entries set `should_decompress=true`); the consumer
-    /// (`decoder::chart_ole::extract_chart_payload`) handles inflation.
-    pub assets_by_binary_data_id: BTreeMap<u16, Vec<u8>>,
+    /// Inflated `/BinData/*` bytes by `binary_data_id`, or why the entry could
+    /// not be inflated (per-stream cap, ratio limit or a corrupt stream). The
+    /// error is reported only if a control references the entry, as the
+    /// existing `DroppedControl` warning.
+    pub assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>>,
 }
 
 impl Hwp5OleAssetPlan {
-    pub(crate) fn bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
-        self.assets_by_binary_data_id.get(&binary_data_id).map(|v| v.as_slice())
+    pub(crate) fn inflated_for_binary_data_id(
+        &self,
+        binary_data_id: u16,
+    ) -> Option<&Result<Vec<u8>, ChartOleError>> {
+        self.assets_by_binary_data_id.get(&binary_data_id)
     }
 }
 
@@ -511,8 +517,16 @@ pub fn inspect_hwp5_file(path: impl AsRef<Path>) -> Hwp5Result<Hwp5InspectSummar
 /// Returns [`Hwp5Error`] if the package cannot be opened or required streams
 /// cannot be decoded.
 pub fn build_hwp5_semantic(bytes: &[u8]) -> Hwp5Result<Hwp5SemanticDocument> {
+    build_hwp5_semantic_with_budget_limit(bytes, MAX_TOTAL_DECOMPRESSED)
+}
+
+/// [`build_hwp5_semantic`] under an explicit document decompression budget.
+pub(crate) fn build_hwp5_semantic_with_budget_limit(
+    bytes: &[u8],
+    budget_limit: u64,
+) -> Hwp5Result<Hwp5SemanticDocument> {
     let decoded = decoder::decode_intermediate(bytes)?;
-    let image_assets = join_hwp5_image_assets(bytes, &decoded)?;
+    let (image_assets, _budget) = join_hwp5_image_assets(bytes, &decoded, budget_limit)?;
     Ok(semantic_adapter::adapt_to_semantic(&decoded, &image_assets))
 }
 
@@ -537,12 +551,20 @@ pub fn build_hwp5_semantic_file(path: impl AsRef<Path>) -> Hwp5Result<Hwp5Semant
 /// Returns [`Hwp5Error`] if package decoding, image asset joining, or Core
 /// projection fails.
 pub fn decode_hwp5_with_images(bytes: &[u8]) -> Hwp5Result<Hwp5Document> {
+    decode_hwp5_with_images_with_budget_limit(bytes, MAX_TOTAL_DECOMPRESSED)
+}
+
+/// [`decode_hwp5_with_images`] under an explicit document decompression budget.
+pub(crate) fn decode_hwp5_with_images_with_budget_limit(
+    bytes: &[u8],
+    budget_limit: u64,
+) -> Hwp5Result<Hwp5Document> {
     let intermediate = decoder::decode_intermediate(bytes)?;
-    let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
+    let (image_assets, budget) = join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
     let mut warnings = intermediate.warnings;
     let metadata = intermediate.metadata;
     let (mut document, image_store, proj_warnings) =
-        projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
+        projection::project_to_core_with_images(intermediate.sections, &image_assets, budget)?;
     document.set_metadata(metadata);
     warnings.extend(proj_warnings);
 
@@ -599,9 +621,17 @@ pub struct Hwp5Decoded {
 /// Returns [`Hwp5Error`] if the package cannot be opened, required streams
 /// cannot be decoded, or Core projection fails.
 pub fn decode_hwp5_to_core(bytes: &[u8]) -> Hwp5Result<Hwp5Decoded> {
+    decode_hwp5_to_core_with_budget_limit(bytes, MAX_TOTAL_DECOMPRESSED)
+}
+
+/// [`decode_hwp5_to_core`] under an explicit document decompression budget.
+pub(crate) fn decode_hwp5_to_core_with_budget_limit(
+    bytes: &[u8],
+    budget_limit: u64,
+) -> Hwp5Result<Hwp5Decoded> {
     let intermediate = decoder::decode_intermediate(bytes)?;
-    let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
-    let ole_assets = join_hwp5_ole_assets(bytes, &intermediate)?;
+    let (image_assets, mut budget) = join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
+    let ole_assets = join_hwp5_ole_assets(bytes, &intermediate, &mut budget)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
     // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
@@ -616,6 +646,7 @@ pub fn decode_hwp5_to_core(bytes: &[u8]) -> Hwp5Result<Hwp5Decoded> {
             intermediate.sections,
             &image_assets,
             &ole_assets,
+            budget,
         )?;
     document.set_metadata(metadata.clone());
     warnings.extend(proj_warnings);
@@ -648,13 +679,20 @@ fn supplement_border_fill_image_assets(
     }
 }
 
+/// Joins `DocInfo/BinData` image records with their `/BinData/*` streams.
+///
+/// Opens the package under `budget_limit` and charges every decompressed
+/// image to the document budget, which is returned for the later stages (OLE
+/// join, projection) to continue from.
 fn join_hwp5_image_assets(
     bytes: &[u8],
     intermediate: &decoder::DecodedHwp5Intermediate,
-) -> Hwp5Result<Hwp5JoinedImageAssetPlan> {
+    budget_limit: u64,
+) -> Hwp5Result<(Hwp5JoinedImageAssetPlan, DecompressBudget)> {
     use decoder::package::PackageReader;
 
-    let pkg = PackageReader::open(bytes)?;
+    let pkg = PackageReader::open_with_budget(bytes, budget_limit)?;
+    let mut budget = pkg.remaining_budget();
     let geometry_hints: BTreeMap<u16, Hwp5ImageGeometryHint> =
         collect_image_geometry_hints(&intermediate.sections);
     let mut ordered_assets: Vec<Hwp5JoinedImageAsset> = Vec::new();
@@ -669,7 +707,8 @@ fn join_hwp5_image_assets(
         let Some(raw_data) = pkg.bin_data().get(&record.storage_name) else {
             continue;
         };
-        let data: Vec<u8> = decode_bin_data_payload(raw_data, record, &record.storage_name)?;
+        let data: Vec<u8> =
+            decode_bin_data_payload(raw_data, record, &record.storage_name, &mut budget)?;
 
         let asset = Hwp5JoinedImageAsset {
             payload: Hwp5SemanticImagePayload {
@@ -686,17 +725,25 @@ fn join_hwp5_image_assets(
         ordered_assets.push(asset);
     }
 
-    Ok(Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id })
+    Ok((Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }, budget))
 }
 
+/// Inflates every OLE BinData entry once, under the per-stream cap and the
+/// decompression-ratio limit, charging the inflated bytes to `budget`.
+///
+/// An entry over the cap or the ratio is kept as an error and dropped with a
+/// warning only if a control references it; exceeding the document budget
+/// fails the document.
 fn join_hwp5_ole_assets(
     bytes: &[u8],
     intermediate: &decoder::DecodedHwp5Intermediate,
+    budget: &mut DecompressBudget,
 ) -> Hwp5Result<Hwp5OleAssetPlan> {
     use decoder::package::PackageReader;
 
     let pkg = PackageReader::open(bytes)?;
-    let mut assets_by_binary_data_id: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    let mut assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>> =
+        BTreeMap::new();
     for record in &intermediate.bin_data_records {
         let extension = record.extension.to_ascii_lowercase();
         if extension != "ole" {
@@ -705,24 +752,40 @@ fn join_hwp5_ole_assets(
         let Some(raw_data) = pkg.bin_data().get(&record.storage_name) else {
             continue;
         };
-        assets_by_binary_data_id.insert(record.binary_data_id, raw_data.clone());
+        let path = format!("/BinData/{}", record.storage_name);
+        let inflated = match decoder::package::decompress_ratio_checked(raw_data, &path) {
+            Ok(inflated) => {
+                budget.charge(inflated.len() as u64, &format!("{path} (inflated OLE)"))?;
+                Ok(inflated)
+            }
+            Err(err) => Err(ChartOleError::Inflate(err.to_string())),
+        };
+        assets_by_binary_data_id.insert(record.binary_data_id, inflated);
     }
     Ok(Hwp5OleAssetPlan { assets_by_binary_data_id })
 }
 
+/// Returns the image bytes of one BinData entry, decompressing when the
+/// record says so. Decompressed bytes are charged to `budget`; images get the
+/// per-stream cap but no ratio limit (legitimate uncompressed BMPs compress
+/// close to 100x).
 fn decode_bin_data_payload(
     raw_data: &[u8],
     record: &Hwp5BinDataRecordSummary,
     stream_name: &str,
+    budget: &mut DecompressBudget,
 ) -> Hwp5Result<Vec<u8>> {
     if !record.should_decompress {
         return Ok(raw_data.to_vec());
     }
 
-    decoder::package::decompress_stream(raw_data).map_err(|_| Hwp5Error::RecordParse {
-        offset: 0,
-        detail: format!("BinData '{stream_name}' decompression failed"),
-    })
+    let data =
+        decoder::package::decompress_stream(raw_data).map_err(|_| Hwp5Error::RecordParse {
+            offset: 0,
+            detail: format!("BinData '{stream_name}' decompression failed"),
+        })?;
+    budget.charge(data.len() as u64, &format!("/BinData/{stream_name} (decompressed image)"))?;
+    Ok(data)
 }
 
 fn collect_image_geometry_hints(
