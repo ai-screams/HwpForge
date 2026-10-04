@@ -220,6 +220,43 @@ pub(crate) fn tally_removed(sites: &mut Vec<(String, usize)>, location: &str, co
     }
 }
 
+/// Whether an edit surface must drop `c` from a caller's text before writing
+/// it as `<hp:t>` content: every [`is_xml_forbidden_char`] except U+001F,
+/// which the inline-text encoder writes as `<hp:fwSpace/>` and so can carry.
+pub(crate) fn is_edit_unrepresentable_char(c: char) -> bool {
+    c != '\u{1F}' && is_xml_forbidden_char(c)
+}
+
+/// Removes the characters [`is_edit_unrepresentable_char`] rejects from one
+/// caller-supplied text value and reports their removal.
+///
+/// Every edit surface (fill, patch, insert-para, set-cell, stamp) passes the
+/// caller's value through this once, at its entry, and uses the returned text
+/// everywhere after that — for the bytes it writes, for the "did the value
+/// change" comparison and for any expected state it verifies against. A
+/// removal adds one [`EncodeWarning::XmlForbiddenCharsRemoved`] for
+/// `(part, location)`; a value with nothing to remove is returned unchanged
+/// and adds nothing.
+///
+/// [`EncodeWarning::XmlForbiddenCharsRemoved`]: crate::EncodeWarning::XmlForbiddenCharsRemoved
+pub(crate) fn sanitize_edit_text(
+    text: &str,
+    part: &str,
+    location: &str,
+    warnings: &mut Vec<crate::EncodeWarning>,
+) -> String {
+    let count = text.chars().filter(|&c| is_edit_unrepresentable_char(c)).count();
+    if count == 0 {
+        return text.to_string();
+    }
+    warnings.push(crate::EncodeWarning::XmlForbiddenCharsRemoved {
+        part: part.to_string(),
+        location: location.to_string(),
+        count,
+    });
+    text.chars().filter(|&c| !is_edit_unrepresentable_char(c)).collect()
+}
+
 /// Copies `s` into `out` without its forbidden characters; returns how many
 /// were left out.
 fn push_allowed(out: &mut String, s: &str) -> usize {
@@ -817,5 +854,42 @@ mod forbidden_char_tests {
         // 이것을 실패시키는 것: 여는 따옴표와 다른 종류의 따옴표에서도 값을 닫는 것.
         let (_, sites) = strip("<a x=\"it's\u{1}\"/>");
         assert_eq!(sites, vec![site("a@x", 1)]);
+    }
+}
+
+#[cfg(test)]
+mod edit_text_tests {
+    use super::sanitize_edit_text;
+    use crate::EncodeWarning;
+
+    fn run(text: &str) -> (String, Vec<EncodeWarning>) {
+        let mut warnings = Vec::new();
+        let out = sanitize_edit_text(text, "Contents/section0.xml", "field 'f'", &mut warnings);
+        (out, warnings)
+    }
+
+    fn removed(count: usize) -> Vec<EncodeWarning> {
+        vec![EncodeWarning::XmlForbiddenCharsRemoved {
+            part: "Contents/section0.xml".to_string(),
+            location: "field 'f'".to_string(),
+            count,
+        }]
+    }
+
+    #[test]
+    fn nul_and_the_other_controls_are_removed_and_counted_once() {
+        // 이것을 실패시키는 것: 판정 범위를 `'\u{1}'..` 로 시작하게 하는 것 (NUL 이 남는다).
+        assert_eq!(run("A\u{0}B\u{1}C\u{FFFF}D"), ("ABCD".to_string(), removed(3)));
+    }
+
+    #[test]
+    fn u001f_tab_lf_cr_stay_because_the_inline_encoder_carries_them() {
+        // 이것을 실패시키는 것: `is_edit_unrepresentable_char` 에서 U+001F 제외를 빼는 것.
+        assert_eq!(run("A\u{1F}B\tC\nD\rE"), ("A\u{1F}B\tC\nD\rE".to_string(), Vec::new()));
+    }
+
+    #[test]
+    fn a_value_of_only_forbidden_characters_becomes_empty() {
+        assert_eq!(run("\u{1}\u{2}"), (String::new(), removed(2)));
     }
 }

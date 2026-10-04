@@ -99,9 +99,49 @@ impl HwpxPatcher {
     /// Patches a single section preservingly, keeping the decoder's warnings.
     ///
     /// Same bytes as [`HwpxPatcher::patch_section_preserving`], which is a
-    /// thin wrapper over this function. The patch itself splices XML rather
-    /// than re-encoding the package, so the only diagnostics on this path
-    /// come from decoding the base to check the replacement against it.
+    /// thin wrapper over this function. It is in turn a thin wrapper over
+    /// [`HwpxPatcher::patch_section_preserving_with_codec_diagnostics`] that
+    /// drops the encode channel — the warnings for characters removed from
+    /// the edited text. Use that twin to see them.
+    ///
+    /// # Errors
+    ///
+    /// See [`HwpxPatcher::patch_section_preserving_with_codec_diagnostics`].
+    pub fn patch_section_preserving_with_diagnostics(
+        base_bytes: &[u8],
+        section_idx: usize,
+        replacement: &Section,
+        styles: Option<&HwpxStyleStore>,
+        preservation: Option<&SectionPreservation>,
+    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<u8>>> {
+        Self::patch_section_preserving_with_codec_diagnostics(
+            base_bytes,
+            section_idx,
+            replacement,
+            styles,
+            preservation,
+        )
+        .map(|diagnosed| {
+            crate::diagnostics::WithDecodeWarnings::new(diagnosed.value, diagnosed.decode_warnings)
+        })
+    }
+
+    /// Patches a single section preservingly, keeping both warning channels.
+    ///
+    /// Same bytes as [`HwpxPatcher::patch_section_preserving`]. The patch
+    /// splices XML rather than re-encoding the package, so the decode
+    /// warnings come from decoding the base to check the replacement against
+    /// it, and the encode warnings describe only the edited text slots: a
+    /// replacement text that holds characters XML 1.0 cannot represent (the
+    /// C0 controls other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) is
+    /// written without them, and each such slot adds one
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`](crate::EncodeWarning::XmlForbiddenCharsRemoved)
+    /// whose `location` is the slot path.
+    ///
+    /// Only slots whose text differs from the base are looked at. A slot
+    /// handed back unchanged is kept byte for byte even when the base itself
+    /// holds such characters, and a slot whose text equals the base once the
+    /// characters are removed is kept too (with the warning).
     ///
     /// # Errors
     ///
@@ -113,13 +153,35 @@ impl HwpxPatcher {
     /// Every package entry is read and counted, including ones the decoder
     /// ignores: an entry that decompresses past 50 MiB, or a package past
     /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
-    pub fn patch_section_preserving_with_diagnostics(
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxPatcher};
+    ///
+    /// let base = std::fs::read("form.hwpx")?;
+    /// let section = HwpxDecoder::decode(&base)?.document.sections()[0].clone();
+    /// let preservation = HwpxPatcher::export_section_preservation(&base, 0, &section)?;
+    /// // `section` would normally carry the caller's text edits here.
+    /// let diagnosed = HwpxPatcher::patch_section_preserving_with_codec_diagnostics(
+    ///     &base,
+    ///     0,
+    ///     &section,
+    ///     None,
+    ///     Some(&preservation),
+    /// )?;
+    /// for warning in &diagnosed.encode_warnings {
+    ///     eprintln!("{warning}");
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn patch_section_preserving_with_codec_diagnostics(
         base_bytes: &[u8],
         section_idx: usize,
         replacement: &Section,
         styles: Option<&HwpxStyleStore>,
         preservation: Option<&SectionPreservation>,
-    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<u8>>> {
+    ) -> HwpxResult<crate::diagnostics::WithCodecWarnings<Vec<u8>>> {
         let preservation = preservation.ok_or_else(|| HwpxError::InvalidStructure {
             detail:
                 "missing preservation metadata; re-export the section with the current to-json command"
@@ -236,13 +298,34 @@ impl HwpxPatcher {
             }
         }
 
-        let mut edits: Vec<(&TextLocator, &str)> = Vec::new();
+        // Decide every slot before splicing any: the caller's text is first
+        // compared as given, so a slot handed back unchanged is never looked
+        // at (the base may itself hold characters XML cannot carry); only a
+        // real change candidate is cleaned, and the cleaned text is compared
+        // again so a value that only differed by those characters is kept.
+        let mut encode_warnings = Vec::new();
+        let mut new_texts: Vec<Option<String>> = Vec::with_capacity(replacement_slots.len());
         for (replacement_slot, preserved_slot) in
-            replacement_slots.iter().zip(&rebuilt_preservation.text_slots).rev()
+            replacement_slots.iter().zip(&rebuilt_preservation.text_slots)
         {
             if replacement_slot.text == preserved_slot.original_text {
+                new_texts.push(None);
                 continue;
             }
+            let text = crate::wire_xml::sanitize_edit_text(
+                &replacement_slot.text,
+                &expected_section_path,
+                &preserved_slot.path,
+                &mut encode_warnings,
+            );
+            new_texts.push((text != preserved_slot.original_text).then_some(text));
+        }
+
+        let mut edits: Vec<(&TextLocator, &str)> = Vec::new();
+        for (new_text, preserved_slot) in new_texts.iter().zip(&rebuilt_preservation.text_slots) {
+            let Some(new_text) = new_text else {
+                continue;
+            };
 
             if preserved_slot.has_inline_markup {
                 return Err(HwpxError::InvalidStructure {
@@ -253,7 +336,7 @@ impl HwpxPatcher {
                 });
             }
 
-            edits.push((&preserved_slot.locator, replacement_slot.text.as_str()));
+            edits.push((&preserved_slot.locator, new_text.as_str()));
         }
 
         // Apply from the last byte offset back so an edit never shifts a span
@@ -268,14 +351,19 @@ impl HwpxPatcher {
         }
 
         if patched_section_xml == base_section_xml {
-            return Ok(crate::diagnostics::WithDecodeWarnings::new(
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
                 base_bytes.to_vec(),
                 decode_warnings,
+                encode_warnings,
             ));
         }
 
         raw_package.replace_text_entry(&expected_section_path, patched_section_xml);
-        Ok(crate::diagnostics::WithDecodeWarnings::new(raw_package.write()?, decode_warnings))
+        Ok(crate::diagnostics::WithCodecWarnings::new(
+            raw_package.write()?,
+            decode_warnings,
+            encode_warnings,
+        ))
     }
 }
 
@@ -1693,7 +1781,7 @@ fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxR
     match locator {
         TextLocator::TextElement { element_start, element_end, content_start, content_end } => {
             if let (Some(start), Some(end)) = (*content_start, *content_end) {
-                patched.replace_range(start..end, &encode_text_inner(new_text));
+                patched.replace_range(start..end, &encode_text_inner(new_text)?);
                 Ok(patched)
             } else {
                 let original = &patched[*element_start..*element_end];
@@ -1711,12 +1799,30 @@ fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxR
     }
 }
 
-fn encode_text_inner(text: &str) -> String {
-    encode_inline_text_xml(text)
+/// Encodes the text a patch splices into a section, refusing a fragment that
+/// would leave the part malformed.
+///
+/// Callers clean the text first ([`crate::wire_xml::sanitize_edit_text`]), so
+/// this check never fires on their path; it is the invariant that keeps a
+/// future splice path which forgets to clean from writing a character XML 1.0
+/// forbids (the inline escape drops most of them, but not NUL). Only the new
+/// fragment is checked — the rest of the section is the caller's input,
+/// preserved as it was.
+fn encode_text_inner(text: &str) -> HwpxResult<String> {
+    let encoded = encode_inline_text_xml(text);
+    if let Some(c) = encoded.chars().find(|&c| crate::wire_xml::is_xml_forbidden_char(c)) {
+        return Err(HwpxError::InvalidStructure {
+            detail: format!(
+                "patched text would write U+{:04X}, which XML 1.0 cannot represent",
+                u32::from(c)
+            ),
+        });
+    }
+    Ok(encoded)
 }
 
 fn patch_text_element_xml(element_xml: &str, new_text: &str) -> HwpxResult<String> {
-    let encoded = encode_text_inner(new_text);
+    let encoded = encode_text_inner(new_text)?;
 
     if let Some(prefix) = element_xml.strip_suffix("/>") {
         if new_text.is_empty() {
@@ -1742,7 +1848,7 @@ fn patch_text_element_xml(element_xml: &str, new_text: &str) -> HwpxResult<Strin
 }
 
 fn patch_text_run_xml(run_xml: &str, new_text: &str) -> HwpxResult<String> {
-    let encoded = encode_text_inner(new_text);
+    let encoded = encode_text_inner(new_text)?;
 
     if let Some(text_start_rel) = run_xml.find("<hp:t") {
         let text_start = text_start_rel;
@@ -2108,9 +2214,33 @@ mod tests {
     #[test]
     fn encode_text_inner_converts_inline_text_to_hpx_mixed_content() {
         assert_eq!(
-            encode_text_inner("line 1\tline 2\nline 3\u{00A0}& < 4"),
+            encode_text_inner("line 1\tline 2\nline 3\u{00A0}& < 4").unwrap(),
             "line 1<hp:tab/>line 2<hp:lineBreak/>line 3<hp:nbSpace/>&amp; &lt; 4"
         );
+    }
+
+    // The new-fragment invariant: a text that reaches the splice uncleaned
+    // must not put NUL (which the inline escape keeps) into the section.
+    // 이것을 실패시키는 것: `encode_text_inner` 의 금지 문자 검사를 빼는 것.
+    #[test]
+    fn a_fragment_holding_nul_is_refused_for_every_splice_shape() {
+        let xml = "<hp:run><hp:t>old</hp:t></hp:run><hp:run/>";
+        let content = TextLocator::TextElement {
+            element_start: 8,
+            element_end: 24,
+            content_start: Some(14),
+            content_end: Some(17),
+        };
+        let empty_run = TextLocator::EmptyRun { run_start: 33, run_end: 42 };
+
+        for locator in [&content, &empty_run] {
+            let error = apply_text_locator(xml, locator, "A\u{0}B").unwrap_err();
+            assert!(
+                matches!(&error, HwpxError::InvalidStructure { detail } if detail.contains("U+0000")),
+                "{error:?}"
+            );
+            assert_eq!(apply_text_locator(xml, locator, "AB").unwrap().matches("AB").count(), 1);
+        }
     }
 
     #[test]
