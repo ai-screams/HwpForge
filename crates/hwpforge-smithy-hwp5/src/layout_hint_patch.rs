@@ -150,10 +150,15 @@ fn collect_flow_paragraph_layout_hints(
 }
 
 /// Collects layout hints from a group's text-bearing children (rect/ellipse
-/// with `drawText`). Non-text children carry no paragraphs. A child that is
-/// itself a nested group recurses so the inner group's text-bearing leaves
-/// (whose `<hp:p>` the encoder still emits) contribute hints — without this
-/// the patcher would underflow on nested groups.
+/// with `drawText`). A child that is itself a nested group recurses so the
+/// inner group's text-bearing leaves (whose `<hp:p>` the encoder still emits)
+/// contribute hints — without this the patcher would underflow on nested
+/// groups.
+///
+/// Only the children whose text the group projection keeps contribute: a
+/// rect or ellipse with a readable matrix chain. The text of any other shape
+/// (a polygon, an arc …) and of a child dropped for an unreadable chain is
+/// reported lost and never written, so its hints would be left over.
 fn collect_group_child_layout_hints(
     group: &crate::decoder::section::Hwp5GroupControl,
     scope: &mut ScopeLayoutHints,
@@ -162,7 +167,11 @@ fn collect_group_child_layout_hints(
         if let Hwp5Control::Group(nested) = &child.control {
             collect_group_child_layout_hints(nested, scope);
         }
-        collect_scope_paragraphs(&child.paragraphs, scope);
+        let keeps_text = child.render.is_ok()
+            && matches!(child.control, Hwp5Control::Rect(_) | Hwp5Control::Ellipse(_));
+        if keeps_text {
+            collect_scope_paragraphs(&child.paragraphs, scope);
+        }
     }
 }
 
@@ -343,6 +352,67 @@ mod tests {
         };
 
         assert_eq!(derive_table_height(&table), Some(4482));
+    }
+
+    /// The group projection keeps the text of a rect child and drops that of
+    /// a polygon child (reported lost); only the kept text's paragraph gets
+    /// a hint, else the patcher is left with an unconsumed one.
+    ///
+    /// 이것을 실패시키는 것: 글자를 버리는 자식(다각형)의 문단도 힌트로 모으는 것,
+    /// 행렬열을 못 읽어 버리는 자식의 문단을 모으는 것.
+    #[test]
+    fn group_hints_follow_the_text_the_projection_keeps() {
+        use crate::decoder::section::{
+            Hwp5GroupChild, Hwp5GroupControl, Hwp5PolygonControl, Hwp5RectControl,
+        };
+        use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
+        let geo = Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 };
+        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let render = Ok(Hwp5ShapeRender {
+            initial: (100, 100),
+            trans: id,
+            pairs: vec![(id, id)],
+            fill: Hwp5ShapeFill::Plain,
+        });
+        let child = |control, render, start| Hwp5GroupChild {
+            control,
+            paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
+            list_header_properties: None,
+            render,
+            nested_controls: Vec::new(),
+        };
+        let rect = || {
+            Hwp5Control::Rect(Hwp5RectControl {
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                ctrl_properties: 0,
+            })
+        };
+        let group = Hwp5GroupControl {
+            ctrl_id: 0,
+            geometry: geo.clone(),
+            children: vec![
+                child(rect(), render.clone(), 1),
+                child(
+                    Hwp5Control::Polygon(Hwp5PolygonControl {
+                        ctrl_id: 0,
+                        geometry: geo.clone(),
+                        points: Vec::new(),
+                        ctrl_properties: 0,
+                    }),
+                    render.clone(),
+                    2,
+                ),
+                child(rect(), Err("cut short".into()), 3),
+            ],
+            render,
+            instance_id: 0,
+        };
+        let mut scope = ScopeLayoutHints::default();
+        collect_group_child_layout_hints(&group, &mut scope);
+        let starts: Vec<u32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].text_start_position).collect();
+        assert_eq!(starts, [1]);
     }
 
     #[test]
