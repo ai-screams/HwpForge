@@ -317,10 +317,51 @@ impl std::fmt::Display for DecodeWarning {
 ///
 /// 하류 크레이트의 테스트가 "새 변형이 폴백 코드로 보고되지 않는다"를
 /// 확인하는 데 쓴다. 표본 목록 옆의 와일드카드 없는 `match` 가 변형 추가 시
-/// 컴파일을 깨뜨려 목록 갱신을 강제한다.
+/// 컴파일을 깨뜨려 목록 갱신을 강제한다. 디코드(`decode`)와
+/// 인코드(`encode`) 경고를 함께 둔다.
 #[cfg(any(test, feature = "test-support"))]
 pub mod warning_samples {
     use super::{DecodeWarning, ParagraphPath, PathSeg};
+    use crate::EncodeWarning;
+
+    /// 각 [`EncodeWarning`] 변형의 표본 하나씩, 선언 순서대로.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::decoder::warning_samples;
+    ///
+    /// let samples = warning_samples::encode();
+    /// assert!(samples.iter().any(|w| w.code() == "LAYOUT_CACHE_DROPPED"));
+    /// ```
+    #[must_use]
+    pub fn encode() -> Vec<EncodeWarning> {
+        let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
+        let samples = vec![
+            EncodeWarning::LayoutCacheDropped { path: path(), reason: "sample".to_string() },
+            EncodeWarning::NoteHeadSkipped { path: path(), reason: "sample".to_string() },
+            EncodeWarning::TitleMarkSkipped { path: path(), reason: "sample".to_string() },
+            EncodeWarning::NoteRestartIgnored { path: path(), reason: "sample".to_string() },
+            EncodeWarning::XmlForbiddenCharsRemoved {
+                part: "Contents/section0.xml".to_string(),
+                location: "hp:t".to_string(),
+                count: 1,
+            },
+        ];
+        for sample in &samples {
+            // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
+            // 그때 위 표본에도 하나를 더한다.
+            match sample {
+                EncodeWarning::LayoutCacheDropped { .. }
+                | EncodeWarning::NoteHeadSkipped { .. }
+                | EncodeWarning::TitleMarkSkipped { .. }
+                | EncodeWarning::NoteRestartIgnored { .. }
+                | EncodeWarning::XmlForbiddenCharsRemoved { .. }
+                | EncodeWarning::ContentLost { .. } => {}
+            }
+        }
+        samples
+    }
 
     /// 각 [`DecodeWarning`] 변형의 표본 하나씩, 선언 순서대로.
     ///

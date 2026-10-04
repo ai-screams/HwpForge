@@ -17,7 +17,7 @@ description = "HWPX format codec (encoder + decoder) for HwpForge"
 ## Enable `JsonSchema` derives on exchange types (`ExportedDocument`, `ExportedSection`).
 schemars = ["dep:schemars"]
 ## Test-only: per-variant warning samples for downstream mapping tests
-## (`decoder::warning_samples`). No stability guarantee.
+## (`decoder::warning_samples::{decode, encode}`). No stability guarantee.
 test-support = []
 
 [dependencies]

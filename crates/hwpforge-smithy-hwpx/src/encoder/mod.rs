@@ -602,6 +602,126 @@ impl EncodeWarning {
             Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
         }
     }
+
+    /// 이 경고의 안정 코드.
+    ///
+    /// 하류(ops·convert·CLI)가 자기 매핑표에 없는 변형을 만나면 이 값을
+    /// 그대로 보고한다. 기존 변형의 하류 출력 코드는 각 하류의 표가 정한다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath};
+    ///
+    /// let w = EncodeWarning::LayoutCacheDropped {
+    ///     path: ParagraphPath::default(),
+    ///     reason: "ledger failed".into(),
+    /// };
+    /// assert_eq!(w.code(), "LAYOUT_CACHE_DROPPED");
+    /// ```
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
+            Self::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
+            Self::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
+            Self::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
+            Self::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
+            Self::ContentLost { .. } => "CONTENT_LOST",
+        }
+    }
+
+    /// 경고가 가리키는 패키지 part 이름. part 를 싣지 않는 변형은 `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath};
+    ///
+    /// let removed = EncodeWarning::XmlForbiddenCharsRemoved {
+    ///     part: "Contents/header.xml".into(),
+    ///     location: "hh:style@engName".into(),
+    ///     count: 1,
+    /// };
+    /// assert_eq!(removed.part(), Some("Contents/header.xml"));
+    /// let dropped = EncodeWarning::LayoutCacheDropped {
+    ///     path: ParagraphPath::default(),
+    ///     reason: "ledger failed".into(),
+    /// };
+    /// assert_eq!(dropped.part(), None);
+    /// ```
+    #[must_use]
+    pub fn part(&self) -> Option<&str> {
+        match self {
+            Self::LayoutCacheDropped { .. }
+            | Self::NoteHeadSkipped { .. }
+            | Self::TitleMarkSkipped { .. }
+            | Self::NoteRestartIgnored { .. } => None,
+            Self::XmlForbiddenCharsRemoved { part, .. } | Self::ContentLost { part, .. } => {
+                Some(part)
+            }
+        }
+    }
+
+    /// 경고가 가리키는 자리를 사람이 읽는 한 줄로.
+    ///
+    /// 문단 경로를 싣는 변형은 그 경로, `XmlForbiddenCharsRemoved` 는
+    /// `part 요소@속성`, `ContentLost` 는 `part:경로`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
+    ///
+    /// let w = EncodeWarning::NoteHeadSkipped {
+    ///     path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(2)]),
+    ///     reason: "titleMark first run".into(),
+    /// };
+    /// assert_eq!(w.location().as_deref(), Some("section[0].para[2]"));
+    /// ```
+    #[must_use]
+    pub fn location(&self) -> Option<String> {
+        match self {
+            Self::LayoutCacheDropped { path, .. }
+            | Self::NoteHeadSkipped { path, .. }
+            | Self::TitleMarkSkipped { path, .. }
+            | Self::NoteRestartIgnored { path, .. } => Some(path.to_string()),
+            Self::XmlForbiddenCharsRemoved { part, location, .. } => {
+                Some(format!("{part} {location}"))
+            }
+            Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
+        }
+    }
+
+    /// 자리([`Self::location`])를 뺀 사람용 문구.
+    ///
+    /// 자리를 따로 싣는 하류 표(CLI `to-pdf` 의 `location` 열 등)가 문구에
+    /// 자리를 두 번 쓰지 않도록 쓴다. 자리까지 한 줄로 필요하면 `Display`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath};
+    ///
+    /// let w = EncodeWarning::LayoutCacheDropped {
+    ///     path: ParagraphPath::default(),
+    ///     reason: "ledger failed".into(),
+    /// };
+    /// assert_eq!(w.message(), "layout cache dropped: ledger failed");
+    /// ```
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
+            Self::NoteHeadSkipped { reason, .. } => format!("note number head skipped: {reason}"),
+            Self::TitleMarkSkipped { reason, .. } => format!("titleMark skipped: {reason}"),
+            Self::NoteRestartIgnored { reason, .. } => format!("note restart ignored: {reason}"),
+            Self::XmlForbiddenCharsRemoved { count, .. } => {
+                format!("removed {count} XML-forbidden character(s)")
+            }
+            Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
+        }
+    }
 }
 
 /// One [`EncodeWarning::XmlForbiddenCharsRemoved`] per `(location, count)`
@@ -713,6 +833,36 @@ mod is_semantic_loss_tests {
             warning.to_string(),
             format!("shape_emission lost at Contents/section0.xml:{}: off by 35.08", path())
         );
+    }
+
+    /// 이것을 실패시키는 것: 표본 목록에서 한 변형을 빼는 것 — 고유 코드 수가
+    /// 갈래 수와 어긋난다.
+    #[test]
+    fn samples_cover_every_code_once() {
+        let samples = crate::decoder::warning_samples::encode();
+        let codes: std::collections::BTreeSet<&str> =
+            samples.iter().map(EncodeWarning::code).collect();
+        assert_eq!(codes.len(), samples.len(), "one sample per code");
+        assert_eq!(
+            codes.into_iter().collect::<Vec<_>>(),
+            [
+                "LAYOUT_CACHE_DROPPED",
+                "NOTE_HEAD_SKIPPED",
+                "NOTE_RESTART_IGNORED",
+                "TITLE_MARK_SKIPPED",
+                "XML_FORBIDDEN_CHARS_REMOVED",
+            ]
+        );
+    }
+
+    /// 이것을 실패시키는 것: `message` 가 자리를 다시 넣는 것 (자리 없는 문구가
+    /// 깨진다).
+    #[test]
+    fn message_leaves_the_location_out() {
+        for w in crate::decoder::warning_samples::encode() {
+            let loc = w.location().unwrap();
+            assert!(!w.message().contains(&loc), "{w:?}: {}", w.message());
+        }
     }
 
     #[test]
