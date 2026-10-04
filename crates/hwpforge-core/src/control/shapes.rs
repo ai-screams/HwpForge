@@ -209,8 +209,11 @@ pub struct ShapeStyle {
     /// Line drawing style (solid, dash, dot, etc.).
     pub line_style: Option<LineStyle>,
     /// Rotation angle in degrees (0-360). `None` means no rotation.
+    /// Positive turns clockwise on the page, about the box centre, after
+    /// the flip (full definition: `hwpforge_core::control::geometry`).
     pub rotation: Option<f32>,
-    /// Flip/mirror state. `None` means no flip.
+    /// Flip/mirror state. `None` means no flip. Applied about the box
+    /// centre, before the rotation.
     pub flip: Option<Flip>,
     /// Arrowhead at the start of a line. Only meaningful for `Control::Line`.
     pub head_arrow: Option<ArrowStyle>,

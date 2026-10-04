@@ -2772,7 +2772,7 @@
           ]
         },
         "rotation": {
-          "description": "Rotation angle in degrees (0-360). `None` means no rotation.",
+          "description": "Rotation angle in degrees (0-360). `None` means no rotation.\nPositive turns clockwise on the page, about the box centre, after\nthe flip (full definition: `hwpforge_core::control::geometry`).",
           "type": [
             "number",
             "null"
@@ -2780,7 +2780,7 @@
           "format": "float"
         },
         "flip": {
-          "description": "Flip/mirror state. `None` means no flip.",
+          "description": "Flip/mirror state. `None` means no flip. Applied about the box\ncentre, before the rotation.",
           "anyOf": [
             {
               "$ref": "#/$defs/Flip"
