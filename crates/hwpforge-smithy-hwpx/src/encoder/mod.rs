@@ -563,6 +563,25 @@ pub enum EncodeWarning {
         /// 그 id 를 쓰는 항목들의 `href`, manifest 순서.
         hrefs: Vec<String>,
     },
+    /// part 의 `binaryItemIDRef` 가 패키지의 어떤 이미지·OLE 항목
+    /// (`content.hpf` 에서 `href` 가 `BinData/` 인 항목)의 id 와도 맞지
+    /// 않는다 — 예: `from-json` 을 원본 패키지(`--base`) 없이 써서 이미지
+    /// 저장소가 비었다. 그림·채우기가 산출물에서 깨지므로 의미 손상이다.
+    ///
+    /// 참조는 **그대로 남긴다**. 한컴은 이런 문서를 경고 없이 열어 원래
+    /// 크기의 빈 그림 상자를 그리고, 다시 저장하면 참조를 빈 값으로 쓴다.
+    /// 빈 참조는 이 크레이트의 디코더가 그림째 버리므로, 남겨 두는 쪽이
+    /// 그림 자리와 참조 이름(나중에 자산을 붙일 열쇠)을 보존한다. 빈 값은
+    /// 참조로 보지 않는다. 같은 `(part, reference)` 는 한 경고로 합친다.
+    ImageReferenceUnresolved {
+        /// 참조가 있는 part 이름 (예: `Contents/header.xml`).
+        part: String,
+        /// 참조를 담은 자리 — `요소@binaryItemIDRef` (`hc:img@binaryItemIDRef`).
+        /// 합친 경고는 처음 본 자리.
+        location: String,
+        /// 해석되지 않은 `binaryItemIDRef` 값.
+        reference: String,
+    },
 }
 
 /// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
@@ -593,6 +612,7 @@ impl EncodeWarning {
     /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
     /// | [`Self::ContentLost`] | 예 | 도형이 정확한 위치에서 벗어나 쓰이거나, 컨트롤·run 내용이 산출물에서 빠진다 |
     /// | [`Self::PackageIdConflict`] | 예 | 참조가 어느 manifest 항목을 가리키는지 정해지지 않는다 |
+    /// | [`Self::ImageReferenceUnresolved`] | 예 | 그림·채우기가 가리키는 자산이 패키지에 없다 |
     /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
@@ -619,7 +639,8 @@ impl EncodeWarning {
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. }
             | Self::ContentLost { .. }
-            | Self::PackageIdConflict { .. } => true,
+            | Self::PackageIdConflict { .. }
+            | Self::ImageReferenceUnresolved { .. } => true,
             Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
         }
     }
@@ -650,6 +671,7 @@ impl EncodeWarning {
             Self::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
             Self::ContentLost { .. } => "CONTENT_LOST",
             Self::PackageIdConflict { .. } => "PACKAGE_ID_CONFLICT",
+            Self::ImageReferenceUnresolved { .. } => "IMAGE_REFERENCE_UNRESOLVED",
         }
     }
 
@@ -679,9 +701,9 @@ impl EncodeWarning {
             | Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. } => None,
-            Self::XmlForbiddenCharsRemoved { part, .. } | Self::ContentLost { part, .. } => {
-                Some(part)
-            }
+            Self::XmlForbiddenCharsRemoved { part, .. }
+            | Self::ContentLost { part, .. }
+            | Self::ImageReferenceUnresolved { part, .. } => Some(part),
             Self::PackageIdConflict { .. } => Some(CONTENT_HPF_PART),
         }
     }
@@ -709,7 +731,8 @@ impl EncodeWarning {
             | Self::NoteHeadSkipped { path, .. }
             | Self::TitleMarkSkipped { path, .. }
             | Self::NoteRestartIgnored { path, .. } => Some(path.to_string()),
-            Self::XmlForbiddenCharsRemoved { part, location, .. } => {
+            Self::XmlForbiddenCharsRemoved { part, location, .. }
+            | Self::ImageReferenceUnresolved { part, location, .. } => {
                 Some(format!("{part} {location}"))
             }
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
@@ -746,6 +769,9 @@ impl EncodeWarning {
             Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
             Self::PackageIdConflict { id, hrefs } => {
                 format!("{} manifest items share id \"{id}\": {}", hrefs.len(), hrefs.join(", "))
+            }
+            Self::ImageReferenceUnresolved { reference, .. } => {
+                format!("binaryItemIDRef \"{reference}\" names no image or OLE item in the package")
             }
         }
     }
@@ -824,6 +850,11 @@ impl std::fmt::Display for EncodeWarning {
                 hrefs.len(),
                 hrefs.join(", ")
             ),
+            Self::ImageReferenceUnresolved { part, location, reference } => write!(
+                f,
+                "binaryItemIDRef \"{reference}\" at {location} in {part} names no image or OLE \
+                 item in the package"
+            ),
         }
     }
 }
@@ -880,6 +911,7 @@ mod is_semantic_loss_tests {
             codes.into_iter().collect::<Vec<_>>(),
             [
                 "CONTENT_LOST",
+                "IMAGE_REFERENCE_UNRESOLVED",
                 "LAYOUT_CACHE_DROPPED",
                 "NOTE_HEAD_SKIPPED",
                 "NOTE_RESTART_IGNORED",
@@ -947,6 +979,7 @@ mod is_semantic_loss_tests {
                     | EncodeWarning::ContentLost { reason, .. } => reason.clone(),
                     EncodeWarning::XmlForbiddenCharsRemoved { location, .. } => location.clone(),
                     EncodeWarning::PackageIdConflict { id, .. } => id.clone(),
+                    EncodeWarning::ImageReferenceUnresolved { reference, .. } => reference.clone(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1021,9 +1054,11 @@ impl EncodeOptions {
 ///
 /// The encoder embeds binary image data from [`ImageStore`] into
 /// `BinData/` entries in the ZIP archive. Image paths in the document
-/// (e.g. `"BinData/image1.png"`) are matched against the store keys.
-/// Images not found in the store are silently skipped (XML reference
-/// only, no binary data).
+/// (e.g. `"BinData/image1.png"`) are matched against the store keys by
+/// stem (`image1`), the id the manifest gives each image. A picture or fill
+/// whose image is not in the store keeps its XML reference, with no binary
+/// data, and [`Self::encode_with_diagnostics`] reports it as
+/// [`EncodeWarning::ImageReferenceUnresolved`].
 #[derive(Debug, Clone, Copy)]
 pub struct HwpxEncoder;
 
@@ -1191,8 +1226,19 @@ impl HwpxEncoder {
             &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
         );
-        // C4: the manifest the writer is about to write, checked as is.
+        // C4: the manifest the writer is about to write, and the parts it
+        // writes, checked as they are.
         warnings.extend(references::manifest_id_conflicts(&manifest));
+        let mut parts: Vec<(String, &str)> = vec![("Contents/header.xml".to_string(), &header_xml)];
+        parts.extend(
+            section_xmls
+                .iter()
+                .enumerate()
+                .map(|(i, xml)| (format!("Contents/section{i}.xml"), xml.as_str())),
+        );
+        parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
+        let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();
+        warnings.extend(references::unresolved_references(&manifest, &parts)?);
         let bytes = PackageWriter::write_hwpx_with_manifest(
             document.metadata(),
             &manifest,

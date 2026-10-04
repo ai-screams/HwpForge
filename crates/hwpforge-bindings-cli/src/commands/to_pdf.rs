@@ -459,6 +459,31 @@ mod tests {
         assert_dto_folds_into_info(&warning, &dto);
     }
 
+    /// C4 의 해석되지 않은 이미지 참조는 자기 코드와 `part 요소@속성` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
+    /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn convert_stage_dto_reports_image_reference_unresolved_by_its_own_code() {
+        let warning = ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(
+            EncodeWarning::ImageReferenceUnresolved {
+                part: "Contents/header.xml".into(),
+                location: "hc:img@binaryItemIDRef".into(),
+                reference: "BIN0005".into(),
+            },
+        ));
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "convert");
+        assert_eq!(dto.code, "IMAGE_REFERENCE_UNRESOLVED");
+        assert_eq!(
+            dto.message,
+            "binaryItemIDRef \"BIN0005\" names no image or OLE item in the package"
+        );
+        assert_eq!(dto.location.as_deref(), Some("Contents/header.xml hc:img@binaryItemIDRef"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
     /// W5(`6ef353b`)의 `render_warning_dto` match(같은 파일 133–249 행)가
     /// 내던 `(code, message, location)` 세 열을 **리터럴로** 고정한다.
     ///

@@ -286,6 +286,7 @@ const WARNING_MAPPING: Table = &[
             ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
             ("ContentLost", "CONTENT_LOST"),
             ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
+            ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
         ],
     ),
     (
@@ -751,6 +752,16 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 OpsWarning::Encode(EncodeWarning::PackageIdConflict {
                     id: "header".into(),
                     hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+                }),
+            ),
+            (
+                // 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "ImageReferenceUnresolved",
+                OpsWarning::Encode(EncodeWarning::ImageReferenceUnresolved {
+                    part: "Contents/header.xml".into(),
+                    location: "hc:img@binaryItemIDRef".into(),
+                    reference: "image1".into(),
                 }),
             ),
         ],

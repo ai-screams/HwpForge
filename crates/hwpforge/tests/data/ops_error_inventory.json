@@ -771,6 +771,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ImageReferenceUnresolved",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

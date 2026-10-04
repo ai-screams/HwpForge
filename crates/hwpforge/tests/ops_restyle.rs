@@ -143,6 +143,30 @@ fn semantic_loss_returns_no_bytes_at_all() {
     );
 }
 
+/// A picture whose `binaryItemIDRef` names no package item (fixture F6:
+/// `image2` with neither a manifest item nor a BinData entry). Restyling
+/// re-encodes the whole package, which would carry the broken picture over
+/// without a word, so it is refused.
+///
+/// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+/// `ImageReferenceUnresolved` 를 `false` 갈래로 옮기는 것.
+#[test]
+fn a_dangling_image_reference_refuses_the_restyle() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/images/");
+    let bytes = std::fs::read(format!("{path}f6-dangling-image.hwpx")).expect("f6 fixture");
+
+    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect_err("a dangling image reference must not pass silently");
+
+    assert_eq!(err.code(), OpsCode::EncodeSemanticLoss, "{err}");
+    let hwpforge::ops::OpsError::EncodeSemanticLoss { warnings, .. } = &err else {
+        panic!("wrong variant: {err:?}");
+    };
+    let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
+    assert_eq!(codes, ["IMAGE_REFERENCE_UNRESOLVED"], "{warnings:?}");
+    assert!(warnings[0].message.contains("image2"), "{warnings:?}");
+}
+
 #[test]
 fn a_document_without_fonts_has_nothing_to_rebind() {
     // A store with shapes but no font table. If the encoder accepts it, the

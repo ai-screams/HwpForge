@@ -111,6 +111,7 @@ const AUDITED: &[Audited] = &[
             // (`EncodeWarning::code`), part and path in the location column.
             ("ContentLost", "CONTENT_LOST"),
             ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
+            ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
         ],
     },
     Audited {

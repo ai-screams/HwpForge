@@ -153,6 +153,33 @@ fn a_base_package_supplies_the_images_the_json_only_references() {
     );
 }
 
+/// Without the base package the picture's reference names nothing in the
+/// output, and `from_json` says so (a warning, the bytes still come back);
+/// with it, nothing is reported.
+///
+/// 이것을 실패시키는 것: 인코더의 참조 검사 호출을 빼는 것, 또는
+/// `from_json` 이 인코드 경고를 버리는 것.
+#[test]
+fn a_picture_without_its_base_package_is_reported_unresolved() {
+    let bytes = fixture("SimplePicture.hwpx");
+    let json = exported_text("SimplePicture.hwpx");
+
+    let without = from_json(&json, &FromJsonOptions::default()).expect("no base").meta().warnings;
+    let with = from_json(&json, &FromJsonOptions::default().with_base(bytes))
+        .expect("with base")
+        .meta()
+        .warnings;
+
+    let unresolved: Vec<&str> = without
+        .iter()
+        .filter(|w| w.code == "IMAGE_REFERENCE_UNRESOLVED")
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(unresolved.len(), 1, "{without:?}");
+    assert!(unresolved[0].contains("Contents/section0.xml"), "{unresolved:?}");
+    assert!(!with.iter().any(|w| w.code == "IMAGE_REFERENCE_UNRESOLVED"), "{with:?}");
+}
+
 #[test]
 fn an_undecodable_base_is_a_decode_failure() {
     let json = exported_text("SimpleTable.hwpx");

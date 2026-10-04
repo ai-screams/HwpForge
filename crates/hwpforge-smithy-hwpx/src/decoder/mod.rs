@@ -357,6 +357,11 @@ pub mod warning_samples {
                 id: "header".to_string(),
                 hrefs: vec!["Contents/header.xml".to_string(), "BinData/header.png".to_string()],
             },
+            EncodeWarning::ImageReferenceUnresolved {
+                part: "Contents/header.xml".to_string(),
+                location: "hc:img@binaryItemIDRef".to_string(),
+                reference: "image1".to_string(),
+            },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
@@ -368,7 +373,8 @@ pub mod warning_samples {
                 | EncodeWarning::NoteRestartIgnored { .. }
                 | EncodeWarning::XmlForbiddenCharsRemoved { .. }
                 | EncodeWarning::ContentLost { .. }
-                | EncodeWarning::PackageIdConflict { .. } => {}
+                | EncodeWarning::PackageIdConflict { .. }
+                | EncodeWarning::ImageReferenceUnresolved { .. } => {}
             }
         }
         samples
