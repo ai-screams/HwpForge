@@ -134,11 +134,13 @@ fn six_digit_coefficients_count_in_the_residual() {
     assert!(raw.residual() < 1e-6);
 }
 
-/// Whole degrees wrap first, then round half away from zero:
-/// 29.5→30, 30.5→31, −30→330, 359.6→360, −0.4→360.
+/// Whole degrees round half away from zero: 29.5→30, 30.5→31. The wrap
+/// into `[0, 360)` (−30→330, −0.4→360) does not change the matrix — a turn
+/// by −30° is a turn by 330° — so it is pinned on the writer's stored angle
+/// instead (smithy-hwpx `rotation_angle_boundaries_match_the_writer`).
 ///
-/// 이것을 실패시키는 것: `rem_euclid` 를 빼는 것(−30 → −30), 반올림을
-/// 내림·짝수 반올림으로 바꾸는 것.
+/// 이것을 실패시키는 것: 반올림을 내림(29.5 → 29)이나 짝수 반올림(30.5 → 30)으로
+/// 바꾸는 것.
 #[test]
 fn whole_degree_boundaries_match_the_writer() {
     for (given, stored) in
@@ -342,4 +344,109 @@ fn groups_and_non_shapes_are_not_folded_here() {
     ));
     assert_eq!(emission_residual(&Control::bookmark("b"), &HWPX_LIKE).residual(), 0.0);
     assert!(emitted_corners(&Control::bookmark("b"), &HWPX_LIKE).is_none());
+}
+
+/// An equation has no rotation or offset field, but a shear must still be
+/// reported: `[1, 0.1, −5, 0, 1, 0]` slants a 100 × 100 box by 5 HWPUNIT.
+///
+/// 이것을 실패시키는 것: 저장 필드가 없는 갈래에서 shear·잔차 검사를 건너뛰고
+/// 손실 없이 돌아가는 것.
+#[test]
+fn a_shear_on_a_variant_without_a_rotation_field_is_still_reported() {
+    let slant = ShapeTransform::from_matrix([1.0, 0.1, -5.0, 0.0, 1.0, 0.0]);
+    let (_, losses) = kept(fold_group_child(
+        Control::equation("x"),
+        &FoldInput::new(slant, (100.0, 100.0), (0.0, 0.0)),
+    ));
+    assert_eq!(kinds(&losses), [FoldLossKind::Shear]);
+}
+
+/// A line, curve or connector squeezed to one point is dropped; a line
+/// that was a single point to begin with is not something the map did.
+///
+/// 이것을 실패시키는 것: 점 기반 붕괴 판정을 다각형에만 두는 것, 또는 원래
+/// 한 점이던 선까지 버리는 것.
+#[test]
+fn point_shapes_squeezed_to_a_point_are_dropped() {
+    let squeeze = FoldInput::new(
+        ShapeTransform::from_matrix([0.0, 0.0, 10.0, 0.0, 0.0, 20.0]),
+        (100.0, 100.0),
+        (0.0, 0.0),
+    );
+    let (a, b) = (ShapePoint::new(0, 0), ShapePoint::new(100, 100));
+    for shape in [
+        Control::line(a, b).unwrap(),
+        Control::curve(vec![a, b, ShapePoint::new(50, 0)]).unwrap(),
+        Control::connect_line(a, b).unwrap(),
+    ] {
+        let kind = shape.kind_name();
+        match fold_group_child(shape, &squeeze) {
+            FoldOutcome::Dropped { losses } => {
+                assert_eq!(kinds(&losses), [FoldLossKind::Degenerate], "{kind}");
+            }
+            other => panic!("{kind}: {other:?}"),
+        }
+    }
+    let shift = FoldInput::new(
+        ShapeTransform::from_matrix([1.0, 0.0, 10.0, 0.0, 1.0, 20.0]),
+        (0.0, 0.0),
+        (0.0, 0.0),
+    );
+    let mut dot = Control::line(a, b).unwrap();
+    if let Control::Line { end, .. } = &mut dot {
+        *end = a;
+    }
+    assert!(matches!(fold_group_child(dot, &shift), FoldOutcome::Kept { .. }));
+}
+
+/// Mirrored both ways and turned is a plain turn 180° further, so even a
+/// policy that cannot store a mirror with a rotation stores it exactly.
+///
+/// 이것을 실패시키는 것: 양축 반사를 단축 반사처럼 정책 제약에 걸리게 두는 것
+/// (반사만 남아 모서리 오차 약 354.76, `Unemittable`).
+#[test]
+fn both_mirrors_need_no_mirror_with_rotation() {
+    let no_mix =
+        EmissionPolicy::new(AngleRounding::WholeDegrees, CoefficientRounding::Decimals(6), false);
+    let check = emission_residual(&rect(1000, 500, Some(37.0), Some(Flip::Both)), &no_mix);
+    assert!(!check.is_unstorable() && check.loss().is_none(), "{check:?}");
+    assert!(check.residual() < 1e-3, "{check:?}");
+}
+
+/// A fold reads only finite numbers: a parent origin that is not a number
+/// drops the child instead of turning into a zero offset.
+///
+/// 이것을 실패시키는 것: 유한성 검사를 행렬에만 두는 것.
+#[test]
+fn non_finite_inputs_are_refused() {
+    let id = ShapeTransform::from_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+    let nan_origin = FoldInput::new(id, (100.0, 50.0), (f64::NAN, 0.0));
+    assert!(matches!(
+        fold_group_child(rect(1, 1, None, None), &nan_origin),
+        FoldOutcome::Dropped { .. }
+    ));
+    assert_eq!(fold_box(100.0, 50.0, &nan_origin).unwrap_err().kind(), FoldLossKind::Degenerate);
+    let nan_size = FoldInput::new(id, (f64::NAN, 50.0), (0.0, 0.0));
+    assert!(matches!(
+        fold_group_child(rect(1, 1, None, None), &nan_size),
+        FoldOutcome::Dropped { .. }
+    ));
+    assert!(max_residual(&[(0.0, 0.0)], &[(f64::NAN, 0.0)]).is_infinite());
+}
+
+/// Core keeps the angle as `f32`. On a box 100,000,000 wide, 300.00001°
+/// stores as 300° and the far corner moves about 17.45: kept, reported.
+///
+/// 이것을 실패시키는 것: 최종 Core 값의 잔차 검사를 지우는 것
+/// (`fold_boxed`·`fold_box` 각각).
+#[test]
+fn an_angle_f32_cannot_hold_on_a_huge_box_is_a_residual() {
+    let (s, c) = 300.00001f64.to_radians().sin_cos();
+    let map = ShapeTransform::from_matrix([c, -s, 0.0, s, c, 0.0]);
+    let input = FoldInput::new(map, (100_000_000.0, 1_000.0), (0.0, 0.0));
+    let (child, losses) = kept(fold_group_child(rect(1, 1, None, None), &input));
+    assert_eq!(rotation_and_flip(&child).0, Some(300.0));
+    assert_eq!(kinds(&losses), [FoldLossKind::Residual]);
+    let b = fold_box(100_000_000.0, 1_000.0, &input).unwrap();
+    assert_eq!(b.losses().iter().map(FoldLoss::kind).collect::<Vec<_>>(), [FoldLossKind::Residual]);
 }

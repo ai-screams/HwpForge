@@ -287,8 +287,14 @@ fn local_affine(
     flip: Option<Flip>,
     policy: &EmissionPolicy,
 ) -> (ShapeTransform, bool) {
-    let angle = stored_angle(rotation, policy.angle);
-    let (fx, fy) = flip_signs(flip);
+    let mut angle = stored_angle(rotation, policy.angle);
+    let (mut fx, mut fy) = flip_signs(flip);
+    if fx < 0.0 && fy < 0.0 && angle != 0.0 {
+        // Mirrored both ways is −I, a half turn: with a rotation it is a
+        // rotation 180° further and no mirror, which any policy can store.
+        (fx, fy) = (1.0, 1.0);
+        angle += 180.0;
+    }
     let mirrored = fx < 0.0 || fy < 0.0;
     let unstorable = angle != 0.0 && mirrored && !policy.mirror_with_rotation;
     let angle = if unstorable { 0.0 } else { angle };
@@ -415,7 +421,7 @@ impl EmissionCheck {
                     self.residual
                 ),
             ))
-        } else if self.residual > EXACT_TOLERANCE {
+        } else if exceeds_tolerance(self.residual) {
             Some(FoldLoss::new(
                 FoldLossKind::Residual,
                 format!("stored transform is off by {:.2} HWPUNIT", self.residual),
@@ -459,13 +465,9 @@ pub fn emission_residual(control: &Control, policy: &EmissionPolicy) -> Emission
     let (stored, unstorable) = local_affine(w, h, rotation, flip, policy);
     let mut pts: Vec<(f64, f64)> = box_corners(w, h).to_vec();
     pts.extend(defining_points(control).iter().map(|p| (f64::from(p.x), f64::from(p.y))));
-    let residual = pts
-        .iter()
-        .map(|&p| {
-            let (e, s) = (exact.apply(p), stored.apply(p));
-            (e.0 - s.0).hypot(e.1 - s.1)
-        })
-        .fold(0.0, f64::max);
+    let exact_pts: Vec<(f64, f64)> = pts.iter().map(|&p| exact.apply(p)).collect();
+    let stored_pts: Vec<(f64, f64)> = pts.iter().map(|&p| stored.apply(p)).collect();
+    let residual = max_residual(&exact_pts, &stored_pts);
     EmissionCheck { residual, unstorable }
 }
 
@@ -736,12 +738,25 @@ fn fits_hwpunit(values: &[i32]) -> bool {
     values.iter().all(|&v| HwpUnit::new(v).is_ok())
 }
 
+/// Largest pairwise distance; a non-finite distance makes the whole result
+/// non-finite instead of being skipped.
 fn max_residual(expected: &[(f64, f64)], actual: &[(f64, f64)]) -> f64 {
-    expected.iter().zip(actual).map(|(e, a)| (e.0 - a.0).hypot(e.1 - a.1)).fold(0.0, f64::max)
+    expected.iter().zip(actual).map(|(e, a)| (e.0 - a.0).hypot(e.1 - a.1)).fold(0.0, |m, d| {
+        if m.is_finite() && d.is_finite() {
+            m.max(d)
+        } else {
+            f64::INFINITY
+        }
+    })
+}
+
+/// A residual over the tolerance — or one that is not a number at all.
+fn exceeds_tolerance(residual: f64) -> bool {
+    residual.is_nan() || residual > EXACT_TOLERANCE
 }
 
 fn residual_loss(residual: f64) -> Option<FoldLoss> {
-    (residual > EXACT_TOLERANCE).then(|| {
+    exceeds_tolerance(residual).then(|| {
         FoldLoss::new(
             FoldLossKind::Residual,
             format!("re-encoded geometry is off by {residual:.2} HWPUNIT"),
@@ -761,13 +776,22 @@ struct RawBoxFold {
     shear: Option<FoldLoss>,
 }
 
+/// Every number a fold reads is finite.
+fn finite_input(width: f64, height: f64, input: &FoldInput) -> Result<(), FoldLoss> {
+    let (ow, oh) = input.original_size;
+    let (px, py) = input.parent_origin;
+    if input.map.is_finite() && [width, height, ow, oh, px, py].iter().all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        Err(FoldLoss::new(FoldLossKind::Degenerate, "transform or size is not a finite number"))
+    }
+}
+
 fn fold_box_raw(width: f64, height: f64, input: &FoldInput) -> Result<RawBoxFold, FoldLoss> {
     let m = &input.map;
     let degenerate =
         || FoldLoss::new(FoldLossKind::Degenerate, "transform collapses an axis to zero");
-    if !m.is_finite() {
-        return Err(degenerate());
-    }
+    finite_input(width, height, input)?;
     let d = decompose_box(m).ok_or_else(degenerate)?;
     let shear = (d.shear > SHEAR_TOLERANCE)
         .then(|| FoldLoss::new(FoldLossKind::Shear, format!("sheared transform ({:.4})", d.shear)));
@@ -1028,10 +1052,8 @@ pub fn fold_group_child(mut control: Control, input: &FoldInput) -> FoldOutcome 
             )],
         };
     }
-    if !input.map.is_finite() {
-        return FoldOutcome::Dropped {
-            losses: vec![FoldLoss::new(FoldLossKind::Degenerate, "transform is not finite")],
-        };
+    if let Err(loss) = finite_input(0.0, 0.0, input) {
+        return FoldOutcome::Dropped { losses: vec![loss] };
     }
     let turns = input.facts.content_turns_with_shape || has_turning_content(&control);
     if point_based && !turns {
@@ -1063,11 +1085,19 @@ fn fold_points(mut control: Control, input: &FoldInput) -> FoldOutcome {
         world.iter().map(|&(wx, wy)| (round_i32(wx - base.0), round_i32(wy - base.1))).collect();
     let w = local.iter().map(|p| p.0).max().unwrap_or(0).max(0);
     let h = local.iter().map(|p| p.1).max().unwrap_or(0).max(0);
-    if matches!(control, Control::Polygon { .. }) && (w == 0 || h == 0) {
+    let source = defining_points(&control);
+    let distinct = source.iter().any(|p| *p != source[0]);
+    let collapsed = match control {
+        // A polygon needs area.
+        Control::Polygon { .. } => w == 0 || h == 0,
+        // A line, curve or connector the map squeezes to a single point.
+        _ => distinct && w == 0 && h == 0,
+    };
+    if collapsed {
         return FoldOutcome::Dropped {
             losses: vec![FoldLoss::new(
                 FoldLossKind::Degenerate,
-                format!("polygon collapses to {w}x{h}"),
+                format!("{} collapses to {w}x{h}", control.kind_name()),
             )],
         };
     }
@@ -1129,7 +1159,15 @@ fn fold_boxed(control: &mut Control, input: &FoldInput) -> Result<Vec<FoldLoss>,
                 format!("{} has no field for its {what}", control.kind_name()),
             )]);
         }
-        return Ok(Vec::new());
+        if let Some(shear) = shear {
+            return Ok(vec![shear]);
+        }
+        let origin = (input.parent_origin.0 + f64::from(x), input.parent_origin.1 + f64::from(y));
+        let ours: Vec<(f64, f64)> = box_corners(f64::from(fold.width), f64::from(fold.height))
+            .iter()
+            .map(|&(px, py)| (origin.0 + px, origin.1 + py))
+            .collect();
+        return Ok(residual_loss(max_residual(&wire[..4], &ours)).into_iter().collect());
     }
     set_box(control, fold.width, fold.height, fold.offset);
     set_rotation_and_flip(control, fold.rotation, fold.flip);
