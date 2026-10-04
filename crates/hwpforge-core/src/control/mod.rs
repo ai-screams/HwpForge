@@ -26,6 +26,8 @@ mod fields;
 mod metadata;
 mod shapes;
 
+pub mod geometry;
+
 pub use fields::*;
 pub use metadata::*;
 pub use shapes::*;
