@@ -1041,9 +1041,13 @@ fn decode_nested_container(
         let _ = decode_group_children(nested, parent_origin, char_shape_id, depth, ctx)?;
         return Ok(None);
     };
-    // The nested group's own matrices should describe the same box.
+    // The nested group's own matrices should describe the same box. A
+    // child Core cannot carry (a picture) still counts in the wire box but
+    // not in the shapes' bounds; it is reported on its own, so the boxes
+    // are not compared then.
     let (org_w, org_h) = container_org_size(nested);
     match nested.rendering_info.as_ref().and_then(wire_chain) {
+        _ if has_unsupported_child(nested) => {}
         Some(own) => {
             let own_box: Vec<(f64, f64)> =
                 corners(org_w, org_h).iter().map(|&p| own.apply(p)).collect();
@@ -1077,6 +1081,13 @@ fn decode_nested_container(
         placement: group_child_placement(x, y),
         inst_id: container_inst_id(nested),
     }))
+}
+
+/// Whether `container` or a group under it has a child Core cannot carry.
+fn has_unsupported_child(container: &crate::schema::section::HxContainer) -> bool {
+    use crate::schema::section::HxContainerChildKind as K;
+    container.child_order.iter().any(|&(kind, _)| matches!(kind, K::Unsupported(_)))
+        || container.containers.iter().any(has_unsupported_child)
 }
 
 /// How far a nested group's own box may sit from the bounds of its shapes.
@@ -3272,6 +3283,23 @@ mod group_tests {
         let (g, w) = decode(&container((1000, 500), &format!("{keep}{}", rect((1000, 400), &bad))));
         assert_eq!(children(&g.unwrap()).len(), 1);
         assert_eq!(lost_kinds(&w), ["group_child_transform"]);
+    }
+
+    /// A nested group holding a picture: the picture is reported, and its
+    /// absence from Core does not also count as a misplaced group box.
+    ///
+    /// 이것을 실패시키는 것: 미지원 자식이 있는 중첩 묶음에서도 상자를 비교하는 것
+    /// (`nested_group_placement` 가 더해진다).
+    #[test]
+    fn nested_group_with_a_picture_is_reported_once() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]));
+        let pic = r#"<hp:pic id="2" groupLevel="2"><hp:offset x="0" y="0"/></hp:pic>"#;
+        // The group box spans the picture too (2000 wide), the rect only 1000.
+        let own = ri(ID, &[(ID, ID), (ID, ID)]);
+        let (g, w) =
+            decode(&container((3000, 3000), &nested((2000, 1000), &own, &format!("{leaf}{pic}"))));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["pic"]);
     }
 
     /// A nested group without its own matrices cannot be checked against its
