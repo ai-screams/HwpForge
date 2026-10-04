@@ -59,9 +59,10 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 /// One `<opf:item>` of the `content.hpf` manifest.
 ///
-/// [`manifest_items`] builds the whole list once; the encoder checks it
-/// (id conflicts, unresolved `binaryItemIDRef`) and
-/// [`PackageWriter::write_hwpx_with_manifest`] writes exactly that list, so
+/// [`manifest_items`] builds the whole list once and [`render_content_hpf`]
+/// turns it into `content.hpf`. The encoder checks that rendered text — read
+/// back with an XML reader, the way a consumer sees the ids — and
+/// [`PackageWriter::write_hwpx_with_content_hpf`] writes the same text, so
 /// the check and the written manifest cannot disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ManifestItem {
@@ -180,13 +181,19 @@ fn generate_content_hpf(
 }
 
 /// Writes `content.hpf` from metadata and an already built manifest list.
-fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) -> String {
+///
+/// `id` and `href` are attribute-escaped: an image store key is caller data,
+/// and a raw `&` or `"` in it would either break the part or turn into a
+/// different id once parsed (`he&#97;der` would read back as `header`).
+pub(crate) fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) -> String {
     use std::fmt::Write as _;
 
     let mut manifest_items = String::new();
     let mut spine_refs = String::new();
     for item in items {
         let ManifestItem { id, href, media_type, is_embeded, in_spine } = item;
+        let id = escape_xml_text_safe(id);
+        let href = escape_xml_text_safe(href);
         write!(manifest_items, r#"<opf:item id="{id}" href="{href}" media-type="{media_type}""#)
             .expect("write to String is infallible");
         if let Some(flag) = is_embeded {
@@ -366,7 +373,7 @@ fn guess_image_media_type(path: &str) -> &'static str {
 pub(crate) struct PackageWriter;
 
 impl PackageWriter {
-    /// [`Self::write_hwpx_with_manifest`] with the manifest built from the
+    /// [`Self::write_hwpx_with_content_hpf`] with the manifest built from the
     /// same inputs (unit tests of the writer).
     #[cfg(test)]
     pub fn write_hwpx(
@@ -384,9 +391,8 @@ impl PackageWriter {
             &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
         );
-        Self::write_hwpx_with_manifest(
-            metadata,
-            &manifest,
+        Self::write_hwpx_with_content_hpf(
+            &render_content_hpf(metadata, &manifest),
             header_xml,
             section_xmls,
             images,
@@ -400,8 +406,8 @@ impl PackageWriter {
     ///
     /// # Arguments
     ///
-    /// * `manifest` — The `content.hpf` manifest, from [`manifest_items`]
-    ///   over the same parts, images and OLE blobs.
+    /// * `content_hpf` — `Contents/content.hpf`, from [`render_content_hpf`]
+    ///   over [`manifest_items`] of the same parts, images and OLE blobs.
     /// * `header_xml` — Serialized `Contents/header.xml` content.
     /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
     /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
@@ -409,10 +415,8 @@ impl PackageWriter {
     /// # Errors
     ///
     /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_hwpx_with_manifest(
-        metadata: &Metadata,
-        manifest: &[ManifestItem],
+    pub fn write_hwpx_with_content_hpf(
+        content_hpf: &str,
         header_xml: &str,
         section_xmls: &[String],
         images: &[(String, Vec<u8>)],
@@ -450,7 +454,6 @@ impl PackageWriter {
         // 5. Contents/content.hpf (dynamic manifest)
         zip.start_file("Contents/content.hpf", deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
-        let content_hpf = render_content_hpf(metadata, manifest);
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml

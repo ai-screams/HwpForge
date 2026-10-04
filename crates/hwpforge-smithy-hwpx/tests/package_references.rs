@@ -73,6 +73,62 @@ fn an_image_stored_as_header_png_is_a_package_id_conflict() {
     assert_eq!(hpf.matches(r#"<opf:item id="header""#).count(), 2, "bytes are not rewritten");
 }
 
+/// The ids that conflict are the ones the written `content.hpf` holds. A key
+/// with a character XML cannot carry (U+0001) loses it on the way out, so
+/// `head\u{1}er.png` is written as id `header` — the same id as the header
+/// part — although the two keys differ inside the encoder.
+///
+/// 이것을 실패시키는 것: 겹침을 써진 `content.hpf` 를 읽은 값이 아니라 인코더
+/// 안의 manifest 항목 id 로 판정하는 것.
+#[test]
+fn ids_are_compared_as_the_written_content_hpf_reads() {
+    let mut images = ImageStore::new();
+    images.insert("head\u{1}er.png", vec![0x89, b'P', b'N', b'G']);
+    images.insert("he&#97;der.jpg", vec![0xFF, 0xD8]);
+    let outcome = encode_runs(vec![Run::text("본문", CharShapeIndex::new(0))], &images);
+
+    let ids = written_ids(&part(&outcome.bytes, "Contents/content.hpf"));
+    assert_eq!(ids.iter().filter(|id| *id == "header").count(), 2, "{ids:?}");
+    assert!(
+        ids.contains(&"he&#97;der".to_string()),
+        "an escaped key reads back as itself: {ids:?}"
+    );
+    assert_eq!(
+        conflicts(&outcome.warnings),
+        [(
+            "header".to_string(),
+            vec!["Contents/header.xml".to_string(), "BinData/header.png".to_string()]
+        )]
+    );
+}
+
+/// `opf:item@id` values of a `content.hpf`, read with an XML reader.
+fn written_ids(hpf: &str) -> Vec<String> {
+    let mut reader = quick_xml::Reader::from_str(hpf);
+    let mut ids = Vec::new();
+    loop {
+        match reader.read_event().expect("well-formed content.hpf") {
+            quick_xml::events::Event::Empty(e) | quick_xml::events::Event::Start(e)
+                if e.name().as_ref() == "opf:item" =>
+            {
+                for attr in e.attributes() {
+                    let attr = attr.expect("attribute");
+                    if attr.key.as_ref() == "id" {
+                        ids.push(
+                            attr.normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                                .expect("value")
+                                .into_owned(),
+                        );
+                    }
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    ids
+}
+
 /// 이것을 실패시키는 것: 항목이 하나뿐인 id 도 보고하는 것.
 #[test]
 fn distinct_image_keys_are_not_a_conflict() {

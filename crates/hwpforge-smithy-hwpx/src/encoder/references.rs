@@ -1,11 +1,12 @@
 //! Package-level reference checks run on the manifest the writer is about to
 //! write (C4).
 //!
-//! The checks look at the exact manifest list
-//! ([`manifest_items`](super::package::manifest_items)) that
-//! [`PackageWriter::write_hwpx_with_manifest`](super::package::PackageWriter::write_hwpx_with_manifest)
-//! writes, so what is checked and what is written cannot drift apart. They
-//! only report; the bytes are left as they are.
+//! The checks read the exact `content.hpf` text
+//! ([`render_content_hpf`](super::package::render_content_hpf)) that
+//! [`PackageWriter::write_hwpx_with_content_hpf`](super::package::PackageWriter::write_hwpx_with_content_hpf)
+//! writes, with an XML reader, so an id is compared as a consumer reads it
+//! (entities resolved, whitespace normalized), not as the encoder held it.
+//! They only report; the bytes are left as they are.
 //!
 //! Scope: only packages this encoder writes. The preserve-first editors that
 //! write the original package back with some parts replaced (`fill`, `patch`,
@@ -16,18 +17,59 @@
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
 
-use super::package::ManifestItem;
 use super::EncodeWarning;
 use crate::error::{HwpxError, HwpxResult};
 
+/// The CONTENT_HPF part name, for parse errors.
+const CONTENT_HPF: &str = "Contents/content.hpf";
+
+/// `(id, href)` of every `<opf:item>` in `content_hpf`, in document order,
+/// as an XML reader reads the attribute values.
+///
+/// # Errors
+///
+/// [`HwpxError::XmlParse`] if the text is not well-formed.
+pub(crate) fn read_manifest(content_hpf: &str) -> HwpxResult<Vec<(String, String)>> {
+    let parse_error = |detail: String| HwpxError::XmlParse { file: CONTENT_HPF.into(), detail };
+    let mut items = Vec::new();
+    let mut reader = Reader::from_str(content_hpf);
+    loop {
+        let element = match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => e,
+            Ok(Event::Eof) => break,
+            Ok(_) => continue,
+            Err(e) => return Err(parse_error(e.to_string())),
+        };
+        if element.name().as_ref() != "opf:item" {
+            continue;
+        }
+        let (mut id, mut href) = (String::new(), String::new());
+        for attr in element.attributes() {
+            let attr = attr.map_err(|e| parse_error(e.to_string()))?;
+            let slot = match attr.key.as_ref() {
+                "id" => &mut id,
+                "href" => &mut href,
+                _ => continue,
+            };
+            *slot = attr
+                .normalized_value(XmlVersion::Explicit1_0)
+                .map_err(|e| parse_error(e.to_string()))?
+                .into_owned();
+        }
+        items.push((id, href));
+    }
+    Ok(items)
+}
+
 /// One [`EncodeWarning::PackageIdConflict`] per manifest id that two or more
-/// items share, in the order the id first appears.
-pub(crate) fn manifest_id_conflicts(items: &[ManifestItem]) -> Vec<EncodeWarning> {
+/// items share, in the order the id first appears. `items` come from
+/// [`read_manifest`].
+pub(crate) fn manifest_id_conflicts(items: &[(String, String)]) -> Vec<EncodeWarning> {
     let mut by_id: Vec<(&str, Vec<String>)> = Vec::new();
-    for item in items {
-        match by_id.iter_mut().find(|(id, _)| *id == item.id) {
-            Some((_, hrefs)) => hrefs.push(item.href.clone()),
-            None => by_id.push((&item.id, vec![item.href.clone()])),
+    for (item_id, item_href) in items {
+        match by_id.iter_mut().find(|(id, _)| *id == item_id) {
+            Some((_, hrefs)) => hrefs.push(item_href.clone()),
+            None => by_id.push((item_id, vec![item_href.clone()])),
         }
     }
     by_id
@@ -39,7 +81,7 @@ pub(crate) fn manifest_id_conflicts(items: &[ManifestItem]) -> Vec<EncodeWarning
 
 /// One [`EncodeWarning::ImageReferenceUnresolved`] per `(part, reference)`
 /// whose `binaryItemIDRef` names no binary item (`href` under `BinData/` —
-/// images and OLE blobs) of `items`.
+/// images and OLE blobs) of `items` (from [`read_manifest`]).
 ///
 /// `parts` are `(part name, XML)` in package order. Every element's
 /// `binaryItemIDRef` attribute is read with an XML reader (either quote
@@ -53,13 +95,13 @@ pub(crate) fn manifest_id_conflicts(items: &[ManifestItem]) -> Vec<EncodeWarning
 /// it, so this is an encoder defect, and a part that cannot be read cannot be
 /// checked.
 pub(crate) fn unresolved_references(
-    items: &[ManifestItem],
+    items: &[(String, String)],
     parts: &[(&str, &str)],
 ) -> HwpxResult<Vec<EncodeWarning>> {
     let binary: Vec<&str> = items
         .iter()
-        .filter(|item| item.href.starts_with("BinData/"))
-        .map(|item| item.id.as_str())
+        .filter(|(_, href)| href.starts_with("BinData/"))
+        .map(|(id, _)| id.as_str())
         .collect();
     let mut warnings = Vec::new();
     for &(part, xml) in parts {
@@ -102,7 +144,13 @@ pub(crate) fn unresolved_references(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::encoder::package::manifest_items;
+    use crate::encoder::package::{manifest_items, render_content_hpf};
+    use hwpforge_core::metadata::Metadata;
+
+    /// The manifest as written and read back.
+    fn written(items: &[crate::encoder::package::ManifestItem]) -> Vec<(String, String)> {
+        read_manifest(&render_content_hpf(&Metadata::default(), items)).unwrap()
+    }
 
     fn strings(xs: &[&str]) -> Vec<String> {
         xs.iter().map(|x| x.to_string()).collect()
@@ -114,7 +162,7 @@ mod tests {
     fn an_image_named_like_a_fixed_part_conflicts_with_it() {
         let items = manifest_items(1, &strings(&["header.png"]), &[], &[]);
         assert_eq!(
-            manifest_id_conflicts(&items),
+            manifest_id_conflicts(&written(&items)),
             [EncodeWarning::PackageIdConflict {
                 id: "header".into(),
                 hrefs: strings(&["Contents/header.xml", "BinData/header.png"]),
@@ -128,7 +176,7 @@ mod tests {
         let items =
             manifest_items(1, &strings(&["a.png", "b.png", "a.jpg"]), &[], &["ole1".into()]);
         assert_eq!(
-            manifest_id_conflicts(&items),
+            manifest_id_conflicts(&written(&items)),
             [EncodeWarning::PackageIdConflict {
                 id: "a".into(),
                 hrefs: strings(&["BinData/a.png", "BinData/a.jpg"]),
@@ -145,7 +193,20 @@ mod tests {
             &strings(&["Contents/masterpage0.xml"]),
             &strings(&["ole1"]),
         );
-        assert_eq!(manifest_id_conflicts(&items), []);
+        assert_eq!(manifest_id_conflicts(&written(&items)), []);
+    }
+
+    /// A key that would read back as `header` if written raw stays its own id
+    /// once escaped.
+    ///
+    /// 이것을 실패시키는 것: `render_content_hpf` 가 `id` 를 escape 하지 않는 것
+    /// (`he&#97;der` 가 `header` 로 읽혀 겹침이 보고된다).
+    #[test]
+    fn an_entity_lookalike_key_is_written_as_itself() {
+        let items = manifest_items(1, &strings(&["he&#97;der.png"]), &[], &[]);
+        let read = written(&items);
+        assert!(read.contains(&("he&#97;der".to_string(), "BinData/he&#97;der.png".to_string())));
+        assert_eq!(manifest_id_conflicts(&read), []);
     }
 
     fn unresolved(warnings: &[EncodeWarning]) -> Vec<(&str, &str, &str)> {
@@ -161,8 +222,8 @@ mod tests {
     }
 
     /// A package with one image (`image1`) and one OLE blob (`ole1`).
-    fn package() -> Vec<ManifestItem> {
-        manifest_items(1, &strings(&["image1.png"]), &[], &strings(&["ole1"]))
+    fn package() -> Vec<(String, String)> {
+        written(&manifest_items(1, &strings(&["image1.png"]), &[], &strings(&["ole1"])))
     }
 
     /// 이것을 실패시키는 것: 해석 집합에서 OLE 항목을 빼는 것, 또는 이미지
