@@ -24,7 +24,7 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 
-use crate::decoder::package::PackageReader;
+use crate::decoder::package::{PackageReader, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
 use crate::error::{HwpxError, HwpxResult};
 use crate::exchange::{
     PreservedTextSlot, SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION,
@@ -50,6 +50,12 @@ impl HwpxPatcher {
     ///
     /// `to-json --section` uses this to embed stable text locators so a later
     /// `patch` call can modify only the touched `<hp:t>` payloads.
+    ///
+    /// # Errors
+    ///
+    /// Every package entry is read and counted, including ones the decoder
+    /// ignores: an entry that decompresses past 50 MiB, or a package past
+    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
     pub fn export_section_preservation(
         base_bytes: &[u8],
         section_idx: usize,
@@ -66,6 +72,13 @@ impl HwpxPatcher {
     /// The preserving path currently supports text-only edits. Any structural
     /// change (style changes, table geometry changes, control changes, etc.)
     /// returns [`HwpxError::InvalidStructure`].
+    ///
+    /// # Errors
+    ///
+    /// Every package entry is read and counted, including ones the decoder
+    /// ignores: an entry that decompresses past 50 MiB, or a package past
+    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
+    /// Beyond that, see [`HwpxPatcher::patch_section_preserving_with_diagnostics`].
     pub fn patch_section_preserving(
         base_bytes: &[u8],
         section_idx: usize,
@@ -96,6 +109,10 @@ impl HwpxPatcher {
     /// missing, stale or aimed at another section, or when the replacement
     /// makes a change the preserving path cannot express; decode failures
     /// surface as themselves.
+    ///
+    /// Every package entry is read and counted, including ones the decoder
+    /// ignores: an entry that decompresses past 50 MiB, or a package past
+    /// 500 MiB in total, is refused with [`HwpxError::InvalidStructure`].
     pub fn patch_section_preserving_with_diagnostics(
         base_bytes: &[u8],
         section_idx: usize,
@@ -312,18 +329,48 @@ struct RawPackageEntry {
 impl RawPackage {
     pub(crate) fn read(bytes: &[u8]) -> HwpxResult<Self> {
         let _ = PackageReader::new(bytes)?;
+        Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+    }
 
+    /// Reads every entry, bounding decompression per entry and in total.
+    ///
+    /// The ZIP header size is attacker-controlled, so it is not used to size
+    /// buffers at all: many entries declaring 50 MiB while holding a few
+    /// bytes would otherwise reserve gigabytes that the cumulative budget
+    /// (which counts real bytes) never sees. Buffers grow with the data, and
+    /// the reader is limited with `take(max_entry + 1)` so a bomb stops one
+    /// byte past the limit.
+    fn read_capped(bytes: &[u8], max_entry: u64, max_total: u64) -> HwpxResult<Self> {
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor).map_err(|e| HwpxError::Zip(e.to_string()))?;
         let mut entries: Vec<RawPackageEntry> = Vec::with_capacity(archive.len());
         let mut index_by_path: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total_read: u64 = 0;
 
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
-            let mut data: Vec<u8> = Vec::with_capacity(file.size() as usize);
-            file.read_to_end(&mut data)
-                .map_err(|e| HwpxError::Zip(format!("read '{}': {e}", file.name())))?;
             let path = file.name().to_string();
+            let mut data: Vec<u8> = Vec::new();
+            (&mut file)
+                .take(max_entry + 1)
+                .read_to_end(&mut data)
+                .map_err(|e| HwpxError::Zip(format!("read '{path}': {e}")))?;
+            if data.len() as u64 > max_entry {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
+                        data.len(),
+                    ),
+                });
+            }
+            total_read += data.len() as u64;
+            if total_read > max_total {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "total decompressed data ({total_read} bytes) exceeds limit of {max_total}",
+                    ),
+                });
+            }
             index_by_path.insert(path.clone(), entries.len());
             entries.push(RawPackageEntry { path, bytes: data, compression: file.compression() });
         }
@@ -1865,6 +1912,95 @@ mod tests {
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;
+
+    /// Builds an in-memory ZIP whose entries are `(name, size)` runs of zeros.
+    fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for (name, size) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(&vec![0u8; *size]).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    /// Rewrites the declared uncompressed size in every central-directory
+    /// record, leaving the compressed data (and its CRC) untouched.
+    fn forge_declared_size(zip: &mut [u8], declared: u32) {
+        let mut at = 0;
+        while at + 28 <= zip.len() {
+            if zip[at..at + 4] == [0x50, 0x4b, 0x01, 0x02] {
+                zip[at + 24..at + 28].copy_from_slice(&declared.to_le_bytes());
+                at += 46;
+            } else {
+                at += 1;
+            }
+        }
+    }
+
+    // 이것을 실패시키는 것: 버퍼 용량을 헤더 크기로 예약 (`Vec::with_capacity(file.size().min(max_entry) as usize)`)
+    #[test]
+    fn read_capped_does_not_reserve_capacity_from_the_forged_header_size() {
+        let mut bytes = zeros_zip(&[("a.bin", 8), ("b.bin", 8), ("c.bin", 8)]);
+        forge_declared_size(&mut bytes, 10 * 1024 * 1024);
+        // Guard the forgery itself: the archive must really declare 10 MiB.
+        let mut archive = ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
+        assert_eq!(archive.by_index(0).unwrap().size(), 10 * 1024 * 1024);
+        drop(archive);
+
+        let package = RawPackage::read_capped(&bytes, 20 * 1024 * 1024, u64::MAX).unwrap();
+
+        for entry in &package.entries {
+            assert_eq!(entry.bytes.len(), 8);
+            assert!(entry.bytes.capacity() < 4096, "capacity {}", entry.bytes.capacity());
+        }
+    }
+
+    // 이것을 실패시키는 것: `file.take(max_entry + 1)` 제거 (해제량이 cap+1 이 아니라 cap*10 으로 보고됨)
+    #[test]
+    fn read_capped_stops_decompression_one_byte_past_the_entry_cap() {
+        let cap: u64 = 1024;
+        let bytes = zeros_zip(&[("bomb.bin", cap as usize * 10)]);
+
+        let err = RawPackage::read_capped(&bytes, cap, u64::MAX).unwrap_err();
+
+        match err {
+            HwpxError::InvalidStructure { detail } => assert_eq!(
+                detail,
+                format!(
+                    "entry 'bomb.bin' decompressed to {} bytes, exceeds limit of {cap}",
+                    cap + 1
+                )
+            ),
+            other => panic!("expected InvalidStructure, got {other:?}"),
+        }
+    }
+
+    // 이것을 실패시키는 것: 누적 총량 검사(`total > max_total`) 제거
+    #[test]
+    fn read_capped_rejects_entries_that_are_small_alone_but_large_together() {
+        let bytes = zeros_zip(&[("a.bin", 600), ("b.bin", 600)]);
+
+        let err = RawPackage::read_capped(&bytes, 1024, 1000).unwrap_err();
+
+        match err {
+            HwpxError::InvalidStructure { detail } => {
+                assert_eq!(detail, "total decompressed data (1200 bytes) exceeds limit of 1000")
+            }
+            other => panic!("expected InvalidStructure, got {other:?}"),
+        }
+    }
+
+    // 이것을 실패시키는 것: 엔트리 검사 `>` 를 `>=` 로 바꿈 (정확히 cap 바이트가 거부됨)
+    // 총량 검사 `>` → `>=` 도 같은 테스트(total == 상한)가 잡는다.
+    #[test]
+    fn read_capped_accepts_an_entry_of_exactly_the_cap() {
+        let bytes = zeros_zip(&[("exact.bin", 1024)]);
+
+        let package = RawPackage::read_capped(&bytes, 1024, 1024).unwrap();
+
+        assert_eq!(package.entries[0].bytes.len(), 1024);
+    }
 
     /// A decodable package can still hold a document Core rejects.
     ///

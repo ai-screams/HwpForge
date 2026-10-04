@@ -12,10 +12,10 @@ use crate::error::{HwpxError, HwpxResult};
 // ── Safety limits ────────────────────────────────────────────────
 
 /// Maximum decompressed size of a single entry (50 MB).
-const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
+pub(crate) const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
 
 /// Maximum total decompressed size across all entries (500 MB).
-const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
 
 /// Maximum number of entries in the archive.
 const MAX_ENTRIES: usize = 10_000;
