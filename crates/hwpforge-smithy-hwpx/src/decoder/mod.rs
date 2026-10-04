@@ -6,6 +6,7 @@
 //! - `section` — `section*.xml` parsing → paragraphs + page settings
 
 pub(crate) mod chart;
+pub(crate) mod group_geometry;
 pub(crate) mod header;
 pub(crate) mod metadata;
 pub(crate) mod package;

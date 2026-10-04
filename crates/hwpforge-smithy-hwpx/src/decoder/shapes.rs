@@ -716,13 +716,39 @@ pub(crate) fn decode_connect_line(
     })
 }
 
-/// Decodes an `<hp:container>` (group / 묶음 객체) into a Core `Run` carrying
-/// `Control::Group` (Wave A: FLAT children only).
+/// Decodes a top-level `<hp:container>` (group / 묶음 객체) into a Core `Run`
+/// carrying `Control::Group`.
 ///
-/// Children reuse the per-shape decoders; the inner `Control` is extracted
-/// from each produced `Run`. Geometry/offset come from the container's
-/// `orgSz`/`pos`; `instid` maps to `inst_id`. Returns `None` when the
-/// container has no representable children.
+/// # Geometry
+///
+/// The Core group is an unrotated box of the container's displayed size
+/// (`<hp:sz>`), anchored by `<hp:pos>` with the container's
+/// `textWrap`/`textFlow`. Its origin is the corner of the box the container's
+/// own matrix chain makes of `<hp:orgSz>`. Children are placed relative to
+/// that origin; each child's matrix chain (see
+/// [`group_geometry`](super::group_geometry)) is folded into the child's own
+/// Core geometry, the way Hancom's "ungroup" does:
+///
+/// - lines, polygons, curves and connectors without text, caption or
+///   directional fill take the whole map onto their points;
+/// - boxes (rect/text box, ellipse, arc) and point shapes that do carry text,
+///   a caption or a directional fill are scaled along their own axes and get
+///   the rotation and horizontal mirror as `ShapeStyle.rotation`/`flip`.
+///
+/// Each child is then checked: the matrix the encoder would write from the
+/// decoded Core value must put every defining point within
+/// [`EXACT_TOLERANCE`](super::group_geometry::EXACT_TOLERANCE) of where the
+/// wire put it. Whatever cannot be carried exactly — a shear, an axis of
+/// size zero, a residual, a displayed size that does not match the
+/// container's own matrices, a nested group whose box disagrees with its
+/// shapes, and every child element Core has no group child for (`pic`,
+/// `ole`, `textart`, `equation`, `switch`, …) — is reported as
+/// [`DecodeWarning::ContentLost`](super::DecodeWarning::ContentLost). Group
+/// child paths use the child's position among the container's child
+/// elements in wire order.
+///
+/// Returns `None` when no child can be represented (the group is then
+/// reported as lost too).
 ///
 /// # Errors
 ///
@@ -735,6 +761,136 @@ pub(crate) fn decode_container(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
+    use super::group_geometry::{bounds, corners, wire_chain, Affine, EXACT_TOLERANCE};
+
+    let (org_w, org_h) = container_org_size(container);
+    let own = container.rendering_info.as_ref().and_then(wire_chain).unwrap_or(Affine::IDENTITY);
+    let own_box: Vec<(f64, f64)> = corners(org_w, org_h).iter().map(|&p| own.apply(p)).collect();
+    let (min_x, min_y, max_x, max_y) = bounds(&own_box).unwrap_or((0.0, 0.0, org_w, org_h));
+    let (width, height) = match container.sz.as_ref() {
+        Some(sz) => (sz.width, sz.height),
+        None => (round_i32(max_x - min_x), round_i32(max_y - min_y)),
+    };
+    let size_error =
+        ((max_x - min_x) - f64::from(width)).abs().max(((max_y - min_y) - f64::from(height)).abs());
+    if size_error > EXACT_TOLERANCE {
+        ctx.content_lost(
+            "group_display_size",
+            format!(
+                "displayed size {width}x{height} differs from the group's own transform by \
+                 {size_error:.2}"
+            ),
+        );
+    }
+
+    let Some(children) =
+        decode_group_children(container, (min_x, min_y), char_shape_id, depth, ctx)?
+    else {
+        return Ok(None);
+    };
+
+    let placement =
+        decode_object_placement(container.pos.as_ref(), &container.text_wrap, &container.text_flow);
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Group {
+            children,
+            width: HwpUnit::new(width).unwrap_or(HwpUnit::ZERO),
+            height: HwpUnit::new(height).unwrap_or(HwpUnit::ZERO),
+            placement,
+            inst_id: container_inst_id(container),
+        })),
+        char_shape_id,
+    }))
+}
+
+fn container_org_size(container: &crate::schema::section::HxContainer) -> (f64, f64) {
+    container
+        .org_sz
+        .as_ref()
+        .or(container.cur_sz.as_ref())
+        .map(|s| (f64::from(s.width), f64::from(s.height)))
+        .unwrap_or_else(|| {
+            container.sz.as_ref().map_or((0.0, 0.0), |s| (f64::from(s.width), f64::from(s.height)))
+        })
+}
+
+fn container_inst_id(
+    container: &crate::schema::section::HxContainer,
+) -> Option<hwpforge_core::ObjectId> {
+    container.instid.parse::<u64>().ok().filter(|&v| v != 0).map(hwpforge_core::ObjectId::new)
+}
+
+fn round_i32(v: f64) -> i32 {
+    // Saturating float→int cast; inputs are HWPUNIT-sized.
+    v.round() as i32
+}
+
+/// Placement of a group child at `(x, y)` inside its parent group.
+///
+/// Same convention as the HWP5 projection of group children
+/// (`offset_placement`): the origin stays `None` (inline defaults), any other
+/// offset floats, so HWPX- and HWP5-sourced groups carry identical Core
+/// values and the encoder reads the offset back from the placement.
+fn group_child_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
+    if x == 0 && y == 0 {
+        return None;
+    }
+    Some(ObjectPlacement {
+        text_wrap: ObjectTextWrap::InFrontOfText,
+        text_flow: ObjectTextFlow::BothSides,
+        treat_as_char: false,
+        flow_with_text: false,
+        allow_overlap: true,
+        vert_rel_to: ObjectRelativeTo::Paper,
+        horz_rel_to: ObjectRelativeTo::Paper,
+        vert_offset: HwpUnit::new(y).unwrap_or(HwpUnit::ZERO),
+        horz_offset: HwpUnit::new(x).unwrap_or(HwpUnit::ZERO),
+    })
+}
+
+/// A child shape's wire map: its matrix chain, or `<hp:offset>` when the
+/// shape has no `<hp:renderingInfo>`. `None` when a matrix does not parse.
+fn child_chain(
+    rendering_info: Option<&crate::schema::section::HxRenderingInfo>,
+    offset: Option<&crate::schema::section::HxOffset>,
+) -> Option<super::group_geometry::Affine> {
+    use super::group_geometry::{wire_chain, Affine};
+    match rendering_info {
+        Some(ri) => wire_chain(ri),
+        None => {
+            let (x, y) = offset.map_or((0, 0), |o| (o.x, o.y));
+            Some(Affine::translate(f64::from(x), f64::from(y)))
+        }
+    }
+}
+
+fn org_size(
+    org: Option<&crate::schema::section::HxSizeAttr>,
+    cur: Option<&crate::schema::section::HxSizeAttr>,
+) -> (f64, f64) {
+    org.or(cur).map_or((0.0, 0.0), |s| (f64::from(s.width), f64::from(s.height)))
+}
+
+/// The wire map and box of one supported child, plus its decoded Core
+/// control (geometry still wire-local).
+struct WireChild {
+    control: Control,
+    map: Option<super::group_geometry::Affine>,
+    org: (f64, f64),
+}
+
+/// Decodes the children of `container` in wire order, folding each child's
+/// map into Core geometry relative to `origin` (in the outermost group's
+/// space). `None` when nothing could be represented.
+fn decode_group_children(
+    container: &crate::schema::section::HxContainer,
+    origin: (f64, f64),
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Vec<Control>>> {
+    use crate::schema::section::HxContainerChildKind as K;
+
     // Bound nested-container recursion (group-in-group) against pathological
     // depth — same cap and error as table nesting (`convert_table`).
     if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
@@ -748,97 +904,449 @@ pub(crate) fn decode_container(
     }
 
     let mut children: Vec<Control> = Vec::new();
-    let mut child_idx: usize = 0;
-
-    let push_run = |run: Run, out: &mut Vec<Control>, child_idx: &mut usize| {
-        if let RunContent::Control(boxed) = run.content {
-            out.push(*boxed);
-            *child_idx += 1;
-        }
-    };
-
-    for rect in &container.rects {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_textbox(rect, char_shape_id, depth, ctx);
-        ctx.leave();
-        if let Some(run) = result? {
-            push_run(run, &mut children, &mut child_idx);
-        }
-    }
-    for line in &container.lines {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_line(line, char_shape_id, depth, ctx);
-        ctx.leave();
-        push_run(result?, &mut children, &mut child_idx);
-    }
-    for ellipse in &container.ellipses {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = if ellipse.has_arc_pr == 1 {
-            decode_arc(ellipse, char_shape_id, depth, ctx)
-        } else {
-            decode_ellipse(ellipse, char_shape_id, depth, ctx)
+    for (wire_idx, &(kind, idx)) in container.child_order.iter().enumerate() {
+        ctx.enter(super::PathSeg::GroupChild(wire_idx));
+        ctx.enter_group_child();
+        let result = decode_group_child(container, kind, idx, origin, char_shape_id, depth, ctx);
+        ctx.leave_group_child();
+        let decoded = match result {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                ctx.leave();
+                return Err(e);
+            }
         };
-        ctx.leave();
-        push_run(result?, &mut children, &mut child_idx);
-    }
-    for polygon in &container.polygons {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_polygon(polygon, char_shape_id, depth, ctx);
-        ctx.leave();
-        push_run(result?, &mut children, &mut child_idx);
-    }
-    for curve in &container.curves {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_curve(curve, char_shape_id, depth, ctx);
-        ctx.leave();
-        push_run(result?, &mut children, &mut child_idx);
-    }
-    for connect_line in &container.connect_lines {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_connect_line(connect_line, char_shape_id, depth, ctx);
-        ctx.leave();
-        push_run(result?, &mut children, &mut child_idx);
-    }
-    // Nested `<hp:container>` children recurse (Wave B); depth+1 bounds it.
-    for nested in &container.containers {
-        ctx.enter(super::PathSeg::GroupChild(child_idx));
-        let result = decode_container(nested, char_shape_id, depth + 1, ctx);
-        ctx.leave();
-        if let Some(run) = result? {
-            push_run(run, &mut children, &mut child_idx);
+        if let Some(control) = decoded {
+            children.push(control);
+        } else if let K::Unsupported(name) = kind {
+            let reason = match name {
+                "caption" | "parameterset" => "group-level element not carried by Core",
+                _ => "unsupported group child",
+            };
+            ctx.content_lost(name, reason);
         }
+        ctx.leave();
     }
 
     if children.is_empty() {
+        ctx.content_lost("group", "no group child can be represented in Core");
         return Ok(None);
     }
+    Ok(Some(children))
+}
 
-    let (width, height) = container
-        .org_sz
-        .as_ref()
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
-        })
-        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-    // `<hp:container>` carries no `textWrap`/`textFlow` attributes, so those
-    // fall back to the inline defaults; anchoring comes from `<hp:pos>`.
-    let placement = decode_object_placement(container.pos.as_ref(), "", "");
-    let inst_id =
-        container.instid.parse::<u64>().ok().filter(|&v| v != 0).map(hwpforge_core::ObjectId::new);
+/// Decodes one child of a group. `Ok(None)` = not represented (unsupported
+/// kind, or dropped with its own `ContentLost` already reported).
+fn decode_group_child(
+    container: &crate::schema::section::HxContainer,
+    kind: crate::schema::section::HxContainerChildKind,
+    idx: usize,
+    origin: (f64, f64),
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Control>> {
+    use crate::schema::section::HxContainerChildKind as K;
 
-    Ok(Some(Run {
-        content: RunContent::Control(Box::new(Control::Group {
-            children,
-            width,
-            height,
-            placement,
-            inst_id,
-        })),
-        char_shape_id,
+    let take = |run: Option<Run>| match run.map(|r| r.content) {
+        Some(RunContent::Control(boxed)) => Some(*boxed),
+        _ => None,
+    };
+    let wire = match kind {
+        K::Rect => {
+            let r = &container.rects[idx];
+            take(decode_textbox(r, char_shape_id, depth, ctx)?).map(|control| WireChild {
+                control,
+                map: child_chain(r.rendering_info.as_ref(), r.offset.as_ref()),
+                org: org_size(r.org_sz.as_ref(), r.cur_sz.as_ref()),
+            })
+        }
+        K::Line => {
+            let l = &container.lines[idx];
+            take(Some(decode_line(l, char_shape_id, depth, ctx)?)).map(|control| WireChild {
+                control,
+                map: child_chain(l.rendering_info.as_ref(), l.offset.as_ref()),
+                org: org_size(l.org_sz.as_ref(), l.cur_sz.as_ref()),
+            })
+        }
+        K::Ellipse => {
+            let e = &container.ellipses[idx];
+            let run = if e.has_arc_pr == 1 {
+                decode_arc(e, char_shape_id, depth, ctx)?
+            } else {
+                decode_ellipse(e, char_shape_id, depth, ctx)?
+            };
+            take(Some(run)).map(|control| WireChild {
+                control,
+                map: child_chain(e.rendering_info.as_ref(), e.offset.as_ref()),
+                org: org_size(e.org_sz.as_ref(), e.cur_sz.as_ref()),
+            })
+        }
+        K::Polygon => {
+            let p = &container.polygons[idx];
+            take(Some(decode_polygon(p, char_shape_id, depth, ctx)?)).map(|control| WireChild {
+                control,
+                map: child_chain(p.rendering_info.as_ref(), p.offset.as_ref()),
+                org: org_size(p.org_sz.as_ref(), p.cur_sz.as_ref()),
+            })
+        }
+        K::Curve => {
+            let c = &container.curves[idx];
+            take(Some(decode_curve(c, char_shape_id, depth, ctx)?)).map(|control| WireChild {
+                control,
+                map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
+                org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
+            })
+        }
+        K::ConnectLine => {
+            let c = &container.connect_lines[idx];
+            take(Some(decode_connect_line(c, char_shape_id, depth, ctx)?)).map(|control| {
+                WireChild {
+                    control,
+                    map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
+                    org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
+                }
+            })
+        }
+        K::Container => {
+            return decode_nested_container(
+                &container.containers[idx],
+                origin,
+                char_shape_id,
+                depth + 1,
+                ctx,
+            );
+        }
+        K::Unsupported(_) => return Ok(None),
+    };
+    let Some(wire) = wire else { return Ok(None) };
+    Ok(normalize_group_child(wire, origin, ctx))
+}
+
+/// A nested `<hp:container>`: its Core box is the bounds of its shapes in the
+/// outermost group's space, placed relative to the parent's `origin`.
+fn decode_nested_container(
+    nested: &crate::schema::section::HxContainer,
+    parent_origin: (f64, f64),
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Control>> {
+    use super::group_geometry::{bounds, corners, wire_chain};
+
+    let leaf_box = leaf_bounds(nested);
+    let Some((min_x, min_y, max_x, max_y)) = leaf_box else {
+        // No geometry to place: decode the children anyway so unsupported
+        // ones are reported, then drop the group.
+        let _ = decode_group_children(nested, parent_origin, char_shape_id, depth, ctx)?;
+        return Ok(None);
+    };
+    // The nested group's own matrices should describe the same box.
+    let (org_w, org_h) = container_org_size(nested);
+    match nested.rendering_info.as_ref().and_then(wire_chain) {
+        Some(own) => {
+            let own_box: Vec<(f64, f64)> =
+                corners(org_w, org_h).iter().map(|&p| own.apply(p)).collect();
+            if let Some((ox0, oy0, ox1, oy1)) = bounds(&own_box) {
+                let err = (ox0 - min_x)
+                    .abs()
+                    .max((oy0 - min_y).abs())
+                    .max((ox1 - max_x).abs())
+                    .max((oy1 - max_y).abs());
+                if err > NESTED_BOX_TOLERANCE {
+                    ctx.content_lost(
+                        "nested_group_placement",
+                        format!("nested group box differs from its shapes by {err:.2}"),
+                    );
+                }
+            }
+        }
+        None => ctx.content_lost("nested_group_placement", "nested group has no transform"),
+    }
+
+    let origin = (min_x.round(), min_y.round());
+    let Some(children) = decode_group_children(nested, origin, char_shape_id, depth, ctx)? else {
+        return Ok(None);
+    };
+    let x = round_i32(origin.0 - parent_origin.0);
+    let y = round_i32(origin.1 - parent_origin.1);
+    Ok(Some(Control::Group {
+        children,
+        width: HwpUnit::new(round_i32(max_x - origin.0)).unwrap_or(HwpUnit::ZERO),
+        height: HwpUnit::new(round_i32(max_y - origin.1)).unwrap_or(HwpUnit::ZERO),
+        placement: group_child_placement(x, y),
+        inst_id: container_inst_id(nested),
     }))
+}
+
+/// How far a nested group's own box may sit from the bounds of its shapes.
+const NESTED_BOX_TOLERANCE: f64 = 1.0;
+
+/// Bounds, in the outermost group's space, of every shape box under
+/// `container` (nested groups included). `None` when there is no shape or a
+/// matrix does not parse.
+fn leaf_bounds(container: &crate::schema::section::HxContainer) -> Option<(f64, f64, f64, f64)> {
+    use super::group_geometry::{bounds, corners};
+    use crate::schema::section::HxContainerChildKind as K;
+
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for &(kind, idx) in &container.child_order {
+        let (map, org) = match kind {
+            K::Rect => {
+                let s = &container.rects[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Line => {
+                let s = &container.lines[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Ellipse => {
+                let s = &container.ellipses[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Polygon => {
+                let s = &container.polygons[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Curve => {
+                let s = &container.curves[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::ConnectLine => {
+                let s = &container.connect_lines[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Container => {
+                if let Some((a, b, c, d)) = leaf_bounds(&container.containers[idx]) {
+                    pts.extend([(a, b), (c, d)]);
+                }
+                continue;
+            }
+            K::Unsupported(_) => continue,
+        };
+        let map = map?;
+        pts.extend(corners(org.0, org.1).iter().map(|&p| map.apply(p)));
+    }
+    bounds(&pts)
+}
+
+/// Whether a point-based shape carries something that turns with it (text,
+/// a caption, or a directional fill), so it must keep its own rotation.
+fn point_shape_has_content(control: &Control) -> bool {
+    use hwpforge_core::control::Fill;
+    let (paragraphs_empty, caption, style) = match control {
+        Control::Polygon { paragraphs, caption, style, .. } => {
+            (paragraphs.is_empty(), caption.is_some(), style)
+        }
+        Control::Line { caption, style, .. }
+        | Control::Curve { caption, style, .. }
+        | Control::ConnectLine { caption, style, .. } => (true, caption.is_some(), style),
+        _ => return true,
+    };
+    let directional_fill = matches!(
+        style.as_ref().and_then(|s| s.fill.as_ref()),
+        Some(Fill::Gradient { .. } | Fill::Pattern { .. } | Fill::Image { .. })
+    );
+    !paragraphs_empty || caption || directional_fill
+}
+
+/// Mutable views of a child's defining points (wire-local on entry).
+fn defining_points(control: &mut Control) -> Vec<&mut hwpforge_core::control::ShapePoint> {
+    match control {
+        Control::Line { start, end, .. } => vec![start, end],
+        Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
+        Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
+            vec![center, axis1, axis2, start1, end1, start2, end2]
+        }
+        Control::Polygon { vertices, .. } => vertices.iter_mut().collect(),
+        Control::Curve { points, .. } => points.iter_mut().collect(),
+        Control::ConnectLine { start, end, control_points, .. } => {
+            let mut v = vec![start, end];
+            v.extend(control_points.iter_mut());
+            v
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn set_size_and_placement(control: &mut Control, w: i32, h: i32, x: i32, y: i32) {
+    let placement_value = group_child_placement(x, y);
+    let (width, height, placement) = match control {
+        Control::TextBox { width, height, placement, .. }
+        | Control::Rect { width, height, placement, .. }
+        | Control::Ellipse { width, height, placement, .. }
+        | Control::Arc { width, height, placement, .. }
+        | Control::Polygon { width, height, placement, .. }
+        | Control::Curve { width, height, placement, .. }
+        | Control::ConnectLine { width, height, placement, .. }
+        | Control::Line { width, height, placement, .. } => (width, height, placement),
+        _ => return,
+    };
+    *width = HwpUnit::new(w).unwrap_or(HwpUnit::ZERO);
+    *height = HwpUnit::new(h).unwrap_or(HwpUnit::ZERO);
+    *placement = placement_value;
+}
+
+fn style_mut(control: &mut Control) -> Option<&mut Option<ShapeStyle>> {
+    match control {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Curve { style, .. }
+        | Control::ConnectLine { style, .. }
+        | Control::Line { style, .. } => Some(style),
+        _ => None,
+    }
+}
+
+/// Replaces the wire's `rotationInfo`/`flip` (which inside a group describe
+/// nothing about the shape's own geometry) with the rotation and mirror
+/// derived from the matrices.
+fn set_rotation_and_flip(control: &mut Control, angle: i32, flip: bool) {
+    let Some(style) = style_mut(control) else { return };
+    let mut s = style.take().unwrap_or_default();
+    s.rotation = (angle != 0).then_some(angle as f32);
+    s.flip = flip.then_some(Flip::Horizontal);
+    *style = (s != ShapeStyle::default()).then_some(s);
+}
+
+/// Folds one child's wire map into Core geometry relative to `origin`, then
+/// checks the result against the wire point by point. `None` = dropped (its
+/// `ContentLost` is already reported).
+fn normalize_group_child(
+    wire: WireChild,
+    origin: (f64, f64),
+    ctx: &mut DecodeCtx,
+) -> Option<Control> {
+    use super::group_geometry::{corners, decompose_box, max_residual, Affine, SHEAR_TOLERANCE};
+
+    let WireChild { mut control, map, org } = wire;
+    let Some(m) = map else {
+        ctx.content_lost("group_child_transform", "unparseable transform matrix");
+        return None;
+    };
+    let point_based = matches!(
+        control,
+        Control::Line { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+    );
+    let wire_local: Vec<(f64, f64)> =
+        defining_points(&mut control).iter().map(|p| (f64::from(p.x), f64::from(p.y))).collect();
+    let wire_world: Vec<(f64, f64)> = wire_local.iter().map(|&p| m.apply(p)).collect();
+
+    if point_based && !point_shape_has_content(&control) {
+        // The whole map goes onto the points; no rotation or flip remains.
+        let Some((min_x, min_y, _, _)) = super::group_geometry::bounds(&wire_world) else {
+            ctx.content_lost("group_child_degenerate", "shape has no points");
+            return None;
+        };
+        let x = round_i32(min_x - origin.0);
+        let y = round_i32(min_y - origin.1);
+        let base = (origin.0 + f64::from(x), origin.1 + f64::from(y));
+        let local: Vec<(i32, i32)> = wire_world
+            .iter()
+            .map(|&(wx, wy)| (round_i32(wx - base.0), round_i32(wy - base.1)))
+            .collect();
+        let w = local.iter().map(|p| p.0).max().unwrap_or(0).max(0);
+        let h = local.iter().map(|p| p.1).max().unwrap_or(0).max(0);
+        if matches!(control, Control::Polygon { .. }) && (w == 0 || h == 0) {
+            ctx.content_lost("group_child_degenerate", format!("polygon collapses to {w}x{h}"));
+            return None;
+        }
+        for (p, (lx, ly)) in defining_points(&mut control).into_iter().zip(&local) {
+            p.x = *lx;
+            p.y = *ly;
+        }
+        set_size_and_placement(&mut control, w, h, x, y);
+        set_rotation_and_flip(&mut control, 0, false);
+        let enc: Vec<(f64, f64)> = local
+            .iter()
+            .map(|&(lx, ly)| (base.0 + f64::from(lx), base.1 + f64::from(ly)))
+            .collect();
+        report_residual(ctx, max_residual(&wire_world, &enc));
+        return Some(control);
+    }
+
+    // Box rule: scale along the shape's own axes, rotation and mirror move
+    // to the style.
+    let Some(d) = decompose_box(m) else {
+        ctx.content_lost("group_child_degenerate", "transform collapses an axis to zero");
+        return None;
+    };
+    let sheared = d.shear > SHEAR_TOLERANCE;
+    if sheared {
+        ctx.content_lost("group_child_transform", format!("sheared transform ({:.4})", d.shear));
+    }
+    let w = round_i32(org.0 * d.sx);
+    let h = round_i32(org.1 * d.sy);
+    if w == 0 || h == 0 {
+        ctx.content_lost("group_child_degenerate", format!("shape collapses to {w}x{h}"));
+        return None;
+    }
+    let scaled: Vec<(i32, i32)> =
+        wire_local.iter().map(|&(px, py)| (round_i32(px * d.sx), round_i32(py * d.sy))).collect();
+    for (p, (sx, sy)) in defining_points(&mut control).into_iter().zip(&scaled) {
+        p.x = *sx;
+        p.y = *sy;
+    }
+    let angle = round_i32(d.angle).rem_euclid(360);
+    set_rotation_and_flip(&mut control, angle, d.flip);
+
+    // The matrix the encoder writes for this Core value (shared builder).
+    let style = style_mut(&mut control).and_then(|s| s.clone());
+    let enc_rot = Affine::from_hx(
+        &crate::encoder::shapes::build_shape_common(w, h, style.as_ref()).rendering_info.rot_matrix,
+    )
+    .unwrap_or(Affine::IDENTITY);
+    // Offset so the box's own origin corner lands where the wire puts it.
+    let x = round_i32(m.c - enc_rot.c - origin.0);
+    let y = round_i32(m.f - enc_rot.f - origin.1);
+    set_size_and_placement(&mut control, w, h, x, y);
+
+    let enc_map =
+        Affine::translate(origin.0 + f64::from(x), origin.1 + f64::from(y)).then_after(enc_rot);
+    let mut wire_check: Vec<(f64, f64)> =
+        corners(org.0, org.1).iter().map(|&p| m.apply(p)).collect();
+    wire_check.extend(&wire_world);
+    let mut enc_check: Vec<(f64, f64)> =
+        corners(f64::from(w), f64::from(h)).iter().map(|&p| enc_map.apply(p)).collect();
+    enc_check.extend(scaled.iter().map(|&(sx, sy)| enc_map.apply((f64::from(sx), f64::from(sy)))));
+    // A sheared child is already reported; its residual says nothing new.
+    if !sheared {
+        report_residual(ctx, max_residual(&wire_check, &enc_check));
+    }
+    Some(control)
+}
+
+fn report_residual(ctx: &mut DecodeCtx, residual: f64) {
+    if super::group_geometry::exceeds_tolerance(residual) {
+        ctx.content_lost(
+            "group_child_transform",
+            format!("re-encoded geometry is off by {residual:.2} HWPUNIT"),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2113,5 +2621,887 @@ mod tests {
         use crate::wire_xml::textart_text_to_wire;
         assert_eq!(textart_text_to_wire("글맵시 1\r\n"), "글맵시 1␍␊");
         assert_eq!(text_art_core_text("글맵시 1␍␊"), "글맵시 1\r\n");
+    }
+}
+
+/// Group (묶음) decoding against Hancom's own "ungroup" answers.
+#[cfg(test)]
+mod group_tests {
+    use hwpforge_core::control::Control;
+    use hwpforge_core::run::RunContent;
+    use hwpforge_foundation::Flip;
+
+    use crate::decoder::group_geometry::{bounds, corners, wire_chain, Affine};
+    use crate::schema::section::{HxRun, HxSection};
+    use crate::HwpxDecoder;
+
+    const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(format!("{FIXTURES}{name}")).unwrap_or_else(|e| panic!("{name}: {e}"))
+    }
+
+    fn section0_xml(bytes: &[u8]) -> String {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("Contents/section0.xml").unwrap(), &mut s)
+            .unwrap();
+        s
+    }
+
+    /// One shape on the page: kind, page coordinates of its box corners and
+    /// defining points, rotation and horizontal mirror.
+    #[derive(Debug)]
+    struct PageShape {
+        kind: &'static str,
+        corners: Vec<(f64, f64)>,
+        points: Vec<(f64, f64)>,
+        angle: i32,
+        flip: bool,
+    }
+
+    /// Top-level shapes of an ungrouped fixture, read straight from the wire:
+    /// page = `<hp:pos>` − box minimum + matrix chain · point.
+    fn ungrouped_shapes(bytes: &[u8]) -> Vec<PageShape> {
+        let xml = section0_xml(bytes);
+        let sec: HxSection = crate::decoder::xml_from_str(&xml).unwrap();
+        let runs: Vec<&HxRun> = sec.paragraphs.iter().flat_map(|p| p.runs.iter()).collect();
+        let mut out = Vec::new();
+        macro_rules! push {
+            ($s:expr, $kind:expr, $pts:expr) => {{
+                let s = $s;
+                let m = wire_chain(s.rendering_info.as_ref().unwrap()).unwrap();
+                let org = s.org_sz.as_ref().unwrap();
+                let cs: Vec<(f64, f64)> = corners(f64::from(org.width), f64::from(org.height))
+                    .iter()
+                    .map(|&p| m.apply(p))
+                    .collect();
+                let (mx, my, _, _) = bounds(&cs).unwrap();
+                let pos = s.pos.as_ref().unwrap();
+                let base = (f64::from(pos.horz_offset) - mx, f64::from(pos.vert_offset) - my);
+                let page = |p: (f64, f64)| {
+                    let (x, y) = m.apply(p);
+                    (x + base.0, y + base.1)
+                };
+                let pts: Vec<(f64, f64)> = $pts;
+                out.push(PageShape {
+                    kind: $kind,
+                    corners: cs.iter().map(|&(x, y)| (x + base.0, y + base.1)).collect(),
+                    points: pts.into_iter().map(page).collect(),
+                    angle: s.rotation_info.as_ref().map_or(0, |r| r.angle),
+                    flip: s.flip.as_ref().is_some_and(|f| f.horizontal == 1),
+                });
+            }};
+        }
+        let pt = |p: &Option<crate::schema::section::HxPoint>| {
+            let p = p.as_ref().unwrap();
+            (f64::from(p.x), f64::from(p.y))
+        };
+        for r in runs {
+            for s in &r.rects {
+                push!(s, "rect", vec![]);
+            }
+            for s in &r.ellipses {
+                push!(s, "ellipse", vec![pt(&s.center), pt(&s.ax1), pt(&s.ax2)]);
+            }
+            for s in &r.polygons {
+                push!(
+                    s,
+                    "polygon",
+                    s.points.iter().map(|p| (f64::from(p.x), f64::from(p.y))).collect()
+                );
+            }
+            for s in &r.lines {
+                push!(s, "line", vec![pt(&s.start_pt), pt(&s.end_pt)]);
+            }
+        }
+        out
+    }
+
+    /// The decoded group's leaves on the page, placed the way the encoder
+    /// writes them: group `<hp:pos>` + accumulated offsets + the rotation
+    /// matrix `build_shape_common` makes from the Core value.
+    fn grouped_shapes(bytes: &[u8]) -> (Control, Vec<PageShape>) {
+        let doc = HwpxDecoder::decode(bytes).unwrap();
+        let group = doc.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .find_map(|r| match &r.content {
+                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
+                    Some((**c).clone())
+                }
+                _ => None,
+            })
+            .expect("a group");
+        let Control::Group { placement, .. } = &group else { unreachable!() };
+        let p = placement.as_ref().expect("floating group");
+        let origin = (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()));
+        let mut out = Vec::new();
+        collect_leaves(&group, origin, &mut out, true);
+        (group, out)
+    }
+
+    fn offset_of(placement: &Option<hwpforge_core::placement::ObjectPlacement>) -> (f64, f64) {
+        placement.as_ref().map_or((0.0, 0.0), |p| {
+            (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()))
+        })
+    }
+
+    fn collect_leaves(c: &Control, base: (f64, f64), out: &mut Vec<PageShape>, top: bool) {
+        use hwpforge_core::control::ShapePoint;
+        let style_of = |s: &Option<hwpforge_core::control::ShapeStyle>| s.clone();
+        let (kind, w, h, placement, style, pts): (&str, i32, i32, _, _, Vec<ShapePoint>) = match c {
+            Control::Group { children, placement, .. } => {
+                let o = if top { (0.0, 0.0) } else { offset_of(placement) };
+                for child in children {
+                    collect_leaves(child, (base.0 + o.0, base.1 + o.1), out, false);
+                }
+                return;
+            }
+            Control::Rect { width, height, placement, style, .. } => {
+                ("rect", width.as_i32(), height.as_i32(), placement, style_of(style), vec![])
+            }
+            Control::Ellipse { width, height, placement, style, center, axis1, axis2, .. } => (
+                "ellipse",
+                width.as_i32(),
+                height.as_i32(),
+                placement,
+                style_of(style),
+                vec![*center, *axis1, *axis2],
+            ),
+            Control::Polygon { width, height, placement, style, vertices, .. } => (
+                "polygon",
+                width.as_i32(),
+                height.as_i32(),
+                placement,
+                style_of(style),
+                vertices.clone(),
+            ),
+            Control::Line { width, height, placement, style, start, end, .. } => (
+                "line",
+                width.as_i32(),
+                height.as_i32(),
+                placement,
+                style_of(style),
+                vec![*start, *end],
+            ),
+            other => panic!("unexpected leaf {other:?}"),
+        };
+        let o = offset_of(placement);
+        let rot = Affine::from_hx(
+            &crate::encoder::shapes::build_shape_common(w, h, style.as_ref())
+                .rendering_info
+                .rot_matrix,
+        )
+        .unwrap();
+        let map = Affine::translate(base.0 + o.0, base.1 + o.1).then_after(rot);
+        out.push(PageShape {
+            kind,
+            corners: corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect(),
+            points: pts.iter().map(|p| map.apply((f64::from(p.x), f64::from(p.y)))).collect(),
+            angle: style.as_ref().and_then(|s| s.rotation).map_or(0, |r| r as i32),
+            flip: style.as_ref().and_then(|s| s.flip) == Some(Flip::Horizontal),
+        });
+    }
+
+    fn dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        a.iter().zip(b).map(|(p, q)| (p.0 - q.0).hypot(p.1 - q.1)).fold(0.0, f64::max)
+    }
+
+    /// Every leaf of the grouped fixture against the ungrouped one: defining
+    /// points within 2 HWPUNIT; boxes (rect, ellipse) also their corners,
+    /// rotation and mirror.
+    fn assert_matches_ungrouped(grouped: &str, ungrouped: &str) {
+        let doc = HwpxDecoder::decode(&fixture(grouped)).unwrap();
+        assert!(doc.warnings.is_empty(), "{grouped}: {:?}", doc.warnings);
+        let (_, g) = grouped_shapes(&fixture(grouped));
+        let mut u = ungrouped_shapes(&fixture(ungrouped));
+        assert_eq!(g.len(), u.len(), "{grouped}: leaf count");
+        for leaf in &g {
+            let box_kind = matches!(leaf.kind, "rect" | "ellipse");
+            let score = |s: &PageShape| {
+                if s.kind != leaf.kind {
+                    return f64::INFINITY;
+                }
+                if box_kind {
+                    dist(&s.corners, &leaf.corners).max(dist(&s.points, &leaf.points))
+                } else {
+                    dist(&s.points, &leaf.points)
+                }
+            };
+            let (i, best) = u
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, score(s)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap();
+            assert!(
+                best <= 2.0,
+                "{grouped}: {} off by {best:.2}: {leaf:?} vs {:?}",
+                leaf.kind,
+                u[i]
+            );
+            if box_kind {
+                assert_eq!(
+                    (leaf.angle, leaf.flip),
+                    (u[i].angle, u[i].flip),
+                    "{grouped}: {}",
+                    leaf.kind
+                );
+            }
+            u.remove(i);
+        }
+    }
+
+    /// F1: four groups made in Hancom and the same groups after "ungroup".
+    ///
+    /// 이것을 실패시키는 것: 쌍을 첫 쌍부터 적용하는 것, 또는 회전·반사를
+    /// 자식의 `rotationInfo`·`flip` 에서 읽는 것 (g2·g3 가 어긋난다).
+    #[test]
+    fn f1_groups_match_hancom_ungroup_per_child() {
+        for (g, u) in [
+            ("group-f1-g1-scaled.hwpx", "group-f1-g1-ungrouped.hwpx"),
+            ("group-f1-g2-rotated.hwpx", "group-f1-g2-ungrouped.hwpx"),
+            ("group-f1-g3-flipped.hwpx", "group-f1-g3-ungrouped.hwpx"),
+            ("group-f1-g4-nested.hwpx", "group-f1-g4-ungrouped.hwpx"),
+        ] {
+            assert_matches_ungrouped(g, u);
+        }
+    }
+
+    // ── synthetic wire ─────────────────────────────────────────────
+
+    const ID: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    fn mat(tag: &str, e: [f64; 6]) -> String {
+        format!(
+            r#"<hc:{tag} e1="{}" e2="{}" e3="{}" e4="{}" e5="{}" e6="{}"/>"#,
+            e[0], e[1], e[2], e[3], e[4], e[5]
+        )
+    }
+
+    /// `<hp:renderingInfo>` with `trans` and `(sca, rot)` pairs in wire order.
+    fn ri(trans: [f64; 6], pairs: &[([f64; 6], [f64; 6])]) -> String {
+        let mut s = format!("<hp:renderingInfo>{}", mat("transMatrix", trans));
+        for (sca, rot) in pairs {
+            s.push_str(&mat("scaMatrix", *sca));
+            s.push_str(&mat("rotMatrix", *rot));
+        }
+        s + "</hp:renderingInfo>"
+    }
+
+    fn rot(deg: f64) -> [f64; 6] {
+        let (s, c) = deg.to_radians().sin_cos();
+        [c, -s, 0.0, s, c, 0.0]
+    }
+
+    fn shape_head(tag: &str, org: (i32, i32), ri: &str) -> String {
+        format!(
+            r#"<hp:{tag} id="1" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="7" hasArcPr="0" arcType="NORMAL"><hp:offset x="0" y="0"/><hp:orgSz width="{}" height="{}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{ri}"#,
+            org.0, org.1
+        )
+    }
+
+    fn rect(org: (i32, i32), ri: &str) -> String {
+        format!("{}</hp:rect>", shape_head("rect", org, ri))
+    }
+
+    fn polygon(org: (i32, i32), ri: &str, pts: &[(i32, i32)], inner: &str) -> String {
+        let pts: String = pts.iter().map(|(x, y)| format!(r#"<hc:pt x="{x}" y="{y}"/>"#)).collect();
+        format!("{}{inner}{pts}</hp:polygon>", shape_head("polygon", org, ri))
+    }
+
+    fn ellipse(org: (i32, i32), ri: &str) -> String {
+        let (w, h) = org;
+        format!(
+            r#"{}<hc:center x="{}" y="{}"/><hc:ax1 x="{w}" y="{}"/><hc:ax2 x="{}" y="{h}"/></hp:ellipse>"#,
+            shape_head("ellipse", org, ri),
+            w / 2,
+            h / 2,
+            h / 2,
+            w / 2
+        )
+    }
+
+    fn draw_text(text: &str) -> String {
+        format!(
+            r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:drawText>"#
+        )
+    }
+
+    /// A top-level container with identity matrices whose box is `org`.
+    fn container(org: (i32, i32), children: &str) -> String {
+        container_with(org, org, &ri(ID, &[(ID, ID)]), children)
+    }
+
+    fn container_with(org: (i32, i32), sz: (i32, i32), own: &str, children: &str) -> String {
+        format!(
+            r#"<hp:container id="9" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="LARGEST_ONLY" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="900"><hp:offset x="0" y="0"/><hp:orgSz width="{}" height="{}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{own}{children}<hp:sz width="{}" widthRelTo="ABSOLUTE" height="{}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="0" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PAPER" horzRelTo="PAPER" vertAlign="TOP" horzAlign="LEFT" vertOffset="5000" horzOffset="6000"/></hp:container>"#,
+            org.0, org.1, sz.0, sz.1
+        )
+    }
+
+    fn nested(org: (i32, i32), own: &str, children: &str) -> String {
+        format!(
+            r#"<hp:container id="8" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="800"><hp:offset x="0" y="0"/><hp:orgSz width="{}" height="{}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{own}{children}</hp:container>"#,
+            org.0, org.1
+        )
+    }
+
+    fn section(run_inner: &str) -> String {
+        format!(
+            r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{run_inner}</hp:run></hp:p></hs:sec>"#
+        )
+    }
+
+    /// Decodes one section; returns its first group (if any) and the warnings.
+    fn decode(run_inner: &str) -> (Option<Control>, Vec<crate::DecodeWarning>) {
+        let r = crate::decoder::section::parse_section(
+            &section(run_inner),
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let group = r.paragraphs[0].runs.iter().find_map(|run| match &run.content {
+            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
+            _ => None,
+        });
+        (group, r.warnings)
+    }
+
+    fn children(group: &Control) -> &[Control] {
+        match group {
+            Control::Group { children, .. } => children,
+            other => panic!("not a group: {other:?}"),
+        }
+    }
+
+    fn lost_kinds(warnings: &[crate::DecodeWarning]) -> Vec<String> {
+        warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::DecodeWarning::ContentLost { kind, .. } => Some(kind.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn size_and_offset(c: &Control) -> (i32, i32, (f64, f64)) {
+        match c {
+            Control::Rect { width, height, placement, .. }
+            | Control::Ellipse { width, height, placement, .. }
+            | Control::Polygon { width, height, placement, .. }
+            | Control::Line { width, height, placement, .. }
+            | Control::Group { width, height, placement, .. } => {
+                (width.as_i32(), height.as_i32(), offset_of(placement))
+            }
+            other => panic!("unexpected child {other:?}"),
+        }
+    }
+
+    fn rotation(c: &Control) -> (Option<f32>, Option<Flip>) {
+        let style = match c {
+            Control::Rect { style, .. }
+            | Control::Ellipse { style, .. }
+            | Control::Polygon { style, .. }
+            | Control::Line { style, .. } => style,
+            other => panic!("unexpected child {other:?}"),
+        };
+        style.as_ref().map_or((None, None), |s| (s.rotation, s.flip))
+    }
+
+    /// First pair `S1 = [0.5, 0, 310; 0, 0.5, 0]`: a 1000×400 rect becomes
+    /// 500×200 at x = 310 (the scale's own translation).
+    ///
+    /// 이것을 실패시키는 것: sca 행렬의 이동 성분(e3·e6)을 버리는 것 (x = 0).
+    #[test]
+    fn first_pair_translation_moves_the_child() {
+        let s1 = [0.5, 0.0, 310.0, 0.0, 0.5, 0.0];
+        let (g, w) =
+            decode(&container((810, 200), &rect((1000, 400), &ri(ID, &[(s1, ID), (ID, ID)]))));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert_eq!(size_and_offset(&children(&g)[0]), (500, 200, (310.0, 0.0)));
+    }
+
+    /// A polygon turned 30° on its own, then stretched 2× along x by the
+    /// group: the map has shear, which only points can hold. Expected
+    /// vertices are `S · R30 · p` minus their minimum, computed outside the
+    /// decoder: (0,270) (1466,0) (1732,770), offset (−600, 250).
+    ///
+    /// 이것을 실패시키는 것: 내용 없는 점 기반 도형을 상자 규칙으로 보내는 것
+    /// (shear 로 `ContentLost` 가 난다).
+    #[test]
+    fn point_shape_takes_a_sheared_map_on_its_points() {
+        let s = [2.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let child = polygon(
+            (1000, 600),
+            &ri(ID, &[(s, ID), (ID, rot(30.0))]),
+            &[(0, 600), (500, 0), (1000, 600)],
+            "",
+        );
+        let (g, w) = decode(&container((3000, 3000), &child));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let Control::Polygon { vertices, .. } = &children(&g)[0] else { panic!() };
+        let v: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(v, [(0, 270), (1466, 0), (1732, 770)]);
+        assert_eq!(size_and_offset(&children(&g)[0]), (1732, 770, (-600.0, 250.0)));
+        assert_eq!(rotation(&children(&g)[0]), (None, None));
+    }
+
+    /// A rect in a group the user turned 30°: the rotation is the rect's own.
+    ///
+    /// 이것을 실패시키는 것: 상자 규칙에서 회전을 조건 밖으로 처리하거나 회전을
+    /// 스타일로 옮기지 않는 것 (재인코드 잔차로 `ContentLost`).
+    #[test]
+    fn box_child_carries_the_group_rotation() {
+        let (g, w) = decode(&container(
+            (3000, 3000),
+            &rect((1000, 400), &ri(ID, &[(ID, rot(30.0)), (ID, ID)])),
+        ));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert_eq!(rotation(&children(&g)[0]), (Some(30.0), None));
+        assert_eq!(size_and_offset(&children(&g)[0]).0, 1000);
+    }
+
+    /// A rect mirrored and turned 30° by its group: the encoder writes either a
+    /// rotation or a mirror for a shape, not both, so re-encoding would move
+    /// its corners — the per-child check reports it.
+    ///
+    /// 이것을 실패시키는 것: 자식별 재인코드 잔차 검사(`report_residual`)를 끄는 것.
+    #[test]
+    fn box_child_the_encoder_cannot_reproduce_is_content_lost() {
+        let mirror = [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0];
+        let (g, w) = decode(&container(
+            (3000, 3000),
+            &rect((1000, 400), &ri(ID, &[(mirror, rot(30.0)), (ID, ID)])),
+        ));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["group_child_transform"]);
+        let reason = match &w[0] {
+            crate::DecodeWarning::ContentLost { reason, .. } => reason.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(reason.contains("re-encoded geometry is off"), "{reason}");
+    }
+
+    /// Shapes the group squashes flat have no Core shape: a rect with a zero
+    /// axis, a rect whose height rounds to 0, a polygon whose points end up
+    /// on one line. Each is dropped and reported, so the document still
+    /// validates.
+    ///
+    /// 이것을 실패시키는 것: 세 갈래(축 0 상자, 반올림 0 상자, 일직선 다각형) 중
+    /// 하나의 방출을 지우는 것 (각각 따로 — 경고 수가 3 → 2).
+    #[test]
+    fn collapsed_children_are_dropped_and_reported() {
+        let flat = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let thin = [1.0, 0.0, 0.0, 0.0, 0.4, 0.0];
+        let keep = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let zero_axis = rect((1000, 400), &ri(ID, &[(flat, ID), (ID, ID)]));
+        let rounds_to_zero = rect((1000, 1), &ri(ID, &[(thin, ID), (ID, ID)]));
+        let on_a_line = polygon(
+            (1000, 600),
+            &ri(ID, &[(flat, ID), (ID, ID)]),
+            &[(0, 600), (500, 0), (1000, 600)],
+            "",
+        );
+        let (g, w) = decode(&container(
+            (1000, 500),
+            &format!("{keep}{zero_axis}{rounds_to_zero}{on_a_line}"),
+        ));
+        assert_eq!(children(&g.unwrap()).len(), 1);
+        assert_eq!(lost_kinds(&w), ["group_child_degenerate"; 3]);
+    }
+
+    /// A rect turned on its own, then stretched unevenly by the group: a box
+    /// cannot hold the shear, so the child is reported once.
+    ///
+    /// 이것을 실패시키는 것: shear 판정(`SHEAR_TOLERANCE`) 갈래의 방출을 지우고
+    /// 잔차 보고도 끄는 것.
+    #[test]
+    fn sheared_box_child_is_content_lost_once() {
+        let s = [2.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let (g, w) = decode(&container(
+            (3000, 3000),
+            &rect((1000, 400), &ri(ID, &[(s, ID), (ID, rot(30.0))])),
+        ));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["group_child_transform"]);
+    }
+
+    /// An ellipse in a group scaled by 0.5: centre and axis points scale too.
+    ///
+    /// 이것을 실패시키는 것: 상자 규칙에서 정의 점에 대각 scale 을 적용하지 않는
+    /// 것 (중심·축이 원래 좌표로 남아 잔차 `ContentLost`, 아래 단언도 실패).
+    #[test]
+    fn ellipse_points_scale_with_the_box() {
+        let half = [0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
+        let (g, w) = decode(&container(
+            (2000, 2000),
+            &ellipse((2000, 1000), &ri(ID, &[(half, ID), (ID, ID)])),
+        ));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let Control::Ellipse { center, axis1, axis2, width, height, .. } = &children(&g)[0] else {
+            panic!()
+        };
+        assert_eq!((width.as_i32(), height.as_i32()), (1000, 500));
+        assert_eq!(
+            (center.x, center.y, axis1.x, axis1.y, axis2.x, axis2.y),
+            (500, 250, 1000, 250, 500, 500)
+        );
+    }
+
+    /// A polygon carrying text in a group turned 30°: the text must turn with
+    /// it, so the polygon keeps its points (scaled only) and gets rotation 30.
+    /// With a shear instead, it is reported.
+    ///
+    /// 이것을 실패시키는 것: 내용 있는 점 기반 도형을 내용 없는 경로로 보내는 것
+    /// (회전이 점에 접혀 rotation 단언이 실패한다).
+    #[test]
+    fn text_polygon_keeps_its_own_rotation() {
+        let pts = [(0, 600), (500, 0), (1000, 600)];
+        let child =
+            polygon((1000, 600), &ri(ID, &[(ID, rot(30.0)), (ID, ID)]), &pts, &draw_text("글"));
+        let (g, w) = decode(&container((3000, 3000), &child));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let c = &children(&g)[0];
+        assert_eq!(rotation(c), (Some(30.0), None));
+        let Control::Polygon { vertices, paragraphs, .. } = c else { panic!() };
+        assert_eq!(vertices.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), pts);
+        assert_eq!(paragraphs[0].text_content(), "글");
+
+        let s = [2.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let sheared =
+            polygon((1000, 600), &ri(ID, &[(s, ID), (ID, rot(30.0))]), &pts, &draw_text("글"));
+        let (_, w) = decode(&container((3000, 3000), &sheared));
+        assert_eq!(lost_kinds(&w), ["group_child_transform"]);
+    }
+
+    /// A nested group whose own box does not match its shapes.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음의 자기 상자 비교를 지우는 것.
+    #[test]
+    fn nested_group_box_mismatch_is_content_lost() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]));
+        let own = ri([1.0, 0.0, 500.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, ID)]);
+        let (g, w) = decode(&container((3000, 3000), &nested((1000, 1000), &own, &leaf)));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["nested_group_placement"]);
+
+        // Same group with a matching box: no warning.
+        let own = ri(ID, &[(ID, ID), (ID, ID)]);
+        let (_, w) = decode(&container((3000, 3000), &nested((1000, 1000), &own, &leaf)));
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    /// A child without matrices sits at its `<hp:offset>`, read as signed:
+    /// Hancom writes −310 as `4294966986`.
+    ///
+    /// 이것을 실패시키는 것: `HxOffset` 에서 부호 헬퍼(`deser_i32_or_u32`)를 빼는
+    /// 것 (값이 i32 범위 밖이라 디코드가 실패한다).
+    #[test]
+    fn negative_offset_written_as_u32_is_signed() {
+        let child = r#"<hp:rect id="1" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="7" ratio="0"><hp:offset x="4294966986" y="0"/><hp:orgSz width="1000" height="400"/></hp:rect>"#;
+        let (g, w) = decode(&container((1000, 400), child));
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(size_and_offset(&children(&g.unwrap())[0]).2, (-310.0, 0.0));
+    }
+
+    /// A `scaMatrix` without its `rotMatrix` is malformed, not silently cut.
+    ///
+    /// 이것을 실패시키는 것: 짝 검사를 지우고 남은 행렬을 버리는 것.
+    #[test]
+    fn unpaired_matrix_is_a_parse_error() {
+        let bad = format!(
+            "<hp:renderingInfo>{}{}{}{}</hp:renderingInfo>",
+            mat("transMatrix", ID),
+            mat("scaMatrix", ID),
+            mat("rotMatrix", ID),
+            mat("scaMatrix", ID)
+        );
+        let err = crate::decoder::section::parse_section(
+            &section(&container((1000, 400), &rect((1000, 400), &bad))),
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, crate::HwpxError::XmlParse { .. }), "{err:?}");
+    }
+
+    /// `renderingInfo` must start with `transMatrix` and carry at least one
+    /// pair.
+    ///
+    /// 이것을 실패시키는 것: 첫 행렬 검사 또는 "쌍 0개" 검사를 지우는 것 (각각 따로).
+    #[test]
+    fn rendering_info_without_trans_or_pairs_is_a_parse_error() {
+        for bad in [
+            // A pair after a stray first matrix — only the `transMatrix`-first
+            // check can reject this one.
+            format!(
+                "<hp:renderingInfo>{}{}{}</hp:renderingInfo>",
+                mat("rotMatrix", ID),
+                mat("scaMatrix", ID),
+                mat("rotMatrix", ID)
+            ),
+            format!("<hp:renderingInfo>{}</hp:renderingInfo>", mat("transMatrix", ID)),
+        ] {
+            let err = crate::decoder::section::parse_section(
+                &section(&container((1000, 400), &rect((1000, 400), &bad))),
+                0,
+                &std::collections::HashMap::new(),
+            )
+            .unwrap_err();
+            assert!(matches!(err, crate::HwpxError::XmlParse { .. }), "{err:?}");
+        }
+    }
+
+    /// A matrix element that is not a number leaves the child without a
+    /// place: it is dropped and reported.
+    ///
+    /// 이것을 실패시키는 것: 해석 불가 행렬 갈래의 방출을 지우는 것.
+    #[test]
+    fn unparseable_child_matrix_is_reported() {
+        let bad = ri(ID, &[(ID, ID)]).replacen(r#"e3="0""#, r#"e3="x""#, 1);
+        let keep = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let (g, w) = decode(&container((1000, 500), &format!("{keep}{}", rect((1000, 400), &bad))));
+        assert_eq!(children(&g.unwrap()).len(), 1);
+        assert_eq!(lost_kinds(&w), ["group_child_transform"]);
+    }
+
+    /// A nested group without its own matrices cannot be checked against its
+    /// shapes; one of pictures only has nothing to place.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음의 "행렬 없음" 갈래 방출을 지우는 것, 또는
+    /// 잎이 없는 중첩 묶음에서 자식 디코드(그림 보고)를 건너뛰는 것.
+    #[test]
+    fn nested_group_without_matrices_or_shapes_is_reported() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]));
+        let no_matrix = nested((1000, 1000), "", &leaf);
+        let (g, w) = decode(&container((3000, 3000), &no_matrix));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["nested_group_placement"]);
+
+        let pic = r#"<hp:pic id="2" groupLevel="2"><hp:offset x="0" y="0"/></hp:pic>"#;
+        let pics_only = nested((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)]), pic);
+        let keep = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let (g, w) = decode(&container((3000, 3000), &format!("{keep}{pics_only}")));
+        assert_eq!(children(&g.unwrap()).len(), 1);
+        assert_eq!(lost_kinds(&w), ["pic", "group"]);
+    }
+
+    /// A group of pictures only: Core has no group child for them yet, so
+    /// every picture and the group itself are reported.
+    ///
+    /// 이것을 실패시키는 것: 자식이 하나도 남지 않을 때 `group` 방출을 지우는 것.
+    #[test]
+    fn picture_only_group_reports_each_picture_and_the_group() {
+        let pic = r#"<hp:pic id="2" groupLevel="1"><hp:offset x="0" y="0"/></hp:pic>"#;
+        let (g, w) = decode(&container((1000, 1000), &format!("{pic}{pic}")));
+        assert!(g.is_none());
+        assert_eq!(lost_kinds(&w), ["pic", "pic", "group"]);
+    }
+
+    /// The container's own `sz` must agree with its matrices.
+    ///
+    /// 이것을 실패시키는 것: 표시 크기 비교를 지우는 것.
+    #[test]
+    fn display_size_disagreeing_with_own_matrices_is_content_lost() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let (g, w) =
+            decode(&container_with((1000, 1000), (1500, 1000), &ri(ID, &[(ID, ID)]), &leaf));
+        let (width, height, _) = size_and_offset(&g.unwrap());
+        assert_eq!((width, height), (1500, 1000), "displayed size is `sz`");
+        assert_eq!(lost_kinds(&w), ["group_display_size"]);
+    }
+
+    // ── fixtures and round trips ───────────────────────────────────
+
+    fn first_group(doc: &crate::HwpxDocument) -> Control {
+        doc.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .find_map(|r| match &r.content {
+                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
+                    Some((**c).clone())
+                }
+                _ => None,
+            })
+            .expect("a group")
+    }
+
+    fn encode(doc: &crate::HwpxDocument) -> Vec<u8> {
+        let validated = doc.document.clone().validate().expect("validate");
+        crate::HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store).expect("encode")
+    }
+
+    /// The two native groups made in Hancom (flat and nested) decode, and
+    /// the group keeps one Core child per wire child.
+    ///
+    /// 이것을 실패시키는 것: `HxRenderingInfo` 를 한 쌍만 받는 derive 로 되돌리는 것
+    /// (`duplicate field scaMatrix` 로 문서 전체 디코드 실패).
+    #[test]
+    fn native_groups_decode_with_every_child() {
+        for (name, top_children) in [("group-native.hwpx", 2), ("group-native-nested.hwpx", 2)] {
+            let doc = HwpxDecoder::decode(&fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(doc.warnings.is_empty(), "{name}: {:?}", doc.warnings);
+            assert_eq!(children(&first_group(&doc)).len(), top_children, "{name}");
+            doc.document.clone().validate().unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        let doc = HwpxDecoder::decode(&fixture("group-native-nested.hwpx")).unwrap();
+        let g = first_group(&doc);
+        assert!(matches!(&children(&g)[0], Control::Group { children, .. } if children.len() == 2));
+    }
+
+    /// F1 g1 (group scaled to 150 % × 50 %): the Core group is the displayed
+    /// box `sz` (34015 × 7086, not `orgSz` 22677 × 14173), anchored the way
+    /// the wire says, in front of text; re-encoding writes the same box.
+    ///
+    /// 이것을 실패시키는 것: 크기를 `orgSz` 에서 읽는 것, 또는 container 의
+    /// `textWrap` 을 읽지 않는 것 (각각 따로).
+    #[test]
+    fn f1_g1_top_level_group_is_the_displayed_box() {
+        use hwpforge_core::placement::ObjectTextWrap;
+        let doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
+        let g = first_group(&doc);
+        let Control::Group { width, height, placement, .. } = &g else { unreachable!() };
+        assert_eq!((width.as_i32(), height.as_i32()), (34015, 7086));
+        let p = placement.as_ref().unwrap();
+        assert_eq!(p.text_wrap, ObjectTextWrap::InFrontOfText);
+        assert_eq!((p.horz_offset.as_i32(), p.vert_offset.as_i32()), (8504, 11339));
+
+        let xml = section0_xml(&encode(&doc));
+        let open = &xml[xml.find("<hp:container").unwrap()..];
+        let open = &open[..open.find('>').unwrap()];
+        assert!(open.contains(r#"textWrap="IN_FRONT_OF_TEXT""#), "{open}");
+        assert!(xml.contains(r#"<hp:sz width="34015" widthRelTo="ABSOLUTE" height="7086""#));
+        assert!(xml.contains(r#"vertOffset="11339" horzOffset="8504""#));
+    }
+
+    /// F1 g2 (group turned 30°): the Core group is an unrotated
+    /// 33001 × 23144 box; the rect and ellipse carry the 30°, the polygon and
+    /// line hold it in their points. Expected points come from applying the
+    /// wire matrices outside the decoder (see the F1 per-child test for the
+    /// page positions).
+    ///
+    /// 이것을 실패시키는 것: 묶음 회전을 자식으로 접지 않고 남기는 것, 또는 점
+    /// 기반 자식에 회전을 남기고 점을 접지 않는 것.
+    #[test]
+    fn f1_g2_rotation_moves_onto_the_children() {
+        let doc = HwpxDecoder::decode(&fixture("group-f1-g2-rotated.hwpx")).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let g = first_group(&doc);
+        let (w, h, _) = size_and_offset(&g);
+        assert_eq!((w, h), (33001, 23144));
+        for c in children(&g) {
+            match c {
+                Control::Rect { .. } | Control::Ellipse { .. } => {
+                    assert_eq!(rotation(c), (Some(30.0), None), "{c:?}");
+                }
+                Control::Polygon { vertices, placement, .. } => {
+                    assert_eq!(rotation(c), (None, None));
+                    let v: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
+                    assert_eq!(v, [(0, 0), (6941, 734), (11047, 6378)]);
+                    assert_eq!(offset_of(placement), (0.0, 6137.0));
+                }
+                Control::Line { start, end, placement, .. } => {
+                    assert_eq!(rotation(c), (None, None));
+                    assert_eq!((start.x, start.y, end.x, end.y), (0, 0, 9630, 8832));
+                    assert_eq!(offset_of(placement), (19828.0, 14312.0));
+                }
+                other => panic!("unexpected child {other:?}"),
+            }
+        }
+    }
+
+    /// A group converted from HWP5 by us decodes to a document that
+    /// validates (shapes no longer come back 0 × 0), and its children keep
+    /// their size and place through another encode and decode.
+    ///
+    /// 이것을 실패시키는 것: 자식 기하 정규화를 빼는 것 (`zero dimension`).
+    #[test]
+    fn converted_group_validates_and_round_trips() {
+        let doc = HwpxDecoder::decode(&fixture("group-converted-from-hwp5.hwpx")).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let first = first_group(&doc);
+        let back = first_group(&HwpxDecoder::decode(&encode(&doc)).unwrap());
+        let geom = |g: &Control| {
+            children(g)
+                .iter()
+                .map(|c| match c {
+                    Control::TextBox { width, height, placement, .. } => {
+                        (width.as_i32(), height.as_i32(), offset_of(placement))
+                    }
+                    other => size_and_offset(other),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(geom(&first).iter().all(|(w, h, _)| *w > 0 && *h > 0), "{:?}", geom(&first));
+        assert_eq!(geom(&first), geom(&back));
+    }
+
+    /// Supported children keep the wire order; every element Core cannot
+    /// carry is reported by its own name, in order.
+    ///
+    /// 이것을 실패시키는 것: 미지원 갈래의 방출을 지우는 것, 또는 사이드카 대신
+    /// 종류별 고정 순서로 디코드하는 것.
+    #[test]
+    fn unsupported_children_are_reported_in_wire_order() {
+        let doc = HwpxDecoder::decode(&fixture("group-unsupported-children.hwpx")).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["pic", "ole", "textart", "unknown"]);
+        let paths: Vec<String> = doc.warnings.iter().map(|w| w.location().unwrap()).collect();
+        assert!(paths[0].ends_with(".group[1]"), "{paths:?}");
+        assert!(paths[3].ends_with(".group[5]"), "{paths:?}");
+        let g = first_group(&doc);
+        let kinds: Vec<&str> = children(&g)
+            .iter()
+            .map(|c| match c {
+                Control::Rect { .. } => "rect",
+                Control::Polygon { .. } => "polygon",
+                Control::Line { .. } => "line",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["rect", "polygon", "line"]);
+    }
+
+    /// A table inside a grouped text box (the shape of a public notice whose
+    /// 43779 × 54767 table sits in a group): the group encoder would drop the
+    /// table's size and place, so the decode reports it.
+    ///
+    /// 이것을 실패시키는 것: 묶음 자식 내부 개체 검사(`note_object_in_group_child`)
+    /// 를 지우는 것.
+    #[test]
+    fn object_inside_a_group_child_is_reported() {
+        let doc = HwpxDecoder::decode(&fixture("group-nested-table.hwpx")).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["group_nested_object"]);
+        let table = first_group(&doc);
+        let Control::TextBox { paragraphs, .. } = &children(&table)[0] else { panic!() };
+        assert!(paragraphs[0].runs.iter().any(|r| r.content.as_table().is_some()));
+    }
+
+    /// A table in an ordinary text box is not a group child: no warning.
+    #[test]
+    fn object_outside_groups_is_not_reported() {
+        let tbl_section = {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/tables/table_01_basic_2x2.hwpx"
+            );
+            section0_xml(&std::fs::read(path).unwrap())
+        };
+        let r = crate::decoder::section::parse_section(
+            &tbl_section,
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(lost_kinds(&r.warnings).is_empty(), "{:?}", r.warnings);
     }
 }

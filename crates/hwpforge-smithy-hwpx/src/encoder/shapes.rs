@@ -315,7 +315,12 @@ pub(crate) fn build_shape_common(
             center_y: height / 2,
             rotate_image: 1,
         },
-        rendering_info: HxRenderingInfo { trans_matrix, sca_matrix, rot_matrix },
+        rendering_info: HxRenderingInfo {
+            trans_matrix,
+            sca_matrix,
+            rot_matrix,
+            extra_pairs: Vec::new(),
+        },
         line_shape,
         fill_brush,
         shadow: HxShadow::default_none(),

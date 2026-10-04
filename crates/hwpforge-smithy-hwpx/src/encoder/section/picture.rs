@@ -75,6 +75,7 @@ pub(super) fn build_picture(
             trans_matrix: HxMatrix::identity(),
             sca_matrix: HxMatrix::identity(),
             rot_matrix: HxMatrix::identity(),
+            extra_pairs: Vec::new(),
         }),
         img_rect: Some(HxImgRect {
             pt0: HxPoint { x: 0, y: 0 },

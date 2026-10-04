@@ -540,52 +540,214 @@ pub struct HxTextArtPr {
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.
 ///
-/// Decodes flat children (rect/ellipse/line/polygon/curve/connectLine) plus
-/// nested `<hp:container>` children (Wave B). The shape-common block
-/// (offset/orgSz/…) is parsed for geometry; children reuse the per-shape
-/// decoders, and nested containers recurse through `decode_container`.
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+/// Deserialization is manual: every child element is recorded in document
+/// order in [`HxContainer::child_order`] (the [`HxRun::child_order`] pattern),
+/// so the decoder keeps the wire child order and can report each element it
+/// does not support instead of skipping it silently. The container's own
+/// shape-common block (`offset`, `orgSz`, `curSz`, `renderingInfo`, `sz`,
+/// `pos`) is parsed for geometry; `flip`/`rotationInfo`/`outMargin`/
+/// `shapeComment` are not needed by the decoder and are skipped.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HxContainer {
     /// Group nesting level (`0` = outermost).
-    #[serde(rename = "@groupLevel", default)]
     pub group_level: u32,
     /// Instance identifier (mirrors HWP5 / Core `inst_id`).
-    #[serde(rename = "@instid", default)]
     pub instid: String,
+    /// `textWrap` attribute (empty when absent).
+    pub text_wrap: String,
+    /// `textFlow` attribute (empty when absent).
+    pub text_flow: String,
 
+    /// Offset inside the parent group (`<hp:offset>`, signed).
+    pub offset: Option<HxOffset>,
     /// Group bounding-box original size (`<hp:orgSz>`).
-    #[serde(rename(deserialize = "orgSz"), default)]
     pub org_sz: Option<HxSizeAttr>,
+    /// Current size (`<hp:curSz>`).
+    pub cur_sz: Option<HxSizeAttr>,
+    /// The container's own matrix chain (`<hp:renderingInfo>`).
+    pub rendering_info: Option<HxRenderingInfo>,
     /// Group placement (`<hp:pos>`) — carries the anchor offsets.
-    #[serde(rename(deserialize = "pos"), default)]
     pub pos: Option<HxTablePos>,
     /// Group display size (`<hp:sz>`).
-    #[serde(rename(deserialize = "sz"), default)]
     pub sz: Option<HxTableSz>,
 
-    // ── Children (flat shapes for Wave A) ──
     /// `<hp:rect>` children (textboxes / pure rects).
-    #[serde(rename(deserialize = "rect"), default)]
     pub rects: Vec<HxRect>,
     /// `<hp:line>` children.
-    #[serde(rename(deserialize = "line"), default)]
     pub lines: Vec<HxLine>,
     /// `<hp:ellipse>` children (ellipse / arc).
-    #[serde(rename(deserialize = "ellipse"), default)]
     pub ellipses: Vec<HxEllipse>,
     /// `<hp:polygon>` children.
-    #[serde(rename(deserialize = "polygon"), default)]
     pub polygons: Vec<HxPolygon>,
     /// `<hp:curve>` children.
-    #[serde(rename(deserialize = "curve"), default)]
     pub curves: Vec<HxCurve>,
     /// `<hp:connectLine>` children.
-    #[serde(rename(deserialize = "connectLine"), default)]
     pub connect_lines: Vec<HxConnectLine>,
-    /// Nested `<hp:container>` children (group-in-group, Wave B). `Vec` is
-    /// heap-indirected so the recursive type needs no explicit `Box`.
-    #[serde(rename(deserialize = "container"), default)]
+    /// Nested `<hp:container>` children (group-in-group).
     pub containers: Vec<HxContainer>,
+
+    /// Child elements in document order: `(kind, index in that kind's Vec)`.
+    /// Elements the decoder does not support are recorded as
+    /// [`HxContainerChildKind::Unsupported`] with index `0`.
+    pub child_order: Vec<(HxContainerChildKind, usize)>,
+}
+
+/// [`HxContainer::child_order`] entry kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HxContainerChildKind {
+    /// `<hp:rect>`.
+    Rect,
+    /// `<hp:line>`.
+    Line,
+    /// `<hp:ellipse>`.
+    Ellipse,
+    /// `<hp:polygon>`.
+    Polygon,
+    /// `<hp:curve>`.
+    Curve,
+    /// `<hp:connectLine>`.
+    ConnectLine,
+    /// `<hp:container>`.
+    Container,
+    /// An element the decoder cannot carry into Core, named by its local
+    /// wire name (`"pic"`, `"ole"`, …; `"unknown"` for an element this
+    /// schema does not name).
+    Unsupported(&'static str),
+}
+
+/// `$value` children of `<hp:container>` (deserialization only).
+#[derive(Deserialize)]
+enum HxContainerChildDe {
+    #[serde(rename = "offset")]
+    Offset(HxOffset),
+    #[serde(rename = "orgSz")]
+    OrgSz(HxSizeAttr),
+    #[serde(rename = "curSz")]
+    CurSz(HxSizeAttr),
+    #[serde(rename = "renderingInfo")]
+    RenderingInfo(Box<HxRenderingInfo>),
+    #[serde(rename = "pos")]
+    Pos(Box<HxTablePos>),
+    #[serde(rename = "sz")]
+    Sz(Box<HxTableSz>),
+    #[serde(rename = "flip")]
+    Flip(serde::de::IgnoredAny),
+    #[serde(rename = "rotationInfo")]
+    RotationInfo(serde::de::IgnoredAny),
+    #[serde(rename = "outMargin")]
+    OutMargin(serde::de::IgnoredAny),
+    #[serde(rename = "shapeComment")]
+    ShapeComment(serde::de::IgnoredAny),
+    #[serde(rename = "rect")]
+    Rect(Box<HxRect>),
+    #[serde(rename = "line")]
+    Line(Box<HxLine>),
+    #[serde(rename = "ellipse")]
+    Ellipse(Box<HxEllipse>),
+    #[serde(rename = "polygon")]
+    Polygon(Box<HxPolygon>),
+    #[serde(rename = "curve")]
+    Curve(Box<HxCurve>),
+    #[serde(rename = "connectLine")]
+    ConnectLine(Box<HxConnectLine>),
+    #[serde(rename = "container")]
+    Container(Box<HxContainer>),
+    #[serde(rename = "pic")]
+    Pic(serde::de::IgnoredAny),
+    #[serde(rename = "ole")]
+    Ole(serde::de::IgnoredAny),
+    #[serde(rename = "textart")]
+    TextArt(serde::de::IgnoredAny),
+    #[serde(rename = "equation")]
+    Equation(serde::de::IgnoredAny),
+    #[serde(rename = "switch")]
+    Switch(serde::de::IgnoredAny),
+    #[serde(rename = "caption")]
+    Caption(serde::de::IgnoredAny),
+    #[serde(rename = "parameterset")]
+    ParameterSet(serde::de::IgnoredAny),
+    /// Text directly inside the container (not part of the schema).
+    #[serde(rename = "$text")]
+    StrayText(String),
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> serde::Deserialize<'de> for HxContainer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct HxContainerDe {
+            #[serde(rename = "@groupLevel", default)]
+            group_level: u32,
+            #[serde(rename = "@instid", default)]
+            instid: String,
+            #[serde(rename = "@textWrap", default)]
+            text_wrap: String,
+            #[serde(rename = "@textFlow", default)]
+            text_flow: String,
+            #[serde(rename = "$value", default)]
+            children: Vec<HxContainerChildDe>,
+        }
+        use HxContainerChildDe as C;
+        use HxContainerChildKind as K;
+        let de = HxContainerDe::deserialize(deserializer)?;
+        let mut c = HxContainer {
+            group_level: de.group_level,
+            instid: de.instid,
+            text_wrap: de.text_wrap,
+            text_flow: de.text_flow,
+            ..HxContainer::default()
+        };
+        for child in de.children {
+            match child {
+                C::Offset(x) => c.offset = Some(x),
+                C::OrgSz(x) => c.org_sz = Some(x),
+                C::CurSz(x) => c.cur_sz = Some(x),
+                C::RenderingInfo(x) => c.rendering_info = Some(*x),
+                C::Pos(x) => c.pos = Some(*x),
+                C::Sz(x) => c.sz = Some(*x),
+                C::Flip(_) | C::RotationInfo(_) | C::OutMargin(_) | C::ShapeComment(_) => {}
+                C::Rect(x) => {
+                    c.child_order.push((K::Rect, c.rects.len()));
+                    c.rects.push(*x);
+                }
+                C::Line(x) => {
+                    c.child_order.push((K::Line, c.lines.len()));
+                    c.lines.push(*x);
+                }
+                C::Ellipse(x) => {
+                    c.child_order.push((K::Ellipse, c.ellipses.len()));
+                    c.ellipses.push(*x);
+                }
+                C::Polygon(x) => {
+                    c.child_order.push((K::Polygon, c.polygons.len()));
+                    c.polygons.push(*x);
+                }
+                C::Curve(x) => {
+                    c.child_order.push((K::Curve, c.curves.len()));
+                    c.curves.push(*x);
+                }
+                C::ConnectLine(x) => {
+                    c.child_order.push((K::ConnectLine, c.connect_lines.len()));
+                    c.connect_lines.push(*x);
+                }
+                C::Container(x) => {
+                    c.child_order.push((K::Container, c.containers.len()));
+                    c.containers.push(*x);
+                }
+                C::Pic(_) => c.child_order.push((K::Unsupported("pic"), 0)),
+                C::Ole(_) => c.child_order.push((K::Unsupported("ole"), 0)),
+                C::TextArt(_) => c.child_order.push((K::Unsupported("textart"), 0)),
+                C::Equation(_) => c.child_order.push((K::Unsupported("equation"), 0)),
+                C::Switch(_) => c.child_order.push((K::Unsupported("switch"), 0)),
+                C::Caption(_) => c.child_order.push((K::Unsupported("caption"), 0)),
+                C::ParameterSet(_) => c.child_order.push((K::Unsupported("parameterset"), 0)),
+                C::StrayText(_) => {}
+                C::Other => c.child_order.push((K::Unsupported("unknown"), 0)),
+            }
+        }
+        Ok(c)
+    }
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -2154,17 +2316,88 @@ impl Default for HxMatrix {
 }
 
 /// `<hp:renderingInfo>` — transformation matrices for rendering.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+///
+/// The wire carries one `transMatrix` followed by one `scaMatrix, rotMatrix`
+/// pair per group level: a shape inside a group of level *n* has *n* + 1
+/// pairs (`trans, sca1, rot1, sca2, rot2, …`). The first pair is the one the
+/// outermost group applied after grouping; the last pair is the shape's own.
+/// `sca_matrix`/`rot_matrix` hold the first pair and [`Self::extra_pairs`] the
+/// rest, in wire order.
+///
+/// Deserialization is manual: a missing or misplaced `transMatrix`, an odd
+/// matrix after it, no pair at all or any other child element is an
+/// `XmlParse` error. Serialization writes `trans, sca, rot` only — the
+/// encoder always writes a single pair.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct HxRenderingInfo {
     /// Translation matrix.
-    #[serde(rename(serialize = "hc:transMatrix", deserialize = "transMatrix"))]
+    #[serde(rename(serialize = "hc:transMatrix"))]
     pub trans_matrix: HxMatrix,
-    /// Scale matrix.
-    #[serde(rename(serialize = "hc:scaMatrix", deserialize = "scaMatrix"))]
+    /// Scale matrix of the first pair.
+    #[serde(rename(serialize = "hc:scaMatrix"))]
     pub sca_matrix: HxMatrix,
-    /// Rotation matrix.
-    #[serde(rename(serialize = "hc:rotMatrix", deserialize = "rotMatrix"))]
+    /// Rotation matrix of the first pair.
+    #[serde(rename(serialize = "hc:rotMatrix"))]
     pub rot_matrix: HxMatrix,
+    /// The `(scaMatrix, rotMatrix)` pairs after the first, in wire order.
+    /// Never serialized.
+    #[serde(skip)]
+    pub extra_pairs: Vec<(HxMatrix, HxMatrix)>,
+}
+
+impl HxRenderingInfo {
+    /// Every `(scaMatrix, rotMatrix)` pair in wire order, the first included.
+    pub fn pairs(&self) -> impl Iterator<Item = (&HxMatrix, &HxMatrix)> {
+        std::iter::once((&self.sca_matrix, &self.rot_matrix))
+            .chain(self.extra_pairs.iter().map(|(s, r)| (s, r)))
+    }
+}
+
+/// `$value` children of `<hp:renderingInfo>` (deserialization only).
+#[derive(Deserialize)]
+enum HxRenderingChildDe {
+    #[serde(rename = "transMatrix")]
+    Trans(HxMatrix),
+    #[serde(rename = "scaMatrix")]
+    Sca(HxMatrix),
+    #[serde(rename = "rotMatrix")]
+    Rot(HxMatrix),
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> serde::Deserialize<'de> for HxRenderingInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        #[derive(Deserialize)]
+        struct HxRenderingInfoDe {
+            #[serde(rename = "$value", default)]
+            children: Vec<HxRenderingChildDe>,
+        }
+        let de = HxRenderingInfoDe::deserialize(deserializer)?;
+        let mut children = de.children.into_iter();
+        let trans_matrix = match children.next() {
+            Some(HxRenderingChildDe::Trans(m)) => m,
+            _ => return Err(D::Error::custom("renderingInfo must start with transMatrix")),
+        };
+        let mut pairs: Vec<(HxMatrix, HxMatrix)> = Vec::new();
+        loop {
+            match (children.next(), children.next()) {
+                (None, _) => break,
+                (Some(HxRenderingChildDe::Sca(sca)), Some(HxRenderingChildDe::Rot(rot))) => {
+                    pairs.push((sca, rot));
+                }
+                _ => return Err(D::Error::custom(
+                    "renderingInfo matrices after transMatrix must be scaMatrix, rotMatrix pairs",
+                )),
+            }
+        }
+        let mut pairs = pairs.into_iter();
+        let Some((sca_matrix, rot_matrix)) = pairs.next() else {
+            return Err(D::Error::custom("renderingInfo has no scaMatrix, rotMatrix pair"));
+        };
+        Ok(Self { trans_matrix, sca_matrix, rot_matrix, extra_pairs: pairs.collect() })
+    }
 }
 
 // Shape-common types (HxLineShape, HxWinBrush, HxFillBrush, HxShadow, HxShapeComment)
