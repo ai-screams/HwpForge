@@ -1153,23 +1153,10 @@ fn core_child_corners(child: &Control) -> Vec<(f64, f64)> {
         placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
     let rot = match child {
         Control::Group { .. } => Affine::IDENTITY,
-        _ => {
-            let style = match child {
-                Control::TextBox { style, .. }
-                | Control::Rect { style, .. }
-                | Control::Ellipse { style, .. }
-                | Control::Arc { style, .. }
-                | Control::Polygon { style, .. }
-                | Control::Curve { style, .. }
-                | Control::ConnectLine { style, .. }
-                | Control::Line { style, .. } => style.as_ref(),
-                _ => None,
-            };
-            Affine::from_hx(
-                &crate::encoder::shapes::build_shape_common(w, h, style).rendering_info.rot_matrix,
-            )
-            .unwrap_or(Affine::IDENTITY)
-        }
+        _ => Affine::from_hx(
+            &crate::encoder::shapes::build_shape_common(child).rendering_info.rot_matrix,
+        )
+        .unwrap_or(Affine::IDENTITY),
     };
     let map = Affine::translate(f64::from(x), f64::from(y)).then_after(rot);
     corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect()
@@ -1448,9 +1435,9 @@ fn normalize_group_child(
     set_rotation_and_flip(&mut control, angle, d.flip);
 
     // The matrix the encoder writes for this Core value (shared builder).
-    let style = style_mut(&mut control).and_then(|s| s.clone());
+    set_size_and_placement(&mut control, w, h, 0, 0);
     let enc_rot = Affine::from_hx(
-        &crate::encoder::shapes::build_shape_common(w, h, style.as_ref()).rendering_info.rot_matrix,
+        &crate::encoder::shapes::build_shape_common(&control).rendering_info.rot_matrix,
     )
     .unwrap_or(Affine::IDENTITY);
     // Offset so the box's own origin corner lands where the wire puts it.
@@ -1464,11 +1451,8 @@ fn normalize_group_child(
 
     // Rebuilt from what the control now holds, not from the values above.
     let (fw, fh, fx, fy) = final_box(&control);
-    let style = style_mut(&mut control).and_then(|s| s.clone());
     let final_rot = Affine::from_hx(
-        &crate::encoder::shapes::build_shape_common(fw, fh, style.as_ref())
-            .rendering_info
-            .rot_matrix,
+        &crate::encoder::shapes::build_shape_common(&control).rendering_info.rot_matrix,
     )
     .unwrap_or(Affine::IDENTITY);
     let enc_map =
@@ -2976,9 +2960,7 @@ mod group_tests {
         };
         let o = offset_of(placement);
         let rot = Affine::from_hx(
-            &crate::encoder::shapes::build_shape_common(w, h, style.as_ref())
-                .rendering_info
-                .rot_matrix,
+            &crate::encoder::shapes::build_shape_common(c).rendering_info.rot_matrix,
         )
         .unwrap();
         let map = Affine::translate(base.0 + o.0, base.1 + o.1).then_after(rot);
@@ -3254,25 +3236,21 @@ mod group_tests {
         assert_eq!(size_and_offset(&children(&g)[0]).0, 1000);
     }
 
-    /// A rect mirrored and turned 30° by its group: the encoder writes either a
-    /// rotation or a mirror for a shape, not both, so re-encoding would move
-    /// its corners — the per-child check reports it.
+    /// A rect mirrored and turned 30° by its group: the encoder writes the
+    /// mirror and the rotation in one matrix, as Hancom does, so the child is
+    /// carried exactly.
     ///
-    /// 이것을 실패시키는 것: 자식별 재인코드 잔차 검사(`report_residual`)를 끄는 것.
+    /// 이것을 실패시키는 것: 인코더가 회전과 함께 있는 반사를 반사만 쓰는 것
+    /// (재인코드 잔차로 `ContentLost`).
     #[test]
-    fn box_child_the_encoder_cannot_reproduce_is_content_lost() {
+    fn box_child_mirrored_and_turned_is_carried() {
         let mirror = [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0];
         let (g, w) = decode(&container(
             (3000, 3000),
             &rect((1000, 400), &ri(ID, &[(mirror, rot(30.0)), (ID, ID)])),
         ));
-        assert!(g.is_some());
-        assert_eq!(lost_kinds(&w), ["group_child_transform"]);
-        let reason = match &w[0] {
-            crate::DecodeWarning::ContentLost { reason, .. } => reason.clone(),
-            other => panic!("{other:?}"),
-        };
-        assert!(reason.contains("re-encoded geometry is off"), "{reason}");
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(rotation(&children(&g.unwrap())[0]), (Some(30.0), Some(Flip::Horizontal)));
     }
 
     /// Shapes the group squashes flat have no Core shape: a rect with a zero

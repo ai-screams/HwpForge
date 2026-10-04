@@ -4,6 +4,9 @@
 //! Functions here convert `Control::TextBox`, `Control::Line`, `Control::Ellipse`,
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
+use hwpforge_core::control::geometry::{
+    emission_residual, local_transform, AngleRounding, CoefficientRounding, EmissionPolicy,
+};
 use hwpforge_core::control::{Control, Fill, ShapeStyle};
 use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip, GradientType};
@@ -136,20 +139,57 @@ fn shape_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
     }
 }
 
-/// Builds the shape-common block for a drawing object of the given pixel size.
+/// What HWPX can store for a shape's own transform: `rotationInfo@angle` is
+/// whole degrees, matrix coefficients are written with six decimals, and one
+/// `rotMatrix` holds a mirror and a rotation together — Hancom itself writes
+/// a shape turned and mirrored as its stored angle and flip with the single
+/// matrix `R(angle)·F` (fixture `shapes/rotflip-single`).
+pub(crate) const HWPX_POLICY: EmissionPolicy =
+    EmissionPolicy::new(AngleRounding::WholeDegrees, CoefficientRounding::Decimals(6), true);
+
+/// Width, height and style of a control with a shape-common block (`0`/`None`
+/// for anything else).
+fn shape_parts(ctrl: &Control) -> (i32, i32, Option<&ShapeStyle>) {
+    match ctrl {
+        Control::TextBox { width, height, style, .. }
+        | Control::Rect { width, height, style, .. }
+        | Control::Ellipse { width, height, style, .. }
+        | Control::Arc { width, height, style, .. }
+        | Control::Polygon { width, height, style, .. }
+        | Control::Curve { width, height, style, .. }
+        | Control::ConnectLine { width, height, style, .. }
+        | Control::Line { width, height, style, .. } => {
+            (width.as_i32(), height.as_i32(), style.as_ref())
+        }
+        Control::Group { width, height, .. } => (width.as_i32(), height.as_i32(), None),
+        _ => (0, 0, None),
+    }
+}
+
+/// Reports a shape whose stored transform ([`HWPX_POLICY`]) lands more than
+/// 2 HWPUNIT from its exact Core position as
+/// [`EncodeWarning::ContentLost`](super::EncodeWarning::ContentLost)
+/// (`shape_emission`) — a large box turned by a fraction of a degree, say,
+/// once its angle is rounded to whole degrees.
+pub(crate) fn report_shape_emission(ctrl: &Control, sink: &mut EncodeSink) {
+    if let Some(loss) = emission_residual(ctrl, &HWPX_POLICY).loss() {
+        sink.content_lost("shape_emission", loss.detail().to_string());
+    }
+}
+
+/// Builds the shape-common block for a drawing object.
 ///
 /// Defaults match 한글's output for a newly created shape:
-/// - zero offset, orgSz = curSz = given dimensions
+/// - zero offset, orgSz = curSz = the control's dimensions
 /// - identity rotation/rendering matrices
 /// - solid black border, white fill, no shadow
 ///
-/// When `ShapeStyle` contains rotation, flip, or arrow overrides, they are
-/// applied to the common block instead of identity values.
-pub(crate) fn build_shape_common(
-    width: i32,
-    height: i32,
-    style: Option<&ShapeStyle>,
-) -> ShapeCommon {
+/// When the control's `ShapeStyle` carries rotation, flip, or arrow
+/// overrides, they are applied to the common block instead of identity
+/// values. The rotation matrix is the Core local transform under
+/// [`HWPX_POLICY`].
+pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
+    let (width, height, style) = shape_parts(ctrl);
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
 
@@ -258,36 +298,15 @@ pub(crate) fn build_shape_common(
         }
     }
 
-    // Build rotation matrix for rotation and/or flip.
-    // 한글 reads both flip and rotation from rotMatrix.
+    // Rotation and/or flip in one `rotMatrix` (한글 reads both from it):
+    // the Core local transform `C + R(θ)·F·(p − C)` under `HWPX_POLICY`.
     // scaMatrix and transMatrix stay identity (unless external scaling).
-    //
-    // Rotation convention (한글): [cos θ, -sin θ, tx; sin θ, cos θ, ty]
-    //   tx = cx*(1-cos) + cy*sin,  ty = cy*(1-cos) - cx*sin
-    //   where cx=width/2, cy=height/2 (rotation around center)
-    //
-    // Flip: horizontal → e1=-1, e3=width; vertical → e5=-1, e6=height
+    // A mirror alone keeps its integer form: horizontal → e1=-1, e3=width;
+    // vertical → e5=-1, e6=height.
     let has_flip = hx_flip.horizontal != 0 || hx_flip.vertical != 0;
-    let rot_matrix = if angle != 0 && !has_flip {
-        // Pure rotation, no flip
-        let rad = (angle as f64).to_radians();
-        let cos_val = rad.cos();
-        let sin_val = rad.sin();
-        let cx = width as f64 / 2.0;
-        let cy = height as f64 / 2.0;
-        let tx = cx * (1.0 - cos_val) + cy * sin_val;
-        let ty = cy * (1.0 - cos_val) - cx * sin_val;
-        HxMatrix {
-            e1: format!("{cos_val:.6}"),
-            e2: format!("{:.6}", -sin_val),
-            e3: format!("{tx:.6}"),
-            e4: format!("{sin_val:.6}"),
-            e5: format!("{cos_val:.6}"),
-            e6: format!("{ty:.6}"),
-        }
-    } else if has_flip {
-        // Flip (with or without rotation) — encode flip in rotMatrix
-        // TODO: compose flip+rotation when both are present
+    let rot_matrix = if angle == 0 && !has_flip {
+        HxMatrix::identity()
+    } else if angle == 0 {
         let h = hx_flip.horizontal != 0;
         let v = hx_flip.vertical != 0;
         HxMatrix {
@@ -299,7 +318,16 @@ pub(crate) fn build_shape_common(
             e6: if v { height.to_string() } else { "0".to_string() },
         }
     } else {
-        HxMatrix::identity()
+        let m = local_transform(ctrl, &HWPX_POLICY)
+            .map_or([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], |t| t.matrix());
+        HxMatrix {
+            e1: format!("{:.6}", m[0]),
+            e2: format!("{:.6}", m[1]),
+            e3: format!("{:.6}", m[2]),
+            e4: format!("{:.6}", m[3]),
+            e5: format!("{:.6}", m[4]),
+            e6: format!("{:.6}", m[5]),
+        }
     };
     let sca_matrix = HxMatrix::identity();
     let trans_matrix = HxMatrix::identity();
@@ -368,7 +396,8 @@ pub(crate) fn encode_textbox_to_rect(
     );
     sink.leave();
     let sub_list = sub_list_result?;
-    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     Ok(HxRect {
         id: generate_instid(),
@@ -450,7 +479,8 @@ pub(crate) fn encode_rect_to_hx(
 
     let width_hwp = width.as_i32();
     let height_hwp = height.as_i32();
-    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     Ok(HxRect {
         id: generate_instid(),
@@ -515,7 +545,8 @@ pub(crate) fn encode_line_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     Ok(HxLine {
         id: generate_instid(),
@@ -605,7 +636,8 @@ pub(crate) fn encode_ellipse_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -712,7 +744,8 @@ pub(crate) fn encode_polygon_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -826,7 +859,8 @@ pub(crate) fn encode_arc_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     Ok(HxEllipse {
         id: generate_instid(),
@@ -893,7 +927,8 @@ pub(crate) fn encode_curve_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     // Per KS X 6101 표 269: each <hp:seg> has x1/y1 (start) + x2/y2 (end).
     // Points array encodes control vertices; segments connect adjacent pairs.
@@ -988,7 +1023,8 @@ pub(crate) fn encode_connect_line_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
+    let sc = build_shape_common(ctrl);
+    report_shape_emission(ctrl, sink);
 
     // Per golden fixture: controlPoints wrapper contains ALL points
     // (start type=3, intermediates type=2, end type=26).
@@ -1396,7 +1432,7 @@ fn encode_group_at(
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
 
-    let sc = build_shape_common(width, height, None);
+    let sc = build_shape_common(ctrl);
 
     // Shape-common block (serialized via the same Hx* sub-structs the per-shape
     // encoders use, so the element shape matches native exactly).
@@ -1590,9 +1626,19 @@ mod tests {
 
     // ── build_shape_common tests ─────────────────────────────────────
 
+    /// The shape-common block of a `w × h` rect with `style`.
+    fn common(w: i32, h: i32, style: Option<&ShapeStyle>) -> ShapeCommon {
+        let hu = |v: i32| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let mut ctrl = Control::rect(hu(w), hu(h)).unwrap();
+        if let Control::Rect { style: s, .. } = &mut ctrl {
+            *s = style.cloned();
+        }
+        build_shape_common(&ctrl)
+    }
+
     #[test]
     fn build_shape_common_default_style_gives_identity_rotation() {
-        let sc = build_shape_common(1000, 500, None);
+        let sc = common(1000, 500, None);
         assert_eq!(sc.rotation_info.angle, 0);
         assert_eq!(sc.flip.horizontal, 0);
         assert_eq!(sc.flip.vertical, 0);
@@ -1600,21 +1646,21 @@ mod tests {
 
     #[test]
     fn build_shape_common_org_sz_matches_dimensions() {
-        let sc = build_shape_common(8000, 4000, None);
+        let sc = common(8000, 4000, None);
         assert_eq!(sc.org_sz.width, 8000);
         assert_eq!(sc.org_sz.height, 4000);
     }
 
     #[test]
     fn build_shape_common_cur_sz_matches_dimensions() {
-        let sc = build_shape_common(8000, 4000, None);
+        let sc = common(8000, 4000, None);
         assert_eq!(sc.cur_sz.width, 8000);
         assert_eq!(sc.cur_sz.height, 4000);
     }
 
     #[test]
     fn build_shape_common_offset_is_zero() {
-        let sc = build_shape_common(1000, 500, None);
+        let sc = common(1000, 500, None);
         assert_eq!(sc.offset.x, 0);
         assert_eq!(sc.offset.y, 0);
     }
@@ -1848,7 +1894,7 @@ mod tests {
     #[test]
     fn build_shape_common_rotation_applied_correctly() {
         let style = ShapeStyle { rotation: Some(45.0), ..Default::default() };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.rotation_info.angle, 45);
         // rotation center = dimension / 2
         assert_eq!(sc.rotation_info.center_x, 500);
@@ -1858,7 +1904,7 @@ mod tests {
     #[test]
     fn build_shape_common_rotation_90_degrees() {
         let style = ShapeStyle { rotation: Some(90.0), ..Default::default() };
-        let sc = build_shape_common(2000, 1000, Some(&style));
+        let sc = common(2000, 1000, Some(&style));
         assert_eq!(sc.rotation_info.angle, 90);
         // 한글 rotation matrix convention: [cos, -sin; sin, cos]
         let e1: f64 = sc.rendering_info.rot_matrix.e1.parse().unwrap();
@@ -1872,7 +1918,7 @@ mod tests {
     #[test]
     fn build_shape_common_flip_horizontal() {
         let style = ShapeStyle { flip: Some(Flip::Horizontal), ..Default::default() };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.flip.horizontal, 1);
         assert_eq!(sc.flip.vertical, 0);
     }
@@ -1880,7 +1926,7 @@ mod tests {
     #[test]
     fn build_shape_common_flip_vertical() {
         let style = ShapeStyle { flip: Some(Flip::Vertical), ..Default::default() };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.flip.horizontal, 0);
         assert_eq!(sc.flip.vertical, 1);
     }
@@ -1888,7 +1934,7 @@ mod tests {
     #[test]
     fn build_shape_common_flip_both() {
         let style = ShapeStyle { flip: Some(Flip::Both), ..Default::default() };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.flip.horizontal, 1);
         assert_eq!(sc.flip.vertical, 1);
     }
@@ -1896,28 +1942,28 @@ mod tests {
     #[test]
     fn build_shape_common_line_color_overridden() {
         let style = make_style(Some("#FF0000"), None, None);
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.line_shape.color, "#FF0000");
     }
 
     #[test]
     fn build_shape_common_line_width_overridden() {
         let style = make_style(None, None, Some(100));
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.line_shape.width, 100);
     }
 
     #[test]
     fn build_shape_common_fill_color_overridden() {
         let style = make_style(None, Some("#00FF00"), None);
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#00FF00");
     }
 
     #[test]
     fn build_shape_common_line_style_dash_overridden() {
         let style = ShapeStyle { line_style: Some(LineStyle::Dash), ..Default::default() };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.line_shape.style, "DASH");
     }
 
@@ -1931,7 +1977,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.line_shape.head_style, "SPEAR");
         assert_eq!(sc.line_shape.head_fill, 1);
         assert_eq!(sc.line_shape.head_sz, "LARGE_LARGE");
@@ -1947,7 +1993,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         // Per gotcha #25: Diamond always maps to EMPTY_DIAMOND; headfill controls fill
         assert_eq!(sc.line_shape.tail_style, "EMPTY_DIAMOND");
         assert_eq!(sc.line_shape.tail_fill, 0);
@@ -1956,7 +2002,7 @@ mod tests {
 
     #[test]
     fn build_shape_common_default_solid_line_style() {
-        let sc = build_shape_common(1000, 500, None);
+        let sc = common(1000, 500, None);
         assert_eq!(sc.line_shape.style, "SOLID");
         assert_eq!(sc.line_shape.color, "#000000");
         assert_eq!(sc.line_shape.width, 33);
@@ -1964,13 +2010,13 @@ mod tests {
 
     #[test]
     fn build_shape_common_default_white_fill() {
-        let sc = build_shape_common(1000, 500, None);
+        let sc = common(1000, 500, None);
         assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#FFFFFF");
     }
 
     #[test]
     fn build_shape_common_no_rotation_uses_identity_matrix() {
-        let sc = build_shape_common(1000, 500, None);
+        let sc = common(1000, 500, None);
         assert_eq!(sc.rendering_info.rot_matrix.e1, "1");
         assert_eq!(sc.rendering_info.rot_matrix.e2, "0");
         assert_eq!(sc.rendering_info.rot_matrix.e5, "1");
@@ -1988,7 +2034,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         let wb = sc.fill_brush.win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("HORIZONTAL".to_string()));
         assert_eq!(wb.face_color, "#FFFFFF");
@@ -2006,7 +2052,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         let wb = sc.fill_brush.win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("SLASH".to_string()));
     }
@@ -2022,7 +2068,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         let wb = sc.fill_brush.win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("BACK_SLASH".to_string()));
     }
@@ -2033,7 +2079,7 @@ mod tests {
             fill: Some(Fill::Solid { color: Color::from_rgb(255, 0, 0) }),
             ..Default::default()
         };
-        let sc = build_shape_common(1000, 500, Some(&style));
+        let sc = common(1000, 500, Some(&style));
         let wb = sc.fill_brush.win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, None);
     }

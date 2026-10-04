@@ -219,6 +219,17 @@ impl EncodeSink {
         &self.part
     }
 
+    /// 산출물에서 뺀 내용을 현재 part·경로에 [`super::EncodeWarning::ContentLost`]
+    /// 로 기록한다.
+    pub(crate) fn content_lost(&mut self, kind: &str, reason: String) {
+        self.warnings.push(super::EncodeWarning::ContentLost {
+            part: self.part.clone(),
+            path: crate::decoder::ParagraphPath(self.path.clone()),
+            kind: kind.to_string(),
+            reason,
+        });
+    }
+
     pub(crate) fn enter(&mut self, seg: crate::decoder::PathSeg) {
         self.path.push(seg);
     }
