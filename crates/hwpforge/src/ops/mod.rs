@@ -785,7 +785,9 @@ impl OpsWarning {
     /// **new canonical codes** that the frontends will adopt through their
     /// compatibility tables: `NOTE_HEAD_SKIPPED`, `TITLE_MARK_SKIPPED`,
     /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
-    /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`. `ASSET_DROPPED`
+    /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`, and
+    /// `CONTENT_LOST` (decode or encode: input content the model or the
+    /// output could not carry). `ASSET_DROPPED`
     /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
     /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
     /// and keeps the typed disposition in its `assets` list; the two codes

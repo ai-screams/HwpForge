@@ -777,14 +777,20 @@ pub enum Control {
         hide_page_num: bool,
     },
 
-    /// An unrecognized control element preserved for round-trip fidelity.
+    /// An unrecognized control element.
     ///
-    /// `tag` holds the element's tag name or type identifier.
-    /// `data` holds optional serialized content for lossless preservation.
+    /// No HWPX or HWP5 decoder produces it; it comes from JSON input, the
+    /// Rust API, or the Markdown lossless decoder. `tag` holds the element's
+    /// tag name or type identifier, `data` optional serialized content.
+    ///
+    /// The Markdown lossless encoder keeps it with `data`; the other Markdown
+    /// encoders show only the tag. The HWPX encoder has no form for it: it
+    /// leaves the control out and reports a `CONTENT_LOST` encode warning.
     Unknown {
         /// Tag name or type identifier of the unrecognized element.
         tag: String,
-        /// Optional serialized data for round-trip preservation.
+        /// Optional serialized data, kept only by the Markdown lossless
+        /// encoder.
         data: Option<String>,
     },
 }

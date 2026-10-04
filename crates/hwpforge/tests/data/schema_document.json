@@ -2682,7 +2682,7 @@
           "additionalProperties": false
         },
         {
-          "description": "An unrecognized control element preserved for round-trip fidelity.\n\n`tag` holds the element's tag name or type identifier.\n`data` holds optional serialized content for lossless preservation.",
+          "description": "An unrecognized control element.\n\nNo HWPX or HWP5 decoder produces it; it comes from JSON input, the\nRust API, or the Markdown lossless decoder. `tag` holds the element's\ntag name or type identifier, `data` optional serialized content.\n\nThe Markdown lossless encoder keeps it with `data`; the other Markdown\nencoders show only the tag. The HWPX encoder has no form for it: it\nleaves the control out and reports a `CONTENT_LOST` encode warning.",
           "type": "object",
           "properties": {
             "Unknown": {
@@ -2693,7 +2693,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "description": "Optional serialized data for round-trip preservation.",
+                  "description": "Optional serialized data, kept only by the Markdown lossless\nencoder.",
                   "type": [
                     "string",
                     "null"
