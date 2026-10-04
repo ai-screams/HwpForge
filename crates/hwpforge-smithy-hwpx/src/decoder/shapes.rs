@@ -1068,19 +1068,102 @@ fn decode_nested_container(
         None => ctx.content_lost("nested_group_placement", "nested group has no transform"),
     }
 
-    let origin = (min_x.round(), min_y.round());
-    let Some(children) = decode_group_children(nested, origin, char_shape_id, depth, ctx)? else {
+    let provisional = (min_x.round(), min_y.round());
+    let Some(mut children) = decode_group_children(nested, provisional, char_shape_id, depth, ctx)?
+    else {
         return Ok(None);
     };
+    // The Core box is the bounds of the decoded children as the encoder will
+    // write them, not of the wire boxes: a polygon whose points sit inside
+    // its wire box shrinks to its points, and rounding is settled once. A
+    // decode of our own output then finds the same box again.
+    let Some((bx0, by0, bx1, by1)) =
+        bounds(&children.iter().flat_map(core_child_corners).collect::<Vec<_>>())
+    else {
+        return Ok(None);
+    };
+    let (dx, dy) = (round_i32(bx0), round_i32(by0));
+    if (dx, dy) != (0, 0) {
+        for child in &mut children {
+            shift_child(child, -dx, -dy);
+        }
+    }
+    let origin = (provisional.0 + f64::from(dx), provisional.1 + f64::from(dy));
     let x = round_i32(origin.0 - parent_origin.0);
     let y = round_i32(origin.1 - parent_origin.1);
     Ok(Some(Control::Group {
         children,
-        width: HwpUnit::new(round_i32(max_x - origin.0)).unwrap_or(HwpUnit::ZERO),
-        height: HwpUnit::new(round_i32(max_y - origin.1)).unwrap_or(HwpUnit::ZERO),
+        width: HwpUnit::new(round_i32(bx1 - f64::from(dx))).unwrap_or(HwpUnit::ZERO),
+        height: HwpUnit::new(round_i32(by1 - f64::from(dy))).unwrap_or(HwpUnit::ZERO),
         placement: group_child_placement(x, y),
         inst_id: container_inst_id(nested),
     }))
+}
+
+/// Corners of a decoded group child's box, relative to its parent group, as
+/// the encoder places it (its offset, then the rotation/mirror matrix
+/// `build_shape_common` writes; a nested group is an unrotated box).
+fn core_child_corners(child: &Control) -> Vec<(f64, f64)> {
+    use super::group_geometry::{corners, Affine};
+    let Some((w, h, placement)) = (match child {
+        Control::TextBox { width, height, placement, .. }
+        | Control::Rect { width, height, placement, .. }
+        | Control::Ellipse { width, height, placement, .. }
+        | Control::Arc { width, height, placement, .. }
+        | Control::Polygon { width, height, placement, .. }
+        | Control::Curve { width, height, placement, .. }
+        | Control::ConnectLine { width, height, placement, .. }
+        | Control::Line { width, height, placement, .. }
+        | Control::Group { width, height, placement, .. } => {
+            Some((width.as_i32(), height.as_i32(), placement))
+        }
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+    let (x, y) =
+        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+    let rot = match child {
+        Control::Group { .. } => Affine::IDENTITY,
+        _ => {
+            let style = match child {
+                Control::TextBox { style, .. }
+                | Control::Rect { style, .. }
+                | Control::Ellipse { style, .. }
+                | Control::Arc { style, .. }
+                | Control::Polygon { style, .. }
+                | Control::Curve { style, .. }
+                | Control::ConnectLine { style, .. }
+                | Control::Line { style, .. } => style.as_ref(),
+                _ => None,
+            };
+            Affine::from_hx(
+                &crate::encoder::shapes::build_shape_common(w, h, style).rendering_info.rot_matrix,
+            )
+            .unwrap_or(Affine::IDENTITY)
+        }
+    };
+    let map = Affine::translate(f64::from(x), f64::from(y)).then_after(rot);
+    corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect()
+}
+
+/// Moves a group child by `(dx, dy)` inside its parent group.
+fn shift_child(child: &mut Control, dx: i32, dy: i32) {
+    let placement = match child {
+        Control::TextBox { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. }
+        | Control::Line { placement, .. }
+        | Control::Group { placement, .. } => placement,
+        _ => return,
+    };
+    let (x, y) =
+        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+    *placement = group_child_placement(x + dx, y + dy);
 }
 
 /// Whether `container` or a group under it has a child Core cannot carry.
@@ -3534,6 +3617,61 @@ mod group_tests {
         let n = &children(&g)[1];
         assert_eq!(size_and_offset(n), (800, 600, (2000.0, 3000.0)));
         assert_eq!(size_and_offset(&children(n)[0]), (800, 600, (0.0, 0.0)));
+    }
+
+    /// `group-converted-from-hwp5.hwpx` with its group replaced by `container`.
+    fn package_with_group(container: &str) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let base = fixture("group-converted-from-hwp5.hwpx");
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&base)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                let a = xml.find("<hp:container").unwrap();
+                let b = xml.rfind("</hp:container>").unwrap() + "</hp:container>".len();
+                data = format!("{}{container}{}", &xml[..a], &xml[b..]).into_bytes();
+            }
+            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
+            out.start_file(name, opts).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        out.finish().unwrap().into_inner()
+    }
+
+    /// A nested group whose polygon's points sit inside the polygon's own
+    /// box: the Core group box is the points' extent, so decoding our own
+    /// encode of it gives the same group again.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음 상자를 디코드한 자식 대신 wire 상자 경계로
+    /// 정하는 것 (재디코드 때마다 상자가 8씩 줄어든다).
+    #[test]
+    fn nested_group_box_is_stable_across_round_trips() {
+        let inset = polygon(
+            (1000, 600),
+            &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]),
+            &[(8, 8), (500, 300), (992, 592)],
+            "",
+        )
+        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let group =
+            container((1000, 600), &nested((1000, 600), &ri(ID, &[(ID, ID), (ID, ID)]), &inset));
+        let first = HwpxDecoder::decode(&package_with_group(&group)).unwrap();
+        let g1 = first_group(&first);
+        assert_eq!(size_and_offset(&children(&g1)[0]), (984, 584, (8.0, 8.0)));
+        let second = HwpxDecoder::decode(&encode(&first)).unwrap();
+        assert!(second.warnings.is_empty(), "{:?}", second.warnings);
+        let g2 = first_group(&second);
+        let geometry = |g: &Control| {
+            let n = &children(g)[0];
+            let Control::Polygon { vertices, .. } = &children(n)[0] else { panic!() };
+            (size_and_offset(n), size_and_offset(&children(n)[0]), vertices.clone())
+        };
+        assert_eq!(geometry(&g2), geometry(&g1));
     }
 
     /// A group converted from HWP5 by us decodes to a document that
