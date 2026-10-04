@@ -14,6 +14,7 @@ mod style_store_border_fill;
 mod style_store_convert;
 mod warning_utils;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use hwpforge_foundation::{HeadingType, ParaShapeIndex};
@@ -210,7 +211,17 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
     options: ConvertOptions,
 ) -> Result<(Vec<u8>, Vec<ConvertWarning>), ConvertError> {
     let decoded = decode_hwp5_to_core(bytes).map_err(ConvertError::Decode)?;
-    let (hwpx_style_store, style_warnings) = hwp5_style_store_to_hwpx(&decoded.style_store);
+    // Border-fill image references are checked against the images this
+    // package will carry (manifest id = store key stem), so a fill whose
+    // asset the decoder could not find is left out instead of pointing at
+    // nothing.
+    let image_ids: BTreeSet<String> = decoded
+        .image_store
+        .iter()
+        .map(|(key, _)| key.rsplit_once('.').map_or(key, |(stem, _)| stem).to_string())
+        .collect();
+    let (hwpx_style_store, style_warnings) =
+        hwp5_style_store_to_hwpx_with_image_ids(&decoded.style_store, Some(&image_ids));
     // Warning order: decode-phase warnings (intermediate + projection +
     // border-fill supplement) first, then HWPX style-mapping warnings. This
     // differs from the pre-E5 monolith (which interleaved style warnings
@@ -247,13 +258,23 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
 /// defaults from the `"default"` preset, and unsupported style payloads surface
 /// as explicit projection-fallback warnings instead of silent lies.
 pub fn hwp5_style_store_to_hwpx(store: &Hwp5StyleStore) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
+    hwp5_style_store_to_hwpx_with_image_ids(store, None)
+}
+
+/// [`hwp5_style_store_to_hwpx`], dropping border-fill image references whose
+/// `BIN{id}` is not in `image_ids` (the manifest ids of the images the package
+/// will carry). `None` keeps them all.
+pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
+    store: &Hwp5StyleStore,
+    image_ids: Option<&BTreeSet<String>>,
+) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
     let mut out = HwpxStyleStore::new();
     let mut warnings: Vec<Hwp5Warning> = Vec::new();
     let border_fills = store.border_fills();
     if border_fills.is_empty() {
         push_required_border_fills(&mut out);
     } else {
-        push_hwp5_border_fills(&mut out, border_fills, &mut warnings);
+        push_hwp5_border_fills(&mut out, border_fills, image_ids, &mut warnings);
     }
     push_fonts(&mut out, store);
     let font_group_counts = resolved_font_group_counts(store);

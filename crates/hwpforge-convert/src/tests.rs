@@ -4330,3 +4330,37 @@ fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
         "HWP5-native and HWPX-native text box placement must agree on every axis (W5 w0)"
     );
 }
+
+/// C4, end to end: a HWP5 border fill whose image asset is in the file keeps
+/// its `imgBrush`, and the reference resolves in the converted package.
+///
+/// 이것을 실패시키는 것: 변환 경로가 이미지 채우기를 자산 유무와 관계없이
+/// 빼는 것, 또는 자산 집합을 확장자 포함 키(`BIN0001.png`)로 만드는 것.
+#[test]
+fn border_fill_image_with_its_asset_survives_conversion_and_resolves() {
+    let bytes = std::fs::read(fixture_path("tables/table_16_image_fill.hwp")).expect("fixture");
+    let (hwpx, warnings) =
+        crate::hwp5_to_hwpx_bytes_with_diagnostics(&bytes, crate::ConvertOptions::default())
+            .expect("convert");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&hwpx)).expect("zip");
+    let mut header = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/header.xml")
+            .expect("header")
+            .read_to_string(&mut header)
+            .expect("utf-8");
+    }
+    assert!(header.contains(r#"binaryItemIDRef="BIN0001""#), "the image fill stays");
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::HwpxEncode(
+                hwpforge_smithy_hwpx::EncodeWarning::ImageReferenceUnresolved { .. }
+            )
+        )),
+        "{warnings:?}"
+    );
+}

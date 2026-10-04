@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::style_store_convert::{
@@ -1934,6 +1935,78 @@ fn to_hwpx_style_store_image_fill_round_trips_correctly() {
     // and cannot be called from hwpforge-convert tests without adding a new pub item.
     // The assertion is preserved here as a comment for documentation:
     // assert_eq!(store.border_fill_image_binary_ids().into_iter().collect::<Vec<_>>(), vec![1]);
+}
+
+/// A store with one border fill (id 4) whose image fill names `BIN0001`.
+fn image_fill_store() -> Hwp5StyleStore {
+    Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![border_fill_slot(
+            4,
+            Hwp5RawBorderFill {
+                property: 0,
+                three_d: false,
+                shadow: false,
+                slash_diagonal_shape: 0,
+                back_slash_diagonal_shape: 0,
+                center_line: false,
+                left: none_border_line(),
+                right: none_border_line(),
+                top: none_border_line(),
+                bottom: none_border_line(),
+                diagonal: none_border_line(),
+                fill: Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
+                    mode: Hwp5FillImageMode::TileAll,
+                    brightness: 0,
+                    contrast: 0,
+                    effect: Hwp5FillImageEffect::RealPic,
+                    bindata_id: 1,
+                    extra_data: Vec::new(),
+                }),
+            },
+        )],
+    }
+}
+
+/// C4: an image fill whose asset the package will not carry is left out
+/// rather than written as a reference to nothing (the decoder has already
+/// warned that the asset is missing). One the package carries stays.
+///
+/// 이것을 실패시키는 것: 자산이 없는 이미지 채우기를 빼는 갈래를 지우는 것
+/// (첫 단언), 또는 자산 유무와 관계없이 빼는 것 (둘째 단언).
+#[test]
+fn image_fill_without_its_asset_is_left_out() {
+    let store = image_fill_store();
+
+    let (without, _) =
+        crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&BTreeSet::new()));
+    let fill = without.border_fill(4).unwrap();
+    assert!(fill.image_fill.is_none(), "{fill:?}");
+    assert!(fill.fill.is_none() && fill.gradient_fill.is_none(), "{fill:?}");
+
+    let ids: BTreeSet<String> = ["BIN0001".to_string()].into();
+    let (with, _) = crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&ids));
+    assert_eq!(
+        with.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        Some("BIN0001")
+    );
+}
+
+/// The public mapping has no image store to check against and keeps the
+/// reference, as before.
+///
+/// 이것을 실패시키는 것: 공개 함수가 빈 집합을 넘기는 것.
+#[test]
+fn public_style_mapping_keeps_every_image_fill() {
+    let (store, _) = crate::hwp5_style_store_to_hwpx(&image_fill_store());
+    assert!(store.border_fill(4).unwrap().image_fill.is_some());
 }
 
 #[test]
