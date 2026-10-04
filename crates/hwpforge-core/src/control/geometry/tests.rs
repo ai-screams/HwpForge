@@ -365,16 +365,19 @@ fn a_shear_on_a_variant_without_a_rotation_field_is_still_reported() {
 /// that was a single point to begin with is not something the map did.
 ///
 /// 이것을 실패시키는 것: 점 기반 붕괴 판정을 다각형에만 두는 것, 붕괴를 반올림한
-/// 로컬 크기로만 판정하는 것(반 단위 이동이 1 × 1 로 살아남음), 또는 원래 한
+/// 로컬 크기로만 판정하는 것(반 단위 이동이 1 × 1 로 살아남음), 저장되는 정수
+/// 점의 폭을 보지 않는 것(작은 scale 이 두 점을 같은 점으로 저장), 또는 원래 한
 /// 점이던 선까지 버리는 것.
 #[test]
 fn point_shapes_squeezed_to_a_point_are_dropped() {
     let (a, b) = (ShapePoint::new(0, 0), ShapePoint::new(100, 100));
     // Onto a grid point, and onto (−0.5, −0.5), which rounds to a 1 × 1 box
     // from the offset.
-    for t in [(10.0, 20.0), (-0.5, -0.5)] {
+    // Also a tiny scale whose points round to one stored point:
+    // (0,0)→(−0.5,−0.5) and (100,100)→(0.28,0.28) both store as (1,1).
+    for (k, t) in [(0.0, (10.0, 20.0)), (0.0, (-0.5, -0.5)), (0.0078125, (-0.5, -0.5))] {
         let squeeze = FoldInput::new(
-            ShapeTransform::from_matrix([0.0, 0.0, t.0, 0.0, 0.0, t.1]),
+            ShapeTransform::from_matrix([k, 0.0, t.0, 0.0, k, t.1]),
             (100.0, 100.0),
             (0.0, 0.0),
         );
