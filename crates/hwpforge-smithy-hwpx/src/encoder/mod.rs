@@ -573,6 +573,10 @@ pub enum EncodeWarning {
     /// 빈 참조는 이 크레이트의 디코더가 그림째 버리므로, 남겨 두는 쪽이
     /// 그림 자리와 참조 이름(나중에 자산을 붙일 열쇠)을 보존한다. 빈 값은
     /// 참조로 보지 않는다. 같은 `(part, reference)` 는 한 경고로 합친다.
+    ///
+    /// 이 인코더가 쓰는 패키지만 검사한다 — 원본 패키지에 part 만 바꿔
+    /// 쓰는 preserve 편집(`fill`·`patch`·구조 편집)은 새 참조도 manifest
+    /// 항목도 만들지 않아 입력에 있던 것을 그대로 물려받는다.
     ImageReferenceUnresolved {
         /// 참조가 있는 part 이름 (예: `Contents/header.xml`).
         part: String,

@@ -6,6 +6,12 @@
 //! [`PackageWriter::write_hwpx_with_manifest`](super::package::PackageWriter::write_hwpx_with_manifest)
 //! writes, so what is checked and what is written cannot drift apart. They
 //! only report; the bytes are left as they are.
+//!
+//! Scope: only packages this encoder writes. The preserve-first editors that
+//! write the original package back with some parts replaced (`fill`, `patch`,
+//! structural insert/delete, through `RawPackage::write` in `patch.rs`) are
+//! not checked — they add no reference and no manifest item, so they carry
+//! over whatever the input had.
 
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
