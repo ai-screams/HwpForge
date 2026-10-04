@@ -1291,6 +1291,79 @@ mod tests {
     }
 
     #[test]
+    fn every_container_fill_visits_maps_to_its_own_paragraph() {
+        // fill 인벤토리가 방문하는 컨테이너마다 필드 하나를 두고 하나씩 채운다.
+        // 기대 캐시(독립 판정): 각 필드 문단에는 필드만 있으므로 그 문단은
+        // `fieldBegin` 뒤 첫 `</hp:p>` 에서 닫힌다 — 표지 번호 = 그 앞의
+        // `</hp:p>` 개수.
+        // 이것을 실패시키는 것: 범위 표의 갈래 하나를 범위 밖으로 바꾸기
+        // (`tc`·표 `caption`·`footNote`·`endNote`·`rect`/`polygon` 의 `drawText`·
+        // 도형 `caption`·`subList`) → 그 필드가 wire 에서 빠져 위치 불일치 오류.
+        let with_caption = |mut control: Control, name: &str| {
+            let caption = Caption::new(vec![para(vec![field(name, "캡")])], CaptionSide::Bottom);
+            match &mut control {
+                Control::TextBox { caption: c, .. }
+                | Control::Polygon { caption: c, .. }
+                | Control::Rect { caption: c, .. }
+                | Control::Line { caption: c, .. }
+                | Control::Curve { caption: c, .. } => *c = Some(caption),
+                _ => panic!("captionable shape"),
+            }
+            control
+        };
+        let point = hwpforge_core::control::ShapePoint::new;
+        let mut polygon =
+            Control::polygon(vec![point(0, 0), point(3000, 0), point(0, 3000)]).expect("polygon");
+        if let Control::Polygon { paragraphs, .. } = &mut polygon {
+            *paragraphs = vec![para(vec![field("poly", "다")])];
+        }
+        let cell = |name: &str| TableCell::new(vec![para(vec![field(name, "칸")])], size(4000));
+        let inner = Table::new(vec![TableRow::new(vec![cell("inner_cell")])]);
+        let outer_cell =
+            TableCell::new(vec![para(vec![RunContent::Table(Box::new(inner))])], size(4000));
+        let table = Table::new(vec![TableRow::new(vec![cell("cell"), outer_cell])]).with_caption(
+            Caption::new(vec![para(vec![field("table_caption", "표")])], CaptionSide::Bottom),
+        );
+        let doc = encode(
+            vec![
+                para(vec![field("body", "본")]),
+                para(vec![RunContent::Table(Box::new(table))]),
+                para(vec![control(Control::footnote(vec![para(vec![field("foot", "각")])]))]),
+                para(vec![control(Control::endnote(vec![para(vec![field("end", "미")])]))]),
+                para(vec![control(with_caption(
+                    Control::text_box(vec![para(vec![field("box", "글")])], size(4000), size(2000)),
+                    "box_caption",
+                ))]),
+                para(vec![control(with_caption(polygon, "poly_caption"))]),
+                para(vec![control(with_caption(
+                    Control::line(point(0, 0), point(3000, 0)).expect("line"),
+                    "line_caption",
+                ))]),
+                para(vec![control(with_caption(
+                    Control::curve(vec![point(0, 0), point(1500, 1500), point(3000, 0)])
+                        .expect("curve"),
+                    "curve_caption",
+                ))]),
+            ],
+            &ImageStore::default(),
+        );
+        let xml = add_caches(&section_xml(&doc));
+        let bytes = with_section_xml(&doc, xml.clone());
+        let listed = HwpxFiller::list_fields(&bytes).expect("list");
+        let names: Vec<String> = listed.iter().filter_map(|f| f.name.clone()).collect();
+        assert_eq!(names.len(), 12, "premise: every field is in the inventory: {names:?}");
+        let all: Vec<usize> = caches(&xml);
+        for name in &names {
+            let at = xml.find(&format!("name=\"{name}\"")).expect("field on the wire");
+            let own = xml[..at].matches("</hp:p>").count();
+            let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
+                .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
+            let expected: Vec<usize> = all.iter().copied().filter(|k| *k != own).collect();
+            assert_eq!(caches(&filled), expected, "{name}: only its own paragraph cache goes");
+        }
+    }
+
+    #[test]
     fn wire_and_inventory_mismatch_is_rejected() {
         // 이것을 실패시키는 것: (경로, 순번, 이름) 집합 동일성 검사를 빼고
         // 이름만으로 고르기 → 아래 세 입력이 Ok 가 된다.
