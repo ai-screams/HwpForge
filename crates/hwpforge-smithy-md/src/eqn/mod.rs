@@ -6,4 +6,4 @@
 mod lexer;
 mod parser;
 
-pub(crate) use parser::eqn_to_latex;
+pub(crate) use parser::{render_equation, EqnRender};

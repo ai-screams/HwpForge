@@ -165,15 +165,52 @@ fn append_spaced(out: &mut String, piece: &str) {
     out.push_str(piece);
 }
 
-/// Parser state: token slice + cursor.
+/// Maximum nesting depth, counted as active [`Parser::parse_one`] calls.
+///
+/// Every recursion path (`over` chains, `{` groups, `matrix`/`cases` rows,
+/// `_`/`^` groups, `from`/`to` limits, accents) passes through
+/// `parse_one`, so this single counter bounds the parser's stack use.
+/// The 34 equations of the measured corpus nest at most 3 deep. 32 keeps
+/// every path within a 256 KiB caller stack in unoptimized builds, where 64
+/// overflowed it on the `matrix`, `cases` and `from` paths.
+const MAX_EQN_DEPTH: usize = 32;
+
+/// Fixed notice written before the original script when conversion stops.
+const DEPTH_FALLBACK_NOTICE: &str = "[수식 변환 생략: 중첩 깊이 초과] ";
+
+/// The script nests deeper than [`MAX_EQN_DEPTH`].
+///
+/// Returned through every parser level with `?` immediately: a level that
+/// swallowed it and kept looping would re-read the same unconsumed token
+/// forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DepthExceeded;
+
+/// Parser result: LaTeX text, or the depth limit was hit.
+type ParseResult = Result<String, DepthExceeded>;
+
+/// How an equation is written to Markdown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EqnRender {
+    /// Converted LaTeX, already wrapped in `$...$`; written verbatim.
+    Latex(String),
+    /// The script nests too deeply to convert. Holds a fixed notice followed
+    /// by the original HancomEQN script with every whitespace run collapsed
+    /// to one space (see [`collapse_whitespace`]). Callers treat it like
+    /// ordinary text in their output context and escape it the same way.
+    RawFallback(String),
+}
+
+/// Parser state: token slice + cursor + current nesting depth.
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, depth: 0 }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -200,12 +237,12 @@ impl<'a> Parser<'a> {
 
     /// Parse a brace-delimited group `{ ... }` and return the inner LaTeX.
     /// If the next token is NOT `{`, parse a single atom instead.
-    fn parse_group(&mut self) -> String {
+    fn parse_group(&mut self) -> ParseResult {
         if matches!(self.peek(), Some(Token::LBrace)) {
             self.advance(); // consume `{`
-            let inner = self.parse_expr_until_rbrace();
+            let inner = self.parse_expr_until_rbrace()?;
             self.consume_if(|t| matches!(t, Token::RBrace));
-            inner
+            Ok(inner)
         } else {
             // Single-token atom
             self.parse_atom()
@@ -213,23 +250,23 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse expression tokens until `}` or end-of-input, returning inner LaTeX.
-    fn parse_expr_until_rbrace(&mut self) -> String {
+    fn parse_expr_until_rbrace(&mut self) -> ParseResult {
         let mut out = String::new();
         loop {
             match self.peek() {
                 None | Some(Token::RBrace) => break,
                 _ => {
-                    let piece = self.parse_one();
+                    let piece = self.parse_one()?;
                     append_spaced(&mut out, &piece);
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Parse expression tokens until `}`, `##` (two consecutive Hash), or end.
     /// Used inside matrix/cases rows.
-    fn parse_expr_until_rbrace_or_rowsep(&mut self) -> String {
+    fn parse_expr_until_rbrace_or_rowsep(&mut self) -> ParseResult {
         let mut out = String::new();
         loop {
             // Peek ahead: two consecutive Hash = row separator
@@ -245,21 +282,21 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 None | Some(Token::RBrace) => break,
                 _ => {
-                    let piece = self.parse_one();
+                    let piece = self.parse_one()?;
                     append_spaced(&mut out, &piece);
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Parse a single atom (no operator handling).
-    fn parse_atom(&mut self) -> String {
-        match self.peek() {
+    fn parse_atom(&mut self) -> ParseResult {
+        Ok(match self.peek() {
             None => String::new(),
             Some(Token::LBrace) => {
                 self.advance();
-                let inner = self.parse_expr_until_rbrace();
+                let inner = self.parse_expr_until_rbrace()?;
                 self.consume_if(|t| matches!(t, Token::RBrace));
                 format!("{{{}}}", inner)
             }
@@ -290,40 +327,55 @@ impl<'a> Parser<'a> {
                 self.advance();
                 t
             }
-        }
+        })
     }
 
     /// Parse `from { ... }` if present, returning the subscript content.
-    fn try_parse_from(&mut self) -> Option<String> {
+    fn try_parse_from(&mut self) -> Result<Option<String>, DepthExceeded> {
         if matches!(self.peek(), Some(Token::Keyword(k)) if k == "from") {
             self.advance();
-            Some(self.parse_group())
+            Ok(Some(self.parse_group()?))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Parse `to { ... }` if present, returning the superscript content.
-    fn try_parse_to(&mut self) -> Option<String> {
+    fn try_parse_to(&mut self) -> Result<Option<String>, DepthExceeded> {
         if matches!(self.peek(), Some(Token::Keyword(k)) if k == "to") {
             self.advance();
-            Some(self.parse_group())
+            Ok(Some(self.parse_group()?))
         } else {
-            None
+            Ok(None)
         }
     }
 
     /// Parse one "statement" including postfix `over`, `_`, `^`.
-    fn parse_one(&mut self) -> String {
-        let base = self.parse_primary();
+    ///
+    /// Counts one nesting level for the duration of the call and fails with
+    /// [`DepthExceeded`] before consuming any token when the level would go
+    /// past [`MAX_EQN_DEPTH`].
+    fn parse_one(&mut self) -> ParseResult {
+        if self.depth >= MAX_EQN_DEPTH {
+            return Err(DepthExceeded);
+        }
+        self.depth += 1;
+        let result = self.parse_one_inner();
+        self.depth -= 1;
+        result
+    }
+
+    /// Body of [`Self::parse_one`], run with the depth already counted.
+    fn parse_one_inner(&mut self) -> ParseResult {
+        let base = self.parse_primary()?;
 
         // Check for postfix `over` (fraction).
         // Uses `parse_one()` for the denominator so that chained `a over b over c`
         // and postfix sub/superscripts `a over b^2` are handled correctly.
         if matches!(self.peek(), Some(Token::Keyword(k)) if k == "over") {
             self.advance(); // consume `over`
-            let denom = self.parse_one();
-            return format!(r"\frac{{{}}}{{{}}}", strip_braces(&base), strip_braces(&denom));
+            let denom = self.parse_one()?;
+            return Ok(format!(r"\frac{{{}}}{{{}}}", strip_braces(&base), strip_braces(&denom)));
         }
 
         // Check for `_` and `^` postfix
@@ -332,30 +384,30 @@ impl<'a> Parser<'a> {
             match self.peek() {
                 Some(Token::Underscore) => {
                     self.advance();
-                    let sub = self.parse_group();
+                    let sub = self.parse_group()?;
                     result = format!("{}_{{{}}}", result, sub);
                 }
                 Some(Token::Caret) => {
                     self.advance();
-                    let sup = self.parse_group();
+                    let sup = self.parse_group()?;
                     result = format!("{}^{{{}}}", result, sup);
                 }
                 _ => break,
             }
         }
 
-        result
+        Ok(result)
     }
 
     /// Parse a primary expression (keyword handlers, atoms).
-    fn parse_primary(&mut self) -> String {
-        match self.peek().cloned() {
+    fn parse_primary(&mut self) -> ParseResult {
+        Ok(match self.peek().cloned() {
             None => String::new(),
 
             Some(Token::LBrace) => {
                 // Grouped expression — parse as group, then check for `over`
                 self.advance(); // consume `{`
-                let inner = self.parse_expr_until_rbrace();
+                let inner = self.parse_expr_until_rbrace()?;
                 self.consume_if(|t| matches!(t, Token::RBrace));
                 // The outer caller (parse_one) will handle `over`
                 format!("{{{}}}", inner)
@@ -366,7 +418,7 @@ impl<'a> Parser<'a> {
                 match kw.as_str() {
                     "sqrt" => {
                         self.advance();
-                        let arg = self.parse_group();
+                        let arg = self.parse_group()?;
                         format!(r"\sqrt{{{}}}", arg)
                     }
                     "sum" | "int" | "prod" | "lim" => {
@@ -378,8 +430,8 @@ impl<'a> Parser<'a> {
                             "lim" => r"\lim",
                             _ => unreachable!(),
                         };
-                        let sub = self.try_parse_from();
-                        let sup = self.try_parse_to();
+                        let sub = self.try_parse_from()?;
+                        let sup = self.try_parse_to()?;
                         let mut s = cmd.to_string();
                         if let Some(sub) = sub {
                             s.push_str(&format!("_{{{}}}", sub));
@@ -391,7 +443,7 @@ impl<'a> Parser<'a> {
                     }
                     "vec" | "hat" | "bar" | "dot" | "tilde" => {
                         self.advance();
-                        let arg = self.parse_group();
+                        let arg = self.parse_group()?;
                         let cmd = match kw.as_str() {
                             "vec" => r"\vec",
                             "hat" => r"\hat",
@@ -405,21 +457,21 @@ impl<'a> Parser<'a> {
                     "left" => {
                         self.advance();
                         // next token should be a delimiter character
-                        let delim = self.parse_atom();
+                        let delim = self.parse_atom()?;
                         format!(r"\left{}", delim)
                     }
                     "right" => {
                         self.advance();
-                        let delim = self.parse_atom();
+                        let delim = self.parse_atom()?;
                         format!(r"\right{}", delim)
                     }
                     "matrix" => {
                         self.advance();
-                        self.parse_matrix_env("pmatrix")
+                        self.parse_matrix_env("pmatrix")?
                     }
                     "cases" => {
                         self.advance();
-                        self.parse_cases_env()
+                        self.parse_cases_env()?
                     }
                     // `from` and `to` without a preceding operator — pass as keyword
                     _ => {
@@ -430,15 +482,15 @@ impl<'a> Parser<'a> {
             }
 
             // Non-keyword text or other tokens
-            _ => self.parse_atom(),
-        }
+            _ => self.parse_atom()?,
+        })
     }
 
     /// Parse `{ cell # cell ## cell # cell }` → `\begin{pmatrix}...\end{pmatrix}`.
-    fn parse_matrix_env(&mut self, env: &str) -> String {
+    fn parse_matrix_env(&mut self, env: &str) -> ParseResult {
         // Consume opening `{`
         if !self.consume_if(|t| matches!(t, Token::LBrace)) {
-            return String::new();
+            return Ok(String::new());
         }
         let mut rows: Vec<Vec<String>> = vec![vec![]];
 
@@ -465,7 +517,7 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 _ => {
-                    let cell = self.parse_expr_until_rbrace_or_rowsep();
+                    let cell = self.parse_expr_until_rbrace_or_rowsep()?;
                     // rows is always non-empty: initialized with vec![vec![]] and only grows.
                     rows.last_mut().unwrap().push(cell);
                 }
@@ -474,13 +526,13 @@ impl<'a> Parser<'a> {
         self.consume_if(|t| matches!(t, Token::RBrace));
 
         let body = rows.into_iter().map(|row| row.join(" & ")).collect::<Vec<_>>().join(r" \\ ");
-        format!(r"\begin{{{env}}}{body}\end{{{env}}}")
+        Ok(format!(r"\begin{{{env}}}{body}\end{{{env}}}"))
     }
 
     /// Parse `{ expr ## expr }` → `\begin{cases}...\end{cases}`.
-    fn parse_cases_env(&mut self) -> String {
+    fn parse_cases_env(&mut self) -> ParseResult {
         if !self.consume_if(|t| matches!(t, Token::LBrace)) {
-            return String::new();
+            return Ok(String::new());
         }
         let mut rows: Vec<String> = Vec::new();
 
@@ -499,7 +551,7 @@ impl<'a> Parser<'a> {
                     self.advance();
                 }
                 _ => {
-                    let expr = self.parse_expr_until_rbrace_or_rowsep();
+                    let expr = self.parse_expr_until_rbrace_or_rowsep()?;
                     rows.push(expr);
                 }
             }
@@ -507,34 +559,74 @@ impl<'a> Parser<'a> {
         self.consume_if(|t| matches!(t, Token::RBrace));
 
         let body = rows.join(r" \\ ");
-        format!(r"\begin{{cases}}{body}\end{{cases}}")
+        Ok(format!(r"\begin{{cases}}{body}\end{{cases}}"))
     }
 
     /// Parse the entire token stream.
-    fn parse_all(&mut self) -> String {
+    fn parse_all(&mut self) -> ParseResult {
         let mut out = String::new();
         while self.peek().is_some() {
-            let piece = self.parse_one();
+            let piece = self.parse_one()?;
             append_spaced(&mut out, &piece);
         }
-        out
+        Ok(out)
     }
 }
 
-/// Converts a HancomEQN script string to LaTeX.
+/// Collapses every run of `' '`, `'\t'`, `'\n'`, `'\r'` to a single space.
 ///
-/// Returns the LaTeX expression wrapped in `$...$` for inline math.
-/// Unknown constructs are passed through as-is.
-pub fn eqn_to_latex(script: &str) -> String {
+/// Used for the depth fallback text. No meaning is lost: the HancomEQN lexer
+/// treats these four characters alike as token separators
+/// (`lexer.rs`, `tokenize`), and HancomEQN line breaks are written with `#`.
+/// With no newline left, and the fixed notice always in front of the script,
+/// the fallback cannot start a Markdown line construct (thematic break, list,
+/// heading) or contain a blank line that would end an HTML table block.
+fn collapse_whitespace(script: &str) -> String {
+    let mut out = String::with_capacity(script.len());
+    let mut in_space = false;
+    for ch in script.chars() {
+        if matches!(ch, ' ' | '\t' | '\n' | '\r') {
+            if !in_space {
+                out.push(' ');
+            }
+            in_space = true;
+        } else {
+            out.push(ch);
+            in_space = false;
+        }
+    }
+    out
+}
+
+/// Converts a HancomEQN script string for Markdown output.
+///
+/// Returns [`EqnRender::Latex`] with the expression wrapped in `$...$` for
+/// inline math (unknown constructs pass through as-is), or
+/// [`EqnRender::RawFallback`] — a fixed notice followed by the original
+/// script, whitespace collapsed — when the script nests deeper than [`MAX_EQN_DEPTH`].
+pub(crate) fn render_equation(script: &str) -> EqnRender {
     let tokens = tokenize(script);
     let mut parser = Parser::new(&tokens);
-    let latex = parser.parse_all();
-    format!("${}$", latex)
+    match parser.parse_all() {
+        Ok(latex) => EqnRender::Latex(format!("${}$", latex)),
+        Err(DepthExceeded) => EqnRender::RawFallback(format!(
+            "{DEPTH_FALLBACK_NOTICE}{}",
+            collapse_whitespace(script)
+        )),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Converts a script that must stay within the depth limit to LaTeX.
+    fn eqn_to_latex(script: &str) -> String {
+        match render_equation(script) {
+            EqnRender::Latex(latex) => latex,
+            EqnRender::RawFallback(raw) => panic!("unexpected depth fallback: {raw}"),
+        }
+    }
 
     #[test]
     fn simple_fraction() {
