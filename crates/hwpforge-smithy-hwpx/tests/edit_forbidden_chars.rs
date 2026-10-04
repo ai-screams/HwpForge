@@ -367,6 +367,19 @@ fn fill_leaves_neighbouring_controls_in_the_base_alone() {
 }
 
 #[test]
+fn fill_leaves_a_field_alone_when_its_current_value_is_requested_again() {
+    // The base already holds `R\u{1}S` in `f2`; asking for exactly that value
+    // is no change, so nothing is cleaned, written or reported.
+    // 이것을 실패시키는 것: 현재 값과의 원문 비교 전에 정리하는 것 (`RS` 로 다시 쓰고 경고·캐시 무효화).
+    let base = dirty();
+    let diagnosed = fill(&base, "f2", "R\u{1}S").expect("fill");
+
+    assert_eq!(diagnosed.value.bytes, base);
+    assert!(diagnosed.value.filled.is_empty(), "{:?}", diagnosed.value.filled);
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
 fn the_older_fill_twins_return_the_same_outcome() {
     // 이것을 실패시키는 것: `fill_with_diagnostics` 래퍼가 `decode_warnings` 를 버리는 것.
     let base = warning_base();
