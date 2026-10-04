@@ -65,7 +65,9 @@ pub(crate) struct ShapeCommon {
     pub rotation_info: HxRotationInfo,
     pub rendering_info: HxRenderingInfo,
     pub line_shape: HxLineShape,
-    pub fill_brush: HxFillBrush,
+    /// `None` = no `<hc:fillBrush>` (Core [`Fill::None`]: the interior stays
+    /// transparent).
+    pub fill_brush: Option<HxFillBrush>,
     pub shadow: HxShadow,
 }
 
@@ -192,6 +194,10 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
     let (width, height, style) = shape_parts(ctrl);
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
+    // 이것을 실패시키는 것: `Fill::None` 갈래를 지우기 — 채우기 없던 도형이
+    // 흰 채우기로 다시 써진다 (`no_fill_shape_writes_no_fill_brush`,
+    // `tests/shape_no_fill.rs`).
+    let mut no_fill = false;
 
     // Rotation angle in integer degrees for HWPX schema
     let mut angle: i32 = 0;
@@ -259,6 +265,7 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
                 Fill::Image { .. } => {
                     // Image fill requires imgBrush — not yet supported in shapes
                 }
+                Fill::None => no_fill = true,
                 _ => {} // future Fill variants
             }
         }
@@ -350,7 +357,7 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
             extra_pairs: Vec::new(),
         },
         line_shape,
-        fill_brush,
+        fill_brush: (!no_fill).then_some(fill_brush),
         shadow: HxShadow::default_none(),
     }
 }
@@ -419,7 +426,7 @@ pub(crate) fn encode_textbox_to_rect(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(HxShadow { alpha: 178, ..HxShadow::default_none() }),
 
         sz: Some(HxTableSz {
@@ -502,7 +509,7 @@ pub(crate) fn encode_rect_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(sc.shadow),
 
         sz: Some(HxTableSz {
@@ -683,7 +690,7 @@ pub(crate) fn encode_ellipse_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,
@@ -790,7 +797,7 @@ pub(crate) fn encode_polygon_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,
@@ -883,7 +890,7 @@ pub(crate) fn encode_arc_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,
@@ -966,7 +973,7 @@ pub(crate) fn encode_curve_to_hx(
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: sc.fill_brush,
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,
@@ -1590,6 +1597,16 @@ fn encode_group_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_fill_shape_writes_no_fill_brush() {
+        use hwpforge_core::control::Fill;
+        let style = ShapeStyle { fill: Some(Fill::None), ..Default::default() };
+        assert!(common(100, 50, Some(&style)).fill_brush.is_none());
+        // 지정 없음은 종전대로 흰 채우기.
+        let default = common(100, 50, None).fill_brush.expect("default fill");
+        assert_eq!(default.win_brush.expect("winBrush").face_color, "#FFFFFF");
+    }
     use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
     use hwpforge_core::paragraph::Paragraph;
     use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
@@ -2440,7 +2457,10 @@ mod tests {
     fn build_shape_common_fill_color_overridden() {
         let style = make_style(None, Some("#00FF00"), None);
         let sc = common(1000, 500, Some(&style));
-        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#00FF00");
+        assert_eq!(
+            sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap().face_color,
+            "#00FF00"
+        );
     }
 
     #[test]
@@ -2494,7 +2514,10 @@ mod tests {
     #[test]
     fn build_shape_common_default_white_fill() {
         let sc = common(1000, 500, None);
-        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#FFFFFF");
+        assert_eq!(
+            sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap().face_color,
+            "#FFFFFF"
+        );
     }
 
     #[test]
@@ -2518,7 +2541,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        let wb = sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("HORIZONTAL".to_string()));
         assert_eq!(wb.face_color, "#FFFFFF");
         assert_eq!(wb.hatch_color, "#000000");
@@ -2536,7 +2559,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        let wb = sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("SLASH".to_string()));
     }
 
@@ -2552,7 +2575,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        let wb = sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, Some("BACK_SLASH".to_string()));
     }
 
@@ -2563,7 +2586,7 @@ mod tests {
             ..Default::default()
         };
         let sc = common(1000, 500, Some(&style));
-        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        let wb = sc.fill_brush.as_ref().unwrap().win_brush.as_ref().unwrap();
         assert_eq!(wb.hatch_style, None);
     }
 

@@ -110,6 +110,7 @@ pub(crate) fn decode_textbox(
     let style = decode_shape_style_full(
         &rect.line_shape,
         &rect.fill_brush,
+        true,
         rect.rotation_info.as_ref(),
         rect.flip.as_ref(),
         &rect.dropcap_style,
@@ -184,6 +185,7 @@ pub(crate) fn decode_line(
             style: decode_shape_style_full(
                 &line.line_shape,
                 &line.fill_brush,
+                false,
                 line.rotation_info.as_ref(),
                 line.flip.as_ref(),
                 &line.dropcap_style,
@@ -258,6 +260,7 @@ pub(crate) fn decode_ellipse(
             style: decode_shape_style_full(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
+                true,
                 ellipse.rotation_info.as_ref(),
                 ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
@@ -318,6 +321,7 @@ pub(crate) fn decode_polygon(
             style: decode_shape_style_full(
                 &polygon.line_shape,
                 &polygon.fill_brush,
+                true,
                 polygon.rotation_info.as_ref(),
                 polygon.flip.as_ref(),
                 &polygon.dropcap_style,
@@ -330,9 +334,15 @@ pub(crate) fn decode_polygon(
 
 /// Extracts a [`ShapeStyle`] from HWPX shape common elements including rotation, flip, arrow,
 /// and drop cap info.
+///
+/// `fillable` = the shape has an interior (everything but lines and connect
+/// lines). For such a shape a missing `<hc:fillBrush>` means "no fill" and
+/// becomes [`Fill::None`](hwpforge_core::control::Fill::None); leaving it
+/// `None` would let the encoder write its default white fill.
 pub(crate) fn decode_shape_style_full(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
+    fillable: bool,
     rotation_info: Option<&crate::schema::section::HxRotationInfo>,
     flip_info: Option<&crate::schema::section::HxFlip>,
     dropcap_style: &str,
@@ -381,6 +391,9 @@ pub(crate) fn decode_shape_style_full(
         }
         None
     });
+    // 이것을 실패시키는 것: 이 대입을 지우기 — 채우기 없는 도형이 Core 에서
+    // "인코더 기본값"과 구별되지 않는다 (`no_fill_shape_decodes_as_fill_none`).
+    let fill = if fillable && fill_brush.is_none() { Some(Fill::None) } else { fill };
 
     let (line_color, line_width, line_style) = match line_shape.as_ref() {
         None => (None, None, None),
@@ -523,6 +536,7 @@ pub(crate) fn decode_arc(
             style: decode_shape_style_full(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
+                true,
                 ellipse.rotation_info.as_ref(),
                 ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
@@ -587,6 +601,7 @@ pub(crate) fn decode_curve(
             style: decode_shape_style_full(
                 &curve.line_shape,
                 &curve.fill_brush,
+                true,
                 curve.rotation_info.as_ref(),
                 curve.flip.as_ref(),
                 &curve.dropcap_style,
@@ -789,6 +804,7 @@ pub(crate) fn decode_connect_line(
             style: decode_shape_style_full(
                 &cl.line_shape,
                 &cl.fill_brush,
+                false,
                 cl.rotation_info.as_ref(),
                 cl.flip.as_ref(),
                 &cl.dropcap_style,
@@ -1559,6 +1575,15 @@ fn fits_hwpunit(values: &[i32]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_fill_shape_decodes_as_fill_none() {
+        use hwpforge_core::control::Fill;
+        let style = decode_shape_style_full(&None, &None, true, None, None, "None").unwrap();
+        assert_eq!(style.fill, Some(Fill::None));
+        // 선(채울 내부가 없음)은 종전대로 스타일 없음.
+        assert!(decode_shape_style_full(&None, &None, false, None, None, "None").is_none());
+    }
     use crate::schema::section::{
         HxConnectLine, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment, HxEllipse,
         HxFillBrush, HxFlip, HxLine, HxLineShape, HxPoint, HxRotationInfo, HxTablePos, HxTableSz,
@@ -1571,7 +1596,7 @@ mod tests {
         fill_brush: &Option<HxFillBrush>,
         dropcap_style: &str,
     ) -> Option<ShapeStyle> {
-        decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
+        decode_shape_style_full(line_shape, fill_brush, false, None, None, dropcap_style)
     }
 
     use hwpforge_foundation::{
@@ -1923,7 +1948,7 @@ mod tests {
     #[test]
     fn decode_shape_style_full_rotation_extracted() {
         let ri = HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 };
-        let style = decode_shape_style_full(&None, &None, Some(&ri), None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &None, false, Some(&ri), None, "None").unwrap();
         let rot = style.rotation.unwrap();
         assert!((rot - 45.0f32).abs() < 0.01, "45 degrees expected, got {rot}");
     }
@@ -1931,35 +1956,35 @@ mod tests {
     #[test]
     fn decode_shape_style_full_rotation_zero_ignored() {
         let ri = HxRotationInfo { angle: 0, center_x: 0, center_y: 0, rotate_image: 1 };
-        let result = decode_shape_style_full(&None, &None, Some(&ri), None, "None");
+        let result = decode_shape_style_full(&None, &None, false, Some(&ri), None, "None");
         assert!(result.is_none(), "zero rotation + no other fields should be None");
     }
 
     #[test]
     fn decode_shape_style_full_flip_horizontal() {
         let fi = HxFlip { horizontal: 1, vertical: 0 };
-        let style = decode_shape_style_full(&None, &None, None, Some(&fi), "None").unwrap();
+        let style = decode_shape_style_full(&None, &None, false, None, Some(&fi), "None").unwrap();
         assert_eq!(style.flip, Some(Flip::Horizontal));
     }
 
     #[test]
     fn decode_shape_style_full_flip_vertical() {
         let fi = HxFlip { horizontal: 0, vertical: 1 };
-        let style = decode_shape_style_full(&None, &None, None, Some(&fi), "None").unwrap();
+        let style = decode_shape_style_full(&None, &None, false, None, Some(&fi), "None").unwrap();
         assert_eq!(style.flip, Some(Flip::Vertical));
     }
 
     #[test]
     fn decode_shape_style_full_flip_both() {
         let fi = HxFlip { horizontal: 1, vertical: 1 };
-        let style = decode_shape_style_full(&None, &None, None, Some(&fi), "None").unwrap();
+        let style = decode_shape_style_full(&None, &None, false, None, Some(&fi), "None").unwrap();
         assert_eq!(style.flip, Some(Flip::Both));
     }
 
     #[test]
     fn decode_shape_style_full_flip_none_ignored() {
         let fi = HxFlip { horizontal: 0, vertical: 0 };
-        let result = decode_shape_style_full(&None, &None, None, Some(&fi), "None");
+        let result = decode_shape_style_full(&None, &None, false, None, Some(&fi), "None");
         assert!(result.is_none(), "zero flip should yield None");
     }
 
@@ -1967,7 +1992,8 @@ mod tests {
     fn decode_shape_style_full_combined_rotation_and_flip() {
         let ri = HxRotationInfo { angle: 90, center_x: 0, center_y: 0, rotate_image: 1 };
         let fi = HxFlip { horizontal: 1, vertical: 0 };
-        let style = decode_shape_style_full(&None, &None, Some(&ri), Some(&fi), "None").unwrap();
+        let style =
+            decode_shape_style_full(&None, &None, false, Some(&ri), Some(&fi), "None").unwrap();
         let rot = style.rotation.unwrap();
         assert!((rot - 90.0f32).abs() < 0.01);
         assert_eq!(style.flip, Some(Flip::Horizontal));
@@ -1987,7 +2013,7 @@ mod tests {
             gradation: None,
             img_brush: None,
         });
-        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &fb, false, None, None, "None").unwrap();
         match style.fill.unwrap() {
             Fill::Pattern { pattern_type, fg_color, bg_color } => {
                 assert_eq!(pattern_type, PatternType::Horizontal);
@@ -2011,7 +2037,7 @@ mod tests {
             gradation: None,
             img_brush: None,
         });
-        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &fb, false, None, None, "None").unwrap();
         match style.fill.unwrap() {
             Fill::Pattern { pattern_type, .. } => {
                 assert_eq!(pattern_type, PatternType::Slash);
@@ -2033,7 +2059,7 @@ mod tests {
             gradation: None,
             img_brush: None,
         });
-        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &fb, false, None, None, "None").unwrap();
         match style.fill.unwrap() {
             Fill::Pattern { pattern_type, .. } => {
                 assert_eq!(pattern_type, PatternType::BackSlash);
@@ -2055,7 +2081,7 @@ mod tests {
             gradation: None,
             img_brush: None,
         });
-        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &fb, false, None, None, "None").unwrap();
         assert!(style.fill.is_none(), "no hatchStyle → no Fill::Pattern");
         assert!(style.fill_color.is_some(), "fill_color should be set");
     }
@@ -2086,7 +2112,7 @@ mod tests {
             }),
             img_brush: None,
         });
-        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        let style = decode_shape_style_full(&None, &fb, false, None, None, "None").unwrap();
         assert!(matches!(style.fill, Some(Fill::Gradient { .. })));
     }
 

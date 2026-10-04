@@ -508,3 +508,33 @@ fn a_malformed_master_page_fails_the_decode_naming_the_part() {
         other => panic!("{other:?}"),
     }
 }
+
+// 이것을 실패시키는 것: 인코더의 `Fill::None` 갈래를 지우기 — 바탕쪽 사각형이
+// 흰 채우기로 써지고, 재디코드 값이 달라져 set-cell admission 이 거부한다.
+#[test]
+fn a_master_page_shape_without_fill_stays_without_fill() {
+    use hwpforge_core::control::{Control, Fill, ShapeStyle};
+    let mut rect = Control::rect(HwpUnit::new(5000).unwrap(), HwpUnit::new(3000).unwrap()).unwrap();
+    if let Control::Rect { style, .. } = &mut rect {
+        *style = Some(ShapeStyle { fill: Some(Fill::None), ..Default::default() });
+    }
+    let mut section = section_with_master("x");
+    section.master_pages.as_mut().unwrap()[0].paragraphs = vec![Paragraph::with_runs(
+        vec![Run::control(rect, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )];
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &styles(), &ImageStore::new())
+        .expect("encode");
+    let xml = part(&bytes, "Contents/masterpage0.xml");
+    assert!(xml.contains("<hp:rect") && !xml.contains("<hc:fillBrush"), "{xml}");
+
+    let edited = HwpxCellEditor::set_cells(&bytes, &cell_spec()).expect("admission passes");
+    let again = decode(&edited.bytes);
+    let RunContent::Control(c) = &masters(&again, 0)[0].paragraphs[0].runs[0].content else {
+        panic!("rect run")
+    };
+    let Control::Rect { style, .. } = c.as_ref() else { panic!("{c:?}") };
+    assert_eq!(style.as_ref().and_then(|s| s.fill.clone()), Some(Fill::None));
+}
