@@ -20,9 +20,9 @@ pub struct PatchData {
     pub sections: usize,
     /// Size of the output file in bytes.
     pub size_bytes: u64,
-    /// Decode warnings for the base package (`ops::PatchOutput::warnings`)
-    /// — a preserving patch never re-encodes, so there is no encode half.
-    /// Omitted when empty.
+    /// Decode warnings for the base package, then one
+    /// `XML_FORBIDDEN_CHARS_REMOVED` per edited text slot that had characters
+    /// removed (`ops::PatchOutput::warnings`). Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
