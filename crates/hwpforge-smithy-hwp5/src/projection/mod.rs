@@ -2770,7 +2770,7 @@ fn project_control_run(
         }
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
-        Hwp5Control::Group(group) => project_group_run(group, projection_images),
+        Hwp5Control::Group(group) => project_group_run(group, projection_images, (0, 0)),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
@@ -3145,13 +3145,27 @@ fn project_textbox_run(
 /// `Unknown`, or an image — not a valid group child per `validate`) are
 /// dropped so the resulting group still validates. Returns `None` only when
 /// the group ends up with no representable children.
+///
+/// # Coordinates
+///
+/// HWP5 gives every shape under a group, nested groups included, an offset in
+/// the **outermost** group's space. Core places a group child relative to its
+/// immediate parent group (the contract the HWPX decoder and encoder share),
+/// so `origin` — the outermost-space corner of the group whose children are
+/// being projected; `(0, 0)` for a top-level group's children — is subtracted
+/// from each child's offset, and a nested group's children are projected
+/// against that nested group's own outermost-space offset.
 fn project_group_run(
     group: &Hwp5GroupControl,
     projection_images: &mut ProjectionImageState<'_>,
+    origin: (i32, i32),
 ) -> Option<Run> {
     let mut children = Vec::with_capacity(group.children.len());
     for child in &group.children {
-        if let Some(control) = project_group_child(child, projection_images) {
+        if let Some(mut control) = project_group_child(child, projection_images) {
+            if origin != (0, 0) {
+                rebase_group_child(&mut control, origin);
+            }
             children.push(control);
         }
     }
@@ -3246,7 +3260,12 @@ fn project_group_child(
         // `Run` carrying `Control::Group`; extract it the same way as every
         // leaf shape below. Recursion bottoms out when all descendants are
         // leaf shapes; depth is already bounded by the decoder's cap.
-        Hwp5Control::Group(nested) => project_group_run(nested, projection_images),
+        // Its children sit in the outermost space, as the nested group's own
+        // offset does: they are rebased on that offset (see
+        // `project_group_run`).
+        Hwp5Control::Group(nested) => {
+            project_group_run(nested, projection_images, (nested.geometry.x, nested.geometry.y))
+        }
         // Image / OLE / anything else is not a valid group child; drop it.
         _ => None,
     }?;
@@ -3265,6 +3284,27 @@ fn project_group_child(
         }
         _ => None,
     }
+}
+
+/// Moves a projected group child from the outermost group's space into its
+/// parent group's space by subtracting `origin` from its offset.
+fn rebase_group_child(control: &mut Control, origin: (i32, i32)) {
+    let placement = match control {
+        Control::Line { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::TextBox { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. }
+        | Control::TextArt { placement, .. }
+        | Control::Group { placement, .. } => placement,
+        _ => return,
+    };
+    let (x, y) =
+        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+    *placement = offset_placement(x - origin.0, y - origin.1);
 }
 
 /// [`project_group_child`] 의 offset-휴리스틱 재지정 대상 자식의 기하
@@ -3798,6 +3838,62 @@ mod tests {
                  인라인 방출 보존, non-zero 는 floating)"
             );
         }
+    }
+
+    /// HWP5 gives a nested group's shapes offsets in the outermost group's
+    /// space; Core places them relative to their own group, which is what the
+    /// HWPX encoder adds back up. Inner rect at outermost (2500, 3400) inside
+    /// a nested group at (2000, 3000) → Core offset (500, 400), so the
+    /// written world position 2000 + 500 = 2500 equals the source.
+    ///
+    /// 이것을 실패시키는 것: `rebase_group_child` 호출을 지우는 것(안쪽 사각형이
+    /// (2500, 3400) 으로 남아 세계 좌표가 중첩 묶음 offset 만큼 밀린다), 또는
+    /// 중첩 묶음 자식을 `(0, 0)` 원점으로 투영하는 것.
+    #[test]
+    fn nested_group_children_are_rebased_on_their_group() {
+        use crate::decoder::section::{Hwp5GroupControl, Hwp5RectControl};
+        use crate::schema::section::Hwp5ShapeComponentGeometry;
+        let geo = |x, y, width, height| Hwp5ShapeComponentGeometry { x, y, width, height };
+        let rect = |x, y| Hwp5GroupChild {
+            control: Hwp5Control::Rect(Hwp5RectControl {
+                ctrl_id: 0,
+                geometry: geo(x, y, 500, 600),
+                ctrl_properties: 0,
+            }),
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+        };
+        let nested = Hwp5GroupChild {
+            control: Hwp5Control::Group(Hwp5GroupControl {
+                ctrl_id: 0,
+                geometry: geo(2000, 3000, 1000, 1000),
+                children: vec![rect(2500, 3400)],
+                instance_id: 0,
+            }),
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+        };
+        let top = Hwp5GroupControl {
+            ctrl_id: 0,
+            geometry: geo(0, 0, 3000, 4000),
+            children: vec![rect(100, 50), nested],
+            instance_id: 0,
+        };
+        let mut state =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        let run = project_group_run(&top, &mut state, (0, 0)).expect("group projects");
+        let RunContent::Control(group) = run.content else { panic!("not a control") };
+        let Control::Group { children, .. } = *group else { panic!("not a group") };
+        let offset = |c: &Control| match c {
+            Control::Rect { placement, .. } | Control::Group { placement, .. } => placement
+                .as_ref()
+                .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32())),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(offset(&children[0]), (100, 50));
+        assert_eq!(offset(&children[1]), (2000, 3000));
+        let Control::Group { children: inner, .. } = &children[1] else { panic!() };
+        assert_eq!(offset(&inner[0]), (500, 400));
     }
 
     #[test]
