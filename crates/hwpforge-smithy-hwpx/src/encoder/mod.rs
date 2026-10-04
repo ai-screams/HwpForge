@@ -528,9 +528,12 @@ pub enum EncodeWarning {
         /// 지운 문자 수.
         count: usize,
     },
-    /// Core 에 있던 내용을 HWPX 로 정확히 쓸 수 없다 — 도형의 회전·반사를
-    /// HWPX 가 저장하는 형태(정수 도 각도, 소수 6자리 행렬 계수)로 쓰면 정확한
-    /// 위치에서 2 HWPUNIT 넘게 벗어나는 경우(`kind` = `shape_emission`).
+    /// Core 에 있던 내용을 HWPX 로 그대로 쓸 수 없다 — 산출물에서 빠지거나
+    /// 정확한 기하를 잃는다. 이 변형 하나가 두 경우를 모두 담고 `kind` 로
+    /// 가른다: 도형의 회전·반사를 HWPX 가 저장하는 형태(정수 도 각도, 소수
+    /// 6자리 행렬 계수)로 쓰면 정확한 위치에서 2 HWPUNIT 넘게 벗어나는 경우는
+    /// `shape_emission`, 인코더가 쓸 형태가 없어 뺀 컨트롤·run 내용은 그
+    /// 종류 이름.
     ///
     /// 디코드 쪽 [`crate::DecodeWarning::ContentLost`] 와 같은 이름·코드다.
     /// 산출물이 입력의 내용을 잃었으므로 의미 손상이다
@@ -540,7 +543,7 @@ pub enum EncodeWarning {
         part: String,
         /// part 안에서 손실이 난 자리의 중첩 경로.
         path: crate::decoder::ParagraphPath,
-        /// 무엇이 빠졌는지 (`shape_emission` …).
+        /// 무엇을 잃었는지 — `shape_emission`, 또는 빠진 내용의 종류 이름.
         kind: String,
         /// 사람이 읽는 사유.
         reason: String,
