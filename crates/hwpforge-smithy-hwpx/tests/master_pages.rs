@@ -509,6 +509,33 @@ fn a_malformed_master_page_fails_the_decode_naming_the_part() {
     }
 }
 
+// 이것을 실패시키는 것: subList 미보존 속성의 보고를 지우기, 또는 기본값까지
+// 보고하기(한컴 fixture 가 경고를 내게 됨 — 위 디코드 테스트가 잡음).
+#[test]
+fn master_page_sublist_attributes_core_cannot_hold_are_reported() {
+    let input = with_master(
+        &package("x", 1),
+        0,
+        BOTH,
+        &p(r#"<hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run>"#),
+    );
+    let xml = part(&input, "Contents/masterpage0.xml")
+        .replacen(r#"textDirection="HORIZONTAL""#, r#"textDirection="VERTICAL""#, 1)
+        .replacen(r#"hasNumRef="0""#, r#"hasNumRef="1""#, 1);
+    let doc = decode(&with_part(&input, "Contents/masterpage0.xml", &xml));
+    let lost: Vec<_> = doc
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            DecodeWarning::ContentLost { kind, reason, .. } => Some((kind.clone(), reason.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert_eq!(lost[0].0, "master_page_sublist");
+    assert!(lost[0].1.contains(r#"textDirection="VERTICAL""#) && lost[0].1.contains("hasNumRef=1"));
+}
+
 // 이것을 실패시키는 것: 인코더의 `Fill::None` 갈래를 지우기 — 바탕쪽 사각형이
 // 흰 채우기로 써지고, 재디코드 값이 달라져 set-cell admission 이 거부한다.
 #[test]

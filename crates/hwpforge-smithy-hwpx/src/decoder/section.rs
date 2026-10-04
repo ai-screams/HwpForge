@@ -2275,6 +2275,38 @@ pub(crate) fn parse_master_page(
 
     let mut master = match &hx.sub_list {
         Some(sub_list) => {
+            // Core 가 담지 않는 subList 속성이 기본값이 아니면 재인코드가 기본값으로
+            // 바꾼다 — 손실로 보고한다.
+            // 이것을 실패시키는 것: 이 보고를 지우기
+            // (`master_page_sublist_attributes_core_cannot_hold_are_reported`).
+            let unsupported: Vec<String> = [
+                ("textDirection", sub_list.text_direction.as_str(), &["", "HORIZONTAL"][..]),
+                ("lineWrap", sub_list.line_wrap.as_str(), &["", "BREAK"][..]),
+            ]
+            .into_iter()
+            .filter(|(_, v, ok)| !ok.contains(v))
+            .map(|(k, v, _)| format!("{k}={v:?}"))
+            .chain(
+                [
+                    ("linkListIDRef", sub_list.link_list_id_ref),
+                    ("linkListNextIDRef", sub_list.link_list_next_id_ref),
+                    ("hasTextRef", sub_list.has_text_ref),
+                    ("hasNumRef", sub_list.has_num_ref),
+                ]
+                .into_iter()
+                .filter(|(_, v)| *v != 0)
+                .map(|(k, v)| format!("{k}={v}")),
+            )
+            .collect();
+            if !unsupported.is_empty() {
+                ctx.content_lost(
+                    "master_page_sublist",
+                    format!(
+                        "subList {} is not carried; it would be written as the default",
+                        unsupported.join(", ")
+                    ),
+                );
+            }
             let paragraphs = decode_sublist_paragraphs(sub_list, 0, &mut ctx)?;
             let mut master = MasterPage::new(apply_page_type, paragraphs);
             master.vert_align = parse_vert_align(&sub_list.vert_align, &mut ctx.warnings);
