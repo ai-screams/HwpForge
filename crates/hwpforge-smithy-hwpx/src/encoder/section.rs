@@ -1573,6 +1573,38 @@ fn build_runs(
         });
     }
 
+    // Every run was left out (a control with no HWPX form, a master page
+    // chart …): keep one empty run in the first run's character shape, so
+    // the paragraph is not written without a run (XSD requires one).
+    // 이것을 실패시키는 것: 이 블록을 지우기
+    // (`master_page_chart_only_paragraph_keeps_an_empty_run`).
+    if result.is_empty() {
+        if let Some(first) = runs.first() {
+            result.push(HxRun {
+                char_pr_id_ref: first.char_shape_id.get() as u32,
+                sec_pr: None,
+                texts: Vec::new(),
+                tables: Vec::new(),
+                pictures: Vec::new(),
+                ctrls: Vec::new(),
+                rects: Vec::new(),
+                lines: Vec::new(),
+                ellipses: Vec::new(),
+                polygons: Vec::new(),
+                equations: Vec::new(),
+                switches: Vec::new(),
+                title_mark: None,
+                dutmals: Vec::new(),
+                composes: Vec::new(),
+                curves: Vec::new(),
+                connect_lines: Vec::new(),
+                containers: Vec::new(),
+                textarts: Vec::new(),
+                child_order: Vec::new(),
+            });
+        }
+    }
+
     // If we need to inject secPr but there were no non-control runs,
     // create a synthetic empty run to carry it.
     if inject_sec_pr && !sec_pr_injected {
@@ -4435,6 +4467,21 @@ mod tests {
             kinds,
             [("Contents/masterpage0.xml", "chart"), ("Contents/masterpage0.xml", "embedded_chart")]
         );
+    }
+
+    #[test]
+    fn master_page_chart_only_paragraph_keeps_an_empty_run() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let para = Paragraph::with_runs(
+            vec![Run::control(sample_chart(), CharShapeIndex::new(4))],
+            ParaShapeIndex::new(0),
+        );
+        let (_, xml, warnings) =
+            master_part(&master_section(MasterPage::new(ApplyPageType::Both, vec![para])));
+        assert!(xml.contains(r#"<hp:run charPrIDRef="4""#), "{xml}");
+        assert!(!xml.contains("chartIDRef"), "{xml}");
+        assert!(warnings.iter().any(|w| w.code() == "CONTENT_LOST"), "{warnings:?}");
     }
 
     #[test]
