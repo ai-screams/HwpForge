@@ -202,6 +202,35 @@ impl DecodeWarning {
         }
     }
 
+    /// 자리([`Self::location`])를 뺀 사람용 문구.
+    ///
+    /// 자리를 따로 싣는 하류 표(CLI `to-pdf` 의 `location` 열 등)가 문구에
+    /// 자리를 두 번 쓰지 않도록 쓴다. 자리까지 한 줄로 필요하면 `Display`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::{DecodeWarning, ParagraphPath};
+    ///
+    /// let w = DecodeWarning::ContentLost {
+    ///     part: "Contents/section0.xml".into(),
+    ///     path: ParagraphPath::default(),
+    ///     kind: "pic".into(),
+    ///     reason: "unsupported group child".into(),
+    /// };
+    /// assert_eq!(w.message(), "pic lost: unsupported group child");
+    /// ```
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::UnknownEnumValue { raw, fallback, .. } => {
+                format!("\"{raw}\" unknown — fell back to {fallback}")
+            }
+            Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
+            Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
+        }
+    }
+
     /// 입력 내용이 디코드에서 빠졌거나 근사됐음을 뜻하는 경고인지.
     ///
     /// `true` 인 경고가 있는 입력을 재인코드하면 손실이 굳으므로, 입력을
@@ -1090,6 +1119,16 @@ mod warning_accessor_tests {
             w.to_string(),
             "pic lost at Contents/section1.xml:section[1].group[2]: unsupported group child"
         );
+    }
+
+    /// 이것을 실패시키는 것: `message` 가 자리를 다시 넣는 것 (자리 없는 문구가
+    /// 깨진다).
+    #[test]
+    fn message_leaves_the_location_out() {
+        for w in warning_samples::decode() {
+            let loc = w.location().unwrap();
+            assert!(!w.message().contains(&loc), "{w:?}: {}", w.message());
+        }
     }
 
     #[test]

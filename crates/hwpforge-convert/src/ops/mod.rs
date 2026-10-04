@@ -712,9 +712,10 @@ fn decode_warning_parts(warning: &DecodeWarning) -> (&'static str, String, Optio
         // The CLI has always printed this one under `OTHER` with its Debug
         // text; kept as is (public output contract).
         DecodeWarning::LayoutCacheDropped { .. } => (OTHER, format!("{warning:?}"), None),
-        // Anything newer reports the decoder's own code, wording and place,
-        // so it never falls back to `OTHER`.
-        other => (other.code(), other.to_string(), other.location()),
+        // Anything newer reports the decoder's own code, wording and place
+        // (the wording without the place, which travels in `location`), so it
+        // never falls back to `OTHER`.
+        other => (other.code(), other.message(), other.location()),
     }
 }
 

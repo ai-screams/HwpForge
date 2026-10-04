@@ -378,6 +378,28 @@ mod tests {
         assert_eq!(dto.location, None);
     }
 
+    /// 새 디코드 변형(`ContentLost`)은 폴백(`OTHER`·Debug)이 아니라 자기 코드,
+    /// 자리 없는 문구, `part:경로` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `decode_warning_parts` 마지막 갈래를
+    /// `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn decode_stage_dto_reports_content_lost_by_its_own_code() {
+        let warning = ConvertOpsWarning::Decode(DecodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::GroupChild(2)]),
+            kind: "pic".into(),
+            reason: "unsupported group child".into(),
+        });
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "decode");
+        assert_eq!(dto.code, "CONTENT_LOST");
+        assert_eq!(dto.message, "pic lost: unsupported group child");
+        assert_eq!(dto.location.as_deref(), Some("Contents/section0.xml:section[0].group[2]"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
     /// W5(`6ef353b`)의 `render_warning_dto` match(같은 파일 133–249 행)가
     /// 내던 `(code, message, location)` 세 열을 **리터럴로** 고정한다.
     ///

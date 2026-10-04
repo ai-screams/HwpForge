@@ -542,7 +542,7 @@ fn decode_warning_samples_keep_old_output_and_never_fall_back() {
             other => {
                 assert_eq!(parts.code, other.code(), "{other:?}");
                 assert_ne!(parts.code, "OTHER", "{other:?}");
-                assert_eq!(parts.message, other.to_string());
+                assert_eq!(parts.message, other.message());
                 assert_eq!(parts.location, other.location());
             }
         }
