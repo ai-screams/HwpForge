@@ -783,6 +783,11 @@ const SHAPE_KINDS: [&str; 9] =
 /// copies `a`'s geometry fields into `b` — so only a real difference is left
 /// for the equality check. Everything else about the shapes must still match.
 fn align_equivalent_shapes(a: &serde_json::Value, b: &mut serde_json::Value) {
+    align_values(a, b, false);
+}
+
+/// `group_child`: `a`/`b` are direct elements of a group's `children`.
+fn align_values(a: &serde_json::Value, b: &mut serde_json::Value, group_child: bool) {
     use serde_json::Value;
     let one_shape = |v: &Value| match v {
         Value::Object(m) if m.len() == 1 => {
@@ -790,22 +795,43 @@ fn align_equivalent_shapes(a: &serde_json::Value, b: &mut serde_json::Value) {
         }
         _ => None,
     };
-    if let (Some(ka), Some(kb)) = (one_shape(a), one_shape(b)) {
-        if ka == kb {
-            align_shape(a, b);
+    let shape = match (one_shape(a), one_shape(b)) {
+        (Some(ka), Some(kb)) if ka == kb => {
+            align_shape(a, b, group_child);
+            Some(ka)
         }
-    }
+        _ => None,
+    };
     match (a, b) {
         (Value::Object(ma), Value::Object(mb)) => {
             for (k, va) in ma {
-                if let Some(vb) = mb.get_mut(k) {
-                    align_equivalent_shapes(va, vb);
+                let Some(vb) = mb.get_mut(k) else { continue };
+                // Inside `{"Group": {...}}`, the elements of `children` are
+                // group children; everything else is not.
+                if shape.as_deref() == Some("Group") {
+                    if let (Value::Object(ga), Value::Object(gb)) = (va, vb) {
+                        for (gk, gva) in ga {
+                            let Some(gvb) = gb.get_mut(gk) else { continue };
+                            match (gk.as_str(), gva, gvb) {
+                                ("children", Value::Array(ca), Value::Array(cb))
+                                    if ca.len() == cb.len() =>
+                                {
+                                    for (ea, eb) in ca.iter().zip(cb.iter_mut()) {
+                                        align_values(ea, eb, true);
+                                    }
+                                }
+                                (_, gva, gvb) => align_values(gva, gvb, false),
+                            }
+                        }
+                    }
+                    continue;
                 }
+                align_values(va, vb, false);
             }
         }
         (Value::Array(va), Value::Array(vb)) if va.len() == vb.len() => {
             for (ea, eb) in va.iter().zip(vb.iter_mut()) {
-                align_equivalent_shapes(ea, eb);
+                align_values(ea, eb, false);
             }
         }
         _ => {}
@@ -814,7 +840,7 @@ fn align_equivalent_shapes(a: &serde_json::Value, b: &mut serde_json::Value) {
 
 /// Replaces `b` (one serialized shape control) with `b` carrying `a`'s
 /// geometry when the two are the same shape within tolerance.
-fn align_shape(a: &serde_json::Value, b: &mut serde_json::Value) {
+fn align_shape(a: &serde_json::Value, b: &mut serde_json::Value, group_child: bool) {
     let (Ok(ca), Ok(cb)) = (
         serde_json::from_value::<Control>(a.clone()),
         serde_json::from_value::<Control>(b.clone()),
@@ -824,7 +850,7 @@ fn align_shape(a: &serde_json::Value, b: &mut serde_json::Value) {
     if !same_place(&ca, &cb) {
         return;
     }
-    let aligned = with_geometry_of(cb, &ca);
+    let aligned = with_geometry_of(cb, &ca, group_child);
     if let Ok(v) = serde_json::to_value(&aligned) {
         *b = v;
     }
@@ -892,8 +918,9 @@ fn defining_points(c: &Control) -> Vec<hwpforge_core::control::ShapePoint> {
 }
 
 /// `b` with `a`'s size, offset, rotation, flip and defining points (`a` and
-/// `b` are the same kind).
-fn with_geometry_of(mut b: Control, a: &Control) -> Control {
+/// `b` are the same kind). `group_child`: both are direct children of a
+/// group, where a missing placement means offset zero.
+fn with_geometry_of(mut b: Control, a: &Control, group_child: bool) -> Control {
     use hwpforge_core::control::ShapeStyle;
     type Geo<'c> = (
         Option<(&'c mut hwpforge_foundation::HwpUnit, &'c mut hwpforge_foundation::HwpUnit)>,
@@ -934,10 +961,14 @@ fn with_geometry_of(mut b: Control, a: &Control) -> Control {
                     pb.vert_offset = pa.vert_offset;
                 }
                 // A group child at its parent's corner has no placement; one
-                // a unit or two away has the group-child form. Only that form
-                // is matched, so an inline shape never equals a floating one.
-                (None, Some(q)) if is_group_child_form(q) => *pb = None,
-                (Some(p), None) if is_group_child_form(p) => *pb = Some(p.clone()),
+                // a unit or two away has the group-child form. Only that, and
+                // only for a group's own children, may stand for a zero
+                // offset: outside a group `None` is an inline shape, which
+                // never equals a floating one.
+                (None, Some(q)) if group_child && is_group_child_form(q) => *pb = None,
+                (Some(p), None) if group_child && is_group_child_form(p) => {
+                    *pb = Some(p.clone());
+                }
                 _ => {}
             }
         }
@@ -1290,6 +1321,30 @@ mod tests {
         assert!(admission_compare(&d0, &recoloured).is_err());
     }
 
+    /// Inside a group, a child at its parent's corner (no placement) and the
+    /// same child a unit away (the group-child placement form) are the same
+    /// shape.
+    ///
+    /// 이것을 실패시키는 것: 묶음 `children` 의 원소를 묶음 자식으로 표시하지 않는 것.
+    #[test]
+    fn admission_matches_a_group_child_at_the_corner() {
+        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let (mut a, _) = no_op_round_trip(&bytes);
+        let (_, mut b) = no_op_round_trip(&bytes);
+        let place = |doc: &mut HwpxDocument, x: Option<i32>| {
+            let child = first_group_children_mut(doc).iter_mut().find(|c| c.is_rect()).unwrap();
+            let Control::Rect { placement, .. } = child else { unreachable!() };
+            *placement = x.map(|x| hwpforge_core::placement::ObjectPlacement {
+                horz_offset: hwpforge_foundation::HwpUnit::new(x).unwrap(),
+                vert_offset: hwpforge_foundation::HwpUnit::new(0).unwrap(),
+                ..placement.clone().expect("a floating rect child")
+            });
+        };
+        place(&mut a, None);
+        place(&mut b, Some(1));
+        admission_compare(&a, &b).unwrap();
+    }
+
     fn doc_with_rect(placement: Option<hwpforge_core::placement::ObjectPlacement>) -> HwpxDocument {
         let mut doc = doc_with_text("x");
         let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
@@ -1307,7 +1362,8 @@ mod tests {
     /// shape: only the group-child placement form may stand for the origin.
     ///
     /// 이것을 실패시키는 것: 배치 정렬에서 묶음 자식 형태 검사
-    /// (`is_group_child_form`)를 지우는 것.
+    /// (`is_group_child_form`)를 지우는 것, 또는 묶음 자식 여부(`group_child`)
+    /// 검사를 지우는 것.
     #[test]
     fn admission_keeps_inline_and_floating_apart() {
         use hwpforge_core::placement::ObjectPlacement;
@@ -1317,6 +1373,22 @@ mod tests {
             ..ObjectPlacement::legacy_inline_defaults()
         };
         assert!(admission_compare(&doc_with_rect(None), &doc_with_rect(Some(floating))).is_err());
+
+        // Even in the form a group child's placement takes ("in front of
+        // text", paper-relative), a top-level shape stays floating.
+        use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+        let in_front = ObjectPlacement {
+            text_wrap: ObjectTextWrap::InFrontOfText,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Paper,
+            horz_rel_to: ObjectRelativeTo::Paper,
+            vert_offset: hwpforge_foundation::HwpUnit::new(0).unwrap(),
+            horz_offset: hwpforge_foundation::HwpUnit::new(1).unwrap(),
+        };
+        assert!(admission_compare(&doc_with_rect(None), &doc_with_rect(Some(in_front))).is_err());
     }
 
     #[test]
