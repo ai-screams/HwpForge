@@ -496,7 +496,7 @@ impl HwpxStamper {
         let e2 = encode_hwpx(&d2)?;
         let d3 = HwpxDecoder::decode(&e2)
             .map_err(|e| StamperError::Codec(format!("fixed-point decode: {e}")))?;
-        admission_compare(&d2, &d3).map_err(|e| StamperError::DeltaMismatch {
+        delta_compare(&d2, &d3).map_err(|e| StamperError::DeltaMismatch {
             stage: "fixed_point".to_string(),
             detail: e.to_string(),
         })?;
@@ -587,7 +587,7 @@ fn verify_and_reverse_cells(
     let reference_bytes = encode_hwpx(text_only)?;
     let reference = HwpxDecoder::decode(&reference_bytes)
         .map_err(|e| StamperError::Codec(format!("reference decode: {e}")))?;
-    admission_compare(&reverted, &reference).map_err(|e| StamperError::DeltaMismatch {
+    delta_compare(&reverted, &reference).map_err(|e| StamperError::DeltaMismatch {
         stage: "reverse_delta".to_string(),
         detail: e.to_string(),
     })
@@ -736,7 +736,25 @@ pub(crate) fn reject_input_content_loss(
     }
 }
 
+/// The no-op round-trip check that admits an input: shapes may differ by
+/// what HWPX storage does to their exact Core values (within 2 HWPUNIT, see
+/// [`align_equivalent_shapes`]).
 pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
+    compare_documents(a, b, true)
+}
+
+/// The edit-delta check: both sides have been through the same number of
+/// round trips, so shapes must match exactly — an edit that moved an
+/// unrelated shape by one unit is caught.
+pub(crate) fn delta_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
+    compare_documents(a, b, false)
+}
+
+fn compare_documents(
+    a: &HwpxDocument,
+    b: &HwpxDocument,
+    shape_tolerance: bool,
+) -> Result<(), StamperError> {
     // 캐시 정규화 비교: 줄 조판 캐시(layout_cache)는 Hancom 이 저장한 렌더
     // 캐시라 원본(보유)과 우리 재인코드 산출물(미보유)이 당연히 다르다.
     // 문서 의미 동등성 판정에서 제외하기 위해 양쪽 사본에서 제거 후 비교한다.
@@ -750,7 +768,9 @@ pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<()
         // within the exactness tolerance of where it was is the same shape.
         let va = serde_json::to_value(&doc_a).unwrap_or(serde_json::Value::Null);
         let mut vb = serde_json::to_value(&doc_b).unwrap_or(serde_json::Value::Null);
-        align_equivalent_shapes(&va, &mut vb);
+        if shape_tolerance {
+            align_equivalent_shapes(&va, &mut vb);
+        }
         if va != vb {
             return Err(StamperError::NotRoundTripSafe {
                 component: "document".to_string(),
@@ -783,11 +803,15 @@ const SHAPE_KINDS: [&str; 9] =
 /// copies `a`'s geometry fields into `b` — so only a real difference is left
 /// for the equality check. Everything else about the shapes must still match.
 fn align_equivalent_shapes(a: &serde_json::Value, b: &mut serde_json::Value) {
-    align_values(a, b, false);
+    align_values(a, b, None);
 }
 
-/// `group_child`: `a`/`b` are direct elements of a group's `children`.
-fn align_values(a: &serde_json::Value, b: &mut serde_json::Value, group_child: bool) {
+/// `group`: when `a`/`b` are direct elements of a group's `children`, the
+/// top-left corner of that group on each side, in the outermost frame both
+/// documents share (captured before the group itself was aligned), so
+/// shapes are compared where they actually land — a group 2 units off and
+/// a child 2 units off within it are 4 units off, not 2 twice.
+fn align_values(a: &serde_json::Value, b: &mut serde_json::Value, group: Option<Origins>) {
     use serde_json::Value;
     let one_shape = |v: &Value| match v {
         Value::Object(m) if m.len() == 1 => {
@@ -795,9 +819,22 @@ fn align_values(a: &serde_json::Value, b: &mut serde_json::Value, group_child: b
         }
         _ => None,
     };
+    let mut child_origins = None;
     let shape = match (one_shape(a), one_shape(b)) {
         (Some(ka), Some(kb)) if ka == kb => {
-            align_shape(a, b, group_child);
+            let base = group.unwrap_or(((0.0, 0.0), (0.0, 0.0)));
+            if let (Ok(ca), Ok(cb)) = (
+                serde_json::from_value::<Control>(a.clone()),
+                serde_json::from_value::<Control>(b.clone()),
+            ) {
+                let (xa, ya) = shape_offset(&ca);
+                let (xb, yb) = shape_offset(&cb);
+                child_origins = Some((
+                    (base.0 .0 + f64::from(xa), base.0 .1 + f64::from(ya)),
+                    (base.1 .0 + f64::from(xb), base.1 .1 + f64::from(yb)),
+                ));
+                align_shape(&ca, cb, b, base, group.is_some());
+            }
             Some(ka)
         }
         _ => None,
@@ -817,40 +854,44 @@ fn align_values(a: &serde_json::Value, b: &mut serde_json::Value, group_child: b
                                     if ca.len() == cb.len() =>
                                 {
                                     for (ea, eb) in ca.iter().zip(cb.iter_mut()) {
-                                        align_values(ea, eb, true);
+                                        align_values(ea, eb, child_origins);
                                     }
                                 }
-                                (_, gva, gvb) => align_values(gva, gvb, false),
+                                (_, gva, gvb) => align_values(gva, gvb, None),
                             }
                         }
                     }
                     continue;
                 }
-                align_values(va, vb, false);
+                align_values(va, vb, None);
             }
         }
         (Value::Array(va), Value::Array(vb)) if va.len() == vb.len() => {
             for (ea, eb) in va.iter().zip(vb.iter_mut()) {
-                align_values(ea, eb, false);
+                align_values(ea, eb, None);
             }
         }
         _ => {}
     }
 }
 
-/// Replaces `b` (one serialized shape control) with `b` carrying `a`'s
-/// geometry when the two are the same shape within tolerance.
-fn align_shape(a: &serde_json::Value, b: &mut serde_json::Value, group_child: bool) {
-    let (Ok(ca), Ok(cb)) = (
-        serde_json::from_value::<Control>(a.clone()),
-        serde_json::from_value::<Control>(b.clone()),
-    ) else {
-        return;
-    };
-    if !same_place(&ca, &cb) {
+/// The parent group's corner on side `a` and on side `b`.
+type Origins = ((f64, f64), (f64, f64));
+
+/// Replaces `b` (one serialized shape control, `cb` decoded) with `cb`
+/// carrying `ca`'s geometry when the two land within tolerance of each
+/// other, each placed from its own parent corner (`origins`).
+fn align_shape(
+    ca: &Control,
+    cb: Control,
+    b: &mut serde_json::Value,
+    origins: Origins,
+    group_child: bool,
+) {
+    if !same_place(ca, &cb, origins) {
         return;
     }
-    let aligned = with_geometry_of(cb, &ca, group_child);
+    let aligned = with_geometry_of(cb, ca, group_child);
     if let Ok(v) = serde_json::to_value(&aligned) {
         *b = v;
     }
@@ -871,13 +912,14 @@ fn placed_points(c: &Control) -> Option<Vec<(f64, f64)>> {
     Some(out)
 }
 
-fn same_place(a: &Control, b: &Control) -> bool {
+fn same_place(a: &Control, b: &Control, ((oax, oay), (obx, oby)): Origins) -> bool {
     if std::mem::discriminant(a) != std::mem::discriminant(b) {
         return false;
     }
     match (placed_points(a), placed_points(b)) {
         (Some(pa), Some(pb)) if pa.len() == pb.len() => pa.iter().zip(&pb).all(|(p, q)| {
-            (p.0 - q.0).hypot(p.1 - q.1) <= crate::decoder::group_geometry::EXACT_TOLERANCE
+            ((p.0 + oax) - (q.0 + obx)).hypot((p.1 + oay) - (q.1 + oby))
+                <= crate::decoder::group_geometry::EXACT_TOLERANCE
         }),
         _ => false,
     }
@@ -1319,6 +1361,108 @@ mod tests {
             panic!("a styled rect child");
         }
         assert!(admission_compare(&d0, &recoloured).is_err());
+    }
+
+    fn first_group_mut(doc: &mut HwpxDocument) -> &mut Control {
+        doc.document
+            .sections_mut()
+            .iter_mut()
+            .flat_map(|s| s.paragraphs.iter_mut())
+            .flat_map(|p| p.runs.iter_mut())
+            .find_map(|r| match &mut r.content {
+                RunContent::Control(c) if c.is_group() => Some(c.as_mut()),
+                _ => None,
+            })
+            .expect("a group")
+    }
+
+    fn nudge(placement: &mut Option<hwpforge_core::placement::ObjectPlacement>, dx: i32) {
+        let p = placement.as_mut().expect("a floating shape");
+        p.horz_offset = hwpforge_foundation::HwpUnit::new(p.horz_offset.as_i32() + dx).unwrap();
+    }
+
+    fn nudge_group(doc: &mut HwpxDocument, dx: i32) {
+        let Control::Group { placement, .. } = first_group_mut(doc) else { unreachable!() };
+        nudge(placement, dx);
+    }
+
+    fn nudge_rect_child(doc: &mut HwpxDocument, dx: i32) {
+        let child = first_group_children_mut(doc).iter_mut().find(|c| c.is_rect()).unwrap();
+        let Control::Rect { placement, .. } = child else { unreachable!() };
+        nudge(placement, dx);
+    }
+
+    /// Shapes are compared where they land: a group moved 1 unit is still
+    /// the same group (its children ride along), but a group moved 2 with a
+    /// child moved 2 more within it puts that child 4 units off.
+    ///
+    /// 이것을 실패시키는 것: 자식을 부모 좌표에서만 비교하는 것(부모 원점 누적 삭제).
+    #[test]
+    fn admission_tolerance_does_not_add_up_through_groups() {
+        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let (d0, _) = no_op_round_trip(&bytes);
+        let mut group_only = no_op_round_trip(&bytes).1;
+        nudge_group(&mut group_only, 1);
+        admission_compare(&d0, &group_only).unwrap();
+        let mut both = no_op_round_trip(&bytes).1;
+        nudge_group(&mut both, 2);
+        nudge_rect_child(&mut both, 2);
+        assert!(admission_compare(&d0, &both).is_err());
+
+        // Without rounding noise: an unrotated rect in a group. Group +2 alone
+        // and child +2 alone each pass; together the rect is 4 off.
+        let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let grouped = |group_x: i32, child_x: i32| {
+            use hwpforge_core::placement::{
+                ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
+            };
+            let at = |x: i32| ObjectPlacement {
+                text_wrap: ObjectTextWrap::InFrontOfText,
+                text_flow: ObjectTextFlow::BothSides,
+                treat_as_char: false,
+                flow_with_text: false,
+                allow_overlap: true,
+                vert_rel_to: ObjectRelativeTo::Paper,
+                horz_rel_to: ObjectRelativeTo::Paper,
+                vert_offset: unit(100),
+                horz_offset: unit(x),
+            };
+            let mut rect = Control::rect(unit(1000), unit(500)).unwrap();
+            if let Control::Rect { placement, .. } = &mut rect {
+                *placement = Some(at(child_x));
+            }
+            let group = Control::Group {
+                children: vec![rect],
+                width: unit(1200),
+                height: unit(700),
+                placement: Some(at(group_x)),
+                inst_id: None,
+            };
+            let mut doc = doc_with_text("x");
+            doc.document.sections_mut()[0].paragraphs[0]
+                .runs
+                .push(Run::control(group, hwpforge_foundation::CharShapeIndex::new(0)));
+            doc
+        };
+        let base = grouped(100, 100);
+        admission_compare(&base, &grouped(102, 100)).unwrap();
+        admission_compare(&base, &grouped(100, 102)).unwrap();
+        assert!(admission_compare(&base, &grouped(102, 102)).is_err());
+    }
+
+    /// The edit-delta check is exact: a shape an edit moved by one unit is a
+    /// failed edit, even though the admission check would let it through.
+    ///
+    /// 이것을 실패시키는 것: 델타 검증에 허용 오차 비교를 쓰는 것.
+    #[test]
+    fn delta_check_refuses_a_shape_moved_by_one_unit() {
+        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let (_, d1) = no_op_round_trip(&bytes);
+        let mut moved = no_op_round_trip(&bytes).1;
+        nudge_rect_child(&mut moved, 1);
+        admission_compare(&d1, &moved).unwrap();
+        assert!(delta_compare(&d1, &moved).is_err());
+        delta_compare(&d1, &no_op_round_trip(&bytes).1).unwrap();
     }
 
     /// Inside a group, a child at its parent's corner (no placement) and the

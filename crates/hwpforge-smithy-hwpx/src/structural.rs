@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
 use crate::patch::{collect_direct_child_outer_spans, find_root_span, section_path, RawPackage};
-use crate::stamp::{admission_compare, check_zip_carry, encode_hwpx, StamperError};
+use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwpx, StamperError};
 
 /// Addresses a **top-level body-flow** paragraph for structural editing.
 ///
@@ -252,7 +252,7 @@ fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
 /// refused with no bytes.
 fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEditError> {
     let d2 = HwpxDecoder::decode(bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-    admission_compare(&d2, expected).map_err(|e| match e {
+    delta_compare(&d2, expected).map_err(|e| match e {
         StamperError::NotRoundTripSafe { component, diff_path } => {
             StructuralEditError::DeltaMismatch {
                 detail: format!("{component} diverges at {diff_path}"),
