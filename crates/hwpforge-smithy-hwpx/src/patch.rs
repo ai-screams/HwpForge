@@ -236,7 +236,7 @@ impl HwpxPatcher {
             }
         }
 
-        let mut patched_section_xml = base_section_xml.clone();
+        let mut edits: Vec<(&TextLocator, &str)> = Vec::new();
         for (replacement_slot, preserved_slot) in
             replacement_slots.iter().zip(&rebuilt_preservation.text_slots).rev()
         {
@@ -253,11 +253,18 @@ impl HwpxPatcher {
                 });
             }
 
-            patched_section_xml = apply_text_locator(
-                &patched_section_xml,
-                &preserved_slot.locator,
-                &replacement_slot.text,
-            )?;
+            edits.push((&preserved_slot.locator, replacement_slot.text.as_str()));
+        }
+
+        // Apply from the last byte offset back so an edit never shifts a span
+        // that is still to be applied. Slot order is the Core visit order,
+        // which is not always byte order: an ellipse or polygon visits its
+        // inner paragraphs before its caption, but the XML writes the caption
+        // first (field order of `HxEllipse` and `HxPolygon`).
+        edits.sort_by_key(|(locator, _)| std::cmp::Reverse(text_locator_start(locator)));
+        let mut patched_section_xml = base_section_xml.clone();
+        for (locator, text) in edits {
+            patched_section_xml = apply_text_locator(&patched_section_xml, locator, text)?;
         }
 
         if patched_section_xml == base_section_xml {
@@ -1673,6 +1680,14 @@ fn buffer_position(reader: &Reader<&[u8]>) -> HwpxResult<usize> {
         .map_err(|_| HwpxError::Zip("buffer position overflow".into()))
 }
 
+/// Byte offset where the span a [`TextLocator`] replaces begins.
+fn text_locator_start(locator: &TextLocator) -> usize {
+    match locator {
+        TextLocator::TextElement { element_start, .. } => *element_start,
+        TextLocator::EmptyRun { run_start, .. } => *run_start,
+    }
+}
+
 fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxResult<String> {
     let mut patched = xml.to_string();
     match locator {
@@ -2271,6 +2286,81 @@ mod tests {
         assert_eq!(
             preservation.text_slots[0].path,
             "paragraphs[0].runs[0].control.textbox.paragraphs[0].runs[0].text"
+        );
+    }
+
+    // 이것을 실패시키는 것: 바뀐 slot 을 바이트 위치가 아니라 slot 순서의 역순으로
+    // 적용 — 캡션(앞쪽 바이트)을 먼저 고쳐 내부 문단 slot 의 위치가 밀린다.
+    // 한글이면 문자 경계 panic, ASCII 면 비정형 XML 을 성공으로 쓴다.
+    #[test]
+    fn edits_apply_in_byte_order_when_slot_order_differs() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::document::Document;
+        use hwpforge_core::image::ImageStore;
+        use hwpforge_core::run::{Run, RunContent};
+        use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex};
+
+        let field = |name: &str, current: &str| {
+            let mut para = Paragraph::new(ParaShapeIndex::new(0));
+            para.runs.push(Run::control(
+                Control::Field {
+                    field_type: FieldType::ClickHere,
+                    hint_text: Some(current.to_string()),
+                    help_text: None,
+                    name: Some(name.to_string()),
+                    display_text: current.to_string(),
+                },
+                CharShapeIndex::new(0),
+            ));
+            para
+        };
+        let size = |v: i32| HwpUnit::new(v).unwrap();
+        let mut ellipse =
+            Control::ellipse_with_text(size(6000), size(3000), vec![field("inner", "aaaa")]);
+        if let Control::Ellipse { caption, .. } = &mut ellipse {
+            *caption = Some(Caption::new(vec![field("cap", "bbbb")], CaptionSide::Bottom));
+        }
+        let mut body = Paragraph::new(ParaShapeIndex::new(0));
+        body.runs.push(Run::control(ellipse, CharShapeIndex::new(0)));
+        let mut doc = Document::new();
+        let mut section = Section::new(hwpforge_core::PageSettings::default());
+        section.paragraphs.push(body);
+        doc.add_section(section);
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let base =
+            crate::HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::default())
+                .unwrap();
+
+        let original = HwpxDecoder::decode(&base).unwrap().document.sections()[0].clone();
+        let mut edited = original.clone();
+        let set = |control: &mut Control, value: &str| {
+            if let Control::Field { display_text, .. } = control {
+                *display_text = value.to_string();
+            }
+        };
+        let RunContent::Control(shape) = &mut edited.paragraphs[0].runs[0].content else {
+            panic!("ellipse run");
+        };
+        let Control::Ellipse { paragraphs, caption: Some(caption), .. } = shape.as_mut() else {
+            panic!("ellipse with caption");
+        };
+        for (paragraphs, value) in [(paragraphs, "X"), (&mut caption.paragraphs, "Y")] {
+            let RunContent::Control(field) = &mut paragraphs[0].runs[0].content else {
+                panic!("field run");
+            };
+            set(field, value);
+        }
+
+        let preservation = HwpxPatcher::export_section_preservation(&base, 0, &original).unwrap();
+        let patched =
+            HwpxPatcher::patch_section_preserving(&base, 0, &edited, None, Some(&preservation))
+                .unwrap();
+        let fields = crate::HwpxFiller::list_fields(&patched).unwrap();
+        let values: Vec<(Option<String>, String)> =
+            fields.into_iter().map(|f| (f.name, f.current)).collect();
+        assert_eq!(
+            values,
+            vec![(Some("inner".into()), "X".into()), (Some("cap".into()), "Y".into())]
         );
     }
 }
