@@ -1075,4 +1075,108 @@ mod tests {
         let top = group(geo(0, 0, 4000, 4000), at(4000, 4000, 0.0, 0.0), vec![n]);
         assert_eq!(project(&top).1, ["pic"]);
     }
+
+    /// A `ShapeComponent` child payload (type tag once): the 48-byte header,
+    /// `trans`, the pairs, then `tail`.
+    fn record_bytes(level: u16, initial: (u32, u32), mats: &[Hwp5Matrix], tail: &[u8]) -> Vec<u8> {
+        let mut d = b"lop$".to_vec();
+        d.extend_from_slice(&[0u8; 8]);
+        d.extend_from_slice(&level.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&initial.0.to_le_bytes());
+        d.extend_from_slice(&initial.1.to_le_bytes());
+        d.extend_from_slice(&[0u8; 22]);
+        let pairs = u16::try_from((mats.len() - 1) / 2).unwrap();
+        d.extend_from_slice(&pairs.to_le_bytes());
+        for m in mats {
+            for v in m {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        d.extend_from_slice(tail);
+        d
+    }
+
+    /// The shared pair-order vector (`tests/fixtures/shapes/group-chain-vectors.json`,
+    /// read by the HWPX side for its XML form): written as HWP5 record bytes,
+    /// parsed and composed, each vector gives its expected matrix — the
+    /// scale inside a pair applies before the turn.
+    ///
+    /// 이것을 실패시키는 것: 한 쌍 안에서 sca 를 rot 뒤에 곱하는 것(`S·R`).
+    /// (바깥 쌍이 항등이라 쌍 순서 변이는 잡지 않는다 — F1 고정 테스트가 잡음.)
+    #[test]
+    fn shared_chain_vectors_compose_as_expected() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/shapes/group-chain-vectors.json"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let m6 = |v: &serde_json::Value| -> Hwp5Matrix {
+            let a: Vec<f64> = v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+            [a[0], a[1], a[2], a[3], a[4], a[5]]
+        };
+        let vectors = json["vectors"].as_array().unwrap();
+        assert!(!vectors.is_empty());
+        for v in vectors {
+            let mut mats = vec![m6(&v["trans"])];
+            for pair in v["pairs"].as_array().unwrap() {
+                mats.push(m6(&pair["sca"]));
+                mats.push(m6(&pair["rot"]));
+            }
+            let level = u16::try_from(v["group_level"].as_u64().unwrap()).unwrap();
+            let data = record_bytes(level, (100, 100), &mats, &[]);
+            let render = Hwp5ShapeRender::parse(&data, false).unwrap();
+            let got = chain(&render).matrix();
+            let want = m6(&v["expected"]);
+            for (g, w) in got.iter().zip(&want) {
+                assert!((g - w).abs() < 1e-9, "{}: {got:?} vs {want:?}", v["name"]);
+            }
+        }
+    }
+
+    /// Solid and pattern fills share the kind bits and differ only in the
+    /// pattern kind: read from record bytes and projected, the solid
+    /// triangle folds its 30° turn into its points (no warning), the
+    /// patterned one keeps the turn and reports the fill. Neither carries a
+    /// fill in Core — HWP5 shape fills are not projected — so the loss the
+    /// warning names is real.
+    ///
+    /// 이것을 실패시키는 것: 무늬 종류를 보지 않는 것(두 기록이 같은 결과),
+    /// 채우기 경고를 지우는 것.
+    #[test]
+    fn solid_and_pattern_records_fold_differently() {
+        let tail = |pattern: i32| {
+            let mut t = vec![0u8; 13];
+            t.extend_from_slice(&1u32.to_le_bytes());
+            t.extend_from_slice(&[0u8; 8]);
+            t.extend_from_slice(&pattern.to_le_bytes());
+            t.push(0);
+            t
+        };
+        let fold = |pattern: i32| {
+            let data = record_bytes(
+                1,
+                (1000, 1000),
+                &[tr(1000.0, 1000.0), ID, ID, ID, rot(30.0)],
+                &tail(pattern),
+            );
+            let render = Hwp5ShapeRender::parse(&data, false).map_err(|e| e.to_string());
+            let top = group(
+                geo(0, 0, 3000, 3000),
+                at(3000, 3000, 0.0, 0.0),
+                vec![child(polygon(&[(0, 0), (1000, 0), (0, 1000)]), render)],
+            );
+            let (g, lost) = project(&top);
+            let g = g.unwrap();
+            let Control::Polygon { style, .. } = &children(&g)[0] else { panic!() };
+            assert!(style.as_ref().and_then(|s| s.fill.as_ref()).is_none());
+            (rotation(&children(&g)[0]), lost)
+        };
+        let (r, lost) = fold(-1);
+        assert_eq!((r, lost.len()), (None, 0), "solid");
+        let (r, lost) = fold(3);
+        assert!(r.is_some_and(|a| (a - 30.0).abs() < 1e-3), "pattern: {r:?}");
+        assert_eq!(lost, ["group_child_fill"]);
+    }
 }
