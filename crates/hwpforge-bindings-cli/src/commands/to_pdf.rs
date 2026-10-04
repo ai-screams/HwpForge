@@ -316,6 +316,18 @@ mod tests {
                 "ledger",
                 None,
             ),
+            // 이것을 실패시키는 것: ops `hwp5_warning_parts` 의 `ContentLost` 갈래를 빼는 것
+            // (`OTHER`·Debug 문구로 떨어짐).
+            (
+                ConvertWarning::Hwp5(Hwp5Warning::ContentLost {
+                    kind: "pic".into(),
+                    reason: "unsupported group child".into(),
+                    location: "group[0].child[1]".into(),
+                }),
+                "CONTENT_LOST",
+                "pic lost: unsupported group child",
+                Some("group[0].child[1]"),
+            ),
             (
                 ConvertWarning::HwpxEncode(EncodeWarning::LayoutCacheDropped {
                     path: paragraph_path(),

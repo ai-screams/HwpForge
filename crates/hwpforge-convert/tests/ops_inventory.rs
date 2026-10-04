@@ -69,6 +69,9 @@ const AUDITED: &[Audited] = &[
             ("ProjectionFallback", "PROJECTION_FALLBACK"),
             ("ParserFallback", "PARSER_FALLBACK"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
+            // Same code as the HWPX decode warning; the group and child
+            // position travel in the location column.
+            ("ContentLost", "CONTENT_LOST"),
         ],
     },
     Audited {

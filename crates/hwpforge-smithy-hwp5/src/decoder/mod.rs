@@ -93,6 +93,22 @@ pub enum Hwp5Warning {
         /// Concrete drop reason (ledger failure or offending textpos).
         reason: String,
     },
+    /// Group (묶음 객체) content Core cannot carry as the source has it: a
+    /// child the shared fold cannot place exactly (shear, collapse, residual,
+    /// a field the Core variant lacks), a matrix chain that cannot be read, a
+    /// picture or OLE child, the text of a shape that does not keep it, a
+    /// directional fill, an object inside a grouped text box, or a group left
+    /// with nothing. Same name and wire code (`CONTENT_LOST`) as the HWPX
+    /// decode warning.
+    ContentLost {
+        /// What was lost (`group_child_transform`, `pic`, `group`, …).
+        kind: String,
+        /// Concrete reason.
+        reason: String,
+        /// The group's number in document order and the child's position
+        /// among its group's children, e.g. `group[3].child[2].child[0]`.
+        location: String,
+    },
 }
 
 /// Shared parser output before Core projection or semantic adaptation.

@@ -461,6 +461,16 @@ fn convert_warnings_keep_the_cli_codes_and_the_convert_stage() {
             "LAYOUT_CACHE_DROPPED",
             "ledger",
         ),
+        // 이것을 실패시키는 것: `hwp5_warning_parts` 의 `ContentLost` 갈래를 빼는 것 (`OTHER` 로 떨어짐).
+        (
+            ConvertWarning::Hwp5(Hwp5Warning::ContentLost {
+                kind: "pic".into(),
+                reason: "unsupported group child".into(),
+                location: "group[0].child[1]".into(),
+            }),
+            "CONTENT_LOST",
+            "group[0].child[1]: pic lost: unsupported group child",
+        ),
         (
             ConvertWarning::HwpxEncode(EncodeWarning::LayoutCacheDropped {
                 path: path(),

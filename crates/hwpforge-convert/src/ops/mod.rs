@@ -704,6 +704,11 @@ fn hwp5_warning_parts(warning: &Hwp5Warning) -> (&'static str, String, Option<St
         Hwp5Warning::LayoutCacheDropped { reason } => {
             ("LAYOUT_CACHE_DROPPED", reason.clone(), None)
         }
+        // Same code and wording as the HWPX decode warning; the group and
+        // child position travel in the location column.
+        Hwp5Warning::ContentLost { kind, reason, location } => {
+            ("CONTENT_LOST", format!("{kind} lost: {reason}"), Some(location.clone()))
+        }
         other => (OTHER, format!("{other:?}"), None),
     }
 }
