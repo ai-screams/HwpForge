@@ -745,7 +745,7 @@ fn parse_masterpage_xml(xml: &str) -> MasterPage {
         search = &after_tag[p_close + "</hp:p>".len()..];
     }
 
-    MasterPage { apply_page_type, paragraphs }
+    MasterPage::new(apply_page_type, paragraphs)
 }
 
 /// Extracts a named u32 attribute value from an XML open-tag string.

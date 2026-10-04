@@ -128,8 +128,8 @@ pub use paragraph::Paragraph;
 pub use placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 pub use run::{Run, RunContent};
 pub use section::{
-    BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,
-    PageNumber, Section, Visibility,
+    BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, MasterPageSpecial,
+    PageBorderFillEntry, PageNumber, Section, Visibility,
 };
 pub use style_lookup::{BorderFillLines, BorderLine, BorderLineKind, FillKind, StyleLookup};
 pub use tab::{TabDef, TabStop};

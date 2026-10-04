@@ -259,22 +259,98 @@ impl Default for BeginNum {
 /// A master page (background/watermark page) for a section.
 ///
 /// Master pages provide background content rendered behind the main body.
-/// Maps to `<masterPage>` elements inside `<hp:secPr>`.
+/// In HWPX each one is its own part (`Contents/masterpage{N}.xml`) referenced
+/// from `<hp:secPr>`.
 ///
-/// In HWPX, each master page has an `applyPageType` attribute
-/// (`BOTH`, `EVEN`, or `ODD`) and contains its own paragraphs.
+/// Which pages it covers is [`apply_page_type`](Self::apply_page_type)
+/// (`BOTH`, `EVEN`, `ODD`) unless [`special`](Self::special) names the last
+/// page or one chosen page. HWPX writes the two in one `type` attribute, so a
+/// special scope requires `apply_page_type == Both` (checked by validation).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::section::{MasterPage, MasterPageSpecial};
+/// use hwpforge_core::paragraph::Paragraph;
+/// use hwpforge_foundation::{ApplyPageType, ParaShapeIndex};
+///
+/// let mut mp = MasterPage::new(ApplyPageType::Both, vec![Paragraph::new(ParaShapeIndex::new(0))]);
+/// mp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+/// assert!(!mp.page_front);
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct MasterPage {
     /// Which pages this master page applies to.
     pub apply_page_type: ApplyPageType,
     /// Paragraphs composing the master page content.
     pub paragraphs: Vec<Paragraph>,
+    /// A scope other than both/even/odd pages: the last page, or one chosen
+    /// page. `None` = [`apply_page_type`](Self::apply_page_type) decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub special: Option<MasterPageSpecial>,
+    /// Hancom "앞 바탕쪽과 겹침": also draw the master pages that would
+    /// otherwise give way to this one on its pages (HWPX `pageDuplicate`).
+    #[serde(default)]
+    pub page_duplicate: bool,
+    /// Hancom "바탕쪽 앞으로": draw this master page in front of the body
+    /// instead of behind it (HWPX `pageFront`).
+    #[serde(default)]
+    pub page_front: bool,
+    /// Vertical alignment of the content area (HWPX `<hp:subList vertAlign>`).
+    #[serde(default)]
+    pub vert_align: hwpforge_foundation::VerticalAlign,
+    /// Width of the content area (HWPX `<hp:subList textWidth>`).
+    ///
+    /// Hancom writes the page's text area. 0 = not given; the encoder then
+    /// writes its own default.
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_width: HwpUnit,
+    /// Height of the content area (HWPX `<hp:subList textHeight>`).
+    ///
+    /// 0 = not given, as for [`text_width`](Self::text_width).
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_height: HwpUnit,
+}
+
+/// A master page scope that the both/even/odd [`ApplyPageType`] cannot say.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::section::MasterPageSpecial;
+///
+/// let scope = MasterPageSpecial::OptionalPage { page_number: 2 };
+/// assert_ne!(scope, MasterPageSpecial::LastPage);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum MasterPageSpecial {
+    /// Only the last page of the section (HWPX `type="LAST_PAGE"`).
+    LastPage,
+    /// Only one chosen page (HWPX `type="OPTIONAL_PAGE"`).
+    OptionalPage {
+        /// The chosen page number (HWPX `pageNumber`).
+        page_number: u32,
+    },
 }
 
 impl MasterPage {
     /// Creates a new master page with the given page type and paragraphs.
+    ///
+    /// The other fields start at their defaults: no special scope, not
+    /// overlapping, behind the body, top-aligned, area size not given.
     pub fn new(apply_page_type: ApplyPageType, paragraphs: Vec<Paragraph>) -> Self {
-        Self { apply_page_type, paragraphs }
+        Self {
+            apply_page_type,
+            paragraphs,
+            special: None,
+            page_duplicate: false,
+            page_front: false,
+            vert_align: hwpforge_foundation::VerticalAlign::default(),
+            text_width: HwpUnit::ZERO,
+            text_height: HwpUnit::ZERO,
+        }
     }
 }
 
@@ -903,6 +979,35 @@ mod tests {
         let s = hf.to_string();
         assert!(s.contains("1 paragraph"), "display: {s}");
         assert!(s.contains("Both"), "display: {s}");
+    }
+
+    // 이것을 실패시키는 것: 새 필드 중 하나의 `#[serde(default)]` 를 지우기
+    // (0.16.10 JSON 에는 그 키가 없다).
+    #[test]
+    fn master_page_reads_json_without_the_new_fields() {
+        let old = r#"{"apply_page_type":"Even","paragraphs":[]}"#;
+        let mp: MasterPage = serde_json::from_str(old).unwrap();
+        assert_eq!(mp, MasterPage::new(ApplyPageType::Even, vec![]));
+    }
+
+    // 이것을 실패시키는 것: 새 필드 하나를 직렬화에서 빼기(`skip`), 또는
+    // `special` 의 `skip_serializing_if` 를 거꾸로 두기.
+    #[test]
+    fn master_page_serde_roundtrip_keeps_every_field() {
+        let mut mp = MasterPage::new(ApplyPageType::Both, vec![simple_paragraph()]);
+        mp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+        mp.page_duplicate = true;
+        mp.page_front = true;
+        mp.vert_align = hwpforge_foundation::VerticalAlign::Bottom;
+        mp.text_width = HwpUnit::new(48190).unwrap();
+        mp.text_height = HwpUnit::new(67181).unwrap();
+        let json = serde_json::to_string(&mp).unwrap();
+        assert!(json.contains(r#""special":{"OptionalPage":{"page_number":3}}"#), "{json}");
+        let back: MasterPage = serde_json::from_str(&json).unwrap();
+        assert_eq!(mp, back);
+
+        let plain = serde_json::to_string(&MasterPage::new(ApplyPageType::Odd, vec![])).unwrap();
+        assert!(!plain.contains("special"), "{plain}");
     }
 
     #[test]

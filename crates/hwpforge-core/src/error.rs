@@ -304,6 +304,19 @@ pub enum ValidationError {
         /// The offending token.
         token: String,
     },
+
+    /// A master page has a special scope (last page or one chosen page) but
+    /// its `apply_page_type` is not `Both`.
+    ///
+    /// HWPX writes both in the single `type` attribute, so a special scope
+    /// leaves no room for an even/odd restriction.
+    #[error("Master page with a special scope must apply to both page types (section {section_index}, master page {master_page_index})")]
+    InvalidMasterPageScope {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based master page index within the section.
+        master_page_index: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +377,8 @@ pub enum CoreErrorCode {
     // are retired (E6 slice C); the gap is intentional — do NOT renumber.
     /// A Group control has a non-shape child.
     InvalidGroupChild = 2020,
+    /// A master page combines a special scope with an even/odd restriction.
+    InvalidMasterPageScope = 2021,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -397,6 +412,7 @@ impl ValidationError {
             Self::MismatchedSeriesLengths { .. } => CoreErrorCode::MismatchedSeriesLengths,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
+            Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
         }
     }
 }

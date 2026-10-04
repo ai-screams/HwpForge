@@ -981,6 +981,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "InvalidMasterPageScope",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

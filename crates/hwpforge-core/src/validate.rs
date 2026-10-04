@@ -8,6 +8,7 @@ use crate::control::{Control, GroupChild};
 use crate::error::ValidationError;
 use crate::run::RunContent;
 use crate::section::Section;
+use hwpforge_foundation::ApplyPageType;
 
 #[derive(Clone, Copy)]
 struct RunValidationContext {
@@ -31,6 +32,7 @@ struct RunValidationContext {
 /// 6. `col_span >= 1`, `row_span >= 1`
 /// 7. TextBox controls have at least 1 paragraph
 /// 8. Footnote controls have at least 1 paragraph
+/// 9. A master page with a special scope applies to both page types
 ///
 /// Errors carry precise location context.
 pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationError> {
@@ -56,6 +58,17 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
                     &run.content,
                     RunValidationContext { section_index: si, paragraph_index: pi, run_index: ri },
                 )?;
+            }
+        }
+
+        // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `Both` 비교를 빼고
+        // `special` 만 보기 (`master_page_special_scope_*` 두 테스트).
+        for (mi, master) in section.master_pages.iter().flatten().enumerate() {
+            if master.special.is_some() && master.apply_page_type != ApplyPageType::Both {
+                return Err(ValidationError::InvalidMasterPageScope {
+                    section_index: si,
+                    master_page_index: mi,
+                });
             }
         }
     }
@@ -482,7 +495,7 @@ mod tests {
     use crate::page::PageSettings;
     use crate::paragraph::Paragraph;
     use crate::run::Run;
-    use crate::section::Section;
+    use crate::section::{MasterPage, MasterPageSpecial, Section};
     use crate::table::{Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, VerticalAlign};
 
@@ -500,6 +513,42 @@ mod tests {
 
     fn simple_cell() -> TableCell {
         TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap())
+    }
+
+    // === Rule 9: master page special scope ===
+
+    fn section_with_master(apply: ApplyPageType, special: Option<MasterPageSpecial>) -> Section {
+        let mut section = simple_section();
+        let ok = MasterPage::new(ApplyPageType::Both, vec![simple_paragraph()]);
+        let mut checked = MasterPage::new(apply, vec![simple_paragraph()]);
+        checked.special = special;
+        section.master_pages = Some(vec![ok, checked]);
+        section
+    }
+
+    // 이것을 실패시키는 것: Rule 9 검사를 지우기.
+    #[test]
+    fn master_page_special_scope_requires_both() {
+        let section = section_with_master(ApplyPageType::Even, Some(MasterPageSpecial::LastPage));
+        assert_eq!(
+            validate_sections(&[section]),
+            Err(ValidationError::InvalidMasterPageScope { section_index: 0, master_page_index: 1 })
+        );
+        assert_eq!(
+            ValidationError::InvalidMasterPageScope { section_index: 0, master_page_index: 1 }
+                .code() as u32,
+            2021
+        );
+    }
+
+    // 이것을 실패시키는 것: `apply_page_type != Both` 조건을 빼고 `special` 만
+    // 보기 (special + Both 를 거부), 또는 `special.is_some()` 을 빼기
+    // (special 없는 Odd 를 거부).
+    #[test]
+    fn master_page_special_scope_accepts_both_and_plain_even_odd() {
+        let special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
+        assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Both, special)]), Ok(()));
+        assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Odd, None)]), Ok(()));
     }
 
     // === Rule 1: At least 1 section ===

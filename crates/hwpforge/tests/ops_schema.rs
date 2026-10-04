@@ -197,3 +197,44 @@ fn group_json_from_0_16_10_still_validates_and_reads() {
     assert!(counted > 0);
     assert_eq!(counted, raw(&instance["document"]));
 }
+
+/// A document exported by 0.16.10 still validates against the published
+/// `exported-document` schema and still builds a package.
+///
+/// `tests/data/master_pages_v0_16_10.json` is the 0.16.10 release binary's
+/// output for the master page fixture with even and odd master pages:
+///
+/// ```text
+/// hwpforge to-json tests/fixtures/master_pages/f5c-odd-even.hwpx --no-styles \
+///     -o crates/hwpforge/tests/data/master_pages_v0_16_10.json
+/// ```
+///
+/// Its master pages carry only `apply_page_type` and `paragraphs`; every
+/// field added since must stay optional in the schema.
+///
+/// 이것을 실패시키는 것: 새 `MasterPage` 필드 하나의 `#[serde(default)]` 를
+/// 지우기 — schemars 가 그 필드를 `required` 로 올린다.
+#[test]
+fn a_0_16_10_master_page_export_validates_against_the_current_schema() {
+    use hwpforge::ops::exchange::{from_json, FromJsonOptions};
+
+    let path = format!("{DATA}master_pages_v0_16_10.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let old: serde_json::Value = serde_json::from_str(&text).expect("old export is JSON");
+    let masters = &old["document"]["sections"][0]["master_pages"];
+    assert_eq!(masters[0]["apply_page_type"], "Even", "the fixture is the even/odd one");
+    assert_eq!(masters[0].as_object().map(|o| o.len()), Some(2), "only the 0.16.10 fields");
+
+    let mut schemas = boon::Schemas::new();
+    let mut compiler = boon::Compiler::new();
+    compiler
+        .add_resource("urn:exported-document", produced(SchemaKind::ExportedDocument))
+        .expect("schema resource");
+    let id = compiler.compile("urn:exported-document", &mut schemas).expect("schema compiles");
+    if let Err(e) = schemas.validate(&old, id) {
+        panic!("0.16.10 export no longer validates: {e:#}");
+    }
+
+    let built = from_json(&text, &FromJsonOptions::default()).expect("old export still builds");
+    assert_eq!(built.sections, 1);
+}

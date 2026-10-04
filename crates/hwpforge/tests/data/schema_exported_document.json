@@ -4209,7 +4209,7 @@
       ]
     },
     "MasterPage": {
-      "description": "A master page (background/watermark page) for a section.\n\nMaster pages provide background content rendered behind the main body.\nMaps to `<masterPage>` elements inside `<hp:secPr>`.\n\nIn HWPX, each master page has an `applyPageType` attribute\n(`BOTH`, `EVEN`, or `ODD`) and contains its own paragraphs.",
+      "description": "A master page (background/watermark page) for a section.\n\nMaster pages provide background content rendered behind the main body.\nIn HWPX each one is its own part (`Contents/masterpage{N}.xml`) referenced\nfrom `<hp:secPr>`.\n\nWhich pages it covers is [`apply_page_type`](Self::apply_page_type)\n(`BOTH`, `EVEN`, `ODD`) unless [`special`](Self::special) names the last\npage or one chosen page. HWPX writes the two in one `type` attribute, so a\nspecial scope requires `apply_page_type == Both` (checked by validation).\n\n# Examples\n\n```\nuse hwpforge_core::section::{MasterPage, MasterPageSpecial};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{ApplyPageType, ParaShapeIndex};\n\nlet mut mp = MasterPage::new(ApplyPageType::Both, vec![Paragraph::new(ParaShapeIndex::new(0))]);\nmp.special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });\nassert!(!mp.page_front);\n```",
       "type": "object",
       "properties": {
         "apply_page_type": {
@@ -4222,11 +4222,79 @@
           "items": {
             "$ref": "#/$defs/Paragraph"
           }
+        },
+        "special": {
+          "description": "A scope other than both/even/odd pages: the last page, or one chosen\npage. `None` = [`apply_page_type`](Self::apply_page_type) decides.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MasterPageSpecial"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_duplicate": {
+          "description": "Hancom \"앞 바탕쪽과 겹침\": also draw the master pages that would\notherwise give way to this one on its pages (HWPX `pageDuplicate`).",
+          "type": "boolean",
+          "default": false
+        },
+        "page_front": {
+          "description": "Hancom \"바탕쪽 앞으로\": draw this master page in front of the body\ninstead of behind it (HWPX `pageFront`).",
+          "type": "boolean",
+          "default": false
+        },
+        "vert_align": {
+          "description": "Vertical alignment of the content area (HWPX `<hp:subList vertAlign>`).",
+          "$ref": "#/$defs/VerticalAlign",
+          "default": "Top"
+        },
+        "text_width": {
+          "description": "Width of the content area (HWPX `<hp:subList textWidth>`).\n\nHancom writes the page's text area. 0 = not given; the encoder then\nwrites its own default.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "text_height": {
+          "description": "Height of the content area (HWPX `<hp:subList textHeight>`).\n\n0 = not given, as for [`text_width`](Self::text_width).",
+          "$ref": "#/$defs/HwpUnit"
         }
       },
       "required": [
         "apply_page_type",
         "paragraphs"
+      ]
+    },
+    "MasterPageSpecial": {
+      "description": "A master page scope that the both/even/odd [`ApplyPageType`] cannot say.\n\n# Examples\n\n```\nuse hwpforge_core::section::MasterPageSpecial;\n\nlet scope = MasterPageSpecial::OptionalPage { page_number: 2 };\nassert_ne!(scope, MasterPageSpecial::LastPage);\n```",
+      "oneOf": [
+        {
+          "description": "Only the last page of the section (HWPX `type=\"LAST_PAGE\"`).",
+          "type": "string",
+          "const": "LastPage"
+        },
+        {
+          "description": "Only one chosen page (HWPX `type=\"OPTIONAL_PAGE\"`).",
+          "type": "object",
+          "properties": {
+            "OptionalPage": {
+              "type": "object",
+              "properties": {
+                "page_number": {
+                  "description": "The chosen page number (HWPX `pageNumber`).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "page_number"
+              ]
+            }
+          },
+          "required": [
+            "OptionalPage"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "BeginNum": {

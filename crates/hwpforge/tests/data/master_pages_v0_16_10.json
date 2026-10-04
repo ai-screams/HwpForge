@@ -1,0 +1,535 @@
+{
+  "document": {
+    "sections": [
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 1쪽 — 1번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 0,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 1쪽 — 2번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 1600,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 1쪽 — 3번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 3200,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": true,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 0,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 2쪽 — 1번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 1600,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 2쪽 — 2번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 3200,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 2쪽 — 3번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 4800,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": true,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 0,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 3쪽 — 1번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 1600,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 3쪽 — 2번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 3200,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 3쪽 — 3번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 4800,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 4쪽 — 1번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": true,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 0,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 4쪽 — 2번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 1600,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "본문 4쪽 — 3번째 문단"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false,
+            "layout_cache": {
+              "lines": [
+                {
+                  "textpos": 0,
+                  "vertpos": 3200,
+                  "vertsize": 1000,
+                  "textheight": 1000,
+                  "baseline": 850,
+                  "spacing": 600,
+                  "horzpos": 0,
+                  "horzsize": 48188,
+                  "flags": 393216
+                }
+              ]
+            }
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "master_pages": [
+          {
+            "apply_page_type": "Even",
+            "paragraphs": [
+              {
+                "runs": [
+                  {
+                    "content": {
+                      "Text": "짝수"
+                    },
+                    "char_shape_id": 1
+                  }
+                ],
+                "para_shape_id": 0,
+                "column_break": false,
+                "page_break": false
+              }
+            ]
+          },
+          {
+            "apply_page_type": "Odd",
+            "paragraphs": [
+              {
+                "runs": [
+                  {
+                    "content": {
+                      "Text": "홀수"
+                    },
+                    "char_shape_id": 1
+                  }
+                ],
+                "para_shape_id": 0,
+                "column_break": false,
+                "page_break": false
+              }
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      }
+    ],
+    "metadata": {
+      "title": "본문 1쪽 ",
+      "author": null,
+      "subject": null,
+      "description": null,
+      "last_saved_by": "SoeBuri",
+      "keywords": [],
+      "created": "2026-10-04T12:52:44Z",
+      "modified": "2026-10-04T12:53:41Z",
+      "extras": {
+        "date": "2026년 10월 4일 일요일 오후 9:53:41"
+      }
+    }
+  }
+}
