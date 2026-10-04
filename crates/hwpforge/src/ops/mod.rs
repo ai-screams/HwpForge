@@ -823,7 +823,9 @@ fn encode_warning_code(warning: &EncodeWarning) -> &'static str {
         EncodeWarning::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
         EncodeWarning::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
         EncodeWarning::ContentLost { .. } => "CONTENT_LOST",
-        _ => UNCLASSIFIED,
+        // A variant without a row above reports the encoder's own code, so a
+        // new warning is never filed under `OTHER`.
+        other => other.code(),
     }
 }
 

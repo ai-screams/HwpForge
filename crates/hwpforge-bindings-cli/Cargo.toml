@@ -32,5 +32,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Per-variant encode warning samples for the mapping tests (test-only feature).
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", features = ["schemars", "test-support"] }
 serde_json = { workspace = true }
 zip = { workspace = true }

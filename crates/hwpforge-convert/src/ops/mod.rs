@@ -675,8 +675,20 @@ fn convert_warning_parts(warning: &ConvertWarning) -> (&'static str, String, Opt
                 Some(format!("{part}:{path}")),
             );
         }
-        ConvertWarning::HwpxEncode(_) => {
+        // The CLI has always printed these three under `OTHER` with their
+        // Debug text; kept as is (public output contract).
+        ConvertWarning::HwpxEncode(
+            EncodeWarning::NoteHeadSkipped { .. }
+            | EncodeWarning::TitleMarkSkipped { .. }
+            | EncodeWarning::NoteRestartIgnored { .. },
+        ) => {
             return (OTHER, format!("{warning:?}"), None);
+        }
+        // Anything newer reports the encoder's own code, wording and place
+        // (the wording without the place, which travels in `location`), so it
+        // never falls back to `OTHER`.
+        ConvertWarning::HwpxEncode(other) => {
+            return (other.code(), other.message(), other.location());
         }
     };
     hwp5_warning_parts(hwp5)
