@@ -4364,3 +4364,80 @@ fn border_fill_image_with_its_asset_survives_conversion_and_resolves() {
         "{warnings:?}"
     );
 }
+
+/// `table_16_image_fill.hwp` rewritten without its `/BinData/BIN0001.*`
+/// stream, so its border fill names an image the file does not contain.
+fn table_16_image_fill_without_its_image() -> Vec<u8> {
+    use std::io::{Read, Write};
+
+    let bytes = std::fs::read(fixture_path("tables/table_16_image_fill.hwp")).expect("fixture");
+    let mut source = cfb::CompoundFile::open(std::io::Cursor::new(bytes)).expect("cfb");
+    let entries: Vec<(std::path::PathBuf, bool)> =
+        source.walk().map(|e| (e.path().to_path_buf(), e.is_stream())).collect();
+    let mut out = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).expect("create");
+    let mut dropped = 0;
+    for (path, is_stream) in entries {
+        let name = path.to_string_lossy();
+        if name == "/" {
+            continue;
+        }
+        if !is_stream {
+            out.create_storage(&path).expect("storage");
+        } else if name.starts_with("/BinData/BIN0001") {
+            dropped += 1;
+        } else {
+            let mut data = Vec::new();
+            source.open_stream(&path).expect("open").read_to_end(&mut data).expect("read");
+            out.create_stream(&path).expect("stream").write_all(&data).expect("write");
+        }
+    }
+    assert_eq!(dropped, 1, "the fixture carries exactly one BIN0001 stream");
+    out.flush().expect("flush");
+    out.into_inner().into_inner()
+}
+
+/// C4, end to end, the other way: the border fill's image is missing from the
+/// file. The decoder's missing-asset warning stays, the `imgBrush` is left
+/// out of the converted header, and no unresolved reference is reported.
+///
+/// 이것을 실패시키는 것: 변환 경로가 스타일 매핑에 자산 집합 대신 `None` 을
+/// 넘기는 것 (`imgBrush` 와 `BIN0001` 참조가 남고 C4 경고가 난다).
+#[test]
+fn border_fill_image_without_its_asset_is_left_out_of_the_conversion() {
+    let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+        &table_16_image_fill_without_its_image(),
+        crate::ConvertOptions::default(),
+    )
+    .expect("convert");
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&hwpx)).expect("zip");
+    let mut header = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/header.xml")
+            .expect("header")
+            .read_to_string(&mut header)
+            .expect("utf-8");
+    }
+    assert!(!header.contains("imgBrush"), "the broken image fill is left out");
+    assert!(!header.contains("BIN0001"), "no reference to the missing image");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback { subject, reason })
+                if *subject == "style.border_fill.image"
+                    && reason == "missing_image_asset_for_binary_data_id=1"
+        )),
+        "the decoder's missing-asset warning is kept: {warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            ConvertWarning::HwpxEncode(
+                hwpforge_smithy_hwpx::EncodeWarning::ImageReferenceUnresolved { .. }
+            )
+        )),
+        "{warnings:?}"
+    );
+}
