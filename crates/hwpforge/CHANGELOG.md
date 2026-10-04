@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.10](https://github.com/ai-screams/HwpForge/compare/v0.16.9...v0.16.10) - 2026-10-04
+
+### Fixed
+
+- *(hwpx)* 편집 경로(`fill`·`patch`·`insert-para`·`delete-para`·`set-cell`·`stamp`·섹션 export)가 HWPX 엔트리를 크기 제한 없이 풀던 문제를 고친다. 디코더와 같은 한도(엔트리 50 MiB, 전체 500 MiB)를 적용하고, ZIP 헤더에 적힌 크기로 메모리를 미리 잡지 않는다. 편집 경로는 디코더가 읽지 않는 엔트리까지 모두 세므로, 50 MiB 를 넘는 엔트리가 있는 패키지는 편집이 거부된다(일반 읽기에는 영향 없음)
+
+- *(hwp5)* HWP 를 HWPX 로 바꿀 때 차트 데이터를 제한 없이 풀던 문제를 고친다. 차트는 다른 HWP5 스트림과 같은 한도(스트림 500 MB, 압축비 100배)를 따르고, 이미지·차트 해제는 모두 문서 전체 예산(2 GiB)에 합산된다(이미지는 압축비 제외 — 정상 BMP 가 93배까지 나옴). 한도를 넘은 차트는 `DroppedControl` 경고와 함께 빠지고, 예산을 넘으면 문서 변환이 실패한다. 예전에 빠지던 zlib 형식 차트는 이제 변환되고, 손상된 차트의 경고 문구에 `Record parse error at offset 0: decompression failed:` 가 붙는다
+
+- *(md)* `to-md` 의 수식 변환이 깊게 중첩된 수식에서 스택을 넘쳐 프로세스가 죽던 문제를 고친다. 중첩 32단에서 멈추고, 그보다 깊은 수식은 `[수식 변환 생략: 중첩 깊이 초과] ` 뒤에 공백을 접은 원문을 그 자리의 일반 텍스트처럼 이스케이프해 쓴다. 실제 문서 수식(측정 코퍼스 최대 3단)의 출력은 그대로다
+
+
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/v0.16.8...v0.16.9) - 2026-10-03
 
 ### Fixed

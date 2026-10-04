@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.9...hwpforge-smithy-md-v0.16.10) - 2026-10-04
+
+### Documentation
+
+- correct the statements a fact check found wrong
+
+- *(readme)* match the READMEs to the code and drop volatile counts
+
+
+### Fixed
+
+- *(md)* `to-md` 의 수식 변환이 깊게 중첩된 수식에서 스택을 넘쳐 프로세스가 죽던 문제를 고친다. 중첩 32단에서 멈추고, 그보다 깊은 수식은 `[수식 변환 생략: 중첩 깊이 초과] ` 뒤에 공백을 접은 원문을 그 자리의 일반 텍스트처럼 이스케이프해 쓴다. 실제 문서 수식(측정 코퍼스 최대 3단)의 출력은 그대로다
+
+
 ## [0.16.8](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.7...hwpforge-smithy-md-v0.16.8) - 2026-10-01
 
 ### Fixed

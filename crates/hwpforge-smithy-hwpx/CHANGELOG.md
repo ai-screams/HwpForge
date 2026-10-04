@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.9...hwpforge-smithy-hwpx-v0.16.10) - 2026-10-04
+
+### Documentation
+
+- correct the statements a fact check found wrong
+
+- *(readme)* match the READMEs to the code and drop volatile counts
+
+
+### Fixed
+
+- *(hwpx)* 편집 경로(`fill`·`patch`·`insert-para`·`delete-para`·`set-cell`·`stamp`·섹션 export)가 HWPX 엔트리를 크기 제한 없이 풀던 문제를 고친다. 디코더와 같은 한도(엔트리 50 MiB, 전체 500 MiB)를 적용하고, ZIP 헤더에 적힌 크기로 메모리를 미리 잡지 않는다. 편집 경로는 디코더가 읽지 않는 엔트리까지 모두 세므로, 50 MiB 를 넘는 엔트리가 있는 패키지는 편집이 거부된다(일반 읽기에는 영향 없음)
+
+
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.8...hwpforge-smithy-hwpx-v0.16.9) - 2026-10-03
 
 ### Fixed
