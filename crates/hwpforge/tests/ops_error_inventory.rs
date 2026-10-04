@@ -1047,27 +1047,46 @@ fn decode_warning_samples_keep_old_output_and_never_fall_back() {
 /// the variants `ops` already printed keep their code and `Display` wording,
 /// every other one reports the encoder's code instead of `OTHER`.
 ///
+/// The existing variants' code and wording are pinned as literals, so a
+/// change to the encoder's `Display` text fails here.
+///
 /// 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를 `UNCLASSIFIED`
-/// 로 되돌리는 것.
+/// 로 되돌리는 것, 또는 기존 변형의 `Display` 문구를 바꾸는 것.
 #[test]
 fn encode_warning_samples_keep_old_output_and_never_fall_back() {
     use hwpforge::hwpx::decoder::warning_samples;
 
     for warning in warning_samples::encode() {
         let info = OpsWarning::Encode(warning.clone()).info();
-        let code = match &warning {
-            EncodeWarning::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
-            EncodeWarning::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
-            EncodeWarning::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
-            EncodeWarning::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
-            EncodeWarning::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
+        let (code, message) = match &warning {
+            EncodeWarning::LayoutCacheDropped { .. } => (
+                "LAYOUT_CACHE_DROPPED",
+                "layout cache dropped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::NoteHeadSkipped { .. } => (
+                "NOTE_HEAD_SKIPPED",
+                "note number head skipped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::TitleMarkSkipped { .. } => (
+                "TITLE_MARK_SKIPPED",
+                "titleMark skipped at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::NoteRestartIgnored { .. } => (
+                "NOTE_RESTART_IGNORED",
+                "note restart ignored at section[0].para[0]: sample".to_string(),
+            ),
+            EncodeWarning::XmlForbiddenCharsRemoved { .. } => (
+                "XML_FORBIDDEN_CHARS_REMOVED",
+                "removed 1 XML-forbidden character(s) from hp:t in Contents/section0.xml"
+                    .to_string(),
+            ),
             other => {
                 assert_ne!(info.code, "OTHER", "{other:?}");
-                other.code()
+                (other.code(), other.to_string())
             }
         };
         assert_eq!(info.code, code, "{warning:?}");
-        assert_eq!(info.message, warning.to_string());
+        assert_eq!(info.message, message, "{warning:?}");
         assert!(!info.message.contains(" {"), "Debug fallback: {}", info.message);
     }
 }
