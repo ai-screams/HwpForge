@@ -1052,6 +1052,29 @@ mod tests {
         assert_eq!(others[0].code, "LAYOUT_CACHE_DROPPED");
     }
 
+    /// R1-1: a control the encoder left out blocks a fail-closed editor.
+    ///
+    /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+    /// `ContentLost` 를 `false` 갈래로 옮기는 것.
+    #[test]
+    fn content_lost_refuses_the_bytes() {
+        let lost = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: path(),
+            kind: "unknown".into(),
+            reason: "no HWPX form".into(),
+        };
+        let outcome = EncodeOutcome { bytes: vec![0x50, 0x4b], warnings: vec![lost] };
+
+        let error = take_bytes_fail_closed(outcome).expect_err("must fail closed");
+
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss);
+        let OpsError::EncodeSemanticLoss { warnings, .. } = &error else {
+            panic!("wrong variant: {error:?}");
+        };
+        assert_eq!(warnings[0].code, "CONTENT_LOST");
+    }
+
     #[test]
     fn empty_encode_is_not_a_semantic_loss() {
         let (bytes, warnings) =

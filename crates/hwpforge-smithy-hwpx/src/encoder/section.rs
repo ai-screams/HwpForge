@@ -837,7 +837,9 @@ fn build_paragraph(
 /// `HxCtrl` (footnote/endnote) or `HxRect` (textbox) elements.
 /// Hyperlinks emit a placeholder text marker that is replaced with real
 /// interleaved XML after serialization (see [`build_hyperlink_run_xml`]).
-/// Unknown controls are silently skipped.
+/// A control or run content the encoder has no HWPX form for (an unknown
+/// control, a new number of unknown kind, a future variant) is left out and
+/// reported as [`super::EncodeWarning::ContentLost`].
 ///
 /// If `inject_sec_pr` is true and `page_settings` is `Some`, the first
 /// run gets `<hp:secPr>` attached.
@@ -1188,8 +1190,14 @@ fn build_runs(
                             ledger.span(8, 0);
                             ctrls.push(hx_ctrl);
                         } else {
-                            // NewNumberKind::Unknown 등 — 방출 스킵 = 기하
-                            // stale (§1g v5 R3#6 일반 불변식).
+                            // NewNumberKind::Unknown 등 — 방출 스킵 = 내용 손실
+                            // + 기하 stale (§1g v5 R3#6 일반 불변식).
+                            sink.content_lost(
+                                ctrl.kind_name(),
+                                "no HWPX form for this control (e.g. a new number of unknown \
+                                 kind); left out of the output"
+                                    .to_string(),
+                            );
                             ledger.mark_cache_inadmissible("unencodable control skipped");
                         }
                     }
@@ -1467,23 +1475,39 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::Unknown { .. } => {
-                        // Unknown controls are silently skipped — 기하 stale
-                        // (§1g v5 R3#6: skipped emission 은 캐시 무효).
+                    Control::Unknown { tag, .. } => {
+                        // 방출할 wire 형태가 없다 — 내용 손실로 보고하고 기하
+                        // stale (§1g v5 R3#6: skipped emission 은 캐시 무효).
+                        sink.content_lost(
+                            ctrl.kind_name(),
+                            format!(
+                                "unrecognized control {tag:?} has no HWPX form; left out of \
+                                 the output"
+                            ),
+                        );
                         ledger.mark_cache_inadmissible("unencodable control skipped");
                         continue;
                     }
                     _ => {
-                        // Future Control variants silently skipped — 동일.
+                        // 이 버전이 모르는 미래 Control 변형 — 동일.
+                        sink.content_lost(
+                            ctrl.kind_name(),
+                            "control kind unknown to this encoder; left out of the output"
+                                .to_string(),
+                        );
                         ledger.mark_cache_inadmissible("unencodable control skipped");
                         continue;
                     }
                 }
             }
             _ => {
-                // Future RunContent variants are silently skipped
-                // (non_exhaustive enum) — 방출 스킵 = 기하 stale (§1g v5
-                // R3#6, 독립 리뷰 Low 상환: Control `_` arm 과 대칭).
+                // 이 버전이 모르는 미래 RunContent 변형 (non_exhaustive enum)
+                // — 내용 손실로 보고하고 기하 stale (§1g v5 R3#6, 독립 리뷰
+                // Low 상환: Control `_` arm 과 대칭).
+                sink.content_lost(
+                    "run_content",
+                    "run content kind unknown to this encoder; left out of the output".to_string(),
+                );
                 ledger.mark_cache_inadmissible("unencodable run content skipped");
                 continue;
             }
@@ -2497,6 +2521,137 @@ mod tests {
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
         assert!(!xml.contains("test"), "unknown control content should not appear in XML");
+    }
+
+    // ── R1-1: a skipped control is reported, not silent ──────────
+
+    fn content_lost(warnings: &[crate::encoder::EncodeWarning]) -> Vec<(String, String, String)> {
+        warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::encoder::EncodeWarning::ContentLost { part, path, kind, .. } => {
+                    Some((part.clone(), path.to_string(), kind.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn one_paragraph(runs: Vec<Run>) -> Section {
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )
+    }
+
+    /// 기본 옵션(캐시 방출 없음)에서도 경고가 난다 — 종전 신호
+    /// `mark_cache_inadmissible` 은 `emit_layout_cache` 일 때만 경고였다.
+    ///
+    /// 이것을 실패시키는 것: `build_runs` 의 `Control::Unknown` 갈래에서
+    /// `sink.content_lost` 호출을 지우는 것.
+    #[test]
+    fn unknown_control_is_reported_as_content_lost() {
+        use hwpforge_core::control::Control;
+        let section = one_paragraph(vec![
+            Run::text("before", CharShapeIndex::new(0)),
+            Run::control(
+                Control::Unknown { tag: "zzq".into(), data: None },
+                CharShapeIndex::new(0),
+            ),
+            Run::text("after", CharShapeIndex::new(0)),
+        ]);
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+
+        assert_eq!(
+            content_lost(&result.warnings),
+            [("Contents/section0.xml".into(), "section[0].para[0]".into(), "unknown".into())]
+        );
+        let crate::encoder::EncodeWarning::ContentLost { reason, .. } = &result.warnings[0] else {
+            panic!("{:?}", result.warnings);
+        };
+        assert!(reason.contains("zzq"), "the tag names what was lost: {reason}");
+        assert!(result.warnings[0].is_semantic_loss());
+    }
+
+    /// 이것을 실패시키는 것: `build_runs` 의 `encode_control_to_ctrl` 이 `None`
+    /// 을 준 갈래에서 `sink.content_lost` 호출을 지우는 것.
+    #[test]
+    fn new_number_of_unknown_kind_is_reported_as_content_lost() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let section = one_paragraph(vec![Run::control(
+            Control::NewNumber { kind: NewNumberKind::Unknown, number: 3 },
+            CharShapeIndex::new(0),
+        )]);
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+
+        assert!(!result.xml.contains("<hp:newNum"), "still not fabricated");
+        assert_eq!(
+            content_lost(&result.warnings),
+            [("Contents/section0.xml".into(), "section[0].para[0]".into(), "new_number".into())]
+        );
+    }
+
+    /// A known `NewNumber` kind is written and reports nothing.
+    ///
+    /// 이것을 실패시키는 것: `content_lost` 호출을 `encode_control_to_ctrl`
+    /// 결과와 무관하게 하는 것.
+    #[test]
+    fn new_number_of_known_kind_is_not_reported() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let section = one_paragraph(vec![Run::control(
+            Control::NewNumber { kind: NewNumberKind::Page, number: 3 },
+            CharShapeIndex::new(0),
+        )]);
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+
+        assert!(result.xml.contains("<hp:newNum"));
+        assert!(content_lost(&result.warnings).is_empty(), "{:?}", result.warnings);
+    }
+
+    /// 이것을 실패시키는 것: `content_lost` 가 sink 의 현재 경로 대신
+    /// 구역 경로만(고정값) 기록하는 것.
+    #[test]
+    fn unknown_control_in_a_table_cell_names_the_cell() {
+        use hwpforge_core::control::Control;
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Unknown { tag: "zzq".into(), data: None },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::new(5000).unwrap(),
+        );
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
+        let section = one_paragraph(vec![Run::table(table, CharShapeIndex::new(0))]);
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+
+        assert_eq!(
+            content_lost(&result.warnings),
+            [(
+                "Contents/section0.xml".into(),
+                "section[0].para[0].cell[0][0].npara[0]".into(),
+                "unknown".into()
+            )]
+        );
+    }
+
+    /// 이것을 실패시키는 것: `EncodeSink::new` 가 part 이름을
+    /// `Contents/section0.xml` 상수로 두는 것.
+    #[test]
+    fn unknown_control_in_the_second_section_names_its_part() {
+        use hwpforge_core::control::Control;
+        let section = one_paragraph(vec![Run::control(
+            Control::Unknown { tag: "zzq".into(), data: None },
+            CharShapeIndex::new(0),
+        )]);
+        let result = encode_section(&section, 1, 0, 0, 0, EncodeOptions::default()).unwrap();
+
+        assert_eq!(
+            content_lost(&result.warnings),
+            [("Contents/section1.xml".into(), "section[1].para[0]".into(), "unknown".into())]
+        );
     }
 
     // ── Test 9: Empty text produces valid XML ────────────────────

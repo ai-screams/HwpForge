@@ -106,8 +106,9 @@ const AUDITED: &[Audited] = &[
             // New with #198 and printed by no older frontend, so it gets its
             // own code; the part and location travel in the location column.
             ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
-            // A shape the HWPX writer cannot store exactly; part and path
-            // travel in the location column.
+            // A shape the HWPX writer cannot store exactly, or content it
+            // leaves out; reported under the encoder's own code
+            // (`EncodeWarning::code`), part and path in the location column.
             ("ContentLost", "CONTENT_LOST"),
         ],
     },

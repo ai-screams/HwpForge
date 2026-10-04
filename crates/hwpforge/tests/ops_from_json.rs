@@ -559,6 +559,49 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     );
 }
 
+/// R1-1: a JSON `Unknown` control has no HWPX form. `from_json` still writes
+/// the document (generation is not fail-closed) but says what it left out,
+/// under its own code, where it was.
+///
+/// 이것을 실패시키는 것: ops `encode_warning_code` 의 위임 갈래를
+/// `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`), 또는 인코더의 `Control::Unknown`
+/// 갈래에서 경고를 지우는 것.
+#[test]
+fn an_unknown_control_comes_back_as_content_lost_with_the_bytes() {
+    use hwpforge::core::control::Control;
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let shape = CharShapeIndex::new(0);
+    let body = Paragraph::with_runs(
+        vec![
+            Run::text("앞", shape),
+            Run::control(Control::Unknown { tag: "zzq".into(), data: None }, shape),
+            Run::text("뒤", shape),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let json =
+        serde_json::to_string(&ExportedDocument { document, styles: Some(styles) }).expect("json");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("generation does not fail");
+
+    assert!(!out.bytes.is_empty());
+    let lost: Vec<_> =
+        out.meta().warnings.into_iter().filter(|w| w.code == "CONTENT_LOST").collect();
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert!(
+        lost[0].message.contains("Contents/section0.xml:section[0].para[0]"),
+        "{}",
+        lost[0].message
+    );
+    assert!(lost[0].message.contains("zzq"), "{}", lost[0].message);
+}
+
 /// An exported document whose only paragraph carries a footnote whose body
 /// is a heading. Built rather than loaded: no committed fixture triggers a
 /// semantic-loss encode warning.

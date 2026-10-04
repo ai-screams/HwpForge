@@ -543,7 +543,9 @@ pub enum EncodeWarning {
         part: String,
         /// part 안에서 손실이 난 자리의 중첩 경로.
         path: crate::decoder::ParagraphPath,
-        /// 무엇을 잃었는지 — `shape_emission`, 또는 빠진 내용의 종류 이름.
+        /// 무엇을 잃었는지 — `shape_emission`, 또는 빠진 내용의 종류 이름
+        /// (컨트롤이면 `Control::kind_name` (`unknown`, `new_number` …), run
+        /// 내용이면 `run_content`).
         kind: String,
         /// 사람이 읽는 사유.
         reason: String,
@@ -573,7 +575,8 @@ impl EncodeWarning {
     /// | [`Self::NoteHeadSkipped`] | 예 | 각주/미주 가시 번호가 산출물에서 사라진다 |
     /// | [`Self::TitleMarkSkipped`] | 예 | TOC 제목 표식이 붙지 않아 목차가 어긋난다 |
     /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
-    /// | [`Self::ContentLost`] | 예 | 도형이 정확한 위치에서 벗어나 쓰인다 |
+    /// | [`Self::ContentLost`] | 예 | 도형이 정확한 위치에서 벗어나 쓰이거나, 컨트롤·run 내용이 산출물에서 빠진다 |
+    /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
     /// # `LayoutCacheDropped` 가 비-의미 손상인 이유
@@ -846,6 +849,7 @@ mod is_semantic_loss_tests {
         assert_eq!(
             codes.into_iter().collect::<Vec<_>>(),
             [
+                "CONTENT_LOST",
                 "LAYOUT_CACHE_DROPPED",
                 "NOTE_HEAD_SKIPPED",
                 "NOTE_RESTART_IGNORED",
@@ -863,6 +867,27 @@ mod is_semantic_loss_tests {
             let loc = w.location().unwrap();
             assert!(!w.message().contains(&loc), "{w:?}: {}", w.message());
         }
+    }
+
+    /// 이것을 실패시키는 것: `is_semantic_loss` 에서 `ContentLost` 를 `false`
+    /// 갈래로 옮기는 것 — 편집기가 빠진 내용을 담은 바이트를 내보낸다.
+    #[test]
+    fn content_lost_for_left_out_content_is_semantic_loss() {
+        let warning = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: path(),
+            kind: "unknown".into(),
+            reason: "no HWPX form".into(),
+        };
+        assert!(warning.is_semantic_loss(), "{warning:?}");
+        assert_eq!(warning.code(), "CONTENT_LOST");
+        assert_eq!(warning.part(), Some("Contents/section0.xml"));
+        assert_eq!(warning.location().as_deref(), Some("Contents/section0.xml:section[0].para[3]"));
+        assert_eq!(warning.message(), "unknown lost: no HWPX form");
+        assert_eq!(
+            warning.to_string(),
+            "unknown lost at Contents/section0.xml:section[0].para[3]: no HWPX form"
+        );
     }
 
     #[test]

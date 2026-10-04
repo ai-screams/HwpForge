@@ -347,6 +347,12 @@ pub mod warning_samples {
                 location: "hp:t".to_string(),
                 count: 1,
             },
+            EncodeWarning::ContentLost {
+                part: "Contents/section0.xml".to_string(),
+                path: path(),
+                kind: "unknown".to_string(),
+                reason: "sample".to_string(),
+            },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
