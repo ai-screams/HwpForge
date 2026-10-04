@@ -162,12 +162,12 @@ struct FieldLocator {
     name: Option<String>,
 }
 
-/// section XML 에서 찾은 누름틀 하나: 위치와 그것을 감싸는 가장 안쪽
-/// `<hp:p>` 의 바이트 구간.
+/// section XML 에서 찾은 누름틀 하나: 위치와, 그것을 감싸는 가장 안쪽
+/// 문단의 직접 자식 `linesegarray` 바이트 구간들.
 #[derive(Debug)]
 struct WireField {
     locator: FieldLocator,
-    paragraph: Range<usize>,
+    caches: Vec<Range<usize>>,
 }
 
 /// 같은 `path` 안에서 각 항목의 순번 (0부터, 목록 순서).
@@ -180,12 +180,13 @@ fn ordinals(paths: &[&[PathSeg]]) -> Vec<usize> {
 }
 
 /// 값이 바뀐 필드들의 둘러싼 `<hp:p>` 에서 직접 자식 `<hp:linesegarray>` 를
-/// 제거한다.
+/// 제거한다. 캐시 요소는 디코더처럼 접두어 없는 이름(`linesegarray`)으로
+/// 판정한다.
 ///
 /// `inventory` 는 구역별로 디코드 Core 의 모든 ClickHere 위치(이름 없는 것
 /// 포함, [`visit_section_fields`] 순서), `changed` 는 값이 바뀐 필드의
 /// `(구역, inventory 안 번호)` 다. 구역마다 section XML 의 누름틀 위치를
-/// [`scan_click_here_fields`] 로 읽어 [`locate_changed_paragraphs`] 로 맞춘다.
+/// [`scan_click_here_fields`] 로 읽어 [`locate_changed_paragraph_caches`] 로 맞춘다.
 fn strip_linesegarray_for_changed_fields(
     bytes: &[u8],
     inventory: &BTreeMap<usize, Vec<FieldLocator>>,
@@ -203,15 +204,8 @@ fn strip_linesegarray_for_changed_fields(
         let path = crate::patch::section_path(section_idx);
         let mut xml = pkg.read_text_entry(&path)?;
         let expected = inventory.get(&section_idx).map(Vec::as_slice).unwrap_or_default();
-        let paragraphs = locate_changed_paragraphs(&xml, section_idx, expected, &field_indices)?;
-        let mut removals: Vec<Range<usize>> = Vec::new();
-        for paragraph in paragraphs {
-            // 직접 자식만: 문단 안 표·글상자 문단의 캐시는 바이트 순서상 먼저
-            // 나오지만 그 문단의 것이 아니다.
-            let spans =
-                crate::patch::collect_direct_child_outer_spans(&xml, paragraph, "hp:linesegarray")?;
-            removals.extend(spans);
-        }
+        let mut removals =
+            locate_changed_paragraph_caches(&xml, section_idx, expected, &field_indices)?;
         // 한 문단에 바뀐 필드가 둘이면 같은 캐시가 두 번 나온다 — 한 번만
         // 지운다 (캐시 없는 문단은 removals 에 아무 것도 더하지 않는다 = no-op).
         removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
@@ -224,7 +218,7 @@ fn strip_linesegarray_for_changed_fields(
     pkg.write()
 }
 
-/// 인벤토리의 `field_indices` 번 필드를 감싸는 문단 구간을 돌려준다.
+/// 인벤토리의 `field_indices` 번 필드를 감싸는 문단의 캐시 구간을 돌려준다.
 ///
 /// section XML 의 누름틀 위치 집합이 인벤토리 위치 집합과 **같은지** 먼저
 /// 검사한다 — (경로, 같은 경로 안 순번, 이름)이 하나라도 어긋나면 디코더가
@@ -235,7 +229,7 @@ fn strip_linesegarray_for_changed_fields(
 ///
 /// 위치 집합이 다르면 [`HwpxError::InvalidStructure`], XML 을 읽지 못하면
 /// [`HwpxError::XmlParse`].
-fn locate_changed_paragraphs(
+fn locate_changed_paragraph_caches(
     xml: &str,
     section_idx: usize,
     expected: &[FieldLocator],
@@ -295,13 +289,14 @@ fn locate_changed_paragraphs(
     field_indices
         .iter()
         .map(|&i| {
-            partner.get(i).map(|&j| wire[j].paragraph.clone()).ok_or_else(|| {
+            partner.get(i).map(|&j| wire[j].caches.clone()).ok_or_else(|| {
                 HwpxError::InvalidStructure {
                     detail: format!("section {section_idx}: filled field index {i} out of range"),
                 }
             })
         })
-        .collect()
+        .collect::<HwpxResult<Vec<_>>>()
+        .map(|caches| caches.into_iter().flatten().collect())
 }
 
 /// [`scan_click_here_fields`] 의 요소 스택 한 칸.
@@ -314,6 +309,11 @@ enum Frame {
     /// `hp:p` — `index` 는 문단 구간 목록 번호.
     Paragraph {
         index: usize,
+    },
+    /// 문단의 직접 자식 `linesegarray` — `paragraph` 의 캐시 구간으로 기록한다.
+    Cache {
+        paragraph: usize,
+        start: usize,
     },
     /// `hp:run` — 디코더처럼 run 안에서만 `fieldBegin`/`fieldEnd` 를 짝짓는다.
     Run {
@@ -403,7 +403,8 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
     let mut buf: Vec<u8> = Vec::new();
     let mut stack: Vec<(Frame, bool)> = Vec::new();
     let mut path: Vec<PathSeg> = Vec::new();
-    let mut paragraphs: Vec<Range<usize>> = Vec::new();
+    // 문단 번호 → 그 문단의 직접 자식 캐시 구간들.
+    let mut paragraphs: Vec<Vec<Range<usize>>> = Vec::new();
     let mut found: Vec<(FieldLocator, usize)> = Vec::new();
 
     loop {
@@ -442,10 +443,13 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
                     PathSeg::BodyParagraph(*next)
                 });
                 *next += 1;
-                paragraphs.push(begin..end);
+                paragraphs.push(Vec::new());
                 Frame::Paragraph { index: paragraphs.len() - 1 }
             }
             Some(Frame::Paragraph { .. }) if local == "run" => Frame::Run { pending: None },
+            Some(Frame::Paragraph { index }) if local == "linesegarray" => {
+                Frame::Cache { paragraph: *index, start: begin }
+            }
             Some(Frame::Run { .. }) => match local {
                 "ctrl" => Frame::Ctrl { begin: None, end: false },
                 "tbl" => Frame::Table { next_row: 0 },
@@ -543,7 +547,7 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
 
     Ok(found
         .into_iter()
-        .map(|(locator, paragraph)| WireField { locator, paragraph: paragraphs[paragraph].clone() })
+        .map(|(locator, paragraph)| WireField { locator, caches: paragraphs[paragraph].clone() })
         .collect())
 }
 
@@ -551,7 +555,7 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
 fn close_frame(
     stack: &mut Vec<(Frame, bool)>,
     path: &mut Vec<PathSeg>,
-    paragraphs: &mut [Range<usize>],
+    paragraphs: &mut [Vec<Range<usize>>],
     found: &mut Vec<(FieldLocator, usize)>,
     end: usize,
 ) {
@@ -562,7 +566,9 @@ fn close_frame(
         path.pop();
     }
     match frame {
-        Frame::Paragraph { index } => paragraphs[index].end = end,
+        // 디코더(serde)처럼 접두어 없는 이름으로 판정한다 — `p:linesegarray` 도
+        // 같은 캐시다.
+        Frame::Cache { paragraph, start } => paragraphs[paragraph].push(start..end),
         Frame::Ctrl { begin, end: has_end } => {
             let Some((Frame::Run { pending }, _)) = stack.last_mut() else {
                 return;
@@ -1091,8 +1097,8 @@ mod tests {
     #[test]
     fn cell_cache_inside_the_filled_paragraph_is_left_alone() {
         // 9000 = 셀 문단(먼저 닫힘), 9001 = 필드와 표가 든 바깥 문단.
-        // 이것을 실패시키는 것: 바깥 문단 구간에서 직접 자식이 아니라 첫
-        // `<hp:linesegarray` 를 지우기 → 셀 캐시 9000 이 지워진다.
+        // 이것을 실패시키는 것: 캐시를 그것의 부모 문단이 아니라 가장 바깥
+        // 문단에 귀속 → 셀 캐시 9000 이 지워진다.
         let cell = TableCell::new(vec![para(vec![text("셀")])], size(4000));
         let table = Table::new(vec![TableRow::new(vec![cell])]);
         let doc = encode(
@@ -1364,6 +1370,73 @@ mod tests {
     }
 
     #[test]
+    fn cache_with_another_prefix_is_still_the_paragraph_cache() {
+        // 디코더(serde)는 접두어 없는 이름으로 읽으므로 `p:linesegarray` 도
+        // 문단 캐시다.
+        // 이것을 실패시키는 것: 캐시를 접두어 포함 이름(`hp:linesegarray`)으로만
+        // 판정 → `p:` 캐시가 남는다.
+        let bytes = named_with(|xml| {
+            xml.replacen(
+                "<hs:sec ",
+                "<hs:sec xmlns:p=\"http://www.hancom.co.kr/hwpml/2011/paragraph\" ",
+                1,
+            )
+            .replace("hp:linesegarray", "p:linesegarray")
+            .replace("<hp:lineseg ", "<p:lineseg ")
+        });
+        let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+        assert!(
+            decoded.document.sections()[0].paragraphs.iter().any(|p| p.layout_cache.is_some()),
+            "premise: the decoder reads the prefixed cache"
+        );
+        let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
+        assert!(!xml.contains("linesegarray"), "prefixed cache must go: {xml}");
+    }
+
+    #[test]
+    fn self_closing_field_begin_is_a_fill_target() {
+        // 이것을 실패시키는 것: `Empty` 이벤트의 `fieldBegin` 을 무시(Start 만
+        // 처리) → wire 에서 필드가 빠져 위치 불일치 오류.
+        let bytes = named_with(|xml| {
+            let open = xml.find("<hp:fieldBegin").unwrap();
+            let head_end = xml[open..].find('>').unwrap() + open;
+            let close = xml[open..].find("</hp:fieldBegin>").unwrap() + open;
+            format!("{}/>{}", &xml[..head_end], &xml[close + "</hp:fieldBegin>".len()..])
+        });
+        assert!(
+            section_xml(&bytes).contains("metaTag=\"\"/>"),
+            "premise: fieldBegin is self-closing"
+        );
+        let listed = HwpxFiller::list_fields(&bytes).expect("list");
+        assert_eq!(listed.len(), 1, "premise: the decoder pairs the self-closing begin");
+        let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
+        assert!(!xml.contains("<hp:linesegarray"));
+    }
+
+    #[test]
+    fn named_field_after_an_unnamed_one_keeps_its_ordinal() {
+        // 9000 = 이름 없는 필드와 `b` 가 든 문단, 9001 = 다음 문단.
+        // 이것을 실패시키는 것: 이름 없는 ClickHere 를 wire 쪽(또는 인벤토리 쪽)
+        // 목록에서 빼기 → 같은 경로 안 순번이 어긋나 위치 불일치 오류.
+        let unnamed = RunContent::Control(Box::new(Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("무명".to_string()),
+            help_text: None,
+            name: None,
+            display_text: "무명".to_string(),
+        }));
+        let doc = encode(
+            vec![para(vec![unnamed, field("b", "나")]), para(vec![text("다음")])],
+            &ImageStore::default(),
+        );
+        let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
+        let listed = HwpxFiller::list_fields(&bytes).expect("list");
+        assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
+        let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
+        assert_eq!(caches(&xml), vec![1]);
+    }
+
+    #[test]
     fn wire_and_inventory_mismatch_is_rejected() {
         // 이것을 실패시키는 것: (경로, 순번, 이름) 집합 동일성 검사를 빼고
         // 이름만으로 고르기 → 아래 세 입력이 Ok 가 된다.
@@ -1372,15 +1445,15 @@ mod tests {
             path: vec![PathSeg::BodyParagraph(0)],
             name: Some(name.to_string()),
         };
-        assert!(locate_changed_paragraphs(&xml, 0, &[at("user_email")], &[0]).is_ok());
-        let renamed = locate_changed_paragraphs(&xml, 0, &[at("other")], &[0]);
+        assert!(locate_changed_paragraph_caches(&xml, 0, &[at("user_email")], &[0]).is_ok());
+        let renamed = locate_changed_paragraph_caches(&xml, 0, &[at("other")], &[0]);
         assert!(matches!(renamed, Err(HwpxError::InvalidStructure { .. })), "{renamed:?}");
-        let missing = locate_changed_paragraphs(&xml, 0, &[at("user_email"), at("x")], &[0]);
+        let missing = locate_changed_paragraph_caches(&xml, 0, &[at("user_email"), at("x")], &[0]);
         assert!(matches!(missing, Err(HwpxError::InvalidStructure { .. })), "{missing:?}");
-        let extra = locate_changed_paragraphs(&xml, 0, &[], &[]);
+        let extra = locate_changed_paragraph_caches(&xml, 0, &[], &[]);
         assert!(matches!(extra, Err(HwpxError::InvalidStructure { .. })), "{extra:?}");
         let moved = FieldLocator { path: vec![PathSeg::BodyParagraph(1)], ..at("user_email") };
-        let moved = locate_changed_paragraphs(&xml, 0, &[moved], &[0]);
+        let moved = locate_changed_paragraph_caches(&xml, 0, &[moved], &[0]);
         assert!(matches!(moved, Err(HwpxError::InvalidStructure { .. })), "{moved:?}");
     }
 
