@@ -2807,7 +2807,7 @@
           ]
         },
         "fill": {
-          "description": "Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.",
+          "description": "Advanced fill (gradient, pattern, image) or explicitly no fill\n([`Fill::None`]). Overrides `fill_color` when present.",
           "anyOf": [
             {
               "$ref": "#/$defs/Fill"
@@ -3022,6 +3022,11 @@
             "Image"
           ],
           "additionalProperties": false
+        },
+        {
+          "description": "No fill: the shape's interior is left transparent (HWPX: the shape has\nno `<hc:fillBrush>`).\n\nDistinct from [`ShapeStyle::fill`] being `None`, which leaves the fill\nto the encoder's default (white).",
+          "type": "string",
+          "const": "None"
         }
       ]
     },

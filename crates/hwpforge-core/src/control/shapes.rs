@@ -176,6 +176,12 @@ pub enum Fill {
         /// Image fill mode (tile, stretch, etc.).
         mode: ImageFillMode,
     },
+    /// No fill: the shape's interior is left transparent (HWPX: the shape has
+    /// no `<hc:fillBrush>`).
+    ///
+    /// Distinct from [`ShapeStyle::fill`] being `None`, which leaves the fill
+    /// to the encoder's default (white).
+    None,
 }
 
 /// Visual style overrides for drawing shapes.
@@ -219,7 +225,8 @@ pub struct ShapeStyle {
     pub head_arrow: Option<ArrowStyle>,
     /// Arrowhead at the end of a line. Only meaningful for `Control::Line`.
     pub tail_arrow: Option<ArrowStyle>,
-    /// Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.
+    /// Advanced fill (gradient, pattern, image) or explicitly no fill
+    /// ([`Fill::None`]). Overrides `fill_color` when present.
     pub fill: Option<Fill>,
     /// Drop cap style for the shape (HWPX `dropcapstyle` attribute).
     /// Controls whether the shape participates in a drop-cap layout.
