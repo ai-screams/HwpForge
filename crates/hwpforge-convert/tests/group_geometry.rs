@@ -499,13 +499,12 @@ fn core_leaves(c: &Control, base: (i64, i64), out: &mut Vec<CoreLeaf>) {
 /// Core, leaf by leaf: sizes, offsets (summed down the group path) and
 /// points within 1 HWPUNIT (HWP5 stores f64 matrices, HWPX six-digit
 /// decimals), rotation within 0.001°, the same mirror.
+/// `rotflip-group` is a turned and mirrored group whose own frame starts
+/// at (−1680, −3359): both decoders place its children from the outer
+/// origin.
 ///
-/// `rotflip-group` (a turned and mirrored group) is left out until the HWPX
-/// decoder places top-level children from the outer origin as this decoder
-/// does: today its offsets differ by exactly the group frame's minimum
-/// (1680, 3360).
-///
-/// 이것을 실패시키는 것: 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(한쪽 decoder 만).
+/// 이것을 실패시키는 것: 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(한쪽 decoder 만),
+/// 최상위 원점을 묶음 자기 틀의 최솟값으로 잡는 것(rotflip).
 #[test]
 fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
     for (hwp, hwpx) in [
@@ -514,6 +513,7 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
         ("group-f1-g4-nested.hwp", "group-f1-g4-nested.hwpx"),
         ("group-f8-poly-margin.hwp", "group-f8-poly-margin.hwpx"),
         ("group-f10-rot-then-scale.hwp", "group-f10-rot-then-scale.hwpx"),
+        ("rotflip-group.hwp", "rotflip-group.hwpx"),
     ] {
         let (ours, _) = hwp5_group(hwp);
         let twin = hwpforge_smithy_hwpx::HwpxDecoder::decode(&fixture(hwpx)).unwrap();
