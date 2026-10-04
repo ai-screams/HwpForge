@@ -201,11 +201,22 @@ pub(crate) struct SectionEncodeResult {
 pub(crate) struct EncodeSink {
     pub(crate) warnings: Vec<super::EncodeWarning>,
     path: Vec<crate::decoder::PathSeg>,
+    /// 지금 쓰는 패키지 part 의 실제 이름 — 이 sink 의 모든 part 경고가 쓴다.
+    part: String,
 }
 
 impl EncodeSink {
     pub(crate) fn new(section_index: usize) -> Self {
-        Self { warnings: Vec::new(), path: vec![crate::decoder::PathSeg::Section(section_index)] }
+        Self {
+            warnings: Vec::new(),
+            path: vec![crate::decoder::PathSeg::Section(section_index)],
+            part: format!("Contents/section{section_index}.xml"),
+        }
+    }
+
+    /// 지금 쓰는 패키지 part 이름.
+    pub(crate) fn part(&self) -> &str {
+        &self.part
     }
 
     pub(crate) fn enter(&mut self, seg: crate::decoder::PathSeg) {
@@ -424,10 +435,8 @@ pub(crate) fn encode_section_with_note_counters(
         std::borrow::Cow::Owned(clean) => clean,
         std::borrow::Cow::Borrowed(_) => xml,
     };
-    sink.warnings.extend(super::forbidden_char_warnings(
-        &format!("Contents/section{section_index}.xml"),
-        sites,
-    ));
+    let part = sink.part().to_string();
+    sink.warnings.extend(super::forbidden_char_warnings(&part, sites));
 
     Ok(SectionEncodeResult {
         xml,

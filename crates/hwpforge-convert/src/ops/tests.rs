@@ -479,6 +479,17 @@ fn convert_warnings_keep_the_cli_codes_and_the_convert_stage() {
             "XML_FORBIDDEN_CHARS_REMOVED",
             "Contents/header.xml hh:style@engName: removed 2 XML-forbidden character(s)",
         ),
+        // 이것을 실패시키는 것: `convert_warning_parts` 의 `ContentLost` 갈래를 빼는 것 (`OTHER` 로 떨어짐).
+        (
+            ConvertWarning::HwpxEncode(EncodeWarning::ContentLost {
+                part: "Contents/section0.xml".into(),
+                path: path(),
+                kind: "shape_emission".into(),
+                reason: "off by 35.08".into(),
+            }),
+            "CONTENT_LOST",
+            "Contents/section0.xml:section[0]: shape_emission lost: off by 35.08",
+        ),
     ];
 
     for (warning, code, message) in cases {

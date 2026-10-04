@@ -284,6 +284,7 @@ const WARNING_MAPPING: Table = &[
             ("TitleMarkSkipped", "TITLE_MARK_SKIPPED"),
             ("NoteRestartIgnored", "NOTE_RESTART_IGNORED"),
             ("XmlForbiddenCharsRemoved", "XML_FORBIDDEN_CHARS_REMOVED"),
+            ("ContentLost", "CONTENT_LOST"),
         ],
     ),
     (
@@ -729,6 +730,16 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     part: "Contents/header.xml".into(),
                     location: "hh:style@engName".into(),
                     count: 1,
+                }),
+            ),
+            // 이것을 실패시키는 것: `encode_warning_code` 의 `ContentLost` 갈래를 빼는 것 (`OTHER`).
+            (
+                "ContentLost",
+                OpsWarning::Encode(EncodeWarning::ContentLost {
+                    part: "Contents/section0.xml".into(),
+                    path: path(),
+                    kind: "shape_emission".into(),
+                    reason: "stored transform is off by 35.08 HWPUNIT".into(),
                 }),
             ),
         ],

@@ -822,6 +822,7 @@ fn encode_warning_code(warning: &EncodeWarning) -> &'static str {
         EncodeWarning::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
         EncodeWarning::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
         EncodeWarning::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
+        EncodeWarning::ContentLost { .. } => "CONTENT_LOST",
         _ => UNCLASSIFIED,
     }
 }

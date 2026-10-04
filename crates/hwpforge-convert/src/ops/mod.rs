@@ -668,6 +668,13 @@ fn convert_warning_parts(warning: &ConvertWarning) -> (&'static str, String, Opt
                 Some(format!("{part} {location}")),
             );
         }
+        ConvertWarning::HwpxEncode(EncodeWarning::ContentLost { part, path, kind, reason }) => {
+            return (
+                "CONTENT_LOST",
+                format!("{kind} lost: {reason}"),
+                Some(format!("{part}:{path}")),
+            );
+        }
         ConvertWarning::HwpxEncode(_) => {
             return (OTHER, format!("{warning:?}"), None);
         }

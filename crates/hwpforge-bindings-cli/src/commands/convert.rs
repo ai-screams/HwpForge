@@ -188,6 +188,9 @@ fn encode_warning_line(w: &EncodeWarning) -> String {
                 "XML_FORBIDDEN_CHARS_REMOVED at {part} {location}: {count} character(s) removed"
             )
         }
+        EncodeWarning::ContentLost { part, path, kind, reason } => {
+            format!("CONTENT_LOST at {part}:{path}: {kind} lost: {reason}")
+        }
         other => format!("ENCODE_WARNING {other:?}"),
     }
 }
@@ -221,6 +224,24 @@ mod tests {
         // `ParagraphPath`'s own `Display` (`decoder::mod.rs`) renders
         // segments as `section[N].para[N]`, not a `sN/pN` shorthand.
         assert_eq!(line, "LAYOUT_CACHE_DROPPED at section[0].para[1]: x");
+    }
+
+    #[test]
+    fn encode_warning_line_names_the_place_of_lost_content() {
+        // 이것을 실패시키는 것: `encode_warning_line` 의 `ContentLost` 갈래를 빼는 것
+        // (Debug 폴백 `ENCODE_WARNING …` 이 된다).
+        let warning = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(2)]),
+            kind: "shape_emission".into(),
+            reason: "off by 35.08".into(),
+        };
+
+        assert_eq!(
+            encode_warning_line(&warning),
+            "CONTENT_LOST at Contents/section0.xml:section[0].para[2]: shape_emission lost: off by \
+             35.08"
+        );
     }
 
     #[test]

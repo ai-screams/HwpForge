@@ -528,6 +528,23 @@ pub enum EncodeWarning {
         /// 지운 문자 수.
         count: usize,
     },
+    /// Core 에 있던 내용을 HWPX 로 정확히 쓸 수 없다 — 도형의 회전·반사를
+    /// HWPX 가 저장하는 형태(정수 도 각도, 소수 6자리 행렬 계수)로 쓰면 정확한
+    /// 위치에서 2 HWPUNIT 넘게 벗어나는 경우(`kind` = `shape_emission`).
+    ///
+    /// 디코드 쪽 [`crate::DecodeWarning::ContentLost`] 와 같은 이름·코드다.
+    /// 산출물이 입력의 내용을 잃었으므로 의미 손상이다
+    /// ([`Self::is_semantic_loss`]).
+    ContentLost {
+        /// 손실이 난 패키지 part 이름 (예: `Contents/section0.xml`).
+        part: String,
+        /// part 안에서 손실이 난 자리의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 무엇이 빠졌는지 (`shape_emission` …).
+        kind: String,
+        /// 사람이 읽는 사유.
+        reason: String,
+    },
 }
 
 impl EncodeWarning {
@@ -553,6 +570,7 @@ impl EncodeWarning {
     /// | [`Self::NoteHeadSkipped`] | 예 | 각주/미주 가시 번호가 산출물에서 사라진다 |
     /// | [`Self::TitleMarkSkipped`] | 예 | TOC 제목 표식이 붙지 않아 목차가 어긋난다 |
     /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
+    /// | [`Self::ContentLost`] | 예 | 도형이 정확한 위치에서 벗어나 쓰인다 |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
     /// # `LayoutCacheDropped` 가 비-의미 손상인 이유
@@ -576,7 +594,8 @@ impl EncodeWarning {
         match self {
             Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
-            | Self::NoteRestartIgnored { .. } => true,
+            | Self::NoteRestartIgnored { .. }
+            | Self::ContentLost { .. } => true,
             Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
         }
     }
@@ -646,6 +665,9 @@ impl std::fmt::Display for EncodeWarning {
             Self::XmlForbiddenCharsRemoved { part, location, count } => {
                 write!(f, "removed {count} XML-forbidden character(s) from {location} in {part}")
             }
+            Self::ContentLost { part, path, kind, reason } => {
+                write!(f, "{kind} lost at {part}:{path}: {reason}")
+            }
         }
     }
 }
@@ -673,6 +695,23 @@ mod is_semantic_loss_tests {
         }
     }
 
+    /// 이것을 실패시키는 것: `is_semantic_loss` 에서 `ContentLost` 를 `false`
+    /// 갈래로 옮기는 것 — 편집기가 도형이 어긋난 바이트를 내보낸다.
+    #[test]
+    fn content_lost_is_semantic_loss() {
+        let warning = EncodeWarning::ContentLost {
+            part: "Contents/section0.xml".into(),
+            path: path(),
+            kind: "shape_emission".into(),
+            reason: "off by 35.08".into(),
+        };
+        assert!(warning.is_semantic_loss(), "{warning:?}");
+        assert_eq!(
+            warning.to_string(),
+            format!("shape_emission lost at Contents/section0.xml:{}: off by 35.08", path())
+        );
+    }
+
     #[test]
     fn layout_cache_dropped_is_not_semantic_loss() {
         let warning =
@@ -695,7 +734,8 @@ mod is_semantic_loss_tests {
                     EncodeWarning::LayoutCacheDropped { reason, .. }
                     | EncodeWarning::NoteHeadSkipped { reason, .. }
                     | EncodeWarning::TitleMarkSkipped { reason, .. }
-                    | EncodeWarning::NoteRestartIgnored { reason, .. } => reason.clone(),
+                    | EncodeWarning::NoteRestartIgnored { reason, .. }
+                    | EncodeWarning::ContentLost { reason, .. } => reason.clone(),
                     EncodeWarning::XmlForbiddenCharsRemoved { location, .. } => location.clone(),
                 })
                 .collect::<Vec<_>>()
