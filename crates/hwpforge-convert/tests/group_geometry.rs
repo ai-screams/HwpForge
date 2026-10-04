@@ -542,3 +542,67 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
         }
     }
 }
+
+/// The HWP5 group written by the HWPX writer and decoded again gives
+/// the same shapes, leaf by leaf (corners in order and defining points
+/// within 2 HWPUNIT), with no lost content. Every nested group in these
+/// fixtures sits at its parent's corner, so this does not pin the writer's
+/// nested-offset convention (moving a nested child by its parent's offset
+/// twice, the pair 4 failure at P1): no committed fixture has a nested group
+/// off its parent's corner — the projection unit test
+/// `nested_children_are_placed_relative_to_their_direct_group` covers the
+/// decoder side only.
+///
+/// 이것을 실패시키는 것: HWPX 방출 정책의 행렬 계수를 소수 1자리로 거칠게 쓰는
+/// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋난다).
+#[test]
+fn hwp5_groups_survive_the_hwpx_writer() {
+    for hwp in [
+        "group-f1-g1-scaled.hwp",
+        "group-f1-g3-flipped.hwp",
+        "group-f1-g4-nested.hwp",
+        "group-f8-poly-margin.hwp",
+        "rotflip-group.hwp",
+    ] {
+        let (ours, _) = hwp5_group(hwp);
+        let (bytes, _) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
+        let back = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
+        let lost: Vec<_> = back
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, hwpforge_smithy_hwpx::DecodeWarning::ContentLost { .. }))
+            .collect();
+        assert!(lost.is_empty(), "{hwp}: {lost:?}");
+        let again = back.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .find_map(|r| match &r.content {
+                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
+                    Some((**c).clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        // The writer stores whole degrees (F9 rect 9.9977° → 10°), so the
+        // turn is compared by where the corners land, not by the angle.
+        let page = |g: &Control| {
+            let mut out = Vec::new();
+            if let Control::Group { children, .. } = g {
+                for child in children {
+                    collect_leaves(child, offset_of(g), &mut out);
+                }
+            }
+            out
+        };
+        let (a, b) = (page(&ours), page(&again));
+        assert_eq!(a.len(), b.len(), "{hwp}");
+        for (x, y) in a.iter().zip(&b) {
+            let off = dist(&x.corners, &y.corners).max(dist(&x.points, &y.points));
+            assert!(
+                x.kind == y.kind && off <= 2.0,
+                "{hwp}: off by {off:.2}\n  hwp5 {x:?}\n  back {y:?}"
+            );
+        }
+    }
+}
