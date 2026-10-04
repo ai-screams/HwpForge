@@ -202,3 +202,32 @@ fn decode_warnings_reach_the_insert_output() {
     assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one input decode, reported once: {codes:?}");
     assert_eq!((out.inserted, out.deleted), (1, 0), "the edit itself still happened");
 }
+
+/// A text holding a character XML cannot carry is inserted without it —
+/// it used to fail the self-verify — and the removal is reported.
+#[test]
+fn a_forbidden_character_in_a_text_is_removed_and_reported() {
+    // 이것을 실패시키는 것: `insert_para` 가 `encode_warnings` 를 `warnings` 에 합치지 않는 것.
+    let bytes = three_paragraphs();
+
+    let out = insert_para(
+        &bytes,
+        &InsertParaOptions::default()
+            .with_section(0)
+            .with_anchor(0)
+            .with_text(owned(&["새\u{1}글"])),
+    )
+    .expect("insert_para");
+
+    assert_eq!(texts(&out.bytes), owned(&["첫째", "새글", "둘째", "셋째"]));
+    let codes: Vec<(String, String)> =
+        out.meta().warnings.into_iter().map(|w| (w.code, w.message)).collect();
+    assert_eq!(
+        codes,
+        [(
+            "XML_FORBIDDEN_CHARS_REMOVED".to_string(),
+            "removed 1 XML-forbidden character(s) from new paragraph 1 in Contents/section0.xml"
+                .to_string()
+        )]
+    );
+}

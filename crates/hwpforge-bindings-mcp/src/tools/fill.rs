@@ -24,7 +24,9 @@ pub struct FillData {
     /// Size of the output file in bytes.
     pub size_bytes: u64,
     /// Decode warnings from resolving the field names (e.g. a dropped
-    /// layout cache) — `ops::FillOutput::warnings`. Omitted when empty.
+    /// layout cache), then one `XML_FORBIDDEN_CHARS_REMOVED` per value that
+    /// had characters removed — `ops::FillOutput::warnings`. Omitted when
+    /// empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ToolWarningInfo>,
 }
@@ -156,5 +158,22 @@ mod tests {
         let value = serde_json::to_value(&data).unwrap();
         assert_eq!(value["warnings"][0]["code"], "LAYOUT_CACHE_DROPPED");
         assert!(!value["warnings"][0]["message"].as_str().unwrap_or_default().is_empty());
+    }
+
+    /// A value holding a character XML cannot carry reaches the MCP caller
+    /// as a warning naming the field.
+    // 이것을 실패시키는 것: ops `fill` 이 인코드 경고 채널을 `warnings` 에 합치지 않는 것.
+    #[test]
+    fn fill_via_mcp_surface_reports_a_removed_control_character() {
+        let path = fixture("fields/clickhere_named.hwpx");
+        let dir = tempfile::tempdir().unwrap();
+        let values =
+            std::collections::BTreeMap::from([("user_email".to_string(), "a\u{1}b".to_string())]);
+        let out = dir.path().join("out.hwpx");
+        let data = run_fill(&path, &values, out.to_str().unwrap()).unwrap();
+
+        let codes: Vec<&str> = data.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert_eq!(codes, ["XML_FORBIDDEN_CHARS_REMOVED"], "{:?}", data.warnings);
+        assert!(data.warnings[0].message.contains("field 'user_email'"), "{:?}", data.warnings);
     }
 }

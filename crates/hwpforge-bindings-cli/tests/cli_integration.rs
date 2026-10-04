@@ -4466,6 +4466,26 @@ fn fill_named_field_end_to_end() {
 }
 
 #[test]
+fn fill_reports_a_removed_control_character() {
+    // 이것을 실패시키는 것: ops `fill` 이 인코드 경고 채널을 `warnings` 에 합치지 않는 것.
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled_ctrl.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=a\u{1}b",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["warnings"][0]["code"], "XML_FORBIDDEN_CHARS_REMOVED", "{value}");
+    let (again, _, _) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(again["fields"][0]["current"], "ab");
+}
+
+#[test]
 fn fill_unknown_name_reports_available_fields() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();

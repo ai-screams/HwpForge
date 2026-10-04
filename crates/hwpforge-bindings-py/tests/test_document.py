@@ -108,6 +108,21 @@ def test_editing_leaves_the_receiver_alone(fields_bytes: bytes) -> None:
     assert [field["name"] for field in result.report["filled"]] == ["user_email"]
 
 
+def test_a_fill_value_with_a_control_character_comes_back_as_a_warning(
+    fields_bytes: bytes,
+) -> None:
+    # 이것을 실패시키는 것: ops `fill` 이 인코드 경고 채널을 `warnings` 에 합치지 않는 것.
+    result = Document.from_bytes(fields_bytes).fill({"user_email": "a\x01b"})
+
+    assert [field["name"] for field in result.report["filled"]] == ["user_email"]
+    assert [(w["code"], w["message"]) for w in result.report["warnings"]] == [
+        (
+            "XML_FORBIDDEN_CHARS_REMOVED",
+            "removed 1 XML-forbidden character(s) from field 'user_email' in Contents/section0.xml",
+        )
+    ]
+
+
 def test_results_are_frozen(fields_bytes: bytes) -> None:
     result = Document.from_bytes(fields_bytes).fill({"user_email": EMAIL})
 

@@ -183,3 +183,49 @@ fn an_undecodable_base_is_a_decode_failure() {
 
     assert_eq!(err.code(), OpsCode::DecodeFailed, "{err}");
 }
+
+/// An edited text slot holding a character XML cannot carry is written
+/// without it, and the removal is reported with the slot path.
+#[test]
+fn a_forbidden_character_in_an_edited_slot_is_removed_and_reported() {
+    // 이것을 실패시키는 것: `patch` 가 `encode_warnings` 를 `warnings` 에 합치지 않는 것.
+    use hwpforge::core::image::ImageStore;
+    use hwpforge::core::run::Run;
+    use hwpforge::core::{Document, PageSettings, Paragraph, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+    use hwpforge::hwpx::HwpxEncoder;
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("before", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    styles.push_char_shape(HwpxCharShape::default());
+    styles.push_para_shape(HwpxParaShape::default());
+    let bytes =
+        HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
+            .expect("encode");
+    let exported = export_section(&bytes, &ExportSectionOptions::default()).expect("export");
+    let mut value = serde_json::to_value(&exported.section).expect("json");
+    let slot =
+        value.pointer_mut("/section/paragraphs/0/runs/0/content/Text").expect("first run is text");
+    *slot = serde_json::Value::String("a\u{1}b".to_string());
+
+    let out = patch(&bytes, &PatchOptions::default().with_patch(value.to_string())).expect("patch");
+
+    let codes: Vec<(String, String)> =
+        out.meta().warnings.into_iter().map(|w| (w.code, w.message)).collect();
+    assert_eq!(
+        codes,
+        [(
+            "XML_FORBIDDEN_CHARS_REMOVED".to_string(),
+            "removed 1 XML-forbidden character(s) from paragraphs[0].runs[0].text in Contents/section0.xml"
+                .to_string()
+        )]
+    );
+}

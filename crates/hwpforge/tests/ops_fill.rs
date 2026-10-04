@@ -264,3 +264,26 @@ fn decode_warnings_reach_the_fill_output() {
     assert_eq!(codes, ["LAYOUT_CACHE_DROPPED"], "one decode, reported once: {codes:?}");
     assert_eq!(out.filled.len(), 1, "the edit itself still happened");
 }
+
+/// A value holding a character XML cannot carry is filled without it, and
+/// the removal reaches the caller as a warning with its own code.
+#[test]
+fn a_forbidden_character_in_a_value_is_removed_and_reported() {
+    // 이것을 실패시키는 것: `fill` 이 `encode_warnings` 를 `warnings` 에 합치지 않는 것.
+    let bytes = named_fixture();
+
+    let out =
+        fill(&bytes, &pairs(&[("user_email", "a\u{1}b")]), &FillOptions::default()).expect("fill");
+
+    assert_eq!(body(&out.bytes, 0, "user_email"), "ab");
+    let codes: Vec<(String, String)> =
+        out.meta().warnings.into_iter().map(|w| (w.code, w.message)).collect();
+    assert_eq!(
+        codes,
+        [(
+            "XML_FORBIDDEN_CHARS_REMOVED".to_string(),
+            "removed 1 XML-forbidden character(s) from field 'user_email' in Contents/section0.xml"
+                .to_string()
+        )]
+    );
+}

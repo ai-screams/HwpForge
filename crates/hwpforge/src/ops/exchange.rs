@@ -20,8 +20,9 @@
 //! [`from_json`] **generates** a package from JSON: there is no original to
 //! preserve, so encode warnings are reported rather than fatal. [`patch`]
 //! **preserves**: it rewrites one section's text inside the existing package
-//! and leaves every other byte alone, so it has no encode stage and no
-//! encode warnings.
+//! and leaves every other byte alone, so it has no encode stage. Its only
+//! encode warnings are about the edited text itself: characters XML 1.0
+//! cannot represent are removed from it and reported.
 
 use hwpforge_core::caption::Caption;
 use hwpforge_core::control::{Control, GroupChild};
@@ -804,12 +805,17 @@ pub struct PatchOutput {
     pub section: usize,
     /// Section count of the output package, which a patch never changes.
     pub sections: usize,
-    /// Decoder warnings for the base package, in decoder order.
+    /// Decoder warnings for the base package, in decoder order, then one
+    /// `XML_FORBIDDEN_CHARS_REMOVED` per edited text slot that had
+    /// characters removed.
     ///
-    /// There are no *encode* warnings here and there never will be: a
-    /// preserving patch splices one section's XML and leaves every other ZIP
-    /// entry alone, so no encoder runs. The base is still decoded, to check
-    /// the replacement against it, and that decode reports.
+    /// A preserving patch splices one section's XML and leaves every other
+    /// ZIP entry alone, so no encoder runs. The base is still decoded, to
+    /// check the replacement against it, and that decode reports. A slot
+    /// whose new text holds characters XML 1.0 cannot represent (the C0
+    /// controls other than TAB, LF, CR and U+001F, plus U+FFFE/U+FFFF) is
+    /// written without them, and the warning's location is the slot path.
+    /// Slots handed back unchanged are never looked at.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -881,15 +887,13 @@ pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 
     let diagnosed =
-        HwpxPatcher::patch_exported_section_with_diagnostics(hwpx, opts.section, &exported)?;
+        HwpxPatcher::patch_exported_section_with_codec_diagnostics(hwpx, opts.section, &exported)?;
     let SectionPatchOutcome { bytes, patched_section, sections } = diagnosed.value;
+    let mut warnings: Vec<OpsWarning> =
+        diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
+    warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
 
-    Ok(PatchOutput {
-        bytes,
-        section: patched_section,
-        sections,
-        warnings: diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect(),
-    })
+    Ok(PatchOutput { bytes, section: patched_section, sections, warnings })
 }
 
 #[cfg(test)]
