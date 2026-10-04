@@ -110,6 +110,7 @@ const AUDITED: &[Audited] = &[
             // leaves out; reported under the encoder's own code
             // (`EncodeWarning::code`), part and path in the location column.
             ("ContentLost", "CONTENT_LOST"),
+            ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
         ],
     },
     Audited {

@@ -787,7 +787,8 @@ impl OpsWarning {
     /// `NOTE_RESTART_IGNORED` (the CLI prints these warnings uncoded today),
     /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`, and
     /// `CONTENT_LOST` (decode or encode: input content the model or the
-    /// output could not carry). `ASSET_DROPPED`
+    /// output could not carry) and `PACKAGE_ID_CONFLICT` (two `content.hpf`
+    /// items share one id). `ASSET_DROPPED`
     /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
     /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),
     /// and keeps the typed disposition in its `assets` list; the two codes
@@ -1074,6 +1075,27 @@ mod tests {
             panic!("wrong variant: {error:?}");
         };
         assert_eq!(warnings[0].code, "CONTENT_LOST");
+    }
+
+    /// C4: a manifest id two items share blocks a fail-closed editor.
+    ///
+    /// 이것을 실패시키는 것: `EncodeWarning::is_semantic_loss` 에서
+    /// `PackageIdConflict` 를 `false` 갈래로 옮기는 것.
+    #[test]
+    fn package_id_conflict_refuses_the_bytes() {
+        let conflict = EncodeWarning::PackageIdConflict {
+            id: "header".into(),
+            hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+        };
+        let outcome = EncodeOutcome { bytes: vec![0x50, 0x4b], warnings: vec![conflict] };
+
+        let error = take_bytes_fail_closed(outcome).expect_err("must fail closed");
+
+        assert_eq!(error.code(), OpsCode::EncodeSemanticLoss);
+        let OpsError::EncodeSemanticLoss { warnings, .. } = &error else {
+            panic!("wrong variant: {error:?}");
+        };
+        assert_eq!(warnings[0].code, "PACKAGE_ID_CONFLICT");
     }
 
     #[test]

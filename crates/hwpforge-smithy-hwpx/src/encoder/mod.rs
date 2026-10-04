@@ -4,6 +4,7 @@
 //! - `header` — [`HwpxStyleStore`] → `header.xml` serialization
 //! - `section` — Core `Section` → `section*.xml` serialization
 //! - `package` — ZIP assembly (mimetype, metadata, content files)
+//! - `references` — manifest id and image reference checks on the package
 //!
 //! The public entry point is [`HwpxEncoder`], which orchestrates
 //! the full pipeline: header → sections → ZIP packaging.
@@ -12,6 +13,7 @@ pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod header_tabs;
 pub(crate) mod package;
+mod references;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
@@ -550,7 +552,21 @@ pub enum EncodeWarning {
         /// 사람이 읽는 사유.
         reason: String,
     },
+    /// `content.hpf` manifest 의 한 `id` 를 항목 둘 이상이 함께 쓴다 — 예:
+    /// 이미지 저장소 키 `header.png` 의 항목 id 가 고정 항목 `header`
+    /// (`Contents/header.xml`)와 같아지거나, `a.png`·`a.jpg` 가 둘 다 `a` 가
+    /// 된다. `binaryItemIDRef`·`idref` 가 어느 항목을 가리키는지 정해지지
+    /// 않으므로 의미 손상이다. 바이트는 바꾸지 않는다.
+    PackageIdConflict {
+        /// 겹친 manifest id.
+        id: String,
+        /// 그 id 를 쓰는 항목들의 `href`, manifest 순서.
+        hrefs: Vec<String>,
+    },
 }
+
+/// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
+const CONTENT_HPF_PART: &str = "Contents/content.hpf";
 
 impl EncodeWarning {
     /// 이 경고가 **의미 손상**인지 — 즉 산출 바이트가 입력의 의미를 잃었는지.
@@ -576,6 +592,7 @@ impl EncodeWarning {
     /// | [`Self::TitleMarkSkipped`] | 예 | TOC 제목 표식이 붙지 않아 목차가 어긋난다 |
     /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
     /// | [`Self::ContentLost`] | 예 | 도형이 정확한 위치에서 벗어나 쓰이거나, 컨트롤·run 내용이 산출물에서 빠진다 |
+    /// | [`Self::PackageIdConflict`] | 예 | 참조가 어느 manifest 항목을 가리키는지 정해지지 않는다 |
     /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
@@ -601,7 +618,8 @@ impl EncodeWarning {
             Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. }
-            | Self::ContentLost { .. } => true,
+            | Self::ContentLost { .. }
+            | Self::PackageIdConflict { .. } => true,
             Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
         }
     }
@@ -631,6 +649,7 @@ impl EncodeWarning {
             Self::NoteRestartIgnored { .. } => "NOTE_RESTART_IGNORED",
             Self::XmlForbiddenCharsRemoved { .. } => "XML_FORBIDDEN_CHARS_REMOVED",
             Self::ContentLost { .. } => "CONTENT_LOST",
+            Self::PackageIdConflict { .. } => "PACKAGE_ID_CONFLICT",
         }
     }
 
@@ -663,6 +682,7 @@ impl EncodeWarning {
             Self::XmlForbiddenCharsRemoved { part, .. } | Self::ContentLost { part, .. } => {
                 Some(part)
             }
+            Self::PackageIdConflict { .. } => Some(CONTENT_HPF_PART),
         }
     }
 
@@ -693,6 +713,7 @@ impl EncodeWarning {
                 Some(format!("{part} {location}"))
             }
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
+            Self::PackageIdConflict { .. } => Some(format!("{CONTENT_HPF_PART} opf:item@id")),
         }
     }
 
@@ -723,6 +744,9 @@ impl EncodeWarning {
                 format!("removed {count} XML-forbidden character(s)")
             }
             Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
+            Self::PackageIdConflict { id, hrefs } => {
+                format!("{} manifest items share id \"{id}\": {}", hrefs.len(), hrefs.join(", "))
+            }
         }
     }
 }
@@ -794,6 +818,12 @@ impl std::fmt::Display for EncodeWarning {
             Self::ContentLost { part, path, kind, reason } => {
                 write!(f, "{kind} lost at {part}:{path}: {reason}")
             }
+            Self::PackageIdConflict { id, hrefs } => write!(
+                f,
+                "{} manifest items share id \"{id}\" in {CONTENT_HPF_PART}: {}",
+                hrefs.len(),
+                hrefs.join(", ")
+            ),
         }
     }
 }
@@ -853,6 +883,7 @@ mod is_semantic_loss_tests {
                 "LAYOUT_CACHE_DROPPED",
                 "NOTE_HEAD_SKIPPED",
                 "NOTE_RESTART_IGNORED",
+                "PACKAGE_ID_CONFLICT",
                 "TITLE_MARK_SKIPPED",
                 "XML_FORBIDDEN_CHARS_REMOVED",
             ]
@@ -915,6 +946,7 @@ mod is_semantic_loss_tests {
                     | EncodeWarning::NoteRestartIgnored { reason, .. }
                     | EncodeWarning::ContentLost { reason, .. } => reason.clone(),
                     EncodeWarning::XmlForbiddenCharsRemoved { location, .. } => location.clone(),
+                    EncodeWarning::PackageIdConflict { id, .. } => id.clone(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1159,6 +1191,8 @@ impl HwpxEncoder {
             &master_pages.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
             &embedded_oles.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
         );
+        // C4: the manifest the writer is about to write, checked as is.
+        warnings.extend(references::manifest_id_conflicts(&manifest));
         let bytes = PackageWriter::write_hwpx_with_manifest(
             document.metadata(),
             &manifest,

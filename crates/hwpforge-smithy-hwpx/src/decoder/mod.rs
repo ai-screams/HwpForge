@@ -353,6 +353,10 @@ pub mod warning_samples {
                 kind: "unknown".to_string(),
                 reason: "sample".to_string(),
             },
+            EncodeWarning::PackageIdConflict {
+                id: "header".to_string(),
+                hrefs: vec!["Contents/header.xml".to_string(), "BinData/header.png".to_string()],
+            },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
@@ -363,7 +367,8 @@ pub mod warning_samples {
                 | EncodeWarning::TitleMarkSkipped { .. }
                 | EncodeWarning::NoteRestartIgnored { .. }
                 | EncodeWarning::XmlForbiddenCharsRemoved { .. }
-                | EncodeWarning::ContentLost { .. } => {}
+                | EncodeWarning::ContentLost { .. }
+                | EncodeWarning::PackageIdConflict { .. } => {}
             }
         }
         samples

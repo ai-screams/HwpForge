@@ -435,6 +435,30 @@ mod tests {
         assert_dto_folds_into_info(&warning, &dto);
     }
 
+    /// C4 의 manifest id 겹침은 자기 코드와 `content.hpf` 자리로 실린다.
+    ///
+    /// 이것을 실패시키는 것: convert 의 `convert_warning_parts` 마지막 인코드
+    /// 갈래를 `(OTHER, Debug, None)` 으로 되돌리는 것.
+    #[test]
+    fn convert_stage_dto_reports_package_id_conflict_by_its_own_code() {
+        let warning = ConvertOpsWarning::Convert(ConvertWarning::HwpxEncode(
+            EncodeWarning::PackageIdConflict {
+                id: "header".into(),
+                hrefs: vec!["Contents/header.xml".into(), "BinData/header.png".into()],
+            },
+        ));
+        let dto = warning_dto(&warning);
+        assert_eq!(dto.stage, "convert");
+        assert_eq!(dto.code, "PACKAGE_ID_CONFLICT");
+        assert_eq!(
+            dto.message,
+            "2 manifest items share id \"header\": Contents/header.xml, BinData/header.png"
+        );
+        assert_eq!(dto.location.as_deref(), Some("Contents/content.hpf opf:item@id"));
+        assert_no_location_prefix(&dto);
+        assert_dto_folds_into_info(&warning, &dto);
+    }
+
     /// W5(`6ef353b`)의 `render_warning_dto` match(같은 파일 133–249 행)가
     /// 내던 `(code, message, location)` 세 열을 **리터럴로** 고정한다.
     ///
