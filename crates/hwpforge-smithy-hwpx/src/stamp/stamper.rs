@@ -372,11 +372,13 @@ impl HwpxStamper {
     ) -> Result<crate::diagnostics::WithCodecWarnings<StampResult>, StamperError> {
         // ── admission gate ──────────────────────────────────────────
         let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
-        reject_input_content_loss(&d0.warnings)?;
         let e0 = encode_hwpx(&d0)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1)?;
         check_zip_carry(base, &e0)?;
+        // After the older checks, so an input they already refused keeps
+        // their error code.
+        reject_input_content_loss(&d0.warnings)?;
 
         // ── apply on the admitted decode ────────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
@@ -446,11 +448,13 @@ impl HwpxStamper {
 
         // ── admission gate (identical to v1) ────────────────────────
         let d0 = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
-        reject_input_content_loss(&d0.warnings)?;
         let e0 = encode_hwpx(&d0)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| StamperError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1)?;
         check_zip_carry(base, &e0)?;
+        // After the older checks, so an input they already refused keeps
+        // their error code.
+        reject_input_content_loss(&d0.warnings)?;
 
         // ── unified preflight, then mutate ──────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;

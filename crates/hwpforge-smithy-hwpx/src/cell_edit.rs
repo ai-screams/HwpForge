@@ -601,11 +601,13 @@ impl HwpxCellEditor {
         specs: &[CellSpec],
     ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
-        reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
         let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
+        // After the older checks, so an input they already refused keeps
+        // their error code.
+        reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
 
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
         let outcome = apply_set_cells(&mut document, specs)?;

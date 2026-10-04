@@ -3810,9 +3810,75 @@ mod group_tests {
         assert_refused_by_stamp_and_set_cell("group-sheared-child.hwpx", "group_child_transform");
     }
 
-    /// Same refusal for a table inside a grouped text box.
+    /// A table inside a grouped text box is refused too. Here the no-op
+    /// round trip already differs (the group encoder drops the table's size),
+    /// so the older admission check answers first, with the same error type.
     #[test]
     fn editors_refuse_an_input_with_an_object_inside_a_group_child() {
-        assert_refused_by_stamp_and_set_cell("group-nested-table.hwpx", "group_nested_object");
+        use crate::stamp::{HwpxStamper, StamperError};
+        use crate::{CellEditError, HwpxCellEditor};
+        let bytes = fixture("group-nested-table.hwpx");
+        assert!(matches!(
+            HwpxStamper::stamp(&bytes, &[]),
+            Err(StamperError::NotRoundTripSafe { .. })
+        ));
+        assert!(matches!(
+            HwpxCellEditor::set_cells(&bytes, &[]),
+            Err(CellEditError::NotRoundTripSafe { .. })
+        ));
+    }
+
+    /// `bytes` with one more ZIP entry the encoder does not write.
+    fn with_uncarried_entry(bytes: &[u8]) -> Vec<u8> {
+        use std::io::{Read, Write};
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
+            out.start_file(name, opts).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        out.start_file("Preview/PrvText.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all("미리보기".as_bytes()).unwrap();
+        out.finish().unwrap().into_inner()
+    }
+
+    /// An input both carrying a ZIP entry the encoder drops and losing group
+    /// content keeps the older code, `UncarriedZipEntries`
+    /// (`INPUT_ENTRIES_NOT_CARRIED`): the content-loss check runs last.
+    ///
+    /// 이것을 실패시키는 것: `reject_input_content_loss` 를 `check_zip_carry` 앞으로
+    /// 옮기는 것 (stamp v1·v2·set-cell 각각 — 그 표면이 `NotRoundTripSafe` 로 바뀐다).
+    #[test]
+    fn uncarried_entries_keep_their_code_over_lost_content() {
+        use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
+        use crate::{CellEditError, HwpxCellEditor};
+        let bytes = with_uncarried_entry(&fixture("group-sheared-child.hwpx"));
+        let doc = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(lost_kinds(&doc.warnings), ["group_child_transform"]);
+
+        let uncarried = |entries: &[String]| entries == ["Preview/PrvText.txt"];
+        match HwpxStamper::stamp(&bytes, &[]) {
+            Err(StamperError::UncarriedZipEntries { entries }) if uncarried(&entries) => {}
+            other => panic!("stamp v1: {other:?}"),
+        }
+        let request = StampRequestV2 {
+            schema_version: STAMP_MAP_VERSION,
+            source_sha256: crate::patch::sha256_hex(&bytes),
+            text: Vec::new(),
+            cells: Vec::new(),
+        };
+        match HwpxStamper::stamp_v2(&bytes, &request) {
+            Err(StamperError::UncarriedZipEntries { entries }) if uncarried(&entries) => {}
+            other => panic!("stamp v2: {other:?}"),
+        }
+        match HwpxCellEditor::set_cells(&bytes, &[]) {
+            Err(CellEditError::UncarriedZipEntries { entries }) if uncarried(&entries) => {}
+            other => panic!("set-cell: {other:?}"),
+        }
     }
 }
