@@ -745,10 +745,18 @@ pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<()
     doc_a.strip_layout_caches();
     doc_b.strip_layout_caches();
     if doc_a != doc_b {
-        return Err(StamperError::NotRoundTripSafe {
-            component: "document".to_string(),
-            diff_path: first_diff_path(&doc_a, &doc_b),
-        });
+        // A shape's exact Core value need not survive HWPX storage digit for
+        // digit (whole-degree angles, integer sizes): a shape that lands
+        // within the exactness tolerance of where it was is the same shape.
+        let va = serde_json::to_value(&doc_a).unwrap_or(serde_json::Value::Null);
+        let mut vb = serde_json::to_value(&doc_b).unwrap_or(serde_json::Value::Null);
+        align_equivalent_shapes(&va, &mut vb);
+        if va != vb {
+            return Err(StamperError::NotRoundTripSafe {
+                component: "document".to_string(),
+                diff_path: first_diff_path(&va, &vb),
+            });
+        }
     }
     if a.style_store != b.style_store {
         return Err(StamperError::NotRoundTripSafe {
@@ -763,6 +771,223 @@ pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<()
         });
     }
     Ok(())
+}
+
+/// Shape kinds whose geometry is compared within tolerance.
+const SHAPE_KINDS: [&str; 9] =
+    ["TextBox", "Rect", "Ellipse", "Arc", "Polygon", "Curve", "ConnectLine", "Line", "Group"];
+
+/// Walks two serialized documents in step and, wherever both hold the same
+/// kind of shape at the same place whose box corners and defining points lie
+/// within 2 HWPUNIT of each other (each in its own parent's coordinates),
+/// copies `a`'s geometry fields into `b` — so only a real difference is left
+/// for the equality check. Everything else about the shapes must still match.
+fn align_equivalent_shapes(a: &serde_json::Value, b: &mut serde_json::Value) {
+    use serde_json::Value;
+    let one_shape = |v: &Value| match v {
+        Value::Object(m) if m.len() == 1 => {
+            m.keys().next().filter(|k| SHAPE_KINDS.contains(&k.as_str())).cloned()
+        }
+        _ => None,
+    };
+    if let (Some(ka), Some(kb)) = (one_shape(a), one_shape(b)) {
+        if ka == kb {
+            align_shape(a, b);
+        }
+    }
+    match (a, b) {
+        (Value::Object(ma), Value::Object(mb)) => {
+            for (k, va) in ma {
+                if let Some(vb) = mb.get_mut(k) {
+                    align_equivalent_shapes(va, vb);
+                }
+            }
+        }
+        (Value::Array(va), Value::Array(vb)) if va.len() == vb.len() => {
+            for (ea, eb) in va.iter().zip(vb.iter_mut()) {
+                align_equivalent_shapes(ea, eb);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Replaces `b` (one serialized shape control) with `b` carrying `a`'s
+/// geometry when the two are the same shape within tolerance.
+fn align_shape(a: &serde_json::Value, b: &mut serde_json::Value) {
+    let (Ok(ca), Ok(cb)) = (
+        serde_json::from_value::<Control>(a.clone()),
+        serde_json::from_value::<Control>(b.clone()),
+    ) else {
+        return;
+    };
+    if !same_place(&ca, &cb) {
+        return;
+    }
+    let aligned = with_geometry_of(cb, &ca);
+    if let Ok(v) = serde_json::to_value(&aligned) {
+        *b = v;
+    }
+}
+
+/// Where a shape's box corners and defining points land in its parent's
+/// coordinates (exact Core definition).
+fn placed_points(c: &Control) -> Option<Vec<(f64, f64)>> {
+    use hwpforge_core::control::geometry::{emitted_corners, local_transform, EmissionPolicy};
+    let exact = EmissionPolicy::exact();
+    let mut out = emitted_corners(c, &exact)?.to_vec();
+    let l = local_transform(c, &exact)?;
+    let (x, y) = shape_offset(c);
+    out.extend(defining_points(c).iter().map(|p| {
+        let (px, py) = l.apply((f64::from(p.x), f64::from(p.y)));
+        (px + f64::from(x), py + f64::from(y))
+    }));
+    Some(out)
+}
+
+fn same_place(a: &Control, b: &Control) -> bool {
+    if std::mem::discriminant(a) != std::mem::discriminant(b) {
+        return false;
+    }
+    match (placed_points(a), placed_points(b)) {
+        (Some(pa), Some(pb)) if pa.len() == pb.len() => pa.iter().zip(&pb).all(|(p, q)| {
+            (p.0 - q.0).hypot(p.1 - q.1) <= crate::decoder::group_geometry::EXACT_TOLERANCE
+        }),
+        _ => false,
+    }
+}
+
+fn shape_offset(c: &Control) -> (i32, i32) {
+    let placement = match c {
+        Control::TextBox { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. }
+        | Control::Line { placement, .. }
+        | Control::Group { placement, .. } => placement,
+        _ => return (0, 0),
+    };
+    placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
+}
+
+fn defining_points(c: &Control) -> Vec<hwpforge_core::control::ShapePoint> {
+    match c {
+        Control::Line { start, end, .. } => vec![*start, *end],
+        Control::Ellipse { center, axis1, axis2, .. } => vec![*center, *axis1, *axis2],
+        Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
+            vec![*center, *axis1, *axis2, *start1, *end1, *start2, *end2]
+        }
+        Control::Polygon { vertices, .. } => vertices.clone(),
+        Control::Curve { points, .. } => points.clone(),
+        Control::ConnectLine { start, end, control_points, .. } => {
+            let mut v = vec![*start, *end];
+            v.extend(control_points.iter().copied());
+            v
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// `b` with `a`'s size, offset, rotation, flip and defining points (`a` and
+/// `b` are the same kind).
+fn with_geometry_of(mut b: Control, a: &Control) -> Control {
+    use hwpforge_core::control::ShapeStyle;
+    type Geo<'c> = (
+        Option<(&'c mut hwpforge_foundation::HwpUnit, &'c mut hwpforge_foundation::HwpUnit)>,
+        Option<&'c mut Option<hwpforge_core::placement::ObjectPlacement>>,
+        Option<&'c mut Option<ShapeStyle>>,
+    );
+    fn parts(c: &mut Control) -> Geo<'_> {
+        match c {
+            Control::TextBox { width, height, placement, style, .. }
+            | Control::Rect { width, height, placement, style, .. }
+            | Control::Ellipse { width, height, placement, style, .. }
+            | Control::Arc { width, height, placement, style, .. }
+            | Control::Polygon { width, height, placement, style, .. }
+            | Control::Curve { width, height, placement, style, .. }
+            | Control::ConnectLine { width, height, placement, style, .. }
+            | Control::Line { width, height, placement, style, .. } => {
+                (Some((width, height)), Some(placement), Some(style))
+            }
+            Control::Group { width, height, placement, .. } => {
+                (Some((width, height)), Some(placement), None)
+            }
+            _ => (None, None, None),
+        }
+    }
+    let mut a = a.clone();
+    let points_a = defining_points(&a);
+    {
+        let (size_a, place_a, style_a) = parts(&mut a);
+        let (size_b, place_b, style_b) = parts(&mut b);
+        if let (Some((wa, ha)), Some((wb, hb))) = (size_a, size_b) {
+            *wb = *wa;
+            *hb = *ha;
+        }
+        if let (Some(pa), Some(pb)) = (place_a, place_b) {
+            match (pa.as_ref(), pb.as_mut()) {
+                (Some(pa), Some(pb)) => {
+                    pb.horz_offset = pa.horz_offset;
+                    pb.vert_offset = pa.vert_offset;
+                }
+                // A group child at its parent's corner has no placement; one
+                // a unit or two away has the group-child form. Only that form
+                // is matched, so an inline shape never equals a floating one.
+                (None, Some(q)) if is_group_child_form(q) => *pb = None,
+                (Some(p), None) if is_group_child_form(p) => *pb = Some(p.clone()),
+                _ => {}
+            }
+        }
+        if let (Some(sa), Some(sb)) = (style_a, style_b) {
+            let (rotation, flip) = sa.as_ref().map_or((None, None), |s| (s.rotation, s.flip));
+            let mut s = sb.take().unwrap_or_default();
+            s.rotation = rotation;
+            s.flip = flip;
+            // A style that only held the rotation goes away with it.
+            *sb = (sa.is_some() || s != ShapeStyle::default()).then_some(s);
+        }
+    }
+    let mut pts = points_a.into_iter();
+    for p in defining_points_mut(&mut b) {
+        if let Some(q) = pts.next() {
+            *p = q;
+        }
+    }
+    b
+}
+
+/// The placement the group decoders give a child away from its parent's
+/// corner (floating in front of text, paper-relative, overlap allowed).
+fn is_group_child_form(p: &hwpforge_core::placement::ObjectPlacement) -> bool {
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+    p.text_wrap == ObjectTextWrap::InFrontOfText
+        && p.text_flow == ObjectTextFlow::BothSides
+        && !p.treat_as_char
+        && !p.flow_with_text
+        && p.allow_overlap
+        && p.vert_rel_to == ObjectRelativeTo::Paper
+        && p.horz_rel_to == ObjectRelativeTo::Paper
+}
+
+fn defining_points_mut(c: &mut Control) -> Vec<&mut hwpforge_core::control::ShapePoint> {
+    match c {
+        Control::Line { start, end, .. } => vec![start, end],
+        Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
+        Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
+            vec![center, axis1, axis2, start1, end1, start2, end2]
+        }
+        Control::Polygon { vertices, .. } => vertices.iter_mut().collect(),
+        Control::Curve { points, .. } => points.iter_mut().collect(),
+        Control::ConnectLine { start, end, control_points, .. } => {
+            let mut v = vec![start, end];
+            v.extend(control_points.iter_mut());
+            v
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// First differing JSON path between two serializable values.
@@ -979,6 +1204,119 @@ mod tests {
         let a = doc_with_text("같음");
         let b = doc_with_text("같음");
         assert!(admission_compare(&a, &b).is_ok());
+    }
+
+    fn shapes_fixture(name: &str) -> Vec<u8> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/shapes/");
+        std::fs::read(format!("{path}{name}")).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
+    }
+
+    /// `decode(bytes)` and the document of `decode(encode(decode(bytes)))`
+    /// with the first decode's stores (Hancom's style store does not round
+    /// trip yet; only the document is under test here).
+    fn no_op_round_trip(bytes: &[u8]) -> (HwpxDocument, HwpxDocument) {
+        let d0 = HwpxDecoder::decode(bytes).unwrap();
+        let d1 = HwpxDecoder::decode(&encode_hwpx(&d0).unwrap()).unwrap();
+        let d1 = HwpxDocument {
+            warnings: Vec::new(),
+            document: d1.document,
+            style_store: d0.style_store.clone(),
+            image_store: d0.image_store.clone(),
+        };
+        (d0, d1)
+    }
+
+    fn first_group_children_mut(doc: &mut HwpxDocument) -> &mut Vec<Control> {
+        doc.document
+            .sections_mut()
+            .iter_mut()
+            .flat_map(|s| s.paragraphs.iter_mut())
+            .flat_map(|p| p.runs.iter_mut())
+            .find_map(|r| match &mut r.content {
+                RunContent::Control(c) => match c.as_mut() {
+                    Control::Group { children, .. } => Some(children),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("a group")
+    }
+
+    /// Hancom's group turned 20° and mirrored (rotflip-group): the folded
+    /// angles are exact (9.99767° for the rect), HWPX stores whole degrees,
+    /// and the re-decode reads 9.99999° — a different Core value for the
+    /// same shape, well inside 2 HWPUNIT. Admission accepts it.
+    ///
+    /// 이것을 실패시키는 것: 도형 기하를 허용 오차 없이 완전 일치로 비교하는 것
+    /// (`align_equivalent_shapes` 호출 삭제).
+    #[test]
+    fn admission_accepts_a_shape_within_the_tolerance() {
+        let (d0, d1) = no_op_round_trip(&shapes_fixture("rotflip-group.hwpx"));
+        let mut a = d0.document.clone();
+        let mut b = d1.document.clone();
+        a.strip_layout_caches();
+        b.strip_layout_caches();
+        assert_ne!(a, b, "the oracle: the exact Core values differ after the round trip");
+        admission_compare(&d0, &d1).unwrap();
+    }
+
+    /// A child moved 3 HWPUNIT is a different shape; a child given another
+    /// size likewise. Both are still refused.
+    ///
+    /// 이것을 실패시키는 것: 허용 오차를 무한으로 두는 것, 또는 기하 외 필드까지
+    /// 덮어써서 비교하는 것.
+    #[test]
+    fn admission_refuses_a_shape_beyond_the_tolerance() {
+        let bytes = shapes_fixture("rotflip-group.hwpx");
+        let (d0, _) = no_op_round_trip(&bytes);
+        let mut moved = no_op_round_trip(&bytes).1;
+        if let Some(Control::Rect { placement: Some(p), .. }) =
+            first_group_children_mut(&mut moved).iter_mut().find(|c| c.is_rect())
+        {
+            p.horz_offset = hwpforge_foundation::HwpUnit::new(p.horz_offset.as_i32() + 3).unwrap();
+        } else {
+            panic!("a floating rect child");
+        }
+        assert!(admission_compare(&d0, &moved).is_err());
+
+        let mut recoloured = no_op_round_trip(&bytes).1;
+        if let Some(Control::Rect { style: Some(s), .. }) =
+            first_group_children_mut(&mut recoloured).iter_mut().find(|c| c.is_rect())
+        {
+            s.line_width = Some(s.line_width.unwrap_or(0) + 100);
+        } else {
+            panic!("a styled rect child");
+        }
+        assert!(admission_compare(&d0, &recoloured).is_err());
+    }
+
+    fn doc_with_rect(placement: Option<hwpforge_core::placement::ObjectPlacement>) -> HwpxDocument {
+        let mut doc = doc_with_text("x");
+        let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let mut rect = Control::rect(unit(1000), unit(500)).unwrap();
+        if let Control::Rect { placement: p, .. } = &mut rect {
+            *p = placement;
+        }
+        doc.document.sections_mut()[0].paragraphs[0]
+            .runs
+            .push(Run::control(rect, hwpforge_foundation::CharShapeIndex::new(0)));
+        doc
+    }
+
+    /// An inline shape and a floating one a unit away are not the same
+    /// shape: only the group-child placement form may stand for the origin.
+    ///
+    /// 이것을 실패시키는 것: 배치 정렬에서 묶음 자식 형태 검사
+    /// (`is_group_child_form`)를 지우는 것.
+    #[test]
+    fn admission_keeps_inline_and_floating_apart() {
+        use hwpforge_core::placement::ObjectPlacement;
+        let floating = ObjectPlacement {
+            treat_as_char: false,
+            horz_offset: hwpforge_foundation::HwpUnit::new(1).unwrap(),
+            ..ObjectPlacement::legacy_inline_defaults()
+        };
+        assert!(admission_compare(&doc_with_rect(None), &doc_with_rect(Some(floating))).is_err());
     }
 
     #[test]
