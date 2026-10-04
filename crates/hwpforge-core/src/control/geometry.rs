@@ -1087,11 +1087,17 @@ fn fold_points(mut control: Control, input: &FoldInput) -> FoldOutcome {
     let h = local.iter().map(|p| p.1).max().unwrap_or(0).max(0);
     let source = defining_points(&control);
     let distinct = source.iter().any(|p| *p != source[0]);
+    // Judged on the mapped points' own extent, not on the rounded local
+    // sizes: points that land on one spot half a unit off the grid still
+    // round to a 1 × 1 box.
+    let (span_x, span_y) = (b.max_x - b.min_x, b.max_y - b.min_y);
+    let flat_x = w == 0 || span_x < 0.5;
+    let flat_y = h == 0 || span_y < 0.5;
     let collapsed = match control {
         // A polygon needs area.
-        Control::Polygon { .. } => w == 0 || h == 0,
+        Control::Polygon { .. } => flat_x || flat_y,
         // A line, curve or connector the map squeezes to a single point.
-        _ => distinct && w == 0 && h == 0,
+        _ => distinct && flat_x && flat_y,
     };
     if collapsed {
         return FoldOutcome::Dropped {

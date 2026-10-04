@@ -364,27 +364,32 @@ fn a_shear_on_a_variant_without_a_rotation_field_is_still_reported() {
 /// A line, curve or connector squeezed to one point is dropped; a line
 /// that was a single point to begin with is not something the map did.
 ///
-/// 이것을 실패시키는 것: 점 기반 붕괴 판정을 다각형에만 두는 것, 또는 원래
-/// 한 점이던 선까지 버리는 것.
+/// 이것을 실패시키는 것: 점 기반 붕괴 판정을 다각형에만 두는 것, 붕괴를 반올림한
+/// 로컬 크기로만 판정하는 것(반 단위 이동이 1 × 1 로 살아남음), 또는 원래 한
+/// 점이던 선까지 버리는 것.
 #[test]
 fn point_shapes_squeezed_to_a_point_are_dropped() {
-    let squeeze = FoldInput::new(
-        ShapeTransform::from_matrix([0.0, 0.0, 10.0, 0.0, 0.0, 20.0]),
-        (100.0, 100.0),
-        (0.0, 0.0),
-    );
     let (a, b) = (ShapePoint::new(0, 0), ShapePoint::new(100, 100));
-    for shape in [
-        Control::line(a, b).unwrap(),
-        Control::curve(vec![a, b, ShapePoint::new(50, 0)]).unwrap(),
-        Control::connect_line(a, b).unwrap(),
-    ] {
-        let kind = shape.kind_name();
-        match fold_group_child(shape, &squeeze) {
-            FoldOutcome::Dropped { losses } => {
-                assert_eq!(kinds(&losses), [FoldLossKind::Degenerate], "{kind}");
+    // Onto a grid point, and onto (−0.5, −0.5), which rounds to a 1 × 1 box
+    // from the offset.
+    for t in [(10.0, 20.0), (-0.5, -0.5)] {
+        let squeeze = FoldInput::new(
+            ShapeTransform::from_matrix([0.0, 0.0, t.0, 0.0, 0.0, t.1]),
+            (100.0, 100.0),
+            (0.0, 0.0),
+        );
+        for shape in [
+            Control::line(a, b).unwrap(),
+            Control::curve(vec![a, b, ShapePoint::new(50, 0)]).unwrap(),
+            Control::connect_line(a, b).unwrap(),
+        ] {
+            let kind = shape.kind_name();
+            match fold_group_child(shape, &squeeze) {
+                FoldOutcome::Dropped { losses } => {
+                    assert_eq!(kinds(&losses), [FoldLossKind::Degenerate], "{kind} {t:?}");
+                }
+                other => panic!("{kind} {t:?}: {other:?}"),
             }
-            other => panic!("{kind}: {other:?}"),
         }
     }
     let shift = FoldInput::new(
