@@ -2224,7 +2224,7 @@ mod tests {
     // 이것을 실패시키는 것: `encode_text_inner` 의 금지 문자 검사를 빼는 것.
     #[test]
     fn a_fragment_holding_nul_is_refused_for_every_splice_shape() {
-        let xml = "<hp:run><hp:t>old</hp:t></hp:run><hp:run/>";
+        let xml = "<hp:run><hp:t>old</hp:t></hp:run><hp:run/><hp:run><hp:t/></hp:run>";
         let content = TextLocator::TextElement {
             element_start: 8,
             element_end: 24,
@@ -2232,8 +2232,14 @@ mod tests {
             content_end: Some(17),
         };
         let empty_run = TextLocator::EmptyRun { run_start: 33, run_end: 42 };
+        let self_closing = TextLocator::TextElement {
+            element_start: 50,
+            element_end: 57,
+            content_start: None,
+            content_end: None,
+        };
 
-        for locator in [&content, &empty_run] {
+        for locator in [&content, &empty_run, &self_closing] {
             let error = apply_text_locator(xml, locator, "A\u{0}B").unwrap_err();
             assert!(
                 matches!(&error, HwpxError::InvalidStructure { detail } if detail.contains("U+0000")),
