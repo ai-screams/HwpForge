@@ -7,7 +7,8 @@
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaLineSeg,
-    Hwp5ShapeComponentGeometry, Hwp5ShapePoint, Hwp5ShapeTextArt, TextSegment,
+    Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapePoint, Hwp5ShapeRender,
+    Hwp5ShapeTextArt, TextSegment,
 };
 
 /// A decoded paragraph from a BodyText section.
@@ -242,11 +243,9 @@ pub(crate) struct Hwp5PolygonControl {
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
 ///
-/// Only geometry (placement + extent) is carried: projection derives the
-/// ellipse center/axes from the bounding box via `Control::ellipse`. The
-/// precise center/axis points decoded in [`Hwp5ShapeComponentEllipse`] are
-/// not needed downstream yet (they would only matter for exact-geometry
-/// fidelity, a future refinement).
+/// Outside a group, projection derives the ellipse center/axes from the
+/// bounding box via `Control::ellipse`. Inside a group the stored centre and
+/// axes ([`Self::shape`]) are folded with the group's matrices instead.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5EllipseControl {
     /// Owning control identifier, currently always `gso `.
@@ -258,6 +257,8 @@ pub(crate) struct Hwp5EllipseControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The stored centre and axis points, in the shape's local coordinates.
+    pub shape: Hwp5ShapeComponentEllipse,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -297,6 +298,9 @@ pub(crate) struct Hwp5ArcControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The stored centre, axis and arc end points, in the shape's local
+    /// coordinates (used inside a group).
+    pub shape: Hwp5ShapeComponentEllipse,
 }
 
 /// Parsed connect-line evidence from a `gso ` scope.
@@ -435,6 +439,9 @@ pub(crate) struct Hwp5GroupControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// Child drawing objects in document (z-) order.
     pub children: Vec<Hwp5GroupChild>,
+    /// The group's own rendering block (initial size and matrix chain), or
+    /// why it could not be read.
+    pub render: Result<Hwp5ShapeRender, String>,
     /// `gso ` CtrlHeader trailer instance ID (mirrored to HWPX
     /// `<hp:container instid>`). `0` when not recoverable.
     pub instance_id: u32,
@@ -460,6 +467,14 @@ pub(crate) struct Hwp5GroupChild {
     /// when present. Bits 5–6 carry text vertical alignment; projection maps
     /// `(props >> 5) & 0x03` → Core `VerticalAlign` for text-bearing children.
     pub list_header_properties: Option<u32>,
+    /// The child's rendering block (initial size, matrix chain, fill facts),
+    /// or why it could not be read.
+    pub render: Result<Hwp5ShapeRender, String>,
+    /// Control ids of the `CtrlHeader` records found under the child (a
+    /// table in a grouped text box, a bookmark in its text …). The group
+    /// child parser keeps only the text of its paragraphs, so these are
+    /// reported as lost.
+    pub nested_controls: Vec<u32>,
 }
 
 /// Parsed table control content.

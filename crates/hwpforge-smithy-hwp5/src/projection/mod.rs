@@ -4,6 +4,7 @@
 //! (parsed records, style tables) into HwpForge Core's `Document<Draft>`
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
+mod group;
 mod shapes;
 mod text;
 
@@ -34,9 +35,9 @@ use crate::ctrl_ids::{
 use crate::decoder::chart_ole::{extract_chart_payload_from_inflated, ChartOleError};
 use crate::decoder::package::{DecompressBudget, MAX_TOTAL_DECOMPRESSED};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl,
-    Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
-    Hwp5Table, Hwp5TableCell, Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
+    Hwp5Control, Hwp5EquationControl, Hwp5ImageControl, Hwp5MemoControl, Hwp5NestedSubtree,
+    Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5Table, Hwp5TableCell,
+    Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::{Hwp5Error, Hwp5Result};
@@ -535,6 +536,8 @@ struct ProjectionImageState<'a> {
     /// First document-budget overrun. Once set, no further chart extraction
     /// runs, and `project_to_core_internal` returns it as the document error.
     budget_error: Option<Hwp5Error>,
+    /// Top-level groups projected so far — numbers group warnings.
+    group_seq: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -557,6 +560,7 @@ impl<'a> ProjectionImageState<'a> {
             dropped_unknown: std::collections::BTreeMap::new(),
             budget,
             budget_error: None,
+            group_seq: 0,
         }
     }
 
@@ -2770,7 +2774,7 @@ fn project_control_run(
         }
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
-        Hwp5Control::Group(group) => project_group_run(group, projection_images, (0, 0)),
+        Hwp5Control::Group(group) => group::project_group_run(group, projection_images),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
@@ -3133,210 +3137,6 @@ fn project_textbox_run(
         },
         CharShapeIndex::new(0),
     )
-}
-
-/// Projects a HWP5 group (묶음 객체) into a Core `Run` carrying
-/// `Control::Group` (Wave A: flat children only).
-///
-/// Each child is projected via the existing per-shape helpers; a child that
-/// carried `drawText` paragraphs becomes a text-bearing shape (rect →
-/// `Control::TextBox`, ellipse → `ellipse_with_text`). Children that cannot
-/// be represented as a Core group child (e.g. a degraded nested-group
-/// `Unknown`, or an image — not a valid group child per `validate`) are
-/// dropped so the resulting group still validates. Returns `None` only when
-/// the group ends up with no representable children.
-///
-/// # Coordinates
-///
-/// HWP5 gives every shape under a group, nested groups included, an offset in
-/// the **outermost** group's space. Core places a group child relative to its
-/// immediate parent group (the contract the HWPX decoder and encoder share),
-/// so `origin` — the outermost-space corner of the group whose children are
-/// being projected; `(0, 0)` for a top-level group's children — is subtracted
-/// from each child's offset, and a nested group's children are projected
-/// against that nested group's own outermost-space offset.
-fn project_group_run(
-    group: &Hwp5GroupControl,
-    projection_images: &mut ProjectionImageState<'_>,
-    origin: (i32, i32),
-) -> Option<Run> {
-    let mut children = Vec::with_capacity(group.children.len());
-    for child in &group.children {
-        if let Some(mut control) = project_group_child(child, projection_images) {
-            if origin != (0, 0) {
-                rebase_group_child(&mut control, origin);
-            }
-            children.push(control);
-        }
-    }
-    if children.is_empty() {
-        return None;
-    }
-    let inst_id = (group.instance_id != 0).then_some(ObjectId::new(u64::from(group.instance_id)));
-    Some(Run::control(
-        Control::Group {
-            children,
-            width: hwp_unit_from_u32(group.geometry.width),
-            height: hwp_unit_from_u32(group.geometry.height),
-            placement: offset_placement(group.geometry.x, group.geometry.y),
-            inst_id,
-        },
-        CharShapeIndex::new(0),
-    ))
-}
-
-/// Projects one [`Hwp5GroupChild`] into a Core shape `Control` suitable as a
-/// `Control::Group` child. Text-bearing rect/ellipse children become
-/// `TextBox` / `ellipse_with_text`; everything else reuses the single-shape
-/// projection helpers and extracts the inner control. Returns `None` for
-/// children that have no valid Core group-child representation.
-fn project_group_child(
-    child: &Hwp5GroupChild,
-    projection_images: &mut ProjectionImageState<'_>,
-) -> Option<Control> {
-    // Text-bearing shapes: attach the projected paragraphs.
-    if !child.paragraphs.is_empty() {
-        let paragraphs = project_nested_paragraphs(
-            &child.paragraphs,
-            projection_images,
-            ImageProjectionContext::TextBox,
-        );
-        let valign = shape_vertical_align_from_list_header(child.list_header_properties);
-        match &child.control {
-            Hwp5Control::Rect(rect) => {
-                let mut control = Control::text_box(
-                    paragraphs,
-                    hwp_unit_from_u32(rect.geometry.width),
-                    hwp_unit_from_u32(rect.geometry.height),
-                );
-                if let Control::TextBox { placement, text_vertical_align, .. } = &mut control {
-                    // 그룹 자식은 자체 `gso ` 속성 word 가 없다 (`into_child`
-                    // 의 강제 0 은 byte-grounded 아님 — 자식 배치는 컨테이너가
-                    // 지배, W5 해석) → bit0 경로 대신 offset 휴리스틱으로
-                    // 기존 zero-offset 인라인 방출을 보존한다.
-                    *placement = offset_placement(rect.geometry.x, rect.geometry.y);
-                    *text_vertical_align = valign;
-                }
-                return Some(control);
-            }
-            Hwp5Control::Ellipse(ellipse) => {
-                let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
-                let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
-                let mut control = Control::ellipse_with_text(width, height, paragraphs);
-                if let Control::Ellipse { placement, text_vertical_align, .. } = &mut control {
-                    // 위 TextBox arm 과 동일 — 그룹 자식 offset 휴리스틱.
-                    *placement = offset_placement(ellipse.geometry.x, ellipse.geometry.y);
-                    *text_vertical_align = valign;
-                }
-                return Some(control);
-            }
-            // Other text-bearing children are uncommon; fall through to the
-            // non-text projection (text is dropped) rather than fabricate.
-            _ => {}
-        }
-    }
-
-    // Non-text children reuse the single-shape projection helpers; extract
-    // the inner control from the produced run.
-    let run = match &child.control {
-        Hwp5Control::Line(line) => project_line_run(line, &mut projection_images.warnings),
-        Hwp5Control::Rect(rect) => project_rect_run(rect, &mut projection_images.warnings),
-        Hwp5Control::Polygon(polygon) => {
-            project_polygon_run(polygon, &mut projection_images.warnings)
-        }
-        Hwp5Control::Ellipse(ellipse) => {
-            project_ellipse_run(ellipse, &mut projection_images.warnings)
-        }
-        Hwp5Control::Arc(arc) => project_arc_run(arc, &mut projection_images.warnings),
-        Hwp5Control::Curve(curve) => project_curve_run(curve, &mut projection_images.warnings),
-        Hwp5Control::TextArt(text_art) => {
-            Some(project_text_art_run(text_art, &mut projection_images.warnings))
-        }
-        Hwp5Control::ConnectLine(connect_line) => {
-            project_connectline_run(connect_line, &mut projection_images.warnings)
-        }
-        Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
-        // Nested group (Wave B): recurse. `project_group_run` returns a
-        // `Run` carrying `Control::Group`; extract it the same way as every
-        // leaf shape below. Recursion bottoms out when all descendants are
-        // leaf shapes; depth is already bounded by the decoder's cap.
-        // Its children sit in the outermost space, as the nested group's own
-        // offset does: they are rebased on that offset (see
-        // `project_group_run`).
-        Hwp5Control::Group(nested) => {
-            project_group_run(nested, projection_images, (nested.geometry.x, nested.geometry.y))
-        }
-        // Image / OLE / anything else is not a valid group child; drop it.
-        _ => None,
-    }?;
-    match run.content {
-        RunContent::Control(boxed) => {
-            let mut control = *boxed;
-            // 공유 project_*_run helper 는 bit0 기반 shape_placement 를
-            // 쓰지만, 그룹 자식의 `ctrl_properties` 는 `into_child` 가
-            // 강제한 0 (byte-grounded 아님 — 자식 배치는 컨테이너 지배,
-            // W5 해석) → offset 휴리스틱으로 재지정해 기존 zero-offset
-            // 인라인 방출(numbering="NONE")을 보존한다.
-            if let Some((x, y)) = group_child_offset(&child.control) {
-                override_shape_placement(&mut control, x, y);
-            }
-            Some(control)
-        }
-        _ => None,
-    }
-}
-
-/// Moves a projected group child from the outermost group's space into its
-/// parent group's space by subtracting `origin` from its offset.
-fn rebase_group_child(control: &mut Control, origin: (i32, i32)) {
-    let placement = match control {
-        Control::Line { placement, .. }
-        | Control::Rect { placement, .. }
-        | Control::TextBox { placement, .. }
-        | Control::Polygon { placement, .. }
-        | Control::Ellipse { placement, .. }
-        | Control::Arc { placement, .. }
-        | Control::Curve { placement, .. }
-        | Control::ConnectLine { placement, .. }
-        | Control::TextArt { placement, .. }
-        | Control::Group { placement, .. } => placement,
-        _ => return,
-    };
-    let (x, y) =
-        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
-    *placement = offset_placement(x - origin.0, y - origin.1);
-}
-
-/// [`project_group_child`] 의 offset-휴리스틱 재지정 대상 자식의 기하
-/// offset. bit0 을 자체 보유하지 않는 leaf 도형만 대상 — `TextArt` 는
-/// [`offset_placement`] 로 이미 투영되고, 중첩 `Group` 은
-/// `project_group_run` 이 컨테이너 규칙을 소유하므로 제외한다.
-fn group_child_offset(control: &Hwp5Control) -> Option<(i32, i32)> {
-    match control {
-        Hwp5Control::Line(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::Rect(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::Polygon(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::Ellipse(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::Arc(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::Curve(c) => Some((c.geometry.x, c.geometry.y)),
-        Hwp5Control::ConnectLine(c) => Some((c.geometry.x, c.geometry.y)),
-        _ => None,
-    }
-}
-
-/// 그룹 자식 leaf 도형의 placement 를 [`offset_placement`] 결과로
-/// 재지정한다 (대상 variant 는 [`group_child_offset`] 와 짝).
-fn override_shape_placement(control: &mut Control, x: i32, y: i32) {
-    match control {
-        Control::Line { placement, .. }
-        | Control::Rect { placement, .. }
-        | Control::Polygon { placement, .. }
-        | Control::Ellipse { placement, .. }
-        | Control::Arc { placement, .. }
-        | Control::Curve { placement, .. }
-        | Control::ConnectLine { placement, .. } => *placement = offset_placement(x, y),
-        _ => {}
-    }
 }
 
 /// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.
@@ -3797,104 +3597,6 @@ fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 그룹 자식은 offset 휴리스틱을 쓴다 — `into_child` 가 강제한
-    /// `ctrl_properties: 0` 이 bit0 경로(shape_placement)를 타면
-    /// zero-offset 자식이 floating placement 를 얻어 numbering 이
-    /// NONE→PICTURE 로 조용히 바뀐다 (W4 w1 byte-preserving 잠금).
-    #[test]
-    fn group_child_zero_offset_stays_inline_non_zero_floats() {
-        let rect = |x: i32, y: i32| {
-            crate::decoder::section::Hwp5RectControl {
-                ctrl_id: 0,
-                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
-                    x,
-                    y,
-                    width: 1000,
-                    height: 1000,
-                },
-                ctrl_properties: 0, // into_child 의 강제값 재현
-            }
-        };
-        for (x, y, expect_inline) in [(0, 0, true), (1_000, 500, false)] {
-            let child = Hwp5GroupChild {
-                control: Hwp5Control::Rect(rect(x, y)),
-                paragraphs: Vec::new(),
-                list_header_properties: None,
-            };
-            let mut state = ProjectionImageState::new(
-                None,
-                None,
-                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
-            );
-            let control = project_group_child(&child, &mut state).expect("rect child projects");
-            let Control::Rect { placement, .. } = control else {
-                panic!("rect child must project to Control::Rect");
-            };
-            assert_eq!(
-                placement.is_none(),
-                expect_inline,
-                "offset ({x},{y}) → inline={expect_inline} (zero-offset 은 legacy \
-                 인라인 방출 보존, non-zero 는 floating)"
-            );
-        }
-    }
-
-    /// HWP5 gives a nested group's shapes offsets in the outermost group's
-    /// space; Core places them relative to their own group, which is what the
-    /// HWPX encoder adds back up. Inner rect at outermost (2500, 3400) inside
-    /// a nested group at (2000, 3000) → Core offset (500, 400), so the
-    /// written world position 2000 + 500 = 2500 equals the source.
-    ///
-    /// 이것을 실패시키는 것: `rebase_group_child` 호출을 지우는 것(안쪽 사각형이
-    /// (2500, 3400) 으로 남아 세계 좌표가 중첩 묶음 offset 만큼 밀린다), 또는
-    /// 중첩 묶음 자식을 `(0, 0)` 원점으로 투영하는 것.
-    #[test]
-    fn nested_group_children_are_rebased_on_their_group() {
-        use crate::decoder::section::{Hwp5GroupControl, Hwp5RectControl};
-        use crate::schema::section::Hwp5ShapeComponentGeometry;
-        let geo = |x, y, width, height| Hwp5ShapeComponentGeometry { x, y, width, height };
-        let rect = |x, y| Hwp5GroupChild {
-            control: Hwp5Control::Rect(Hwp5RectControl {
-                ctrl_id: 0,
-                geometry: geo(x, y, 500, 600),
-                ctrl_properties: 0,
-            }),
-            paragraphs: Vec::new(),
-            list_header_properties: None,
-        };
-        let nested = Hwp5GroupChild {
-            control: Hwp5Control::Group(Hwp5GroupControl {
-                ctrl_id: 0,
-                geometry: geo(2000, 3000, 1000, 1000),
-                children: vec![rect(2500, 3400)],
-                instance_id: 0,
-            }),
-            paragraphs: Vec::new(),
-            list_header_properties: None,
-        };
-        let top = Hwp5GroupControl {
-            ctrl_id: 0,
-            geometry: geo(0, 0, 3000, 4000),
-            children: vec![rect(100, 50), nested],
-            instance_id: 0,
-        };
-        let mut state =
-            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
-        let run = project_group_run(&top, &mut state, (0, 0)).expect("group projects");
-        let RunContent::Control(group) = run.content else { panic!("not a control") };
-        let Control::Group { children, .. } = *group else { panic!("not a group") };
-        let offset = |c: &Control| match c {
-            Control::Rect { placement, .. } | Control::Group { placement, .. } => placement
-                .as_ref()
-                .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32())),
-            other => panic!("unexpected {other:?}"),
-        };
-        assert_eq!(offset(&children[0]), (100, 50));
-        assert_eq!(offset(&children[1]), (2000, 3000));
-        let Control::Group { children: inner, .. } = &children[1] else { panic!() };
-        assert_eq!(offset(&inner[0]), (500, 400));
-    }
 
     #[test]
     fn bookmark_n2_2_collapses_to_contents_not_separate_variant() {

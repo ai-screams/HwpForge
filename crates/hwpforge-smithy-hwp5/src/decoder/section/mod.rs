@@ -572,11 +572,13 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
+                shape: ellipse,
             }),
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
                 ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
+                shape: ellipse,
             }),
             None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
         };
@@ -1030,8 +1032,12 @@ impl BodyTextParserState {
                 });
                 return false;
             };
+            // Directly under the `gso` control header the component writes
+            // its type tag twice.
+            let render = crate::schema::section::Hwp5ShapeRender::parse(&record.data, true)
+                .map_err(|e| e.to_string());
             if let Some(ctx) = self.subtree_ctx.as_mut() {
-                ctx.group = Some(GsoGroupBuilder::new(level, geometry, instance_id));
+                ctx.group = Some(GsoGroupBuilder::new(level, geometry, instance_id, render));
             }
             // The `$con` record itself opens the group scope; it carries no
             // child payload, so nothing further to route for this record.

@@ -1,14 +1,51 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 138,
-  "fixtures_decoded": 138,
+  "fixtures_scanned": 158,
+  "fixtures_decoded": 158,
   "fixtures_failed": 0,
-  "total_warnings": 2,
+  "total_warnings": 24,
   "categories": {
+    "ContentLost:group": {
+      "count": 4,
+      "fixtures": {
+        "tests/fixtures/shapes/group-f3a-logo.hwp": 1,
+        "tests/fixtures/shapes/group-f3c-cropped.hwp": 1,
+        "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 1,
+        "tests/fixtures/shapes/group-f3e-gray.hwp": 1
+      }
+    },
+    "ContentLost:group_child_transform": {
+      "count": 1,
+      "fixtures": {
+        "tests/fixtures/shapes/group-f10-rot-then-scale.hwp": 1
+      }
+    },
+    "ContentLost:group_nested_object": {
+      "count": 2,
+      "fixtures": {
+        "tests/fixtures/shapes/group-f2-textbox-table.hwp": 2
+      }
+    },
+    "ContentLost:pic": {
+      "count": 14,
+      "fixtures": {
+        "tests/fixtures/shapes/group-f3a-logo.hwp": 3,
+        "tests/fixtures/shapes/group-f3b-mixed.hwp": 2,
+        "tests/fixtures/shapes/group-f3c-cropped.hwp": 3,
+        "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 3,
+        "tests/fixtures/shapes/group-f3e-gray.hwp": 3
+      }
+    },
     "DroppedControl:unknown_control": {
       "count": 1,
       "fixtures": {
         "tests/fixtures/tables/table_20_real_world_ministry_stress.hwp": 1
+      }
+    },
+    "HwpxEncode:ContentLost": {
+      "count": 1,
+      "fixtures": {
+        "tests/fixtures/shapes/group-f10-rot-then-scale.hwp": 1
       }
     },
     "LayoutCacheDropped:lineseg textpos ##: wire ## inside a non-#:# span interior": {

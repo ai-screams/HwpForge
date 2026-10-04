@@ -12,7 +12,7 @@ use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
     Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
     Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
-    Hwp5ShapeTextArt,
+    Hwp5ShapeRender, Hwp5ShapeTextArt,
 };
 
 use super::{
@@ -95,6 +95,9 @@ pub(super) struct GsoChildBuilder {
     text_art: Option<Hwp5ShapeTextArt>,
     shape_component_kind: Option<[u8; 4]>,
     paragraphs: Vec<Hwp5Paragraph>,
+    render: Result<Hwp5ShapeRender, String>,
+    /// Control ids of `CtrlHeader` records under this child.
+    nested_controls: Vec<u32>,
 }
 
 impl GsoChildBuilder {
@@ -102,6 +105,7 @@ impl GsoChildBuilder {
         comp_depth: u16,
         shape_component_kind: Option<[u8; 4]>,
         geometry: Option<Hwp5ShapeComponentGeometry>,
+        render: Result<Hwp5ShapeRender, String>,
     ) -> Self {
         Self {
             comp_depth,
@@ -118,6 +122,8 @@ impl GsoChildBuilder {
             text_art: None,
             shape_component_kind,
             paragraphs: Vec::new(),
+            render,
+            nested_controls: Vec::new(),
         }
     }
 
@@ -144,6 +150,8 @@ impl GsoChildBuilder {
                 control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
                 paragraphs: Vec::new(),
                 list_header_properties: None,
+                render: self.render,
+                nested_controls: self.nested_controls,
             };
         }
 
@@ -169,6 +177,8 @@ impl GsoChildBuilder {
             control,
             paragraphs: self.paragraphs,
             list_header_properties: self.list_header_properties,
+            render: self.render,
+            nested_controls: self.nested_controls,
         }
     }
 }
@@ -191,6 +201,7 @@ pub(super) struct GsoGroupBuilder {
     instance_id: u32,
     children: Vec<Hwp5GroupChild>,
     current_child: Option<GsoActiveChild>,
+    render: Result<Hwp5ShapeRender, String>,
 }
 
 /// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
@@ -221,11 +232,16 @@ impl GsoActiveChild {
     fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
         match self {
             Self::Leaf(b) => b.into_child(warnings),
-            Self::Nested(b) => Hwp5GroupChild {
-                control: b.into_control(warnings),
-                paragraphs: Vec::new(),
-                list_header_properties: None,
-            },
+            Self::Nested(b) => {
+                let render = b.render.clone();
+                Hwp5GroupChild {
+                    control: b.into_control(warnings),
+                    paragraphs: Vec::new(),
+                    list_header_properties: None,
+                    render,
+                    nested_controls: Vec::new(),
+                }
+            }
         }
     }
 }
@@ -235,6 +251,7 @@ impl GsoGroupBuilder {
         comp_depth: u16,
         geometry: Hwp5ShapeComponentGeometry,
         instance_id: u32,
+        render: Result<Hwp5ShapeRender, String>,
     ) -> Self {
         Self {
             comp_depth,
@@ -243,6 +260,7 @@ impl GsoGroupBuilder {
             instance_id,
             children: Vec::new(),
             current_child: None,
+            render,
         }
     }
 
@@ -282,6 +300,8 @@ impl GsoGroupBuilder {
             // drops the child to Unknown.
             let geometry =
                 Hwp5ShapeComponentGeometry::parse_from_shape_component(&record.data).ok();
+            // A component below the `gso` header writes its type tag once.
+            let render = Hwp5ShapeRender::parse(&record.data, false).map_err(|e| e.to_string());
 
             if kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
                 // Depth cap: a nested `$con` past the limit degrades to a leaf
@@ -296,20 +316,20 @@ impl GsoGroupBuilder {
                         ),
                     });
                     self.current_child = Some(GsoActiveChild::Leaf(Box::new(
-                        GsoChildBuilder::new(level, kind, geometry),
+                        GsoChildBuilder::new(level, kind, geometry, render),
                     )));
                 } else {
                     // Nested group: its bounding box is the child geometry
                     // (fall back to the parent bbox if unrecoverable); it has
                     // no per-child CtrlHeader so instance_id = 0.
                     let bbox = geometry.unwrap_or_else(|| self.geometry.clone());
-                    let mut nested = GsoGroupBuilder::new(level, bbox, 0);
+                    let mut nested = GsoGroupBuilder::new(level, bbox, 0, render);
                     nested.depth = self.depth.saturating_add(1);
                     self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
                 }
             } else {
                 self.current_child = Some(GsoActiveChild::Leaf(Box::new(GsoChildBuilder::new(
-                    level, kind, geometry,
+                    level, kind, geometry, render,
                 ))));
             }
             return;
@@ -329,7 +349,7 @@ impl GsoGroupBuilder {
         // below its `ShapeComponent`, its paragraphs' records two levels
         // below. Anything deeper belongs to an object inside its text (a
         // table and its cells, a picture): not the child's own shape or
-        // text.
+        // text — that object is reported through `nested_controls`.
         let own = level == child.comp_depth.saturating_add(1);
         let in_paragraph = level == child.comp_depth.saturating_add(2);
         match tag {
@@ -339,6 +359,11 @@ impl GsoGroupBuilder {
                     if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
                         child.list_header_properties = Some(u32::from_le_bytes(arr));
                     }
+                }
+            }
+            TagId::CtrlHeader if in_paragraph => {
+                if let Some(id) = record.data.get(..4) {
+                    child.nested_controls.push(u32::from_le_bytes([id[0], id[1], id[2], id[3]]));
                 }
             }
             TagId::ShapeComponentRect if own => child.saw_shape_rectangle = true,
@@ -450,6 +475,7 @@ impl GsoGroupBuilder {
             geometry: self.geometry,
             children: self.children,
             instance_id: self.instance_id,
+            render: self.render,
         })
     }
 }

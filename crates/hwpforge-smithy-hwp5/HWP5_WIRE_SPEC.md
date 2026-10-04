@@ -430,7 +430,8 @@ GsoGroupBuilder` type cycle). A nested child's records recurse into its own
 builder; the parent's depth-based close rule is identical for both arms.
 
 Recursion threads through all four layers: projection
-(`project_group_child` → `project_group_run` on a nested group),
+(`projection/group.rs`: `project_child` → `project_nested_group`, each child
+folded by the Core geometry definition),
 layout-hint collection (`collect_group_child_layout_hints` recurses so the
 inner group's drawText `<hp:p>` get hints — otherwise the section patcher
 underflows), HWPX encoder (`encode_group_child_xml` early-returns into
@@ -453,6 +454,32 @@ HWPX decoder (`HxContainer.containers: Vec<HxContainer>` +
 Source: `Hwp5ShapeComponentGeometry::parse_from_shape_component`. Derived by
 correlating native `sample-gso-group.hwp` child bytes with the 한컴-emitted
 `<hp:offset>`/`<hp:orgSz>` in the `.hwpx` pair.
+
+**Rendering block and matrix chain** (`Hwp5ShapeRender::parse`). The same
+header goes on: `[12..14]` group level (u16), `[14..16]` version, `[16..24]`
+initial size (= HWPX `orgSz`), `[24..32]` current size (`curSz`), `[32..36]`
+flags, `[36..38]` angle (i16), `[38..46]` rotation centre, `[46..48]` pair
+count (u16), then `transMatrix` and `(scaMatrix, rotMatrix)` × pair count,
+each 6 × f64 — the same chain as HWPX `<hp:renderingInfo>`. Every group child
+in the HWP5 corpus has pair count = group level + 1 (3,936/3,936). The
+component right under a top-level `gso` CtrlHeader writes its type tag twice
+(`[0..4]` = `[4..8]`), shifting every field by four bytes; children write it
+once. A local point lands in the outermost group's space at
+`T · R1 · S1 · … · Rn · Sn · p` (last pair = the shape's own, first pair =
+the outermost group's); the outermost space's origin is the group's page
+position, not the minimum of the group's own transformed frame (F9: frame
+from (−1680, −3359), shapes from (−1679, 0), Hancom's ungroup at pos + chain).
+Drawing shapes follow the chain with line information (13 bytes) and a fill
+kind u32 (bit 0 = colour + hatch, pattern kind i32 at +12 with `-1` = none;
+bit 1 = picture; bit 2 = gradient — the `DocInfo` border-fill layout).
+
+**Child record levels.** A child's own shape sub-records and `LIST_HEADER` /
+`PARA_HEADER` sit one level below its `ShapeComponent`; its paragraphs'
+`PARA_TEXT` / `PARA_CHAR_SHAPE` / `PARA_LINE_SEG` and inline `CtrlHeader`s two
+levels below. Deeper records belong to an object inside the child's text (a
+table and its cells, a picture's own `ShapeComponent` / `ShapePicture`) and
+must not be read as the child's (F2: a picture in a grouped text box made the
+text box classify as two payloads and drop).
 
 **HWPX positioning gotcha**: 한컴 places a `<hp:container>` child by its
 `<hc:transMatrix>` **translation** (`e3` = x, `e6` = y), NOT by `<hp:offset>`

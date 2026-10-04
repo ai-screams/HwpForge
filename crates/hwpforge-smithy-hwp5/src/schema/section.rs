@@ -717,6 +717,154 @@ impl Hwp5ShapeComponentGeometry {
 }
 
 // ---------------------------------------------------------------------------
+// Hwp5ShapeRender
+// ---------------------------------------------------------------------------
+
+/// A 2D affine matrix as stored in a `ShapeComponent`: `[a, b, c, d, e, f]`
+/// for `x' = a·x + b·y + c`, `y' = d·x + e·y + f`.
+pub(crate) type Hwp5Matrix = [f64; 6];
+
+/// Fill facts read after a shape's matrix chain — only what decides how a
+/// group child folds and whether its fill is reported lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Hwp5ShapeFill {
+    /// No fill, or one colour without a hatch pattern (turns with nothing).
+    Plain,
+    /// A fill with a direction: `"gradient"`, `"picture"` or `"pattern"`.
+    Directional(&'static str),
+    /// The fill block is missing, cut short, or uses kind bits we do not
+    /// know (a group component has none).
+    Unreadable,
+}
+
+/// The rendering block of a `ShapeComponent` (`0x4C`): the shape's initial
+/// size and its matrix chain — `trans`, then one `(sca, rot)` pair per group
+/// level, the first pair given by the outermost group and the last the
+/// shape's own. The same chain HWPX writes in `<hp:renderingInfo>`.
+///
+/// | bytes | field |
+/// | -- | -- |
+/// | `[0..4]` | type tag (`$rec` …); the component right under a `gso` control header writes it twice |
+/// | `[4..8]` `[8..12]` | x, y (i32) |
+/// | `[12..14]` | group level (u16) |
+/// | `[14..16]` | version (u16) |
+/// | `[16..24]` | initial width, height (u32) — what local coordinates refer to |
+/// | `[24..32]` | current width, height (u32) |
+/// | `[32..36]` | flags |
+/// | `[36..38]` | angle (i16) |
+/// | `[38..46]` | rotation centre x, y (i32) |
+/// | `[46..48]` | pair count (u16) = group level + 1 |
+/// | `[48..96]` | `trans` (6 × f64) |
+/// | then | `(sca, rot)` × pair count (12 × f64 each) |
+/// | then (drawing shapes) | line information (13 bytes), fill kind (u32), fill payload … |
+///
+/// Checked against the Hancom HWPX twins of the same documents: every group
+/// child in the HWP5 corpus (3,936) has `pair count = group level + 1`, and
+/// the HWPX resave of a corpus document carries the same matrices.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Hwp5ShapeRender {
+    /// Initial (unscaled) width and height.
+    pub initial: (u32, u32),
+    /// `transMatrix`.
+    pub trans: Hwp5Matrix,
+    /// `(scaMatrix, rotMatrix)` pairs in stored order.
+    pub pairs: Vec<(Hwp5Matrix, Hwp5Matrix)>,
+    /// Fill facts after the chain.
+    pub fill: Hwp5ShapeFill,
+}
+
+impl Hwp5ShapeRender {
+    const HEADER: usize = 48;
+    const MATRIX: usize = 48;
+    /// Line information before the fill kind: colour, thickness, properties
+    /// (u32 each) and the outline style byte.
+    const LINE_INFO: usize = 13;
+
+    /// Parses the rendering block of a `ShapeComponent` payload.
+    /// `type_repeated` is set for the component right under a `gso` control
+    /// header, which writes its type tag twice.
+    ///
+    /// # Errors
+    ///
+    /// [`Hwp5Error::RecordParse`] when the block is short, its pair count is
+    /// not its group level + 1, or a matrix entry is not finite — never a
+    /// guessed matrix.
+    pub(crate) fn parse(data: &[u8], type_repeated: bool) -> Hwp5Result<Self> {
+        let err = |detail: String| Hwp5Error::RecordParse { offset: 0, detail };
+        let data = if type_repeated { data.get(4..).unwrap_or(&[]) } else { data };
+        if data.len() < Self::HEADER {
+            return Err(err(format!("shape rendering block too short: {} bytes", data.len())));
+        }
+        let mut cur = Cursor::new(&data[12..Self::HEADER]);
+        let group_level = cur.read_u16::<LittleEndian>()?;
+        let _version = cur.read_u16::<LittleEndian>()?;
+        let initial = (cur.read_u32::<LittleEndian>()?, cur.read_u32::<LittleEndian>()?);
+        cur.set_position(34);
+        let pair_count = usize::from(cur.read_u16::<LittleEndian>()?);
+        if pair_count != usize::from(group_level) + 1 {
+            return Err(err(format!(
+                "matrix pair count {pair_count} does not match group level {group_level} + 1"
+            )));
+        }
+        let chain_end = Self::HEADER + Self::MATRIX * (1 + 2 * pair_count);
+        if data.len() < chain_end {
+            return Err(err(format!(
+                "matrix chain cut short: {} bytes, {chain_end} needed",
+                data.len()
+            )));
+        }
+        let mut cur = Cursor::new(&data[Self::HEADER..chain_end]);
+        let mut matrix = || -> Hwp5Result<Hwp5Matrix> {
+            let mut m = [0.0; 6];
+            for v in &mut m {
+                *v = cur.read_f64::<LittleEndian>()?;
+                if !v.is_finite() {
+                    return Err(err("matrix entry is not a finite number".to_string()));
+                }
+            }
+            Ok(m)
+        };
+        let trans = matrix()?;
+        let mut pairs = Vec::with_capacity(pair_count);
+        for _ in 0..pair_count {
+            pairs.push((matrix()?, matrix()?));
+        }
+        Ok(Self { initial, trans, pairs, fill: Self::fill_after(&data[chain_end..]) })
+    }
+
+    /// Reads the fill kind after the line information, the layout of the
+    /// `DocInfo` border fill (`border_fill.rs`): bit 0 = one colour plus a
+    /// hatch pattern (pattern kind `-1` = none), bit 1 = picture, bit 2 =
+    /// gradient.
+    fn fill_after(tail: &[u8]) -> Hwp5ShapeFill {
+        let at = Self::LINE_INFO;
+        let word = |i: usize| tail.get(i..i + 4).map(|b| [b[0], b[1], b[2], b[3]]);
+        let Some(kind) = word(at).map(u32::from_le_bytes) else {
+            return Hwp5ShapeFill::Unreadable;
+        };
+        if kind & !0b111 != 0 {
+            return Hwp5ShapeFill::Unreadable;
+        }
+        if kind & 0b100 != 0 {
+            return Hwp5ShapeFill::Directional("gradient");
+        }
+        if kind & 0b010 != 0 {
+            return Hwp5ShapeFill::Directional("picture");
+        }
+        if kind & 0b001 != 0 {
+            // Background colour, pattern colour, then the pattern kind.
+            let Some(pattern) = word(at + 12).map(i32::from_le_bytes) else {
+                return Hwp5ShapeFill::Unreadable;
+            };
+            if pattern >= 0 {
+                return Hwp5ShapeFill::Directional("pattern");
+            }
+        }
+        Hwp5ShapeFill::Plain
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hwp5ShapePoint / Hwp5ShapeComponentLine / Hwp5ShapeComponentPolygon
 // ---------------------------------------------------------------------------
 
@@ -3636,6 +3784,170 @@ mod tests {
             geometry,
             Hwp5ShapeComponentGeometry { x: 17_360, y: 0, width: 6998, height: 12_426 }
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Hwp5ShapeRender
+    // -----------------------------------------------------------------------
+
+    const ID: Hwp5Matrix = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+    /// A `ShapeComponent` payload: the 48-byte header (type tag, x, y,
+    /// group level, version, initial and current size, flags, angle, centre,
+    /// pair count), `trans`, the `(sca, rot)` pairs, then `tail`.
+    fn render_record(
+        repeated: bool,
+        level: u16,
+        initial: (u32, u32),
+        pair_count: u16,
+        matrices: &[Hwp5Matrix],
+        tail: &[u8],
+    ) -> Vec<u8> {
+        let mut d = Vec::new();
+        if repeated {
+            d.extend_from_slice(b"noc$");
+        }
+        d.extend_from_slice(b"cer$");
+        d.extend_from_slice(&111i32.to_le_bytes());
+        d.extend_from_slice(&222i32.to_le_bytes());
+        d.extend_from_slice(&level.to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&initial.0.to_le_bytes());
+        d.extend_from_slice(&initial.1.to_le_bytes());
+        d.extend_from_slice(&(initial.0 * 2).to_le_bytes());
+        d.extend_from_slice(&(initial.1 * 2).to_le_bytes());
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.extend_from_slice(&0i16.to_le_bytes());
+        d.extend_from_slice(&0i32.to_le_bytes());
+        d.extend_from_slice(&0i32.to_le_bytes());
+        d.extend_from_slice(&pair_count.to_le_bytes());
+        assert_eq!(d.len(), if repeated { 52 } else { 48 });
+        for m in matrices {
+            for v in m {
+                d.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        d.extend_from_slice(tail);
+        d
+    }
+
+    fn m(k: f64) -> Hwp5Matrix {
+        [k, 0.0, k * 10.0, 0.0, k, k * 100.0]
+    }
+
+    /// The fill block after the 13-byte line information: fill kind, then
+    /// (for kind bit 0) background colour, pattern colour, pattern kind.
+    fn fill_tail(kind: u32, pattern: Option<i32>) -> Vec<u8> {
+        let mut t = vec![0u8; 13];
+        t.extend_from_slice(&kind.to_le_bytes());
+        if let Some(p) = pattern {
+            t.extend_from_slice(&0x00FF_FFFFu32.to_le_bytes());
+            t.extend_from_slice(&0u32.to_le_bytes());
+            t.extend_from_slice(&p.to_le_bytes());
+            t.push(0);
+        }
+        t
+    }
+
+    /// A level-1 child: `trans`, then two pairs in stored order, each `sca`
+    /// before its `rot`.
+    ///
+    /// 이것을 실패시키는 것: 쌍 순서를 뒤집어 읽는 것, 한 쌍 안에서 sca·rot 를
+    /// 바꿔 읽는 것, 초기 크기를 [24..32](현재 크기)에서 읽는 것.
+    #[test]
+    fn shape_render_reads_trans_and_pairs_in_stored_order() {
+        let data = render_record(
+            false,
+            1,
+            (700, 300),
+            2,
+            &[m(1.0), m(2.0), m(3.0), m(4.0), m(5.0)],
+            &fill_tail(0, None),
+        );
+        let r = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(r.initial, (700, 300));
+        assert_eq!(r.trans, m(1.0));
+        assert_eq!(r.pairs, vec![(m(2.0), m(3.0)), (m(4.0), m(5.0))]);
+        assert_eq!(r.fill, Hwp5ShapeFill::Plain);
+    }
+
+    /// A level-2 child (inside a nested group) carries three pairs.
+    ///
+    /// 이것을 실패시키는 것: 쌍 개수를 group level 로(1 적게) 읽는 것.
+    #[test]
+    fn shape_render_reads_three_pairs_at_level_two() {
+        let mats = [m(1.0), m(2.0), m(3.0), m(4.0), m(5.0), m(6.0), m(7.0)];
+        let data = render_record(false, 2, (10, 20), 3, &mats, &fill_tail(0, None));
+        let r = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(r.pairs.len(), 3);
+        assert_eq!(r.pairs[2], (m(6.0), m(7.0)));
+    }
+
+    /// The component right under a top-level `gso` control header writes its
+    /// type tag twice; every field after it moves by four bytes.
+    ///
+    /// 이것을 실패시키는 것: 반복 type tag 를 건너뛰지 않는 것(필드가 4바이트
+    /// 밀려 크기·쌍 개수가 틀려진다).
+    #[test]
+    fn shape_render_skips_the_repeated_type_tag_of_a_top_level_component() {
+        let data = render_record(true, 0, (5000, 4000), 1, &[m(1.0), m(2.0), m(3.0)], &[]);
+        let r = Hwp5ShapeRender::parse(&data, true).unwrap();
+        assert_eq!(r.initial, (5000, 4000));
+        assert_eq!(r.pairs, vec![(m(2.0), m(3.0))]);
+        // A group component has no fill block.
+        assert_eq!(r.fill, Hwp5ShapeFill::Unreadable);
+    }
+
+    /// `pairCount = groupLevel + 1` on every group child in the corpus; any
+    /// other count is a reason, not a guess.
+    ///
+    /// 이것을 실패시키는 것: 쌍 개수 검사를 지우는 것.
+    #[test]
+    fn shape_render_rejects_a_pair_count_off_the_group_level() {
+        let data = render_record(false, 1, (10, 10), 1, &[ID, ID, ID], &fill_tail(0, None));
+        let err = Hwp5ShapeRender::parse(&data, false).unwrap_err();
+        assert!(err.to_string().contains("pair count 1"), "{err}");
+    }
+
+    /// 이것을 실패시키는 것: 머리 길이 검사, 또는 행렬열 길이 검사를 지우는 것
+    /// (각각 범위 밖 읽기로 panic).
+    #[test]
+    fn shape_render_rejects_a_short_block() {
+        let data = render_record(false, 0, (10, 10), 1, &[ID, ID, ID], &[]);
+        assert!(Hwp5ShapeRender::parse(&data[..40], false).is_err());
+        assert!(Hwp5ShapeRender::parse(&data[..48 + 48 * 2], false).is_err());
+    }
+
+    /// 이것을 실패시키는 것: 행렬 성분의 유한성 검사를 지우는 것.
+    #[test]
+    fn shape_render_rejects_a_non_finite_matrix_entry() {
+        let bad = [1.0, 0.0, f64::NAN, 0.0, 1.0, 0.0];
+        let data = render_record(false, 0, (10, 10), 1, &[ID, ID, bad], &fill_tail(0, None));
+        let err = Hwp5ShapeRender::parse(&data, false).unwrap_err();
+        assert!(err.to_string().contains("finite"), "{err}");
+    }
+
+    /// Fill kind bits: 1 = one colour plus an optional hatch pattern (the
+    /// pattern kind tells them apart, `-1` = none), 2 = picture, 4 =
+    /// gradient. Solid and pattern share the kind bits.
+    ///
+    /// 이것을 실패시키는 것: 무늬 종류를 보지 않고 종류 비트만 보는 것(단색과
+    /// 무늬가 같은 결과), 그러데이션·그림 비트 판정을 지우는 것, 모르는 비트를
+    /// 단색으로 접는 것.
+    #[test]
+    fn shape_render_tells_solid_from_pattern_and_directional_fills() {
+        let fill = |tail: Vec<u8>| {
+            let data = render_record(false, 0, (10, 10), 1, &[ID, ID, ID], &tail);
+            Hwp5ShapeRender::parse(&data, false).unwrap().fill
+        };
+        assert_eq!(fill(fill_tail(0, None)), Hwp5ShapeFill::Plain);
+        assert_eq!(fill(fill_tail(1, Some(-1))), Hwp5ShapeFill::Plain);
+        assert_eq!(fill(fill_tail(1, Some(3))), Hwp5ShapeFill::Directional("pattern"));
+        assert_eq!(fill(fill_tail(2, None)), Hwp5ShapeFill::Directional("picture"));
+        assert_eq!(fill(fill_tail(4, None)), Hwp5ShapeFill::Directional("gradient"));
+        assert_eq!(fill(fill_tail(5, Some(-1))), Hwp5ShapeFill::Directional("gradient"));
+        assert_eq!(fill(fill_tail(8, None)), Hwp5ShapeFill::Unreadable);
+        assert_eq!(fill(fill_tail(1, None)), Hwp5ShapeFill::Unreadable);
     }
 
     #[test]
