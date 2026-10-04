@@ -784,8 +784,12 @@ pub enum Control {
     /// tag name or type identifier, `data` optional serialized content.
     ///
     /// The Markdown lossless encoder keeps it with `data`; the other Markdown
-    /// encoders show only the tag. The HWPX encoder has no form for it: it
-    /// leaves the control out and reports a `CONTENT_LOST` encode warning.
+    /// encoders show only the tag. The HWPX encoder has no form for it: in
+    /// body text, table cells, notes, captions, text boxes and headers or
+    /// footers it leaves the control out and reports a `CONTENT_LOST` encode
+    /// warning. Two places still drop it without that warning: a master page
+    /// paragraph (only its text is written) and a memo's anchor runs (only
+    /// their text is kept).
     Unknown {
         /// Tag name or type identifier of the unrecognized element.
         tag: String,

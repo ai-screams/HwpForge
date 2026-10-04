@@ -2682,7 +2682,7 @@
           "additionalProperties": false
         },
         {
-          "description": "An unrecognized control element.\n\nNo HWPX or HWP5 decoder produces it; it comes from JSON input, the\nRust API, or the Markdown lossless decoder. `tag` holds the element's\ntag name or type identifier, `data` optional serialized content.\n\nThe Markdown lossless encoder keeps it with `data`; the other Markdown\nencoders show only the tag. The HWPX encoder has no form for it: it\nleaves the control out and reports a `CONTENT_LOST` encode warning.",
+          "description": "An unrecognized control element.\n\nNo HWPX or HWP5 decoder produces it; it comes from JSON input, the\nRust API, or the Markdown lossless decoder. `tag` holds the element's\ntag name or type identifier, `data` optional serialized content.\n\nThe Markdown lossless encoder keeps it with `data`; the other Markdown\nencoders show only the tag. The HWPX encoder has no form for it: in\nbody text, table cells, notes, captions, text boxes and headers or\nfooters it leaves the control out and reports a `CONTENT_LOST` encode\nwarning. Two places still drop it without that warning: a master page\nparagraph (only its text is written) and a memo's anchor runs (only\ntheir text is kept).",
           "type": "object",
           "properties": {
             "Unknown": {
