@@ -1660,7 +1660,7 @@ fn text_locator(span: &TextElementSpan) -> TextLocator {
     }
 }
 
-fn event_start(end: usize, raw_len: usize, is_empty: bool) -> HwpxResult<usize> {
+pub(crate) fn event_start(end: usize, raw_len: usize, is_empty: bool) -> HwpxResult<usize> {
     let extra = if is_empty { 3 } else { 2 };
     end.checked_sub(raw_len + extra).ok_or_else(|| HwpxError::XmlParse {
         file: "section.xml".into(),
@@ -1675,7 +1675,7 @@ fn end_tag_start(end: usize, raw_len: usize) -> HwpxResult<usize> {
     })
 }
 
-fn buffer_position(reader: &Reader<&[u8]>) -> HwpxResult<usize> {
+pub(crate) fn buffer_position(reader: &Reader<&[u8]>) -> HwpxResult<usize> {
     usize::try_from(reader.buffer_position())
         .map_err(|_| HwpxError::Zip("buffer position overflow".into()))
 }
