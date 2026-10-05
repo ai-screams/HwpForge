@@ -450,6 +450,33 @@ fn to_hwpx_style_store_projects_numberings_and_warns_on_bullets() {
     )));
 }
 
+/// A picture bullet keeps `use_image`, but the image it names is not
+/// carried — said once per such bullet, and not for a glyph bullet.
+///
+/// 이것을 실패시키는 것: 그림 글머리표 경고 갈래를 지우는 것, 조건을
+/// 거꾸로 하는 것(글자 글머리표에 경고).
+#[test]
+fn picture_bullet_reports_that_its_image_is_not_carried() {
+    let mut store = image_fill_store();
+    store.border_fills.clear();
+    store.bullets = vec![
+        bullet_slot(2, Hwp5RawBulletDef::parse(&make_bullet_def_bytes(true)).unwrap()),
+        bullet_slot(3, Hwp5RawBulletDef::parse(&make_bullet_def_bytes(false)).unwrap()),
+    ];
+
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+
+    assert_eq!(hwpx_store.bullet_count(), 2);
+    let reasons: Vec<&String> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback { subject: "bullet.image", reason } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, ["picture bullet id=2: its image reference is not carried"]);
+}
+
 #[test]
 fn to_hwpx_style_store_uses_id_mappings_font_buckets() {
     let mut raw = default_char_shape();

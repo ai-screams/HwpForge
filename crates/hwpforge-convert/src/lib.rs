@@ -363,7 +363,21 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     append_bullet_definition_integrity_warning(store, &mut warnings);
     for slot in &store.bullets {
         match slot.bullet.as_ref() {
-            Some(raw) => out.push_bullet(raw.to_core_bullet_def(slot.id)),
+            Some(raw) => {
+                // The bullet's image reference is not parsed into anything
+                // Core can carry; only `use_image` reaches the output.
+                if raw.use_image {
+                    push_projection_fallback(
+                        &mut warnings,
+                        "bullet.image",
+                        format!(
+                            "picture bullet id={}: its image reference is not carried",
+                            slot.id
+                        ),
+                    );
+                }
+                out.push_bullet(raw.to_core_bullet_def(slot.id));
+            }
             None => {
                 warnings.push(Hwp5Warning::ParserFallback {
                     subject: "bullet.slot",
