@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::style_store_convert::{
@@ -1975,38 +1975,88 @@ fn image_fill_store() -> Hwp5StyleStore {
     }
 }
 
-/// C4: an image fill whose asset the package will not carry is left out
-/// rather than written as a reference to nothing (the decoder has already
-/// warned that the asset is missing). One the package carries stays.
+/// C4 + §19 C: an image fill names the image of its reference's `DocInfo`
+/// position. One whose reference has no image the package will carry is
+/// left out rather than written as a reference to nothing (the decoder has
+/// already warned that the asset is missing); one that has an image is
+/// written with that image's manifest id — `BIN0006` here, where the record
+/// at position 1 stores id 6.
 ///
 /// 이것을 실패시키는 것: 자산이 없는 이미지 채우기를 빼는 갈래를 지우는 것
-/// (첫 단언), 또는 자산 유무와 관계없이 빼는 것 (둘째 단언).
+/// (첫 단언), 해석 표를 무시하고 `BIN{참조}` 로 쓰는 것 (둘째 단언).
 #[test]
 fn image_fill_without_its_asset_is_left_out() {
     let store = image_fill_store();
 
     let (without, _) =
-        crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&BTreeSet::new()));
+        crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&BTreeMap::new()));
     let fill = without.border_fill(4).unwrap();
     assert!(fill.image_fill.is_none(), "{fill:?}");
     assert!(fill.fill.is_none() && fill.gradient_fill.is_none(), "{fill:?}");
 
-    let ids: BTreeSet<String> = ["BIN0001".to_string()].into();
+    let ids: BTreeMap<u16, String> = [(1, "BIN0006".to_string())].into();
     let (with, _) = crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&ids));
     assert_eq!(
         with.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
-        Some("BIN0001")
+        Some("BIN0006")
     );
 }
 
-/// The public mapping has no image store to check against and keeps the
-/// reference, as before.
+/// The old public mapping has no `DocInfo` order: it keeps the reference
+/// as `BIN{N:04X}`, as before, and now says the name may be wrong.
 ///
-/// 이것을 실패시키는 것: 공개 함수가 빈 집합을 넘기는 것.
+/// 이것을 실패시키는 것: 공개 함수가 빈 집합을 넘기는 것 (채우기가 빠진다),
+/// 해석 없이 쓸 때의 경고를 지우는 것.
 #[test]
 fn public_style_mapping_keeps_every_image_fill() {
-    let (store, _) = crate::hwp5_style_store_to_hwpx(&image_fill_store());
-    assert!(store.border_fill(4).unwrap().image_fill.is_some());
+    let (store, warnings) = crate::hwp5_style_store_to_hwpx(&image_fill_store());
+    assert_eq!(
+        store.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        Some("BIN0001")
+    );
+    let reference_warnings: Vec<&String> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback {
+                subject: "style.border_fill.image_reference",
+                reason,
+            } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reference_warnings,
+        ["reference 1 written as BIN0001 without a DocInfo order resolver"],
+        "{warnings:?}"
+    );
+}
+
+/// S6: the sibling resolves the reference through the storage names the
+/// decoder reports, writes the manifest id (the name's stem), and has
+/// nothing to warn about. A reference with no name is left out.
+///
+/// 이것을 실패시키는 것: 형제 함수가 해석 표 대신 `None` 을 넘기는 것
+/// (`BIN0001` + 경고), 저장 이름의 확장자를 떼지 않는 것 (`BIN0006.png`).
+#[test]
+fn bin_data_style_mapping_writes_the_resolved_image() {
+    let names: BTreeMap<u16, String> = [(1, "BIN0006.png".to_string())].into();
+    let (store, warnings) =
+        crate::hwp5_style_store_to_hwpx_with_bin_data(&image_fill_store(), &names);
+    assert_eq!(
+        store.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        Some("BIN0006")
+    );
+    assert!(
+        !warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject: "style.border_fill.image_reference", .. }
+        )),
+        "{warnings:?}"
+    );
+
+    let (unnamed, _) =
+        crate::hwp5_style_store_to_hwpx_with_bin_data(&image_fill_store(), &BTreeMap::new());
+    assert!(unnamed.border_fill(4).unwrap().image_fill.is_none());
 }
 
 #[test]

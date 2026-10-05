@@ -14,7 +14,7 @@ mod style_store_border_fill;
 mod style_store_convert;
 mod warning_utils;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use hwpforge_foundation::{HeadingType, ParaShapeIndex};
@@ -211,14 +211,15 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
     options: ConvertOptions,
 ) -> Result<(Vec<u8>, Vec<ConvertWarning>), ConvertError> {
     let decoded = decode_hwp5_to_core(bytes).map_err(ConvertError::Decode)?;
-    // Border-fill image references are checked against the images this
-    // package will carry (manifest id = store key stem), so a fill whose
-    // asset the decoder could not find is left out instead of pointing at
-    // nothing.
-    let image_ids: BTreeSet<String> = decoded
-        .image_store
+    // Border-fill image references count `DocInfo` `BIN_DATA` records; they
+    // resolve to the manifest id (store key stem) of the image the package
+    // will carry, so a fill whose asset the decoder could not find is left
+    // out instead of pointing at nothing.
+    let image_ids: BTreeMap<u16, String> = decoded
+        .bin_data_reference_names
         .iter()
-        .map(|(key, _)| key.rsplit_once('.').map_or(key, |(stem, _)| stem).to_string())
+        .filter(|(_, name)| decoded.image_store.get(name).is_some())
+        .map(|(reference, name)| (*reference, manifest_id(name)))
         .collect();
     let (hwpx_style_store, style_warnings) =
         hwp5_style_store_to_hwpx_with_image_ids(&decoded.style_store, Some(&image_ids));
@@ -257,16 +258,66 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
 /// This is a best-effort conversion. Fields that cannot be mapped cleanly use
 /// defaults from the `"default"` preset, and unsupported style payloads surface
 /// as explicit projection-fallback warnings instead of silent lies.
+///
+/// A border fill's image reference counts `DocInfo` `BIN_DATA` records, but
+/// the store does not know their order, so this writes reference `N` as
+/// `BIN{N:04X}` — the wrong image when the document's stored ids are not
+/// `1..n` — and returns a `style.border_fill.image_reference` warning for
+/// each such fill. Use [`hwp5_style_store_to_hwpx_with_bin_data`] with
+/// [`Hwp5Decoded::bin_data_reference_names`](hwpforge_smithy_hwp5::Hwp5Decoded::bin_data_reference_names)
+/// instead.
 pub fn hwp5_style_store_to_hwpx(store: &Hwp5StyleStore) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
     hwp5_style_store_to_hwpx_with_image_ids(store, None)
 }
 
-/// [`hwp5_style_store_to_hwpx`], dropping border-fill image references whose
-/// `BIN{id}` is not in `image_ids` (the manifest ids of the images the package
-/// will carry). `None` keeps them all.
+/// [`hwp5_style_store_to_hwpx`] that resolves border-fill image references
+/// through the document's `DocInfo` order.
+///
+/// `bin_data_reference_names` maps each BinData reference to its `/BinData`
+/// storage name — pass [`Hwp5Decoded::bin_data_reference_names`](hwpforge_smithy_hwp5::Hwp5Decoded::bin_data_reference_names).
+/// An image fill is written with the manifest id of that name (its stem,
+/// `BIN0006` for `BIN0006.png`); one whose reference has no name (an
+/// external link, a record that could not be parsed) is left out, as the
+/// decoder has already warned about it.
+///
+/// # Examples
+///
+/// ```no_run
+/// use hwpforge_convert::hwp5_style_store_to_hwpx_with_bin_data;
+/// use hwpforge_smithy_hwp5::decode_hwp5_to_core;
+///
+/// let decoded = decode_hwp5_to_core(&std::fs::read("report.hwp")?)?;
+/// let (store, warnings) = hwp5_style_store_to_hwpx_with_bin_data(
+///     &decoded.style_store,
+///     &decoded.bin_data_reference_names,
+/// );
+/// # let _ = (store, warnings);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn hwp5_style_store_to_hwpx_with_bin_data(
+    store: &Hwp5StyleStore,
+    bin_data_reference_names: &BTreeMap<u16, String>,
+) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
+    let image_ids: BTreeMap<u16, String> = bin_data_reference_names
+        .iter()
+        .map(|(reference, name)| (*reference, manifest_id(name)))
+        .collect();
+    hwp5_style_store_to_hwpx_with_image_ids(store, Some(&image_ids))
+}
+
+/// The manifest id the HWPX encoder writes for image store key `name`: its
+/// stem (`BIN0006` for `BIN0006.png`).
+fn manifest_id(name: &str) -> String {
+    name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_string()
+}
+
+/// [`hwp5_style_store_to_hwpx`] with border-fill image references resolved
+/// through `image_ids` (reference → manifest id of an image the package will
+/// carry); a reference not in it is left out. `None` writes `BIN{N:04X}`
+/// with a warning per fill.
 pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     store: &Hwp5StyleStore,
-    image_ids: Option<&BTreeSet<String>>,
+    image_ids: Option<&BTreeMap<u16, String>>,
 ) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
     let mut out = HwpxStyleStore::new();
     let mut warnings: Vec<Hwp5Warning> = Vec::new();

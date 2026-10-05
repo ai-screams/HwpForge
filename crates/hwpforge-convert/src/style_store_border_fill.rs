@@ -4,7 +4,7 @@
 //! `HwpxBorderFill`/`HwpxFill` representation, emitting projection-fallback
 //! warnings for fill semantics the HWPX surface cannot carry.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_foundation::{Color, GradientType, PatternType};
@@ -29,16 +29,19 @@ pub(crate) fn push_required_border_fills(store: &mut HwpxStyleStore) {
 
 /// Maps the HWP5 border/fill slots.
 ///
-/// `image_ids` is the set of manifest ids (image store key stems,
-/// `BIN0005` for `BIN0005.png`) the package will carry, when known. An image
-/// fill whose `BIN{id}` is not in it is left out — the decoder already
-/// warned that the asset is missing (`style.border_fill.image`), and a
-/// reference to nothing would only produce a broken fill. `None` keeps every
-/// image fill (the caller has no image store to check against).
+/// `image_ids` maps a border fill's image reference (the 1-based `DocInfo`
+/// position of its `BIN_DATA` record) to the manifest id written for it
+/// (image store key stem, `BIN0006` for `BIN0006.png`), when the caller
+/// knows the `DocInfo` order. An image fill whose reference is not in it is
+/// left out — the decoder already warned that the asset is missing
+/// (`style.border_fill.image`), and a reference to nothing would only
+/// produce a broken fill. `None` writes every reference as `BIN{N:04X}`,
+/// which names the wrong image when stored ids are not `1..n`, and says so
+/// with a `style.border_fill.image_reference` warning per fill.
 pub(crate) fn push_hwp5_border_fills(
     store: &mut HwpxStyleStore,
     border_fills: &[Hwp5DocInfoBorderFillSlot],
-    image_ids: Option<&BTreeSet<String>>,
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     for slot in border_fills {
@@ -53,7 +56,7 @@ pub(crate) fn push_hwp5_border_fills(
 fn hwp5_border_fill_to_hwpx(
     id: u32,
     fill: &Hwp5RawBorderFill,
-    image_ids: Option<&BTreeSet<String>>,
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> HwpxBorderFill {
     let fill_projection = hwp5_fill_to_hwpx(id, &fill.fill, image_ids, warnings);
@@ -153,7 +156,7 @@ fn hwp5_diagonal_shape_to_hwpx(shape: u8) -> &'static str {
 fn hwp5_fill_to_hwpx(
     border_fill_id: u32,
     fill: &Hwp5RawBorderFillFill,
-    image_ids: Option<&BTreeSet<String>>,
+    image_ids: Option<&BTreeMap<u16, String>>,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> BorderFillFillProjection {
     match fill {
@@ -220,10 +223,23 @@ fn hwp5_fill_to_hwpx(
                 );
                 return BorderFillFillProjection::default();
             };
-            let binary_item_id_ref = format!("BIN{:04X}", fill.bindata_id);
-            if image_ids.is_some_and(|ids| !ids.contains(&binary_item_id_ref)) {
-                return BorderFillFillProjection::default();
-            }
+            let binary_item_id_ref = match image_ids {
+                Some(ids) => match ids.get(&fill.bindata_id) {
+                    Some(id) => id.clone(),
+                    None => return BorderFillFillProjection::default(),
+                },
+                None => {
+                    push_projection_fallback(
+                        warnings,
+                        "style.border_fill.image_reference",
+                        format!(
+                            "reference {0} written as BIN{0:04X} without a DocInfo order resolver",
+                            fill.bindata_id
+                        ),
+                    );
+                    format!("BIN{:04X}", fill.bindata_id)
+                }
+            };
             BorderFillFillProjection {
                 image_fill: Some(HwpxImageFill {
                     mode: mode.to_string(),
