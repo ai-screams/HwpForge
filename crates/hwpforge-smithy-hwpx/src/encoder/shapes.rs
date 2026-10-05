@@ -1136,7 +1136,8 @@ fn set_group_child_offset(xml: &str, x: i32, y: i32) -> String {
 /// the native default `#0000FF` when none is carried.
 ///
 /// `as_group_child` = the TextArt sits in a group: it is placed by its
-/// matrix there, so no `<hp:sz>`/`<hp:pos>` is written.
+/// matrix there, so no `<hp:sz>`/`<hp:pos>` is written and its offset is left
+/// at zero for the group encoder to fill in.
 pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> HwpxResult<String> {
     let (
         text,
@@ -1169,8 +1170,11 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         } => {
             // TextArt anchors at `<hp:offset>`; its `<hp:pos>` is a fixed
             // floating template, so only the placement offsets are sourced.
+            // A group child's offset is written by the group encoder, from
+            // the same placement plus its parent's origin.
             let (hx, vy) = placement
                 .as_ref()
+                .filter(|_| !as_group_child)
                 .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
                 .unwrap_or((0, 0));
             (
@@ -1286,6 +1290,7 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
         | Control::Curve { placement, .. }
         | Control::ConnectLine { placement, .. }
         | Control::Line { placement, .. }
+        | Control::TextArt { placement, .. }
         | Control::Group { placement, .. } => placement
             .as_ref()
             .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
@@ -2125,6 +2130,79 @@ mod tests {
         assert_eq!((lost[1].0, lost[1].2), ("embedded_chart", Some(&PathSeg::GroupChild(1))));
         assert!(lost[1].1.contains("group child 2"), "{}", lost[1].1);
         assert!(sink.warnings.iter().all(EncodeWarning::is_semantic_loss));
+    }
+
+    fn text_art_at(x: i32, y: i32) -> Control {
+        Control::TextArt {
+            text: "묶음글맵시".to_string(),
+            shape: "WAVE2".to_string(),
+            font_name: "함초롬바탕".to_string(),
+            font_style: "보통".to_string(),
+            align: "LEFT".to_string(),
+            line_spacing: 120,
+            char_spacing: 100,
+            width: HwpUnit::new(7087).unwrap(),
+            height: HwpUnit::new(3543).unwrap(),
+            placement: Some(ObjectPlacement {
+                horz_offset: HwpUnit::new(x).unwrap(),
+                vert_offset: HwpUnit::new(y).unwrap(),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
+            fill_color: Some(Color::from_rgb(255, 0, 0)),
+            inst_id: None,
+        }
+    }
+
+    /// The `<hp:offset>` and transMatrix translation of the first
+    /// `<hp:textart>` in `xml`.
+    fn text_art_place(xml: &str) -> (String, String) {
+        let at = xml.find("<hp:textart ").expect("textart written");
+        let tail = &xml[at..];
+        let offset = tail.find("<hp:offset ").map(|i| &tail[i..]).unwrap();
+        let trans = tail.find("<hc:transMatrix ").map(|i| &tail[i..]).unwrap();
+        (
+            offset[..offset.find("/>").unwrap() + 2].to_string(),
+            trans[..trans.find("/>").unwrap() + 2].to_string(),
+        )
+    }
+
+    /// A TextArt in a group is placed at its own offset (M9): the offset and
+    /// the transMatrix translation both carry it, and no `sz`/`pos` is written.
+    ///
+    /// 이것을 실패시키는 것: `group_child_offset` 의 TextArt 갈래를 지우는 것
+    /// (원점 (0, 0) 에 놓임).
+    #[test]
+    fn grouped_text_art_keeps_its_offset() {
+        let (xml, _) = encode_group(&group_of(vec![text_art_at(1200, 800)]));
+        let (offset, trans) = text_art_place(&xml);
+        assert_eq!(offset, r#"<hp:offset x="1200" y="800"/>"#);
+        assert_eq!(trans, r#"<hc:transMatrix e1="1" e2="0" e3="1200" e4="0" e5="1" e6="800"/>"#);
+        assert!(!placement_paths(&xml).iter().any(|p| p.contains("hp:textart/")), "{xml}");
+        assert!(xml.contains(r##"faceColor="#FF0000""##), "{xml}");
+    }
+
+    /// In a nested group the TextArt's offset adds its parent's origin, the
+    /// same as the matrix translation.
+    ///
+    /// 이것을 실패시키는 것: 묶음 자식 글맵시가 자기 배치 offset 을 그대로 쓰는 것
+    /// (부모 원점이 빠진 (1200, 800) 이 남음).
+    #[test]
+    fn nested_grouped_text_art_adds_its_parent_origin() {
+        let inner = Control::Group {
+            children: vec![text_art_at(1200, 800)],
+            width: HwpUnit::new(9000).unwrap(),
+            height: HwpUnit::new(5000).unwrap(),
+            placement: Some(ObjectPlacement {
+                horz_offset: HwpUnit::new(500).unwrap(),
+                vert_offset: HwpUnit::new(300).unwrap(),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
+            inst_id: None,
+        };
+        let (xml, _) = encode_group(&group_of(vec![inner]));
+        let (offset, trans) = text_art_place(&xml);
+        assert_eq!(offset, r#"<hp:offset x="1700" y="1100"/>"#);
+        assert_eq!(trans, r#"<hc:transMatrix e1="1" e2="0" e3="1700" e4="0" e5="1" e6="1100"/>"#);
     }
 
     /// Replaces the counter-based `id`/`instid` values with `#` so encoder
