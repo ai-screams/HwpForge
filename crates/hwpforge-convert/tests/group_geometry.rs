@@ -18,6 +18,7 @@ use std::path::PathBuf;
 
 use hwpforge_core::control::geometry::{emitted_corners, local_transform, EmissionPolicy};
 use hwpforge_core::control::{Control, ShapePoint};
+use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
 use hwpforge_smithy_hwp5::{decode_hwp5_with_images, Hwp5Warning};
 use quick_xml::events::{BytesStart, Event};
@@ -91,6 +92,21 @@ struct WireShape {
 /// Top-level shapes of `section0.xml`: page = `<hp:pos>` − the minimum of
 /// the matrix-chained box + matrix chain · point.
 fn ungrouped_shapes(hwpx: &[u8]) -> Vec<PageShape> {
+    wire_shapes(hwpx, false).into_iter().map(page_shape).collect()
+}
+
+/// The direct child shapes of the first `<hp:container>` of `section0.xml`,
+/// wherever it sits (body or table cell), in the group's outer space: each
+/// child's own matrix chain already carries the group's transforms and
+/// `<hp:pos>` places the outer origin (0, 0), so a child lands at chain ·
+/// point (see the HWPX decoder's `decode_container`).
+fn grouped_shapes(hwpx: &[u8]) -> Vec<PageShape> {
+    wire_shapes(hwpx, true).into_iter().map(group_shape).collect()
+}
+
+/// Wire shapes of `section0.xml`: the top-level ones, or (`grouped`) the
+/// direct children of the first `<hp:container>`.
+fn wire_shapes(hwpx: &[u8], grouped: bool) -> Vec<WireShape> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(hwpx)).unwrap();
     let mut xml = String::new();
     archive.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
@@ -98,6 +114,8 @@ fn ungrouped_shapes(hwpx: &[u8]) -> Vec<PageShape> {
     let mut out = Vec::new();
     // (shape, depth of its start tag)
     let mut current: Option<(WireShape, usize)> = None;
+    // Depth of the first `<hp:container>` start tag (grouped mode).
+    let mut container: Option<usize> = None;
     let mut depth = 0usize;
     loop {
         let event = reader.read_event().unwrap();
@@ -108,7 +126,10 @@ fn ungrouped_shapes(hwpx: &[u8]) -> Vec<PageShape> {
                 depth -= 1;
                 if current.as_ref().is_some_and(|(_, d)| *d == depth) {
                     let (s, _) = current.take().unwrap();
-                    out.push(page_shape(s));
+                    out.push(s);
+                }
+                if container == Some(depth) {
+                    break;
                 }
                 continue;
             }
@@ -125,8 +146,12 @@ fn ungrouped_shapes(hwpx: &[u8]) -> Vec<PageShape> {
             "hp:connectLine" => Some("connectLine"),
             _ => None,
         };
+        if grouped && container.is_none() && name == "hp:container" {
+            container = Some(depth);
+        }
+        let in_scope = !grouped || container.is_some_and(|c| depth == c + 1);
         match (&mut current, kind) {
-            (None, Some(kind)) => {
+            (None, Some(kind)) if in_scope => {
                 current = Some((WireShape { kind, ..WireShape::default() }, depth));
             }
             (Some((s, d)), _) if depth == *d + 1 || name.starts_with("hc:") => {
@@ -170,6 +195,20 @@ fn page_shape(s: WireShape) -> PageShape {
         kind: s.kind,
         corners: cs.into_iter().map(page).collect(),
         points: points.iter().map(|&p| page(apply(&m, p))).collect(),
+    }
+}
+
+fn group_shape(s: WireShape) -> PageShape {
+    // trans, then each (sca, rot) pair: M = T · R1 · S1 · … · Rn · Sn.
+    let (t, pairs) = s.mats.split_first().expect("a transMatrix");
+    assert!(pairs.len() % 2 == 0, "{}: {} matrices", s.kind, s.mats.len());
+    let m = pairs.chunks(2).fold(*t, |m, p| mul(&mul(&m, &p[1]), &p[0]));
+    let (w, h) = s.org;
+    let points = if s.kind == "ellipse" { &s.points[..3] } else { &s.points[..] };
+    PageShape {
+        kind: s.kind,
+        corners: [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].iter().map(|&p| apply(&m, p)).collect(),
+        points: points.iter().map(|&p| apply(&m, p)).collect(),
     }
 }
 
@@ -232,19 +271,47 @@ fn collect_leaves(c: &Control, base: (f64, f64), out: &mut Vec<PageShape>) {
     });
 }
 
-/// The first top-level group of section 0 and the decode warnings.
-fn hwp5_group(name: &str) -> (Control, Vec<Hwp5Warning>) {
-    let doc = decode_hwp5_with_images(&fixture(name)).unwrap();
-    let group = doc.document.sections()[0]
-        .paragraphs
-        .iter()
+/// The groups among the runs of `paragraphs` (not inside their tables).
+fn groups_in<'a>(paragraphs: impl IntoIterator<Item = &'a Paragraph>) -> Vec<Control> {
+    paragraphs
+        .into_iter()
         .flat_map(|p| p.runs.iter())
-        .find_map(|r| match &r.content {
+        .filter_map(|r| match &r.content {
             RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
             _ => None,
         })
-        .unwrap_or_else(|| panic!("{name}: no group"));
-    (group, doc.warnings)
+        .collect()
+}
+
+/// The paragraphs of every table cell among the runs of `paragraphs`.
+fn cell_paragraphs(paragraphs: &[Paragraph]) -> Vec<&Paragraph> {
+    paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| match &r.content {
+            RunContent::Table(t) => Some(t),
+            _ => None,
+        })
+        .flat_map(|t| t.rows.iter().flat_map(|row| row.cells.iter()))
+        .flat_map(|cell| cell.paragraphs.iter())
+        .collect()
+}
+
+/// The first group of section 0's body, or else of its table cells (F12).
+fn first_group(doc: &hwpforge_core::document::Document) -> Control {
+    let paragraphs = &doc.sections()[0].paragraphs;
+    groups_in(paragraphs)
+        .into_iter()
+        .chain(groups_in(cell_paragraphs(paragraphs)))
+        .next()
+        .expect("a group")
+}
+
+/// The first group of section 0 (body first, then table cells) and the
+/// decode warnings.
+fn hwp5_group(name: &str) -> (Control, Vec<Hwp5Warning>) {
+    let doc = decode_hwp5_with_images(&fixture(name)).unwrap();
+    (first_group(&doc.document), doc.warnings)
 }
 
 fn lost_kinds(warnings: &[Hwp5Warning]) -> Vec<String> {
@@ -374,6 +441,94 @@ fn f9_turned_and_mirrored_group_matches_hancom_ungroup() {
     let (_, warnings) = hwp5_group("rotflip-group.hwp");
     assert!(lost_kinds(&warnings).is_empty(), "{warnings:?}");
     assert_leaves_match("rotflip-group.hwp", "rotflip-group-ungrouped.hwpx", 2, &[]);
+}
+
+/// F12: a polygon and a rect (each turned 150°) grouped inside a 1×1 table
+/// cell's paragraph, the group turned 330° and mirrored left-right; a rect
+/// anchored to the paper stays outside the table and the group.
+///
+/// The HWP5 group stays a group in the cell (nothing lifted to the body) and
+/// loses nothing; its leaves, placed from the group's outer origin, land
+/// within 2 HWPUNIT of the children of Hancom's HWPX save of the same file,
+/// read from the wire (chain · point, no cell or page position involved).
+///
+/// Hancom's ungroup re-anchors the children in the body paragraph above the
+/// table, so their positions there differ from the grouped ones by the
+/// cell's place on the page. Only where the leaves sit relative to each
+/// other is compared: one translation, fitted on the polygon's first point,
+/// must carry every leaf of ours within 2 HWPUNIT of the ungrouped one.
+///
+/// The HWPX writer then writes the group back into the cell.
+///
+/// 이것을 실패시키는 것: 표 칸 문단의 `$con` 을 묶음 빌더로 열지 않는 것(칸의 묶음이
+/// `unknown_control` 로 버려진다), 칸 안 개체를 본문 문단에 붙이는 것(묶음이 본문으로
+/// 올라간다), HWP5 묶음 행렬열의 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(두 잎이 한컴의
+/// 묶음·풀기 답 모두에서 벗어나고 사각형이 기울어 `group_child_transform` 이 보고된다),
+/// HWPX 인코더가 표 칸 안의 묶음을 쓰지 않는 것.
+#[test]
+fn f12_group_in_a_table_cell_matches_hancom() {
+    let hwp = "group-f12-cell-group.hwp";
+    let doc = decode_hwp5_with_images(&fixture(hwp)).unwrap();
+    let loss: Vec<_> = doc
+        .warnings
+        .iter()
+        .filter(|w| {
+            matches!(w, Hwp5Warning::ContentLost { .. } | Hwp5Warning::DroppedControl { .. })
+        })
+        .collect();
+    assert!(loss.is_empty(), "{loss:?}");
+    let paragraphs = &doc.document.sections()[0].paragraphs;
+    assert!(groups_in(paragraphs).is_empty(), "the cell's group was lifted to the body");
+    let in_cell = groups_in(cell_paragraphs(paragraphs));
+    let [group] = &in_cell[..] else { panic!("{} groups in the cell", in_cell.len()) };
+    let Control::Group { children, .. } = group else { unreachable!() };
+
+    let mut ours = Vec::new();
+    for child in children {
+        collect_leaves(child, (0.0, 0.0), &mut ours);
+    }
+    let close = |x: &PageShape, y: &PageShape, shift: (f64, f64)| {
+        let moved = |ps: &[(f64, f64)]| -> Vec<(f64, f64)> {
+            ps.iter().map(|p| (p.0 + shift.0, p.1 + shift.1)).collect()
+        };
+        assert_eq!(x.kind, y.kind);
+        // A point shape folds its turn and mirror into its points, so only a
+        // box's corners keep their order (as in `assert_leaves_match`).
+        let corners = if x.kind == "rect" { dist(&moved(&x.corners), &y.corners) } else { 0.0 };
+        corners.max(dist(&moved(&x.points), &y.points))
+    };
+
+    let theirs = grouped_shapes(&fixture("group-f12-cell-group.hwpx"));
+    assert_eq!(ours.len(), theirs.len());
+    for (x, y) in ours.iter().zip(&theirs) {
+        let off = close(x, y, (0.0, 0.0));
+        assert!(off <= 2.0, "{hwp}: {} off Hancom's group by {off:.2}\n{x:?}\n{y:?}", x.kind);
+    }
+
+    // The paper-anchored 6303 × 2743 rect outside the group.
+    let ungrouped: Vec<PageShape> =
+        ungrouped_shapes(&fixture("group-f12-cell-group-ungrouped.hwpx"))
+            .into_iter()
+            .filter(|s| {
+                let (w, h) = (s.corners[2].0 - s.corners[0].0, s.corners[2].1 - s.corners[0].1);
+                !(s.kind == "rect" && (w - 6303.0).abs() < 1.0 && (h - 2743.0).abs() < 1.0)
+            })
+            .collect();
+    assert_eq!(ungrouped.len(), ours.len());
+    let polygon = |v: &[PageShape]| v.iter().find(|s| s.kind == "polygon").unwrap().points[0];
+    let (a, b) = (polygon(&ours), polygon(&ungrouped));
+    let shift = (b.0 - a.0, b.1 - a.1);
+    for x in &ours {
+        let y = ungrouped.iter().find(|s| s.kind == x.kind).unwrap();
+        let off = close(x, y, shift);
+        assert!(off <= 2.0, "{hwp}: {} off Hancom's ungroup by {off:.2}\n{x:?}\n{y:?}", x.kind);
+    }
+
+    // The HWPX writer writes the group back into the cell.
+    let (bytes, _) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
+    let back = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
+    let paragraphs = &back.document.sections()[0].paragraphs;
+    assert_eq!(groups_in(cell_paragraphs(paragraphs)).len(), 1);
 }
 
 /// F2: a group holding a text box with a table and a picture in it. The
@@ -508,10 +663,11 @@ fn core_leaves(c: &Control, base: (i64, i64), out: &mut Vec<CoreLeaf>) {
 /// decimals), rotation within 0.001°, the same mirror.
 /// `rotflip-group` is a turned and mirrored group whose own frame starts
 /// at (−1680, −3359): both decoders place its children from the outer
-/// origin.
+/// origin. F12's group sits in a table cell.
 ///
 /// 이것을 실패시키는 것: 쌍 적용 순서를 첫 쌍부터로 바꾸는 것(한쪽 decoder 만),
-/// 최상위 원점을 묶음 자기 틀의 최솟값으로 잡는 것(rotflip).
+/// 최상위 원점을 묶음 자기 틀의 최솟값으로 잡는 것(rotflip), 표 칸 문단의 `$con` 을
+/// 묶음 빌더로 열지 않는 것(F12).
 #[test]
 fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
     for (hwp, hwpx) in [
@@ -522,20 +678,11 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
         ("group-f10-rot-then-scale.hwp", "group-f10-rot-then-scale.hwpx"),
         ("rotflip-group.hwp", "rotflip-group.hwpx"),
         ("group-f11-nested-offset.hwp", "group-f11-nested-offset.hwpx"),
+        ("group-f12-cell-group.hwp", "group-f12-cell-group.hwpx"),
     ] {
         let (ours, _) = hwp5_group(hwp);
         let twin = hwpforge_smithy_hwpx::HwpxDecoder::decode(&fixture(hwpx)).unwrap();
-        let theirs = twin.document.sections()[0]
-            .paragraphs
-            .iter()
-            .flat_map(|p| p.runs.iter())
-            .find_map(|r| match &r.content {
-                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
-                    Some((**c).clone())
-                }
-                _ => None,
-            })
-            .unwrap();
+        let theirs = first_group(&twin.document);
         let (mut a, mut b) = (Vec::new(), Vec::new());
         core_leaves(&ours, (0, 0), &mut a);
         core_leaves(&theirs, (0, 0), &mut b);
@@ -562,7 +709,8 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
 ///
 /// 이것을 실패시키는 것: HWPX 방출 정책의 행렬 계수를 소수 1자리로 거칠게 쓰는
 /// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋나고 `shape_emission` 경고가 난다),
-/// 인코더가 중첩 묶음 자식에 부모 원점을 더하지 않는 것(F11).
+/// 인코더가 중첩 묶음 자식에 부모 원점을 더하지 않는 것(F11), 표 칸 문단의 `$con` 을
+/// 묶음 빌더로 열지 않는 것·인코더가 표 칸 안의 묶음을 쓰지 않는 것(F12).
 #[test]
 fn hwp5_groups_survive_the_hwpx_writer() {
     for hwp in [
@@ -572,6 +720,7 @@ fn hwp5_groups_survive_the_hwpx_writer() {
         "group-f8-poly-margin.hwp",
         "rotflip-group.hwp",
         "group-f11-nested-offset.hwp",
+        "group-f12-cell-group.hwp",
     ] {
         let (ours, _) = hwp5_group(hwp);
         let (bytes, conversion) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
@@ -594,17 +743,7 @@ fn hwp5_groups_survive_the_hwpx_writer() {
             .filter(|w| matches!(w, hwpforge_smithy_hwpx::DecodeWarning::ContentLost { .. }))
             .collect();
         assert!(lost.is_empty(), "{hwp}: {lost:?}");
-        let again = back.document.sections()[0]
-            .paragraphs
-            .iter()
-            .flat_map(|p| p.runs.iter())
-            .find_map(|r| match &r.content {
-                RunContent::Control(c) if matches!(**c, Control::Group { .. }) => {
-                    Some((**c).clone())
-                }
-                _ => None,
-            })
-            .unwrap();
+        let again = first_group(&back.document);
         // The writer stores whole degrees (F9 rect 9.9977° → 10°), so the
         // turn is compared by where the corners land, not by the angle.
         let page = |g: &Control| {
