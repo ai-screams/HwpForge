@@ -1209,6 +1209,10 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     let font_name_esc = escape_xml(font_name);
     let font_style_esc = escape_xml(font_style);
     let align_esc = escape_xml(align);
+    // Hancom writes a group child TextArt as `NONE` / `TOP_AND_BOTTOM`
+    // (F14); a free one keeps the writer's `PICTURE` / `SQUARE`.
+    let (numbering, wrap) =
+        if as_group_child { ("NONE", "TOP_AND_BOTTOM") } else { ("PICTURE", "SQUARE") };
     let placement = if as_group_child {
         String::new()
     } else {
@@ -1221,7 +1225,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     };
 
     Ok(format!(
-        r##"<hp:textart id="{id}" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
+        r##"<hp:textart id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
         id = id,
         instid = instid,
         text = text_esc,
@@ -1241,6 +1245,8 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         char_spacing = char_spacing,
         align = align_esc,
         placement = placement,
+        numbering = numbering,
+        wrap = wrap,
     ))
 }
 
@@ -1770,6 +1776,8 @@ mod tests {
         };
         let xml = encode_text_art_to_xml(&ta, false).unwrap();
         assert!(xml.contains("<hp:textart "), "missing textart open: {xml}");
+        // 이것을 실패시키는 것: 본문 글맵시도 묶음 자식처럼 `NONE`/`TOP_AND_BOTTOM` 으로 쓰는 것.
+        assert!(xml.contains(r#"numberingType="PICTURE" textWrap="SQUARE""#), "{xml}");
         assert!(xml.contains(r#"text="글맵시""#), "text attr missing");
         assert!(xml.contains(r#"textShape="WAVE2""#), "textShape missing");
         assert!(xml.contains(r#"fontName="함초롬바탕""#), "fontName missing");
@@ -2179,6 +2187,11 @@ mod tests {
         assert_eq!(trans, r#"<hc:transMatrix e1="1" e2="0" e3="1200" e4="0" e5="1" e6="800"/>"#);
         assert!(!placement_paths(&xml).iter().any(|p| p.contains("hp:textart/")), "{xml}");
         assert!(xml.contains(r##"faceColor="#FF0000""##), "{xml}");
+        // Written as Hancom writes a group child TextArt (F14).
+        // 이것을 실패시키는 것: 묶음 자식 글맵시도 `PICTURE`/`SQUARE` 로 쓰는 것.
+        let art = &xml[xml.find("<hp:textart ").unwrap()..];
+        let head = &art[..art.find('>').unwrap()];
+        assert!(head.contains(r#"numberingType="NONE" textWrap="TOP_AND_BOTTOM""#), "{head}");
     }
 
     /// In a nested group the TextArt's offset adds its parent's origin, the
