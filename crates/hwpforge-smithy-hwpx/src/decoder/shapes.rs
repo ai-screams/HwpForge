@@ -3537,6 +3537,113 @@ mod group_tests {
         assert_eq!((size, (art_at.0 + 200, art_at.1 + 200)), ((7087, 3543), (1200, 800)));
     }
 
+    /// F14 (Hancom): a 40 × 20 mm TextArt grouped with a rectangle, the group
+    /// at (8559, 11338) on the paper. Returns the decode warnings, the
+    /// TextArt's (width, height), its corner on the paper and its colour.
+    fn f14_text_art(
+        name: &str,
+    ) -> (Vec<crate::DecodeWarning>, (i32, i32), (i32, i32), Option<hwpforge_foundation::Color>)
+    {
+        let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
+        let group = first_group(&doc);
+        let Control::Group { placement, .. } = &group else { unreachable!() };
+        let p = placement.as_ref().expect("floating group");
+        let art = children(&group)
+            .iter()
+            .find(|c| matches!(c, Control::TextArt { .. }))
+            .expect("TextArt child")
+            .clone();
+        let Control::TextArt { width, height, placement: at, fill_color, .. } = art else {
+            unreachable!()
+        };
+        let (x, y) = at.map_or((0, 0), |q| (q.horz_offset.as_i32(), q.vert_offset.as_i32()));
+        (
+            doc.warnings,
+            (width.as_i32(), height.as_i32()),
+            (p.horz_offset.as_i32() + x, p.vert_offset.as_i32() + y),
+            fill_color,
+        )
+    }
+
+    fn near(a: (i32, i32), b: (i32, i32)) -> bool {
+        (a.0 - b.0).abs() <= 2 && (a.1 - b.1).abs() <= 2
+    }
+
+    /// The colour the F14 author picked (`faceColor="#C75252"`).
+    fn f14_colour() -> Option<hwpforge_foundation::Color> {
+        Some(hwpforge_foundation::Color::from_rgb(0xC7, 0x52, 0x52))
+    }
+
+    /// F14 as grouped: the TextArt's own pair scales the 14173 design box to
+    /// 40 × 20 mm (14173 × 0.799972 = 11338, × 0.399986 = 5669) and it sits
+    /// at the group's corner; its colour is carried; nothing is lost.
+    ///
+    /// 이것을 실패시키는 것: 묶음 글맵시 디코드 갈래를 지우는 것, 크기를 `orgSz`
+    /// 대신 `sz`(없음)에서 읽는 것, `fill_color` 를 `None` 으로 두는 것.
+    #[test]
+    fn f14_grouped_text_art_matches_hancom() {
+        let (w, size, at, colour) = f14_text_art("group-f14-textart.hwpx");
+        assert!(w.is_empty(), "{w:?}");
+        assert!(near(size, (11_338, 5669)), "{size:?}");
+        assert!(near(at, (8559, 11_338)), "{at:?}");
+        assert_eq!(colour, f14_colour());
+    }
+
+    /// F14 after Hancom scaled the group ×1.5024 / ×0.499824: the TextArt's
+    /// size is `orgSz` × both pairs, and it lands where Hancom's own ungroup
+    /// of the same file puts it (`<hp:sz>` 17034 × 2834 at (8559, 11338)).
+    ///
+    /// 이것을 실패시키는 것: 쌍 하나만 적용하는 것(크기가 자기 쌍만의 11338 ×
+    /// 5669), `curSz` 를 `orgSz` 보다 먼저 읽는 것.
+    #[test]
+    fn f14_scaled_text_art_matches_hancom_ungroup() {
+        let (w, size, at, colour) = f14_text_art("group-f14-textart-scaled.hwpx");
+        assert!(w.is_empty(), "{w:?}");
+        let ungrouped = section0_xml(&fixture("group-f14-textart-scaled-ungrouped.hwpx"));
+        let art = &ungrouped[ungrouped.find("<hp:textart ").unwrap()..];
+        let attr = |tag: &str, name: &str| -> i32 {
+            let el = &art[art.find(&format!("<hp:{tag} ")).unwrap()..];
+            let v = &el[el.find(&format!(" {name}=\"")).unwrap() + name.len() + 3..];
+            v[..v.find('"').unwrap()].parse().unwrap()
+        };
+        let hancom_size = (attr("sz", "width"), attr("sz", "height"));
+        let hancom_at = (attr("pos", "horzOffset"), attr("pos", "vertOffset"));
+        assert_eq!((hancom_size, hancom_at), ((17_034, 2834), (8559, 11_338)));
+        assert!(near(size, hancom_size), "{size:?} vs {hancom_size:?}");
+        assert!(near(at, hancom_at), "{at:?} vs {hancom_at:?}");
+        assert_eq!(colour, f14_colour());
+    }
+
+    /// F14 written again: the TextArt goes out the way Hancom writes a group
+    /// child — no `<hp:sz>`/`<hp:pos>`, the 14173 design box scaled by the
+    /// matrix, its colour — and decodes to the same size, place and colour.
+    ///
+    /// 이것을 실패시키는 것: 묶음 글맵시가 `sz`/`pos` 를 쓰는 것, 채우기 색을
+    /// 버리는 것(기본 파랑).
+    #[test]
+    fn f14_text_art_survives_our_encoder() {
+        let doc = HwpxDecoder::decode(&fixture("group-f14-textart-scaled.hwpx")).unwrap();
+        let bytes = encode(&doc);
+        let xml = section0_xml(&bytes);
+        let at = xml.find("<hp:textart ").expect("TextArt written");
+        let art = &xml[at..at + xml[at..].find("</hp:textart>").unwrap()];
+        assert!(art.contains(r#"groupLevel="1""#), "{art}");
+        assert!(art.contains(r#"<hp:orgSz width="14173" height="14173"/>"#), "{art}");
+        assert!(art.contains(r##"faceColor="#C75252""##), "{art}");
+        assert!(!art.contains("<hp:sz ") && !art.contains("<hp:pos "), "{art}");
+        let before = f14_text_art("group-f14-textart-scaled.hwpx");
+        let again = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+        let group = first_group(&again);
+        let Control::TextArt { width, height, fill_color, .. } =
+            children(&group).iter().find(|c| matches!(c, Control::TextArt { .. })).unwrap()
+        else {
+            unreachable!()
+        };
+        assert!(near((width.as_i32(), height.as_i32()), before.1));
+        assert_eq!(*fill_color, f14_colour());
+    }
+
     /// Core TextArt has no rotation: a group turned 30° reports it.
     ///
     /// 이것을 실패시키는 것: 접기의 회전·반사 저장 불가 판정을 지우는 것.
