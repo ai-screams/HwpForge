@@ -1140,7 +1140,7 @@ mod tests {
         // 처럼 자식 도형을 따라 들어감) → wire 후보가 둘이 되어 위치 불일치 오류.
         let inner = Control::text_box(vec![para(vec![field("dup", "안")])], size(4000), size(2000));
         let group = Control::Group {
-            children: vec![inner],
+            children: vec![hwpforge_core::control::GroupChild::Shape(inner)],
             width: size(4000),
             height: size(2000),
             placement: None,

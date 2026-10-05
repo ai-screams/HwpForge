@@ -3866,7 +3866,7 @@ mod group_tests {
                 "{case}"
             );
             let xml =
-                crate::encoder::shapes::encode_text_art_to_xml(&children(&g)[0], true).unwrap();
+                crate::encoder::shapes::encode_text_art_to_xml(children(&g)[0], true).unwrap();
             assert!(
                 xml.contains(r#"fontStyle="REGULAR" fontType="TTF""#)
                     && xml.contains(r#"lineSpacing="120" charSpacing="100""#),
