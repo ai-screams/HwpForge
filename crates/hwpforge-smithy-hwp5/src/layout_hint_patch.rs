@@ -397,6 +397,7 @@ mod tests {
             ],
             render,
             instance_id: 0,
+            has_link: false,
         };
         let mut scope = ScopeLayoutHints::default();
         collect_group_child_layout_hints(&group, &mut scope);
@@ -444,6 +445,7 @@ mod tests {
                 children: vec![rect(flat, 3)],
                 render: render(id),
                 instance_id: 0,
+                has_link: false,
             }),
             paragraphs: Vec::new(),
             list_header_properties: None,
@@ -456,6 +458,7 @@ mod tests {
             children: vec![rect(id, 1), rect(flat, 2), nested],
             render: render(id),
             instance_id: 0,
+            has_link: false,
         };
         let mut scope = ScopeLayoutHints::default();
         collect_group_child_layout_hints(&group, &mut scope);

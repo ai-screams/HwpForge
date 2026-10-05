@@ -595,3 +595,101 @@ fn grouped_text_box_keeps_its_own_records_only() {
         .collect();
     assert_eq!(texts, [["글상자 안 표", "", "글상자 안 그림", ""]]);
 }
+
+/// Hancom's object-link record (`CtrlData`) as saved under a logo picture.
+const LINK_RECORD: &str = "1b02010000006f0200806f0201000000650201001b0068007400740070005c003a002f002f007700770077002e006b006f007200650061002e006b0072003b0031003b0030003b0030003b00";
+
+/// One TLV record: header (tag, level, size) then the payload.
+fn tlv(tag: u16, level: u16, data: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(data.len()).unwrap();
+    let mut out = (u32::from(tag) | (u32::from(level) << 10) | (size << 20)).to_le_bytes().to_vec();
+    out.extend_from_slice(data);
+    out
+}
+
+/// Section 0's records of an HWP5 file, as `(tag, level, payload)`.
+fn section0_records(bytes: &[u8]) -> Vec<(u16, u16, Vec<u8>)> {
+    use std::io::Read;
+    let raw = read_cfb_stream(bytes, "/BodyText/Section0");
+    let mut inflated = Vec::new();
+    flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut inflated).unwrap();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 4 <= inflated.len() {
+        let h = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap());
+        i += 4;
+        let (tag, level) = ((h & 0x3ff) as u16, ((h >> 10) & 0x3ff) as u16);
+        let mut size = (h >> 20) as usize;
+        if size == 0xfff {
+            size = u32::from_le_bytes(inflated[i..i + 4].try_into().unwrap()) as usize;
+            i += 4;
+        }
+        out.push((tag, level, inflated[i..i + size].to_vec()));
+        i += size;
+    }
+    out
+}
+
+/// F3a with a link record added under the group's own component and under
+/// the first picture's component, each one level below it.
+fn f3a_with_links() -> Vec<u8> {
+    let bytes = std::fs::read(fixture_path("shapes/group-f3a-logo.hwp")).unwrap();
+    let link: Vec<u8> = (0..LINK_RECORD.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&LINK_RECORD[i..i + 2], 16).unwrap())
+        .collect();
+    let mut stream = Vec::new();
+    let (mut group_done, mut pic_done) = (false, false);
+    for (tag, level, data) in section0_records(&bytes) {
+        stream.extend(tlv(tag, level, &data));
+        if tag == 0x4C && !group_done && data.windows(4).any(|w| w == b"noc$") {
+            stream.extend(tlv(0x57, level + 1, &link));
+            group_done = true;
+        } else if tag == 0x4C && group_done && !pic_done && data.windows(4).any(|w| w == b"cip$") {
+            stream.extend(tlv(0x57, level + 1, &link));
+            pic_done = true;
+        }
+    }
+    assert!(group_done && pic_done, "F3a has a group of pictures");
+    replace_cfb_stream(bytes, "/BodyText/Section0", &deflate(&stream))
+}
+
+/// A picture's link record inside a group is read into the picture's
+/// hyperlink, and the group's own link record is reported as lost: the
+/// group-child and group record paths of the decoder.
+///
+/// 이것을 실패시키는 것: 묶음 자식 빌더의 `CtrlData` 갈래 삭제(그림 링크가 사라진다) /
+/// 묶음 빌더의 자기 수준 `CtrlData` 갈래 삭제(묶음 링크 경고가 사라진다).
+#[test]
+fn group_and_group_picture_links_are_read() {
+    use hwpforge_core::control::{Control, GroupChild};
+    use hwpforge_core::run::RunContent;
+    let doc = decode_hwp5_with_images(&f3a_with_links()).unwrap();
+    let lost: Vec<&str> = doc
+        .warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ContentLost { kind, .. } => Some(kind.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lost, ["group_hyperlink"]);
+    let group = doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .find_map(|r| match &r.content {
+            RunContent::Control(c) if matches!(**c, Control::Group { .. }) => Some((**c).clone()),
+            _ => None,
+        })
+        .expect("a group");
+    let Control::Group { children, .. } = &group else { unreachable!() };
+    let links: Vec<Option<&str>> = children
+        .iter()
+        .map(|c| match c {
+            GroupChild::Picture(image) => image.hyperlink.as_deref(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(links, [Some("http://www.korea.kr"), None, None]);
+}

@@ -7,8 +7,8 @@
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaLineSeg,
-    Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapePoint, Hwp5ShapeRender,
-    Hwp5ShapeTextArt, TextSegment,
+    Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapePicture, Hwp5ShapePoint,
+    Hwp5ShapeRender, Hwp5ShapeTextArt, TextSegment,
 };
 
 /// A decoded paragraph from a BodyText section.
@@ -191,6 +191,12 @@ pub(crate) struct Hwp5ImageControl {
     /// bit0 = 글자처럼 취급. W2p: projection 의 `treat_as_char` 판정에 대한
     /// 유일한 진실 — 좌표 `(x,y)==(0,0)` 휴리스틱을 대체한다.
     pub ctrl_properties: u32,
+    /// The whole `ShapePicture` record (crop, effects, border, image size).
+    pub picture: Hwp5ShapePicture,
+    /// The picture's hyperlink command from its `CtrlData` record
+    /// (`URL;1;0;0;`), or why that record could not be read. `None` = no
+    /// link.
+    pub link: Option<Result<String, String>>,
 }
 
 /// Parsed line evidence from a `gso ` scope.
@@ -445,6 +451,9 @@ pub(crate) struct Hwp5GroupControl {
     /// `gso ` CtrlHeader trailer instance ID (mirrored to HWPX
     /// `<hp:container instid>`). `0` when not recoverable.
     pub instance_id: u32,
+    /// The group carries a hyperlink (a `CtrlData` record of its own), which
+    /// a Core group cannot hold.
+    pub has_link: bool,
 }
 
 /// One child of a [`Hwp5GroupControl`]: a shape control plus any `drawText`

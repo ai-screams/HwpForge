@@ -5,6 +5,7 @@
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
 mod group;
+mod image_size;
 
 pub(crate) use group::written_group_text;
 mod shapes;
@@ -636,7 +637,69 @@ impl<'a> ProjectionImageState<'a> {
         if image.instance_id != 0 {
             core_image.inst_id = Some(ObjectId::new(u64::from(image.instance_id)));
         }
+        core_image.hyperlink = self.picture_hyperlink(image);
         Some(core_image)
+    }
+
+    /// The picture's link URL, or `None`; a link record in another form is
+    /// reported as lost.
+    fn picture_hyperlink(&mut self, image: &Hwp5ImageControl) -> Option<String> {
+        match object_link_url(image.link.as_ref()) {
+            Ok(url) => url,
+            Err(reason) => {
+                self.warnings.push(Hwp5Warning::ContentLost {
+                    kind: "picture_hyperlink".to_string(),
+                    reason,
+                    location: format!("image binary_data_id={}", image.binary_data_id),
+                });
+                None
+            }
+        }
+    }
+
+    /// The image asset of `binary_data_id`, when the document has one.
+    fn image_asset(&self, binary_data_id: u16) -> Option<&'a Hwp5JoinedImageAsset> {
+        self.image_assets?.asset_for_binary_data_id(binary_data_id)
+    }
+
+    /// A group picture: the image at the folded size and offset (relative to
+    /// its group), with its asset stored. `None` when the asset is missing
+    /// (the planner has already reported that).
+    fn build_group_picture(
+        &mut self,
+        image: &Hwp5ImageControl,
+        (width, height): (i32, i32),
+        (x, y): (i32, i32),
+        hyperlink: Option<String>,
+    ) -> Option<Image> {
+        let asset = self.image_asset(image.binary_data_id)?;
+        self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+        let mut core_image = Image::new(
+            asset.payload.package_path.clone(),
+            HwpUnit::new(width).unwrap_or(HwpUnit::ZERO),
+            HwpUnit::new(height).unwrap_or(HwpUnit::ZERO),
+            core_image_format(&asset.payload.format),
+        );
+        core_image.placement = shapes::offset_placement(x, y);
+        core_image.hyperlink = hyperlink;
+        Some(core_image)
+    }
+}
+
+/// What Hancom appends to the URL of an object's link (`URL;1;0;0;`; the
+/// only form in the corpus). The HWPX `href` carries the same command.
+const OBJECT_HYPERLINK_SUFFIX: &str = ";1;0;0;";
+
+/// The URL of an object's link record: `Ok(None)` = no link, `Err` = a link
+/// that is not `URL;1;0;0;` or could not be read (reported, not guessed at).
+fn object_link_url(link: Option<&Result<String, String>>) -> Result<Option<String>, String> {
+    match link {
+        None => Ok(None),
+        Some(Err(reason)) => Err(format!("unreadable object hyperlink: {reason}")),
+        Some(Ok(command)) => match command.strip_suffix(OBJECT_HYPERLINK_SUFFIX) {
+            Some(url) if !url.is_empty() => Ok(Some(url.to_string())),
+            _ => Err(format!("unrecognised object hyperlink {command:?}")),
+        },
     }
 }
 
@@ -4126,6 +4189,8 @@ mod tests {
             // W2p: treat_as_char 는 이제 raw bit0 이 유일한 진실 — 좌표
             // (0,0) 만으로는 더 이상 inline 판정이 되지 않는다.
             ctrl_properties: 0x1,
+            picture: Default::default(),
+            link: None,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4190,6 +4255,8 @@ mod tests {
             binary_data_id: 7,
             instance_id: 0,
             ctrl_properties: 0,
+            picture: Default::default(),
+            link: None,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4268,6 +4335,8 @@ mod tests {
             // Para/Para/Square, flowWithText=1)를 싣는다 (이전엔 TextBox 관례가
             // 이 값을 합성했다).
             ctrl_properties: 0x040a_2310,
+            picture: Default::default(),
+            link: None,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -4363,6 +4432,8 @@ mod tests {
             binary_data_id: 99,
             instance_id: 0,
             ctrl_properties: 0,
+            picture: Default::default(),
+            link: None,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4410,6 +4481,8 @@ mod tests {
             binary_data_id: 5,
             instance_id: 0,
             ctrl_properties: 0,
+            picture: Default::default(),
+            link: None,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4450,6 +4523,76 @@ mod tests {
         assert_eq!(image.height, HwpUnit::new(4_560).unwrap());
     }
 
+    /// A body picture keeps its link (Hancom's `URL;1;0;0;` command, the
+    /// suffix taken off); a link record in another form is reported, not
+    /// guessed at.
+    ///
+    /// 이것을 실패시키는 것: `core_image.hyperlink = …` 줄 삭제 / 형식 밖 링크 경고 삭제.
+    #[test]
+    fn body_picture_keeps_its_hyperlink() {
+        let project = |link: Option<Result<String, String>>| {
+            let image = Hwp5Control::Image(Hwp5ImageControl {
+                ctrl_id: 0x6773_6F20,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100,
+                },
+                binary_data_id: 5,
+                instance_id: 0,
+                ctrl_properties: 0,
+                picture: Default::default(),
+                link,
+            });
+            let section = make_section(
+                vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
+                    page_break: false,
+                    column_break: false,
+                    text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
+                    controls: vec![image],
+                }],
+                None,
+            );
+            let assets = image_plan_with_dimensions(
+                5,
+                "BIN0005.png",
+                Hwp5SemanticImageFormat::Png,
+                None,
+                None,
+                vec![0x89, 0x50, 0x4E, 0x47],
+            );
+            let (document, _, warnings) = project_to_core_with_images(
+                vec![section],
+                &assets,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            )
+            .unwrap();
+            let image = document.sections()[0].paragraphs[0].runs[0].content.as_image().cloned();
+            let lost = warnings
+                .iter()
+                .filter(|w| matches!(w, Hwp5Warning::ContentLost { kind, .. } if kind == "picture_hyperlink"))
+                .count();
+            (image.expect("image").hyperlink, lost)
+        };
+        assert_eq!(project(None), (None, 0));
+        assert_eq!(
+            project(Some(Ok("http://www.korea.kr;1;0;0;".to_string()))),
+            (Some("http://www.korea.kr".to_string()), 0)
+        );
+        assert_eq!(project(Some(Ok("http://www.korea.kr".to_string()))), (None, 1));
+        assert_eq!(
+            project(Some(Err("not an object hyperlink parameter set".to_string()))),
+            (None, 1)
+        );
+    }
+
     #[test]
     fn project_to_core_with_images_drops_zero_sized_image_without_fallback() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
@@ -4463,6 +4606,8 @@ mod tests {
             binary_data_id: 6,
             instance_id: 0,
             ctrl_properties: 0,
+            picture: Default::default(),
+            link: None,
         });
         let section = make_section(
             vec![Hwp5Paragraph {

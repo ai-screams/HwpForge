@@ -1684,6 +1684,8 @@ mod tests {
                         binary_data_id: 1,
                         instance_id: 0,
                         ctrl_properties: 0,
+                        picture: Default::default(),
+                        link: None,
                     })],
                 }],
                 page_def: None,

@@ -244,10 +244,23 @@ fn leaf_points(c: &Control) -> (&'static str, Vec<ShapePoint>) {
     }
 }
 
-/// [`collect_leaves`] for a group child (a picture has no shape leaf).
+/// [`collect_leaves`] for a group child; a picture is its unturned box.
 fn collect_child(c: &GroupChild, base: (f64, f64), out: &mut Vec<PageShape>) {
-    if let GroupChild::Shape(c) = c {
-        collect_leaves(c, base, out);
+    match c {
+        GroupChild::Shape(c) => collect_leaves(c, base, out),
+        GroupChild::Picture(image) => {
+            let (x, y) = image.placement.as_ref().map_or((0.0, 0.0), |p| {
+                (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()))
+            });
+            let (x, y) = (base.0 + x, base.1 + y);
+            let (w, h) = (f64::from(image.width.as_i32()), f64::from(image.height.as_i32()));
+            out.push(PageShape {
+                kind: "picture",
+                corners: vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
+                points: Vec::new(),
+            });
+        }
+        _ => {}
     }
 }
 
@@ -602,23 +615,43 @@ fn paragraph_text(p: &hwpforge_core::paragraph::Paragraph) -> String {
 }
 
 /// F3: picture groups (a logo of three pictures, a rect with two pictures, a
-/// cropped, a turned and a grey-scale picture group). Core groups have no
-/// picture child yet: every picture is reported, and a group of pictures
-/// only is reported as gone. Expected counts are the `$pic` components under
-/// each group in the record stream (three, except two beside a rect in b).
+/// cropped, a turned and a grey-scale picture group). Every picture is a
+/// Core group child; what a Core picture cannot show is reported, once per
+/// picture: the crop of F3c, the turn of F3d, the grey scale of F3e.
 ///
-/// 이것을 실패시키는 것: 그림 자식 경고를 지우는 것, 빈 묶음 경고를 지우는 것.
+/// 이것을 실패시키는 것: HWP5 판정 표의 자르기·회전·효과 행을 각각 지우는 것 /
+/// 그림을 미지원 자식으로 되돌리는 것(`pic` 손실).
 #[test]
-fn f3_pictures_and_picture_only_groups_are_reported() {
-    for (name, expected) in [
-        ("group-f3a-logo.hwp", &["pic", "pic", "pic", "group"][..]),
-        ("group-f3b-mixed.hwp", &["pic", "pic"][..]),
-        ("group-f3c-cropped.hwp", &["pic", "pic", "pic", "group"][..]),
-        ("group-f3d-rotated-pic.hwp", &["pic", "pic", "pic", "group"][..]),
-        ("group-f3e-gray.hwp", &["pic", "pic", "pic", "group"][..]),
+fn f3_picture_groups_keep_their_pictures() {
+    for (name, pictures, expected) in [
+        ("group-f3a-logo.hwp", 3, None),
+        ("group-f3b-mixed.hwp", 2, None),
+        ("group-f3c-cropped.hwp", 3, Some("crop:")),
+        ("group-f3d-rotated-pic.hwp", 3, Some("rotation/flip:")),
+        ("group-f3e-gray.hwp", 3, Some("effect: 1")),
     ] {
         let doc = decode_hwp5_with_images(&fixture(name)).unwrap();
-        assert_eq!(lost_kinds(&doc.warnings), expected, "{name}");
+        let lost: Vec<(String, String)> = doc
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::ContentLost { kind, reason, .. } => {
+                    Some((kind.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        match expected {
+            None => assert!(lost.is_empty(), "{name}: {lost:?}"),
+            Some(reason) => {
+                assert_eq!(lost.len(), 1, "{name}: {lost:?}");
+                assert_eq!(lost[0].0, "group_child_picture", "{name}");
+                assert!(lost[0].1.starts_with(reason), "{name}: {lost:?}");
+            }
+        }
+        let Control::Group { children, .. } = first_group(&doc.document) else { unreachable!() };
+        let count = children.iter().filter(|c| matches!(c, GroupChild::Picture(_))).count();
+        assert_eq!(count, pictures, "{name}");
     }
 }
 
@@ -706,6 +739,11 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
         ("rotflip-group.hwp", "rotflip-group.hwpx"),
         ("group-f11-nested-offset.hwp", "group-f11-nested-offset.hwpx"),
         ("group-f12-cell-group.hwp", "group-f12-cell-group.hwpx"),
+        ("group-f3a-logo.hwp", "group-f3a-logo.hwpx"),
+        ("group-f3b-mixed.hwp", "group-f3b-mixed.hwpx"),
+        ("group-f3c-cropped.hwp", "group-f3c-cropped.hwpx"),
+        ("group-f3d-rotated-pic.hwp", "group-f3d-rotated-pic.hwpx"),
+        ("group-f3e-gray.hwp", "group-f3e-gray.hwpx"),
     ] {
         let (ours, _) = hwp5_group(hwp);
         let twin = hwpforge_smithy_hwpx::HwpxDecoder::decode(&fixture(hwpx)).unwrap();
@@ -748,6 +786,8 @@ fn hwp5_groups_survive_the_hwpx_writer() {
         "rotflip-group.hwp",
         "group-f11-nested-offset.hwp",
         "group-f12-cell-group.hwp",
+        "group-f3a-logo.hwp",
+        "group-f3b-mixed.hwp",
     ] {
         let (ours, _) = hwp5_group(hwp);
         let (bytes, conversion) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();

@@ -358,6 +358,11 @@ struct NestedSubtreeContext {
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record, used
     /// to tell a connect line apart from a plain line (both use `0x4E`).
     shape_component_kind: Option<[u8; 4]>,
+    /// Level of the scope's first `ShapeComponent`: the shape's own records
+    /// sit one level below it.
+    comp_level: Option<u16>,
+    /// The shape's hyperlink (`CtrlData` one level below its component).
+    link: Option<Result<String, String>>,
     paragraphs: Vec<Hwp5Paragraph>,
     /// Active group builder, set when this gso scope's first `ShapeComponent`
     /// carries the `"$con"` type tag. When `Some`, all subtree records are
@@ -391,6 +396,8 @@ impl NestedSubtreeContext {
             curve: None,
             text_art: None,
             shape_component_kind: None,
+            comp_level: None,
+            link: None,
             paragraphs: Vec::new(),
             group: None,
         }
@@ -411,10 +418,19 @@ impl NestedSubtreeContext {
         self.saw_shape_rectangle = true;
     }
 
-    fn note_shape_component(&mut self, data: &[u8]) {
+    fn note_shape_component(&mut self, data: &[u8], level: u16) {
         self.saw_shape_component = true;
+        self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
             self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
+        }
+    }
+
+    /// A `CtrlData` record: the shape's hyperlink when it sits one level
+    /// below the shape's component (deeper ones belong to its text).
+    fn note_ctrl_data(&mut self, data: &[u8], level: u16) {
+        if self.link.is_none() && self.comp_level.is_some_and(|c| level == c.saturating_add(1)) {
+            self.link = Some(crate::schema::section::parse_object_link(data));
         }
     }
 
@@ -528,6 +544,7 @@ impl NestedSubtreeContext {
                 curve: self.curve,
                 text_art: self.text_art,
                 shape_component_kind: self.shape_component_kind,
+                link: self.link,
                 instance_id: self.instance_id,
                 ctrl_properties: self.properties_raw,
             }),
@@ -626,6 +643,8 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             binary_data_id: picture.binary_data_id,
             instance_id: gso_instance_id,
             ctrl_properties: input.ctrl_properties,
+            picture,
+            link: input.link,
         }),
         (Some(geometry), None, Some(ole), None, None) => {
             Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -1098,7 +1117,12 @@ impl BodyTextParserState {
             }
             TagId::ShapeComponent => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_shape_component(&record.data);
+                    ctx.note_shape_component(&record.data, level);
+                }
+            }
+            TagId::CtrlData => {
+                if let Some(ctx) = self.subtree_ctx.as_mut() {
+                    ctx.note_ctrl_data(&record.data, level);
                 }
             }
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
@@ -2084,7 +2108,8 @@ impl BodyTextParserState {
         }
 
         match tag {
-            TagId::ShapeComponent => ctx.note_shape_component(&record.data),
+            TagId::ShapeComponent => ctx.note_shape_component(&record.data, level),
+            TagId::CtrlData => ctx.note_ctrl_data(&record.data, level),
             TagId::ShapeComponentRect => ctx.note_shape_rectangle(),
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => ctx.note_shape_line(line),
@@ -3702,6 +3727,71 @@ mod tests {
         }
     }
 
+    /// Hancom's object-link record (`CtrlData`, as saved under a logo in a
+    /// government press release) one level below a picture's component.
+    const LINK_RECORD: &str = "1b02010000006f0200806f0201000000650201001b0068007400740070005c003a002f002f007700770077002e006b006f007200650061002e006b0072003b0031003b0030003b0030003b00";
+
+    fn link_record() -> Vec<u8> {
+        (0..LINK_RECORD.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&LINK_RECORD[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// A picture's link is its own `CtrlData` (one level below its
+    /// component); one deeper belongs to something inside it and is not
+    /// taken. Both the paragraph-level and the text-box-level paths.
+    ///
+    /// 이것을 실패시키는 것: 두 경로의 `CtrlData` 갈래를 각각 지우는 것 / 수준
+    /// 검사(`comp_level + 1`)를 지우는 것(깊은 기록이 링크가 된다).
+    #[test]
+    fn picture_link_record_is_read_at_its_own_level() {
+        let link = |deeper: bool| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+            stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 640, 320)));
+            stream.extend(make_record(TagId::ShapeComponent, 1, &[0u8; 4]));
+            stream.extend(make_record(TagId::CtrlData, if deeper { 3 } else { 2 }, &link_record()));
+            stream.extend(make_record(TagId::ShapePicture, 2, &shape_picture_data(7)));
+            let result = parse_body_text(&stream, &version()).unwrap();
+            match &result.paragraphs[0].controls[0] {
+                Hwp5Control::Image(image) => image.link.clone(),
+                other => panic!("expected Image, got {other:?}"),
+            }
+        };
+        assert_eq!(link(false), Some(Ok("http://www.korea.kr;1;0;0;".to_string())));
+        assert_eq!(link(true), None);
+
+        let boxed_link = |deeper: bool| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                0,
+                &gso_ctrl_header_data(0, 0, 8000, 6000),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 1, &[0u8; 4]));
+            stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+            stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("앞", "뒤")));
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                2,
+                &gso_ctrl_header_data(10, 20, 3000, 4000),
+            ));
+            stream.extend(make_record(TagId::ShapeComponent, 3, &[0u8; 4]));
+            stream.extend(make_record(TagId::CtrlData, if deeper { 5 } else { 4 }, &link_record()));
+            stream.extend(make_record(TagId::ShapePicture, 4, &shape_picture_data(2)));
+            let result = parse_body_text(&stream, &version()).unwrap();
+            let Hwp5Control::TextBox(textbox) = &result.paragraphs[0].controls[0] else { panic!() };
+            let Hwp5Control::Image(image) = &textbox.paragraphs[0].controls[0] else { panic!() };
+            image.link.clone()
+        };
+        assert_eq!(boxed_link(false), Some(Ok("http://www.korea.kr;1;0;0;".to_string())));
+        assert_eq!(boxed_link(true), None);
+    }
+
     #[test]
     fn textbox_subtree_keeps_nested_image_control() {
         let mut stream = Vec::new();
@@ -4046,7 +4136,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
-        ctx.note_shape_component(&[]);
+        ctx.note_shape_component(&[], 0);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -4067,7 +4157,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
-        ctx.note_shape_component(&[]);
+        ctx.note_shape_component(&[], 0);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -4102,6 +4192,7 @@ mod tests {
             curve: None,
             text_art: None,
             shape_component_kind,
+            link: None,
             instance_id: 0,
             ctrl_properties: 0,
         }

@@ -2776,11 +2776,38 @@ impl Hwp5EqEdit {
 // Hwp5ShapePicture
 // ---------------------------------------------------------------------------
 
-/// Minimal `ShapePicture` payload needed to resolve a `DocInfo/BinData` entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `ShapePicture` payload: the `DocInfo/BinData` entry it shows, and what
+/// a group picture is judged by (border, crop, effects, image size).
+///
+/// Layout (HWP 5.0 표 107, checked against Hancom's HWPX twins of the F3
+/// group-picture fixtures): border colour `[0..4]`, border thickness
+/// `[4..8]`, border properties `[8..12]`, image rectangle `[12..44]`, crop
+/// left/top/right/bottom `[44..60]` (= HWPX `imgClip`), inner margins
+/// `[60..68]`, brightness/contrast/effect `[68..71]` (effect 1 = HWPX
+/// `GRAY_SCALE`), BinData id `[71..73]`, border alpha `[73]`, instance id
+/// `[74..78]`, picture-effect flags `[78..82]`, then — only when no effect
+/// is set, as the effect blocks come in between — the image's own size
+/// `[82..90]` (= HWPX `imgDim`). Older records stop at 73 or 78 bytes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapePicture {
     /// 1-based binary item identifier.
     pub binary_data_id: u16,
+    /// Border thickness (HWPUNIT); `0` = no border drawn.
+    pub border_thickness: i32,
+    /// Crop rectangle: left, top, right, bottom.
+    pub crop: [i32; 4],
+    /// Brightness, contrast and effect (0 = the picture as it is).
+    pub brightness: i8,
+    /// See [`Self::brightness`].
+    pub contrast: i8,
+    /// See [`Self::brightness`].
+    pub effect: u8,
+    /// Picture-effect flags (shadow, glow, …); `None` in a record too short
+    /// to hold them.
+    pub effect_flags: Option<u32>,
+    /// The image's own size, the extent of an uncropped crop rectangle;
+    /// `None` when the record does not hold it.
+    pub dimension: Option<(u32, u32)>,
 }
 
 impl Hwp5ShapePicture {
@@ -2801,11 +2828,57 @@ impl Hwp5ShapePicture {
                 ),
             });
         }
-
+        let i32_at =
+            |at: usize| i32::from_le_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]]);
+        let u32_at =
+            |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
         let start = Self::BINARY_DATA_ID_OFFSET;
-        let binary_data_id = u16::from_le_bytes([data[start], data[start + 1]]);
-        Ok(Self { binary_data_id })
+        let effect_flags = u32_at(78);
+        let dimension = match (effect_flags, u32_at(82), u32_at(86)) {
+            (Some(0), Some(w), Some(h)) => Some((w, h)),
+            _ => None,
+        };
+        Ok(Self {
+            binary_data_id: u16::from_le_bytes([data[start], data[start + 1]]),
+            border_thickness: i32_at(4),
+            crop: [i32_at(44), i32_at(48), i32_at(52), i32_at(56)],
+            brightness: i8::from_le_bytes([data[68]]),
+            contrast: i8::from_le_bytes([data[69]]),
+            effect: data[70],
+            effect_flags,
+            dimension,
+        })
     }
+}
+
+/// The link a shape's `CtrlData` (`0x57`) record holds: Hancom's object
+/// hyperlink, a parameter set `0x021B` with one nested set `0x026F` whose
+/// one string item `0x0265` is the link command (HWPX `href`; every shape
+/// `CtrlData` in the corpus has exactly this form).
+///
+/// Returns the command with its `\` escapes undone
+/// (`http\://www.korea.kr;1;0;0;` → `http://www.korea.kr;1;0;0;`), or why
+/// the record is not in that form.
+pub(crate) fn parse_object_link(data: &[u8]) -> Result<String, String> {
+    const PREFIX: [u8; 20] = [
+        0x1b, 0x02, 0x01, 0x00, 0x00, 0x00, // set 0x021B, one item
+        0x6f, 0x02, 0x00, 0x80, // item 0x026F, a parameter set
+        0x6f, 0x02, 0x01, 0x00, 0x00, 0x00, // set 0x026F, one item
+        0x65, 0x02, 0x01, 0x00, // item 0x0265, a string
+    ];
+    let rest = data.strip_prefix(&PREFIX[..]).ok_or("not an object hyperlink parameter set")?;
+    let len = rest.get(..2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]])));
+    let units = len
+        .and_then(|n| rest.get(2..2 + n * 2))
+        .ok_or("object hyperlink string runs past the record")?;
+    let units: Vec<u16> = units.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let raw = String::from_utf16(&units).map_err(|_| "object hyperlink is not UTF-16")?;
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next().unwrap_or(c) } else { c });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -3962,12 +4035,74 @@ mod tests {
     // Hwp5ShapePicture
     // -----------------------------------------------------------------------
 
+    /// The picture fields a group picture is judged by, at the offsets the
+    /// F3 twins show (F3c crop (0, 0, 7474, 15000) of a 22500 x 15000 image,
+    /// F3e effect 1 = HWPX GRAY_SCALE); the image size is read only when no
+    /// picture effect comes before it.
+    ///
+    /// 이것을 실패시키는 것: 오프셋을 하나씩 바꾸는 것 / 효과 플래그가 있어도 크기를
+    /// 읽는 것.
+    #[test]
+    fn shape_picture_parses_crop_effect_border_and_size() {
+        let mut data = vec![0u8; 91];
+        data[4..8].copy_from_slice(&28i32.to_le_bytes());
+        for (i, v) in [0i32, 0, 7474, 15_000].iter().enumerate() {
+            data[44 + 4 * i..48 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        data[68] = 0xF6; // brightness −10
+        data[69] = 5;
+        data[70] = 1;
+        data[71..73].copy_from_slice(&3u16.to_le_bytes());
+        data[82..86].copy_from_slice(&22_500u32.to_le_bytes());
+        data[86..90].copy_from_slice(&15_000u32.to_le_bytes());
+        let p = Hwp5ShapePicture::parse(&data).unwrap();
+        assert_eq!(
+            p,
+            Hwp5ShapePicture {
+                binary_data_id: 3,
+                border_thickness: 28,
+                crop: [0, 0, 7474, 15_000],
+                brightness: -10,
+                contrast: 5,
+                effect: 1,
+                effect_flags: Some(0),
+                dimension: Some((22_500, 15_000)),
+            }
+        );
+        data[78] = 4;
+        let p = Hwp5ShapePicture::parse(&data).unwrap();
+        assert_eq!((p.effect_flags, p.dimension), (Some(4), None));
+        let p = Hwp5ShapePicture::parse(&data[..73]).unwrap();
+        assert_eq!((p.effect_flags, p.dimension), (None, None));
+    }
+
+    /// The object-link parameter set: the string item, `\\` escapes undone;
+    /// any other shape is an error, not a guess.
+    ///
+    /// 이것을 실패시키는 것: 접두 검사 삭제 / 길이 검사 삭제 / 역슬래시 해제 삭제.
+    #[test]
+    fn object_link_record_is_parsed_strictly() {
+        let units = |s: &str| s.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+        let mut rec = hex_bytes("1b02010000006f0200806f020100000065020100");
+        rec.extend_from_slice(&27u16.to_le_bytes());
+        rec.extend(units("http\\://www.korea.kr;1;0;0;"));
+        assert_eq!(parse_object_link(&rec).as_deref(), Ok("http://www.korea.kr;1;0;0;"));
+        assert!(parse_object_link(&rec[..rec.len() - 2]).is_err());
+        let mut other = rec.clone();
+        other[0] = 0x1c;
+        assert!(parse_object_link(&other).is_err());
+    }
+
+    fn hex_bytes(h: &str) -> Vec<u8> {
+        (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap()).collect()
+    }
+
     #[test]
     fn shape_picture_parses_binary_data_id() {
         let mut data = vec![0u8; 73];
         data[71..73].copy_from_slice(&1u16.to_le_bytes());
         let picture = Hwp5ShapePicture::parse(&data).unwrap();
-        assert_eq!(picture, Hwp5ShapePicture { binary_data_id: 1 });
+        assert_eq!(picture, Hwp5ShapePicture { binary_data_id: 1, ..Default::default() });
     }
 
     #[test]

@@ -43,6 +43,10 @@ pub(super) struct InlineGsoContext {
     text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     shape_component_kind: Option<[u8; 4]>,
+    /// Level of the scope's first `ShapeComponent`.
+    comp_level: Option<u16>,
+    /// The shape's hyperlink (`CtrlData` one level below its component).
+    link: Option<Result<String, String>>,
     /// Set when the scope's first `ShapeComponent` is a group (`$con`):
     /// every deeper record then belongs to the group, as in body paragraphs.
     group: Option<Box<GsoGroupBuilder>>,
@@ -69,6 +73,8 @@ pub(super) struct GsoClassificationInput {
     /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
     /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
     pub(super) ctrl_properties: u32,
+    /// The shape's hyperlink (a picture keeps it).
+    pub(super) link: Option<Result<String, String>>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -101,6 +107,8 @@ pub(super) struct GsoChildBuilder {
     render: Result<Hwp5ShapeRender, String>,
     /// Control ids of `CtrlHeader` records under this child.
     nested_controls: Vec<u32>,
+    /// The child's hyperlink (its own `CtrlData`).
+    link: Option<Result<String, String>>,
 }
 
 impl GsoChildBuilder {
@@ -127,6 +135,7 @@ impl GsoChildBuilder {
             paragraphs: Vec::new(),
             render,
             nested_controls: Vec::new(),
+            link: None,
         }
     }
 
@@ -175,6 +184,7 @@ impl GsoChildBuilder {
             // 그룹 자식의 개체 속성은 그룹 배치(W5)가 지배 — 자식 단독
             // treat_as_char 는 W5 에서 해석.
             ctrl_properties: 0,
+            link: self.link,
         });
         Hwp5GroupChild {
             control,
@@ -205,6 +215,8 @@ pub(super) struct GsoGroupBuilder {
     children: Vec<Hwp5GroupChild>,
     current_child: Option<GsoActiveChild>,
     render: Result<Hwp5ShapeRender, String>,
+    /// The group has a hyperlink of its own (a `CtrlData` record).
+    has_link: bool,
 }
 
 /// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
@@ -264,6 +276,7 @@ impl GsoGroupBuilder {
             children: Vec::new(),
             current_child: None,
             render,
+            has_link: false,
         }
     }
 
@@ -295,6 +308,10 @@ impl GsoGroupBuilder {
         // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
         // child. A nested `$con` child opens a recursive `GsoGroupBuilder`
         // (Wave B); any other shape opens a flat leaf builder.
+        if matches!(tag, TagId::CtrlData) && level == self.comp_depth.saturating_add(1) {
+            self.has_link = true;
+            return;
+        }
         if matches!(tag, TagId::ShapeComponent) && level == self.comp_depth.saturating_add(1) {
             let kind = record.data.get(..4).map(|c| [c[0], c[1], c[2], c[3]]);
             // Parse the child's group-relative geometry from its own
@@ -408,6 +425,9 @@ impl GsoGroupBuilder {
                     }),
                 }
             }
+            TagId::CtrlData if own && child.link.is_none() => {
+                child.link = Some(crate::schema::section::parse_object_link(&record.data));
+            }
             TagId::ShapePicture if own => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => child.picture = Some(picture),
                 Err(_) => warnings
@@ -479,6 +499,7 @@ impl GsoGroupBuilder {
             children: self.children,
             instance_id: self.instance_id,
             render: self.render,
+            has_link: self.has_link,
         })
     }
 }
@@ -507,6 +528,8 @@ impl InlineGsoContext {
             curve: None,
             text_art: None,
             shape_component_kind: None,
+            comp_level: None,
+            link: None,
             group: None,
         }
     }
@@ -551,8 +574,9 @@ impl InlineGsoContext {
         true
     }
 
-    pub(super) fn note_shape_component(&mut self, data: &[u8]) {
+    pub(super) fn note_shape_component(&mut self, data: &[u8], level: u16) {
         self.saw_shape_component = true;
+        self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
             self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
         }
@@ -560,6 +584,14 @@ impl InlineGsoContext {
 
     pub(super) fn note_shape_rectangle(&mut self) {
         self.saw_shape_rectangle = true;
+    }
+
+    /// A `CtrlData` record: the shape's hyperlink when it sits one level
+    /// below the shape's component (deeper ones belong to its text).
+    pub(super) fn note_ctrl_data(&mut self, data: &[u8], level: u16) {
+        if self.link.is_none() && self.comp_level.is_some_and(|c| level == c.saturating_add(1)) {
+            self.link = Some(crate::schema::section::parse_object_link(data));
+        }
     }
 
     pub(super) fn note_shape_picture(&mut self, picture: Hwp5ShapePicture) {
@@ -609,6 +641,7 @@ impl InlineGsoContext {
             curve: self.curve,
             text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
+            link: self.link,
         })
     }
 }

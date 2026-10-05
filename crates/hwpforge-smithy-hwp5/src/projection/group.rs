@@ -17,17 +17,21 @@
 //! plus its chained coordinates, even when the group's own frame (its chain
 //! applied to its initial size) starts elsewhere.
 //!
+//! A picture child becomes a [`GroupChild::Picture`], its box folded like a
+//! shape's and kept unturned.
+//!
 //! Whatever Core cannot carry is reported as [`Hwp5Warning::ContentLost`]:
-//! what the fold cannot place exactly, an unreadable chain, pictures and OLE
-//! objects (Core groups have no picture child yet), the text of a shape that
-//! does not keep it, the controls inside a child's text (the group child
-//! parser keeps only text), a directional fill (HWP5 shape styles are not
-//! projected at all yet — only the fills that decide geometry are reported
-//! here), a displayed size or a nested group box that disagrees with the
-//! shapes, and a group left with nothing.
+//! what the fold cannot place exactly, an unreadable chain, OLE objects, a
+//! picture's turn, crop, effect or border, a link that is not in Hancom's
+//! form, the group's own link, the text of a shape that does not keep it,
+//! the controls inside a child's text (the group child parser keeps only
+//! text), a directional fill (HWP5 shape styles are not projected at all
+//! yet — only the fills that decide geometry are reported here), a
+//! displayed size or a nested group box that disagrees with the shapes, and
+//! a group left with nothing.
 
 use hwpforge_core::control::geometry::{
-    emitted_corners, fold_group_child, group_bounds, Bounds, EmissionPolicy, FoldInput,
+    emitted_corners, fold_box, fold_group_child, group_bounds, Bounds, EmissionPolicy, FoldInput,
     FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
 };
 use hwpforge_core::control::{Control, GroupChild, ShapePoint};
@@ -36,14 +40,17 @@ use hwpforge_core::ObjectId;
 use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
 
 use crate::ctrl_ids::{CTRL_ID_EQED, CTRL_ID_GSO, CTRL_ID_TABLE};
-use crate::decoder::section::{Hwp5Control, Hwp5GroupChild, Hwp5GroupControl, Hwp5Paragraph};
+use crate::decoder::section::{
+    Hwp5Control, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5Paragraph,
+};
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{Hwp5Matrix, Hwp5ShapeFill, Hwp5ShapePoint, Hwp5ShapeRender};
 
+use super::image_size::pixel_size;
 use super::shapes::offset_placement;
 use super::text::hwp_unit_from_u32;
 use super::{
-    project_equation_run, project_nested_paragraphs, project_text_art_run,
+    object_link_url, project_equation_run, project_nested_paragraphs, project_text_art_run,
     shape_vertical_align_from_list_header, ImageProjectionContext, ProjectionImageState,
 };
 
@@ -110,9 +117,9 @@ fn point(p: Hwp5ShapePoint) -> ShapePoint {
 /// Name of a child kind Core groups do not hold.
 fn unsupported_kind(control: &Hwp5Control) -> Option<&'static str> {
     match control {
-        Hwp5Control::Image(_) => Some("pic"),
         Hwp5Control::OleObject(_) => Some("ole"),
-        Hwp5Control::Rect(_)
+        Hwp5Control::Image(_)
+        | Hwp5Control::Rect(_)
         | Hwp5Control::Ellipse(_)
         | Hwp5Control::Arc(_)
         | Hwp5Control::Polygon(_)
@@ -194,6 +201,13 @@ enum Outcome<'a> {
         offset: (i32, i32),
         size: (i32, i32),
     },
+    /// A picture stays, as an unturned box at `offset` in its group.
+    Picture {
+        image: &'a Hwp5ImageControl,
+        size: (i32, i32),
+        offset: (i32, i32),
+        hyperlink: Option<String>,
+    },
     Dropped,
     /// A nested group that cannot be placed: nothing of it is written, but
     /// its children's own losses are still reported.
@@ -223,13 +237,29 @@ impl GroupPlan<'_> {
     }
 }
 
-fn plan_children(children: &[Hwp5GroupChild], origin: (f64, f64)) -> GroupPlan<'_> {
-    GroupPlan { children: children.iter().map(|c| plan_child(c, origin)).collect() }
+/// What the planner knows of a picture's image: `None` = the document has
+/// no asset for that BinData id; `Some(size)` = it has one, with its pixel
+/// size when the header could be read.
+type ImageAssets<'f> = &'f dyn Fn(u16) -> Option<Option<(u32, u32)>>;
+
+fn plan_children<'a>(
+    children: &'a [Hwp5GroupChild],
+    origin: (f64, f64),
+    assets: ImageAssets<'_>,
+) -> GroupPlan<'a> {
+    GroupPlan { children: children.iter().map(|c| plan_child(c, origin, assets)).collect() }
 }
 
-fn plan_child(child: &Hwp5GroupChild, origin: (f64, f64)) -> ChildPlan<'_> {
+fn plan_child<'a>(
+    child: &'a Hwp5GroupChild,
+    origin: (f64, f64),
+    assets: ImageAssets<'_>,
+) -> ChildPlan<'a> {
     if let Hwp5Control::Group(nested) = &child.control {
-        return plan_nested(child, nested, origin);
+        return plan_nested(child, nested, origin, assets);
+    }
+    if let Hwp5Control::Image(image) = &child.control {
+        return plan_picture(child, image, origin, assets);
     }
     let mut after = Vec::new();
     let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
@@ -314,11 +344,15 @@ fn plan_nested<'a>(
     child: &'a Hwp5GroupChild,
     nested: &'a Hwp5GroupControl,
     parent_origin: (f64, f64),
+    assets: ImageAssets<'_>,
 ) -> ChildPlan<'a> {
-    let before = nested_box_notes(nested);
+    let mut before = nested_box_notes(nested);
+    if nested.has_link {
+        before.push(group_link_note());
+    }
     let provisional = wire_bounds(&nested.children, false)
         .map_or(parent_origin, |b| (b.min_x().round(), b.min_y().round()));
-    let mut plan = plan_children(&nested.children, provisional);
+    let mut plan = plan_children(&nested.children, provisional, assets);
     let mut corners: Vec<(f64, f64)> = Vec::new();
     for c in &plan.children {
         match &c.outcome {
@@ -327,7 +361,7 @@ fn plan_nested<'a>(
                     emitted_corners(control, &EmissionPolicy::exact()).into_iter().flatten(),
                 );
             }
-            Outcome::Nested { offset, size, .. } => {
+            Outcome::Nested { offset, size, .. } | Outcome::Picture { offset, size, .. } => {
                 let (x, y) = (f64::from(offset.0), f64::from(offset.1));
                 let (w, h) = (f64::from(size.0), f64::from(size.1));
                 corners.extend([(x, y), (x + w, y + h)]);
@@ -359,7 +393,9 @@ fn plan_nested<'a>(
     for c in &mut plan.children {
         match &mut c.outcome {
             Outcome::Kept { control, .. } => shift_child(control, -dx, -dy),
-            Outcome::Nested { offset, .. } => *offset = (offset.0 - dx, offset.1 - dy),
+            Outcome::Nested { offset, .. } | Outcome::Picture { offset, .. } => {
+                *offset = (offset.0 - dx, offset.1 - dy);
+            }
             Outcome::Dropped | Outcome::DroppedGroup(_) => {}
         }
     }
@@ -369,6 +405,120 @@ fn plan_nested<'a>(
         size: (size.0 as i32, size.1 as i32),
     };
     ChildPlan { child, before, outcome, after }
+}
+
+/// The note for a group's own hyperlink, which a Core group cannot hold.
+fn group_link_note() -> PlanNote {
+    note("group_hyperlink", "group hyperlink not carried by Core")
+}
+
+/// HWPUNIT per image pixel (96 dpi): the unit of the crop rectangle and the
+/// image size in `ShapePicture`.
+const HWPUNIT_PER_PIXEL: i64 = 75;
+
+/// A picture in a group: its box folded like a shape's (`fold_box`), kept
+/// unturned. What a Core picture cannot show is noted as
+/// `group_child_picture` — a turn or mirror (kept around the same centre),
+/// a crop, an image effect, a border — as the HWPX decoder does.
+fn plan_picture<'a>(
+    child: &'a Hwp5GroupChild,
+    image: &'a Hwp5ImageControl,
+    origin: (f64, f64),
+    assets: ImageAssets<'_>,
+) -> ChildPlan<'a> {
+    let mut after = Vec::new();
+    let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
+    let Some(pixels) = assets(image.binary_data_id) else {
+        after.push(PlanNote::Warning(Hwp5Warning::DroppedControl {
+            control: "image",
+            reason: format!("missing_image_asset_for_binary_data_id={}", image.binary_data_id),
+        }));
+        return dropped(after);
+    };
+    let render = match &child.render {
+        Ok(render) => render,
+        Err(reason) => {
+            after.push(note("group_child_transform", format!("matrix chain: {reason}")));
+            return dropped(after);
+        }
+    };
+    let (w, h) = initial_size(render);
+    let fold = match fold_box(w, h, &FoldInput::new(chain(render), (w, h), origin)) {
+        Ok(fold) => fold,
+        Err(loss) => {
+            let kind = match loss.kind() {
+                FoldLossKind::Degenerate => "group_child_degenerate",
+                _ => "group_child_transform",
+            };
+            after.push(note(kind, loss.detail().to_string()));
+            return dropped(after);
+        }
+    };
+    for loss in fold.losses() {
+        after.push(note("group_child_transform", loss.detail().to_string()));
+    }
+    if fold.rotation().is_some() || fold.flip().is_some() {
+        after.push(note(
+            "group_child_picture",
+            "rotation/flip: a Core picture cannot turn or mirror; kept unturned around the \
+             same centre",
+        ));
+    }
+    after.extend(picture_losses(image, pixels).into_iter().map(|r| note("group_child_picture", r)));
+    let hyperlink = match object_link_url(image.link.as_ref()) {
+        Ok(url) => url,
+        Err(reason) => {
+            after.push(note("picture_hyperlink", reason));
+            None
+        }
+    };
+    let outcome = Outcome::Picture {
+        image,
+        size: (fold.width(), fold.height()),
+        offset: fold.offset(),
+        hyperlink,
+    };
+    ChildPlan { child, before: Vec::new(), outcome, after }
+}
+
+/// What a group picture shows that a Core picture cannot (the HWPX
+/// decoder's rule on the same fields): a crop more than one pixel off the
+/// whole image — the record's image size, or the image's pixel size × 75,
+/// or, without either, a crop that cannot be ruled out; an effect
+/// (brightness, contrast, effect, or any picture-effect flag); a border
+/// (a thickness above zero).
+fn picture_losses(image: &Hwp5ImageControl, pixels: Option<(u32, u32)>) -> Vec<String> {
+    let p = &image.picture;
+    let mut out = Vec::new();
+    let whole = match p.dimension {
+        Some((w, h)) if w > 0 && h > 0 => Some((i64::from(w), i64::from(h))),
+        _ => pixels
+            .map(|(w, h)| (i64::from(w) * HWPUNIT_PER_PIXEL, i64::from(h) * HWPUNIT_PER_PIXEL)),
+    };
+    let [left, top, right, bottom] = p.crop.map(i64::from);
+    match whole {
+        Some((w, h)) => {
+            let off = [left, top, right - w, bottom - h].iter().map(|v| v.abs()).max().unwrap_or(0);
+            if off > HWPUNIT_PER_PIXEL {
+                out.push(format!("crop: ({left}, {top}, {right}, {bottom}) of a {w}x{h} image"));
+            }
+        }
+        None => out.push("crop: the image's size is unknown, so a crop cannot be ruled out".into()),
+    }
+    if p.brightness != 0
+        || p.contrast != 0
+        || p.effect != 0
+        || p.effect_flags.is_some_and(|f| f != 0)
+    {
+        out.push(format!(
+            "effect: {} (brightness {}, contrast {}, effect flags {:?})",
+            p.effect, p.brightness, p.contrast, p.effect_flags
+        ));
+    }
+    if p.border_thickness > 0 {
+        out.push(format!("border: thickness {}", p.border_thickness));
+    }
+    out
 }
 
 /// A nested group's own matrices should describe the box of its shapes. A
@@ -531,7 +681,9 @@ fn wire_local_control(
 /// these.
 pub(crate) fn written_group_text(group: &Hwp5GroupControl) -> Vec<&[Hwp5Paragraph]> {
     let mut out = Vec::new();
-    collect_written_text(&plan_children(&group.children, (0.0, 0.0)), &mut out);
+    // Pictures write no text: whether their images exist does not matter.
+    let assets: ImageAssets<'_> = &|_| Some(None);
+    collect_written_text(&plan_children(&group.children, (0.0, 0.0), assets), &mut out);
     out
 }
 
@@ -540,7 +692,10 @@ fn collect_written_text<'a>(plan: &GroupPlan<'a>, out: &mut Vec<&'a [Hwp5Paragra
         match &c.outcome {
             Outcome::Kept { keeps_text: true, .. } => out.push(&c.child.paragraphs),
             Outcome::Nested { plan, .. } => collect_written_text(plan, out),
-            Outcome::Kept { .. } | Outcome::Dropped | Outcome::DroppedGroup(_) => {}
+            Outcome::Kept { .. }
+            | Outcome::Picture { .. }
+            | Outcome::Dropped
+            | Outcome::DroppedGroup(_) => {}
         }
     }
 }
@@ -561,7 +716,11 @@ pub(super) fn project_group_run(
         lost(state, &place, "group_transform", format!("group matrix chain: {reason}"));
     }
     check_display_size(group, &place, state);
-    let plan = plan_children(&group.children, (0.0, 0.0));
+    if group.has_link {
+        report(vec![group_link_note()], &place, state);
+    }
+    let pixels = |id: u16| state.image_asset(id).map(|asset| pixel_size(&asset.bytes));
+    let plan = plan_children(&group.children, (0.0, 0.0), &pixels);
     let kept = plan.kept();
     let children = emit(plan, &mut place, state);
     if kept == 0 {
@@ -621,6 +780,13 @@ fn emit(
             Outcome::DroppedGroup(plan) => {
                 report_only(plan, place, state);
                 None
+            }
+            Outcome::Picture { image, size, offset, hyperlink } => {
+                let picture = state.build_group_picture(image, size, offset, hyperlink);
+                report(c.after, place, state);
+                out.extend(picture.map(GroupChild::Picture));
+                place.path.pop();
+                continue;
             }
             Outcome::Dropped => None,
         };
@@ -702,11 +868,11 @@ mod tests {
     use super::*;
     use crate::decoder::package::{DecompressBudget, MAX_TOTAL_DECOMPRESSED};
     use crate::decoder::section::{
-        Hwp5EllipseControl, Hwp5EquationControl, Hwp5ImageControl, Hwp5Paragraph,
-        Hwp5PolygonControl, Hwp5RectControl, Hwp5TextArtControl,
+        Hwp5EllipseControl, Hwp5EquationControl, Hwp5ImageControl, Hwp5OleObjectControl,
+        Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5TextArtControl,
     };
     use crate::schema::section::{
-        Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapeTextArt,
+        Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry, Hwp5ShapePicture, Hwp5ShapeTextArt,
     };
 
     const ID: Hwp5Matrix = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
@@ -771,7 +937,53 @@ mod tests {
             binary_data_id: 1,
             instance_id: 0,
             ctrl_properties: 0,
+            picture: Hwp5ShapePicture {
+                binary_data_id: 1,
+                crop: [0, 0, 22_500, 15_000],
+                dimension: Some((22_500, 15_000)),
+                effect_flags: Some(0),
+                ..Default::default()
+            },
+            link: None,
         })
+    }
+
+    fn ole() -> Hwp5Control {
+        Hwp5Control::OleObject(Hwp5OleObjectControl {
+            ctrl_id: CTRL_ID_GSO,
+            geometry: geo(0, 0, 0, 0),
+            binary_data_id: 2,
+            extent_width: 0,
+            extent_height: 0,
+        })
+    }
+
+    /// An image plan holding BinData 1, a 300 x 200 px PNG.
+    fn assets() -> crate::Hwp5JoinedImageAssetPlan {
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&300u32.to_be_bytes());
+        png.extend_from_slice(&200u32.to_be_bytes());
+        assets_of(png)
+    }
+
+    /// An image plan holding BinData 1 with these bytes.
+    fn assets_of(png: Vec<u8>) -> crate::Hwp5JoinedImageAssetPlan {
+        let asset = crate::Hwp5JoinedImageAsset {
+            payload: crate::Hwp5SemanticImagePayload {
+                binary_data_id: 1,
+                storage_name: "image1.png".to_string(),
+                package_path: "BinData/image1.png".to_string(),
+                format: crate::Hwp5SemanticImageFormat::Png,
+                width_hwp: None,
+                height_hwp: None,
+            },
+            bytes: png,
+        };
+        crate::Hwp5JoinedImageAssetPlan {
+            ordered_assets: vec![asset.clone()],
+            assets_by_binary_data_id: [(1, asset)].into_iter().collect(),
+        }
     }
 
     fn group(
@@ -779,7 +991,14 @@ mod tests {
         render: Result<Hwp5ShapeRender, String>,
         children: Vec<Hwp5GroupChild>,
     ) -> Hwp5GroupControl {
-        Hwp5GroupControl { ctrl_id: CTRL_ID_GSO, geometry, children, render, instance_id: 0 }
+        Hwp5GroupControl {
+            ctrl_id: CTRL_ID_GSO,
+            geometry,
+            children,
+            render,
+            instance_id: 0,
+            has_link: false,
+        }
     }
 
     fn nested(
@@ -811,8 +1030,18 @@ mod tests {
     /// Projects `top`, returning the group (if any) and the `ContentLost`
     /// kinds in order.
     fn project(top: &Hwp5GroupControl) -> (Option<Control>, Vec<String>) {
-        let mut state =
-            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        project_with(top, assets())
+    }
+
+    fn project_with(
+        top: &Hwp5GroupControl,
+        plan: crate::Hwp5JoinedImageAssetPlan,
+    ) -> (Option<Control>, Vec<String>) {
+        let mut state = ProjectionImageState::new(
+            Some(&plan),
+            None,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        );
         let run = project_group_run(top, &mut state);
         let kinds = state
             .warnings
@@ -1023,20 +1252,25 @@ mod tests {
         assert_eq!(offset(children(&g.unwrap())[0]), (0, 1500));
     }
 
-    /// Pictures are not Core group children yet: each is reported, and a
-    /// group with nothing else is reported too.
+    /// Pictures are group children: a picture beside a rect and a group of
+    /// pictures only are kept whole. Without the image's asset the picture
+    /// is dropped with the usual missing-asset warning, and a group left
+    /// with nothing is reported.
     ///
-    /// 이것을 실패시키는 것: 미지원 자식 경고를 지우는 것, 빈 묶음 경고를 지우는 것.
+    /// 이것을 실패시키는 것: 그림을 미지원 종류로 되돌리는 것(`pic` 손실) / 자산 없는
+    /// 그림을 그대로 두는 것.
     #[test]
-    fn pictures_are_reported_and_a_picture_only_group_too() {
+    fn pictures_are_kept_and_one_without_its_image_is_dropped() {
         let mixed = group(
             geo(0, 0, 200, 100),
             at(200, 100, 0.0, 0.0),
             vec![child(picture(), at(100, 100, 0.0, 0.0)), child(rect(), at(100, 100, 100.0, 0.0))],
         );
         let (g, lost) = project(&mixed);
-        assert_eq!(lost, ["pic"]);
-        assert_eq!(children(&g.unwrap()).len(), 1);
+        assert!(lost.is_empty(), "{lost:?}");
+        let Some(Control::Group { children, .. }) = g else { panic!() };
+        assert!(matches!(children[0], GroupChild::Picture(_)), "{children:?}");
+        assert!(matches!(children[1], GroupChild::Shape(Control::Rect { .. })), "{children:?}");
 
         let only = group(
             geo(0, 0, 200, 100),
@@ -1047,8 +1281,19 @@ mod tests {
             ],
         );
         let (g, lost) = project(&only);
-        assert!(g.is_none());
-        assert_eq!(lost, ["pic", "pic", "group"]);
+        assert!(lost.is_empty(), "{lost:?}");
+        let Some(Control::Group { children, .. }) = g else { panic!() };
+        assert_eq!(children.len(), 2);
+
+        let mut state =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        assert!(project_group_run(&only, &mut state).is_none());
+        let dropped = state
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, Hwp5Warning::DroppedControl { control: "image", .. }))
+            .count();
+        assert_eq!(dropped, 2, "{:?}", state.warnings);
     }
 
     /// A rect keeps its text as a text box; a polygon's text is not carried.
@@ -1208,11 +1453,12 @@ mod tests {
                 child(picture(), at(1000, 1000, 500.0, 0.0)),
             ],
         );
-        assert_eq!(project(&with_pic).1, ["pic"]);
+        assert!(project(&with_pic).1.is_empty());
     }
 
-    /// A nested group whose own box is 10 off its shapes is reported; with a
-    /// picture under it the boxes are not compared.
+    /// A nested group whose own box is 10 off its shapes is reported; with an
+    /// OLE object (a child Core groups do not hold) under it the boxes are not
+    /// compared.
     ///
     /// 이것을 실패시키는 것: 중첩 묶음 상자 비교를 지우는 것, 미지원 자식이 있을
     /// 때 비교를 건너뛰지 않는 것.
@@ -1227,11 +1473,11 @@ mod tests {
             at(500, 600, 2610.0, 3400.0),
             vec![
                 child(rect(), at(500, 600, 2600.0, 3400.0)),
-                child(picture(), at(10, 10, 2600.0, 3400.0)),
+                child(ole(), at(10, 10, 2600.0, 3400.0)),
             ],
         );
         let top = group(geo(0, 0, 4000, 4000), at(4000, 4000, 0.0, 0.0), vec![n]);
-        assert_eq!(project(&top).1, ["pic"]);
+        assert_eq!(project(&top).1, ["ole"]);
     }
 
     /// A `ShapeComponent` child payload (type tag once): the 48-byte header,
@@ -1459,8 +1705,8 @@ mod tests {
     }
 
     /// A nested group that is dropped still reports its children's own
-    /// losses, each at its place: a picture-only nested group reports both
-    /// pictures before the group, a nested group whose only child collapses
+    /// losses, each at its place: an OLE-only nested group reports both
+    /// objects before the group, a nested group whose only child collapses
     /// reports the collapse.
     ///
     /// 이것을 실패시키는 것: 버려진 중첩 묶음의 자식 계획을 재생하지 않는 것(자식별
@@ -1472,10 +1718,7 @@ mod tests {
         let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let pics = nested(
             at(200, 100, 0.0, 0.0),
-            vec![
-                child(picture(), at(100, 100, 0.0, 0.0)),
-                child(picture(), at(100, 100, 100.0, 0.0)),
-            ],
+            vec![child(ole(), at(100, 100, 0.0, 0.0)), child(ole(), at(100, 100, 100.0, 0.0))],
         );
         let collapsed = nested(
             at(100, 100, 0.0, 0.0),
@@ -1484,7 +1727,7 @@ mod tests {
         // One level deeper: a dropped group holding a picture-only group.
         let deeper = nested(
             at(100, 100, 0.0, 0.0),
-            vec![nested(at(100, 100, 0.0, 0.0), vec![child(picture(), at(100, 100, 0.0, 0.0))])],
+            vec![nested(at(100, 100, 0.0, 0.0), vec![child(ole(), at(100, 100, 0.0, 0.0))])],
         );
         let top = group(
             geo(0, 0, 200, 100),
@@ -1503,19 +1746,109 @@ mod tests {
             })
             .collect();
         let want = [
-            ("pic", "group[0].child[1].child[0]"),
-            ("pic", "group[0].child[1].child[1]"),
+            ("ole", "group[0].child[1].child[0]"),
+            ("ole", "group[0].child[1].child[1]"),
             ("group", "group[0].child[1]"),
             // Its stored box is 100 wide; its only shape is flattened to 0.
             ("nested_group_placement", "group[0].child[2]"),
             ("group_child_degenerate", "group[0].child[2].child[0]"),
             ("group", "group[0].child[2]"),
-            ("pic", "group[0].child[3].child[0].child[0]"),
+            ("ole", "group[0].child[3].child[0].child[0]"),
             ("group", "group[0].child[3].child[0]"),
             ("group", "group[0].child[3]"),
         ];
         let want: Vec<(String, String)> =
             want.iter().map(|(k, l)| (k.to_string(), l.to_string())).collect();
         assert_eq!(lost, want);
+    }
+
+    /// A one-picture group whose picture record is `edit`ed first.
+    fn picture_group(edit: impl FnOnce(&mut Hwp5ImageControl)) -> Hwp5GroupControl {
+        let mut pic = picture();
+        let Hwp5Control::Image(image) = &mut pic else { unreachable!() };
+        edit(image);
+        group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![child(pic, at(100, 100, 0.0, 0.0))])
+    }
+
+    /// The crop rule (as the HWPX decoder's): more than 75 HWPUNIT off the
+    /// whole image; the whole image is the record's size, or the image's
+    /// pixel size × 75, or — when neither is known — a crop is reported.
+    ///
+    /// 이것을 실패시키는 것: `>` 를 `>=` 로 / 픽셀 크기 대체 삭제 / 크기 모름 갈래 삭제 /
+    /// `left`·`top` 을 비교에서 빼는 것.
+    #[test]
+    fn group_picture_crop_rule() {
+        let crop = |c: [i32; 4], dim: Option<(u32, u32)>| {
+            picture_group(|i| {
+                i.picture.crop = c;
+                i.picture.dimension = dim;
+            })
+        };
+        let whole = Some((22_500, 15_000));
+        assert!(project(&crop([0, 0, 22_425, 15_000], whole)).1.is_empty());
+        assert_eq!(project(&crop([0, 0, 22_424, 15_000], whole)).1, ["group_child_picture"]);
+        assert_eq!(project(&crop([0, 76, 22_500, 15_000], whole)).1, ["group_child_picture"]);
+        // No size in the record: the 300 x 200 px image gives 22500 x 15000.
+        assert!(project(&crop([0, 0, 22_500, 15_000], None)).1.is_empty());
+        assert!(project(&crop([0, 0, 22_500, 15_000], Some((0, 0)))).1.is_empty());
+        let unreadable = assets_of(b"not an image".to_vec());
+        assert_eq!(
+            project_with(&crop([0, 0, 22_500, 15_000], None), unreadable).1,
+            ["group_child_picture"]
+        );
+    }
+
+    /// Effects and a border are reported; a plain picture is not.
+    ///
+    /// 이것을 실패시키는 것: 밝기·명암·효과·효과 플래그·테두리 조건을 각각 지우는 것.
+    #[test]
+    fn group_picture_effect_and_border_rule() {
+        type Edit = fn(&mut Hwp5ImageControl);
+        let edits: [Edit; 5] = [
+            |i| i.picture.brightness = -10,
+            |i| i.picture.contrast = 5,
+            |i| i.picture.effect = 1,
+            |i| i.picture.effect_flags = Some(4),
+            |i| i.picture.border_thickness = 28,
+        ];
+        for (n, edit) in edits.into_iter().enumerate() {
+            assert_eq!(project(&picture_group(edit)).1, ["group_child_picture"], "edit {n}");
+        }
+        assert!(project(&picture_group(|_| {})).1.is_empty());
+    }
+
+    /// A group picture keeps its link; a link record in another form is
+    /// reported. A group's own link (top-level or nested) is reported.
+    ///
+    /// 이것을 실패시키는 것: 그림 링크를 싣지 않는 것 / 형식 밖 링크 경고 삭제 /
+    /// 최상위·중첩 묶음 링크 경고를 각각 지우는 것.
+    #[test]
+    fn group_picture_and_group_links() {
+        let linked = picture_group(|i| i.link = Some(Ok("http://a.kr;1;0;0;".to_string())));
+        let (g, lost) = project(&linked);
+        assert!(lost.is_empty(), "{lost:?}");
+        let Some(Control::Group { children, .. }) = g else { panic!() };
+        let GroupChild::Picture(image) = &children[0] else { panic!() };
+        assert_eq!(image.hyperlink.as_deref(), Some("http://a.kr"));
+
+        let odd = picture_group(|i| i.link = Some(Ok("http://a.kr".to_string())));
+        assert_eq!(project(&odd).1, ["picture_hyperlink"]);
+
+        let mut top = picture_group(|_| {});
+        top.has_link = true;
+        assert_eq!(project(&top).1, ["group_hyperlink"]);
+
+        let mut inner = group(
+            geo(0, 0, 0, 0),
+            at(100, 100, 0.0, 0.0),
+            vec![child(rect(), at(100, 100, 0.0, 0.0))],
+        );
+        inner.has_link = true;
+        let outer = group(
+            geo(0, 0, 100, 100),
+            at(100, 100, 0.0, 0.0),
+            vec![child(Hwp5Control::Group(inner), Ok(render_stub()))],
+        );
+        assert_eq!(project(&outer).1, ["group_hyperlink"]);
     }
 }
