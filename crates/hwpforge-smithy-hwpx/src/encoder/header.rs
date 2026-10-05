@@ -99,12 +99,20 @@ fn wrap_header_xml(
 
 // ── 한글 compatibility defaults ─────────────────────────────────
 
-/// Builds `<hh:beginNum>` XML from Core `BeginNum`, defaulting to all 1s.
+/// Builds `<hh:beginNum>` — the document's start numbers — from the first
+/// section's `BeginNum`.
+///
+/// Only footnote and endnote come from it (the decoder merges the header's
+/// values there). Its page/pic/tbl/equation are the section's restart
+/// numbers (`<hp:startNum>`, `0` = continue), not the document's, and Core
+/// has no document layer, so those are written as Hancom always writes them:
+/// `1` (XSD `positiveInteger`; Hancom keeps the header at 1 when a start
+/// number changes — F16, F17 — and a header page of 0 starts the document at
+/// page 0 and swaps odd and even master pages).
 fn build_begin_num_xml(begin_num: Option<&hwpforge_core::section::BeginNum>) -> String {
-    let bn = begin_num.copied().unwrap_or_default();
+    let (footnote, endnote) = begin_num.map_or((1, 1), |bn| (bn.footnote, bn.endnote));
     format!(
-        r#"<hh:beginNum page="{}" footnote="{}" endnote="{}" pic="{}" tbl="{}" equation="{}"/>"#,
-        bn.page, bn.footnote, bn.endnote, bn.pic, bn.tbl, bn.equation,
+        r#"<hh:beginNum page="1" footnote="{footnote}" endnote="{endnote}" pic="1" tbl="1" equation="1"/>"#,
     )
 }
 

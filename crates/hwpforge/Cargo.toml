@@ -53,3 +53,5 @@ hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", featur
 quote = "1"
 serde_json = { workspace = true }
 syn = { version = "3", features = ["full", "extra-traits", "visit"] }
+# Reads `Contents/header.xml` of re-encoded packages (`tests/ops_begin_num.rs`).
+zip = { workspace = true }

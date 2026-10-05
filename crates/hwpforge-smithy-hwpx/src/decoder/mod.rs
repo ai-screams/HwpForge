@@ -18,7 +18,7 @@ use std::path::Path;
 
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
-use hwpforge_core::section::{MasterPage, Section};
+use hwpforge_core::section::{BeginNum, MasterPage, Section};
 use hwpforge_core::PageSettings;
 
 use crate::error::HwpxResult;
@@ -641,17 +641,24 @@ impl HwpxDecoder {
                 page_border_fills: result.page_border_fills,
                 master_pages: section_master_pages,
                 // Per-section startNum from secPr; merge footnote/endnote
-                // from header.xml for the first section.
+                // from header.xml for the first section. Only those two: the
+                // header's page/pic/tbl/equation are the document's start
+                // numbers, which `Section::begin_num` (a section restart, 0 =
+                // continue) cannot hold — without a startNum the section
+                // continues.
                 begin_num: {
                     let mut bn = result.begin_num;
                     if i == 0 {
-                        if let (Some(ref mut section_bn), Some(ref header_bn)) =
-                            (&mut bn, &begin_num)
-                        {
+                        if let Some(header_bn) = &begin_num {
+                            let section_bn = bn.get_or_insert(BeginNum {
+                                page: 0,
+                                pic: 0,
+                                tbl: 0,
+                                equation: 0,
+                                ..BeginNum::default()
+                            });
                             section_bn.footnote = header_bn.footnote;
                             section_bn.endnote = header_bn.endnote;
-                        } else if bn.is_none() {
-                            bn = begin_num;
                         }
                     }
                     bn
