@@ -494,8 +494,9 @@ impl<'de> serde::Deserialize<'de> for HxRun {
 ///
 /// Decode-only mirror of [`crate::encoder::shapes::encode_text_art_to_xml`].
 /// Captures only the attributes needed to reconstruct `Control::TextArt`:
-/// the displayed `text`, `instid`, placement (`offset`), size (`sz`), and the
-/// `<hp:textartPr>` typography sub-element.
+/// the displayed `text`, `instid`, placement (`offset`), size (`sz`; for a
+/// group child, which has no `sz`, `orgSz` and the matrix chain), the fill
+/// brush, and the `<hp:textartPr>` typography sub-element.
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct HxTextArt {
     /// Displayed text content.
@@ -510,6 +511,18 @@ pub struct HxTextArt {
     /// Display size (`<hp:sz>`) — carries width/height.
     #[serde(rename(deserialize = "sz"), default)]
     pub sz: Option<HxTableSz>,
+    /// Size before the matrix chain (`<hp:orgSz>`).
+    #[serde(rename(deserialize = "orgSz"), default)]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current size (`<hp:curSz>`).
+    #[serde(rename(deserialize = "curSz"), default)]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Matrix chain (`<hp:renderingInfo>`) — places a group child.
+    #[serde(rename(deserialize = "renderingInfo"), default)]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Fill brush (`<hc:fillBrush>`) — the text's colour.
+    #[serde(rename(deserialize = "fillBrush"), default)]
+    pub fill_brush: Option<HxFillBrush>,
     /// Typography properties (`<hp:textartPr>`).
     #[serde(rename(deserialize = "textartPr"), default)]
     pub textart_pr: Option<HxTextArtPr>,
@@ -585,6 +598,8 @@ pub struct HxContainer {
     pub connect_lines: Vec<HxConnectLine>,
     /// Nested `<hp:container>` children (group-in-group).
     pub containers: Vec<HxContainer>,
+    /// `<hp:textart>` children.
+    pub textarts: Vec<HxTextArt>,
 
     /// Child elements in document order: `(kind, index in that kind's Vec)`.
     /// Elements the decoder does not support are recorded as
@@ -609,6 +624,8 @@ pub enum HxContainerChildKind {
     ConnectLine,
     /// `<hp:container>`.
     Container,
+    /// `<hp:textart>`.
+    TextArt,
     /// An element the decoder cannot carry into Core, named by its local
     /// wire name (`"pic"`, `"ole"`, …; `"unknown"` for an element this
     /// schema does not name).
@@ -657,7 +674,7 @@ enum HxContainerChildDe {
     #[serde(rename = "ole")]
     Ole(serde::de::IgnoredAny),
     #[serde(rename = "textart")]
-    TextArt(serde::de::IgnoredAny),
+    TextArt(Box<HxTextArt>),
     #[serde(rename = "equation")]
     Equation(serde::de::IgnoredAny),
     #[serde(rename = "switch")]
@@ -737,7 +754,10 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
                 }
                 C::Pic(_) => c.child_order.push((K::Unsupported("pic"), 0)),
                 C::Ole(_) => c.child_order.push((K::Unsupported("ole"), 0)),
-                C::TextArt(_) => c.child_order.push((K::Unsupported("textart"), 0)),
+                C::TextArt(x) => {
+                    c.child_order.push((K::TextArt, c.textarts.len()));
+                    c.textarts.push(*x);
+                }
                 C::Equation(_) => c.child_order.push((K::Unsupported("equation"), 0)),
                 C::Switch(_) => c.child_order.push((K::Unsupported("switch"), 0)),
                 C::Caption(_) => c.child_order.push((K::Unsupported("caption"), 0)),

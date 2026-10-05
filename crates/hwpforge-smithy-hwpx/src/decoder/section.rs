@@ -727,7 +727,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
                 runs.push(decode_curve(&hx.curves[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::TextArt => {
-                runs.push(decode_textart(&hx.textarts[idx], char_shape_id, depth)?);
+                runs.push(decode_textart(&hx.textarts[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::ConnectLine => {
                 runs.push(decode_connect_line(&hx.connect_lines[idx], char_shape_id, depth, ctx)?);

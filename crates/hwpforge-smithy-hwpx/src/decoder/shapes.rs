@@ -598,11 +598,14 @@ pub(crate) fn decode_curve(
 
 /// Decodes an `HxTextArt` (`<hp:textart>`) into a Core `Run` with
 /// `Control::TextArt`. Round-trip mirror of the encoder's raw-XML emission:
-/// geometry from `<hp:offset>`/`<hp:sz>`, typography from `<hp:textartPr>`.
+/// geometry from `<hp:offset>`/`<hp:sz>` (a group child, which has no `sz`,
+/// is sized later from its matrix chain), typography from `<hp:textartPr>`,
+/// the colour from the fill brush ([`textart_fill_color`]).
 pub(crate) fn decode_textart(
     text_art: &HxTextArt,
     char_shape_id: CharShapeIndex,
     _depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     let (width, height) = text_art
         .sz
@@ -645,11 +648,44 @@ pub(crate) fn decode_textart(
             width,
             height,
             placement,
-            fill_color: None,
+            fill_color: textart_fill_color(text_art.fill_brush.as_ref(), ctx),
             inst_id,
         })),
         char_shape_id,
     })
+}
+
+/// The colour Core `TextArt.fill_color` can carry: a `winBrush` with a valid
+/// `faceColor`, no hatch and no transparency, and no gradation or picture
+/// beside it. Any other fill is reported as
+/// [`ContentLost`](super::DecodeWarning::ContentLost) (`textart_fill`) and
+/// left to the encoder's default, since Core has nowhere to keep it.
+fn textart_fill_color(
+    fill: Option<&HxFillBrush>,
+    ctx: &mut DecodeCtx,
+) -> Option<hwpforge_foundation::Color> {
+    let lost = |ctx: &mut DecodeCtx, what: &str| {
+        ctx.content_lost("textart_fill", format!("fill: {what} not carried by Core TextArt"));
+        None
+    };
+    let Some(fill) = fill else { return lost(ctx, "missing fill brush") };
+    if fill.gradation.is_some() {
+        return lost(ctx, "gradation");
+    }
+    if fill.img_brush.is_some() {
+        return lost(ctx, "picture fill");
+    }
+    let Some(brush) = fill.win_brush.as_ref() else { return lost(ctx, "empty fill brush") };
+    if brush.hatch_style.is_some() {
+        return lost(ctx, "pattern");
+    }
+    if brush.alpha != 0 {
+        return lost(ctx, "transparency");
+    }
+    match crate::color::parse_hex_color_raw(&brush.face_color) {
+        Some(color) => Some(color),
+        None => lost(ctx, &format!("face colour {:?}", brush.face_color)),
+    }
 }
 
 /// Decodes an `HxConnectLine` into a Core `Run` with `Control::ConnectLine`.
@@ -733,7 +769,9 @@ pub(crate) fn decode_connect_line(
 ///   directional fill take the whole map onto their points;
 /// - boxes (rect/text box, ellipse, arc) and point shapes that do carry text,
 ///   a caption or a directional fill are scaled along their own axes and get
-///   the rotation and horizontal mirror as `ShapeStyle.rotation`/`flip`.
+///   the rotation and horizontal mirror as `ShapeStyle.rotation`/`flip`;
+/// - a TextArt is scaled the same way from its `<hp:orgSz>`; it has no
+///   rotation or mirror field, so a turned or mirrored one is reported.
 ///
 /// Each child is then checked: the matrix the encoder would write from the
 /// decoded Core value must put every defining point within
@@ -742,7 +780,7 @@ pub(crate) fn decode_connect_line(
 /// size zero, a residual, a displayed size that does not match the
 /// container's own matrices, a nested group whose box disagrees with its
 /// shapes, and every child element Core has no group child for (`pic`,
-/// `ole`, `textart`, `equation`, `switch`, …) — is reported as
+/// `ole`, `equation`, `switch`, …) — is reported as
 /// [`DecodeWarning::ContentLost`](super::DecodeWarning::ContentLost). Group
 /// child paths use the child's position among the container's child
 /// elements in wire order.
@@ -1045,6 +1083,16 @@ fn decode_group_child(
                 }
             })
         }
+        K::TextArt => {
+            let t = &container.textarts[idx];
+            take(Some(decode_textart(t, char_shape_id, depth, ctx)?)).map(|control| WireChild {
+                control,
+                map: child_chain(t.rendering_info.as_ref(), t.offset.as_ref()),
+                org: org_size(t.org_sz.as_ref(), t.cur_sz.as_ref()),
+                // Its fill is judged (and reported) by `decode_textart`.
+                picture_fill: false,
+            })
+        }
         K::Container => {
             return decode_nested_container(
                 &container.containers[idx],
@@ -1160,6 +1208,7 @@ fn shift_child(child: &mut Control, dx: i32, dy: i32) {
         | Control::Curve { placement, .. }
         | Control::ConnectLine { placement, .. }
         | Control::Line { placement, .. }
+        | Control::TextArt { placement, .. }
         | Control::Group { placement, .. } => placement,
         _ => return,
     };
@@ -1225,6 +1274,13 @@ fn leaf_bounds(container: &crate::schema::section::HxContainer) -> Option<(f64, 
             }
             K::ConnectLine => {
                 let s = &container.connect_lines[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::TextArt => {
+                let s = &container.textarts[idx];
                 (
                     child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
                     org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
@@ -2519,7 +2575,8 @@ mod tests {
     /// Decodes a TextArt whose wire `text` attribute is `wire`.
     fn text_art_core_text(wire: &str) -> String {
         let hx = HxTextArt { text: wire.to_string(), ..Default::default() };
-        let run = decode_textart(&hx, CharShapeIndex::new(0), 0).expect("decode");
+        let mut ctx = DecodeCtx::new(0);
+        let run = decode_textart(&hx, CharShapeIndex::new(0), 0, &mut ctx).expect("decode");
         match run.content {
             RunContent::Control(c) => match *c {
                 Control::TextArt { text, .. } => text,
@@ -3371,6 +3428,165 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["pic", "group"]);
     }
 
+    // ── TextArt in a group (§7 contract; no Hancom sample yet) ───────
+
+    fn solid_brush(face: &str) -> String {
+        format!(
+            r##"<hc:fillBrush><hc:winBrush faceColor="{face}" hatchColor="#000000" alpha="0"/></hc:fillBrush>"##
+        )
+    }
+
+    fn text_art(level: u32, ri: &str, brush: &str, tail: &str) -> String {
+        format!(
+            r##"<hp:textart id="5" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="{level}" instid="55" text="묶음글맵시"><hp:offset x="0" y="0"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{ri}<hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/>{brush}<hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="함초롬바탕" fontStyle="보통" fontType="TTF" textShape="WAVE2" lineSpacing="120" charSpacing="100" align="LEFT"/>{tail}</hp:textart>"##
+        )
+    }
+
+    /// A one-child group holding a TextArt whose first pair scales the
+    /// 14173 × 14173 design box by 0.5 × 0.25 (after `first_rot`), placed at
+    /// (1200, 800) — or at (5000, 5000) when turned, which keeps the turned
+    /// box clear of the group's origin.
+    fn grouped_text_art(first_rot: [f64; 6], brush: &str) -> String {
+        const HALF_QUARTER: [f64; 6] = [0.5, 0.0, 0.0, 0.0, 0.25, 0.0];
+        let (x, y) = if first_rot == ID { (1200.0, 800.0) } else { (5000.0, 5000.0) };
+        let ri = ri([1.0, 0.0, x, 0.0, 1.0, y], &[(HALF_QUARTER, first_rot), (ID, ID)]);
+        container((14_173, 14_173), &text_art(1, &ri, brush, ""))
+    }
+
+    /// (size, offset, colour) of a group's only child, a TextArt.
+    fn text_art_geometry(
+        group: &Control,
+    ) -> ((i32, i32), (i32, i32), Option<hwpforge_foundation::Color>) {
+        let Control::TextArt { width, height, placement, fill_color, .. } = &children(group)[0]
+        else {
+            panic!("not a TextArt: {group:?}")
+        };
+        let at =
+            placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+        ((width.as_i32(), height.as_i32()), at, *fill_color)
+    }
+
+    /// A TextArt in a group: its size is `orgSz` × the chain's scale
+    /// (14173 × 0.5 = 7086.5 → 7087, × 0.25 = 3543.25 → 3543), its place the
+    /// chain's translation, its colour the solid `faceColor`. Encoded again
+    /// and decoded, it comes back the same, with the colour on the wire.
+    ///
+    /// 이것을 실패시키는 것: 묶음 글맵시 디코드 갈래를 지우는 것(미지원 손실로
+    /// 돌아감), 크기를 `orgSz` 대신 `sz` 에서 읽는 것(0 × 0 으로 버려짐),
+    /// `fill_color` 를 `None` 으로 두는 것(재인코드가 기본 파랑).
+    #[test]
+    fn grouped_text_art_round_trips_size_place_and_colour() {
+        let (g, w) = decode(&grouped_text_art(ID, &solid_brush("#FF0000")));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let red = Some(hwpforge_foundation::Color::from_rgb(255, 0, 0));
+        assert_eq!(text_art_geometry(&g), ((7087, 3543), (1200, 800), red));
+
+        let xml = crate::encoder::shapes::encode_group_to_xml(
+            &g,
+            0,
+            0,
+            &mut Vec::new(),
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        )
+        .unwrap();
+        assert!(xml.contains(r##"faceColor="#FF0000""##), "{xml}");
+        let (again, w) = decode(&xml);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(text_art_geometry(&again.unwrap()), text_art_geometry(&g));
+    }
+
+    /// A TextArt in a nested group next to a polygon whose points sit inside
+    /// its box: the nested group's box is the bounds of its decoded shapes
+    /// (from the polygon's points at (200, 200)), so every child, the TextArt
+    /// too, moves by that corner and the TextArt stays at (1200, 800) on the
+    /// outer group. The nested group's own box (8287 × 4343) holds the
+    /// TextArt, so the wire box check passes only when the TextArt counts.
+    ///
+    /// 이것을 실패시키는 것: `shift_child` 에서 TextArt 를 빼는 것(글맵시가
+    /// (200, 200) 밀림), 잎 경계(`leaf_bounds`)에서 TextArt 를 빼는 것
+    /// (`nested_group_placement` 경고).
+    #[test]
+    fn text_art_in_a_nested_group_keeps_its_place() {
+        const HALF_QUARTER: [f64; 6] = [0.5, 0.0, 0.0, 0.0, 0.25, 0.0];
+        let three = |sca: [f64; 6]| [(sca, ID), (ID, ID), (ID, ID)];
+        let poly =
+            polygon((1000, 1000), &ri(ID, &three(ID)), &[(200, 200), (800, 200), (500, 800)], "");
+        let art = text_art(
+            2,
+            &ri([1.0, 0.0, 1200.0, 0.0, 1.0, 800.0], &three(HALF_QUARTER)),
+            &solid_brush("#FF0000"),
+            "",
+        );
+        let inner = nested((8287, 4343), &ri(ID, &[(ID, ID), (ID, ID)]), &format!("{poly}{art}"));
+        let (g, w) =
+            decode(&container_with((8287, 4343), (8287, 4343), &ri(ID, &[(ID, ID)]), &inner));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let Control::Group { placement, .. } = &children(&g)[0] else { panic!("{g:?}") };
+        let at = placement.as_ref().map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+        assert_eq!(at, Some((200, 200)));
+        let (size, art_at, _) = text_art_geometry(&Control::Group {
+            children: vec![children(&children(&g)[0])[1].clone()],
+            width: hwpforge_foundation::HwpUnit::ZERO,
+            height: hwpforge_foundation::HwpUnit::ZERO,
+            placement: None,
+            inst_id: None,
+        });
+        assert_eq!((size, (art_at.0 + 200, art_at.1 + 200)), ((7087, 3543), (1200, 800)));
+    }
+
+    /// Core TextArt has no rotation: a group turned 30° reports it.
+    ///
+    /// 이것을 실패시키는 것: 접기의 회전·반사 저장 불가 판정을 지우는 것.
+    #[test]
+    fn turned_grouped_text_art_is_reported() {
+        let (g, w) = decode(&grouped_text_art(rot(30.0), &solid_brush("#FF0000")));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["group_child_transform"], "{w:?}");
+    }
+
+    /// Only a plain opaque colour is carried; a hatch or transparency is
+    /// reported (the TextArt itself stays).
+    ///
+    /// 이것을 실패시키는 것: 허용 조건을 `winBrush` 가 있는지만으로 줄이는 것
+    /// (무늬·투명도 검사를 지우는 것, 각각).
+    #[test]
+    fn text_art_hatch_or_transparency_is_reported() {
+        for brush in [
+            r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" hatchStyle="CROSS" alpha="0"/></hc:fillBrush>"##,
+            r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" alpha="128"/></hc:fillBrush>"##,
+        ] {
+            let (g, w) = decode(&grouped_text_art(ID, brush));
+            assert_eq!(lost_kinds(&w), ["textart_fill"], "{brush}");
+            assert_eq!(text_art_geometry(&g.unwrap()).2, None, "{brush}");
+        }
+    }
+
+    /// A TextArt outside groups keeps its colour too (it used to come back
+    /// blue, the encoder's default).
+    ///
+    /// 이것을 실패시키는 것: `fill_color` 를 `None` 으로 두는 것.
+    #[test]
+    fn body_text_art_keeps_its_colour() {
+        let sz = r#"<hp:sz width="7000" widthRelTo="ABSOLUTE" height="3000" heightRelTo="ABSOLUTE" protect="0"/>"#;
+        let ri = ri(ID, &[(ID, ID)]);
+        let r = crate::decoder::section::parse_section(
+            &section(&text_art(0, &ri, &solid_brush("#00FF00"), sz)),
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        let art =
+            r.paragraphs[0].runs.iter().find_map(|run| run.content.as_control().cloned()).unwrap();
+        let Control::TextArt { fill_color, .. } = &art else { panic!("{art:?}") };
+        assert_eq!(*fill_color, Some(hwpforge_foundation::Color::from_rgb(0, 255, 0)));
+        let xml = crate::encoder::shapes::encode_text_art_to_xml(&art, false).unwrap();
+        assert!(xml.contains(r##"faceColor="#00FF00""##), "{xml}");
+    }
+
     const SWITCH: &str = r#"<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/ooxmlchart"/></hp:switch>"#;
 
     fn sublist(run_inner: &str) -> String {
@@ -3815,7 +4031,7 @@ mod group_tests {
     #[test]
     fn unsupported_children_are_reported_in_wire_order() {
         let doc = HwpxDecoder::decode(&fixture("group-unsupported-children.hwpx")).unwrap();
-        assert_eq!(lost_kinds(&doc.warnings), ["pic", "ole", "textart", "unknown"]);
+        assert_eq!(lost_kinds(&doc.warnings), ["pic", "ole", "equation", "unknown"]);
         let paths: Vec<String> = doc.warnings.iter().map(|w| w.location().unwrap()).collect();
         assert!(paths[0].ends_with(".group[1]"), "{paths:?}");
         assert!(paths[3].ends_with(".group[5]"), "{paths:?}");
