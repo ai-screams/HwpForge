@@ -496,10 +496,7 @@ impl HwpxStamper {
         let e2 = encode_hwpx(&d2)?;
         let d3 = HwpxDecoder::decode(&e2)
             .map_err(|e| StamperError::Codec(format!("fixed-point decode: {e}")))?;
-        delta_compare(&d2, &d3).map_err(|e| StamperError::DeltaMismatch {
-            stage: "fixed_point".to_string(),
-            detail: e.to_string(),
-        })?;
+        verify_fixed_point(&d2, &d3)?;
 
         // ── v2 manifest from the OUTPUT ─────────────────────────────
         let fields = HwpxFiller::list_fields(&bytes)
@@ -741,6 +738,19 @@ pub(crate) fn reject_input_content_loss(
 /// [`align_equivalent_shapes`]).
 pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
     compare_documents(a, b, true)
+}
+
+/// The output is a fixed point: one more round trip changes nothing beyond
+/// what HWPX storage does to exact shape values. `d3` has been through one
+/// round trip more than `d2`, so that storage effect does not cancel (a
+/// 2,000,000-wide box at 30° loses a unit of width per trip to six-digit
+/// coefficients) — the admission tolerance applies, not the exact delta
+/// comparison.
+fn verify_fixed_point(d2: &HwpxDocument, d3: &HwpxDocument) -> Result<(), StamperError> {
+    admission_compare(d2, d3).map_err(|e| StamperError::DeltaMismatch {
+        stage: "fixed_point".to_string(),
+        detail: e.to_string(),
+    })
 }
 
 /// The edit-delta check: both sides have been through the same number of
@@ -1463,6 +1473,38 @@ mod tests {
         admission_compare(&d1, &moved).unwrap();
         assert!(delta_compare(&d1, &moved).is_err());
         delta_compare(&d1, &no_op_round_trip(&bytes).1).unwrap();
+    }
+
+    /// A 2,000,000 × 10,000 group child turned 30°: six-digit coefficients
+    /// make its axis a hair shorter than 1, so each round trip takes a unit
+    /// off its width. One more round trip than the stamped output is not an
+    /// exact fixed point, but it is within the tolerance, and an unrelated
+    /// edit must not be refused for it.
+    ///
+    /// 이것을 실패시키는 것: 고정점 검증에 정확 비교(`delta_compare`)를 쓰는 것.
+    #[test]
+    fn fixed_point_tolerates_storage_drift() {
+        use hwpforge_core::control::ShapeStyle;
+        let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let mut rect = Control::rect(unit(2_000_000), unit(10_000)).unwrap();
+        if let Control::Rect { style, .. } = &mut rect {
+            *style = Some(ShapeStyle { rotation: Some(30.0), ..ShapeStyle::default() });
+        }
+        let group = Control::Group {
+            children: vec![rect],
+            width: unit(1_740_000),
+            height: unit(1_010_000),
+            placement: None,
+            inst_id: None,
+        };
+        let mut doc = doc_with_text("x");
+        doc.document.sections_mut()[0].paragraphs[0]
+            .runs
+            .push(Run::control(group, hwpforge_foundation::CharShapeIndex::new(0)));
+        let d2 = HwpxDecoder::decode(&encode_hwpx(&doc).unwrap()).unwrap();
+        let d3 = HwpxDecoder::decode(&encode_hwpx(&d2).unwrap()).unwrap();
+        assert!(delta_compare(&d2, &d3).is_err(), "the oracle: not an exact fixed point");
+        verify_fixed_point(&d2, &d3).unwrap();
     }
 
     /// Inside a group, a child at its parent's corner (no placement) and the
