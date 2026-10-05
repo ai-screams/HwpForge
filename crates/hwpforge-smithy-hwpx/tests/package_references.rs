@@ -331,6 +331,71 @@ fn an_item_whose_href_is_not_the_written_entry_is_unresolved() {
     assert!(outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
 }
 
+/// Two different images stored as `a\u{0}.png` and `/a.png`: once
+/// `content.hpf` is scanned, the first item reads `id="a"
+/// href="BinData/a.png"`, and the second asset's entry name is cleaned to
+/// exactly `BinData/a.png`. The ids (`a`, `/a`) do not collide, so a reader
+/// following the first picture's `href` opens the other picture. The item is
+/// compared with the entry of its own asset, so the picture is reported.
+///
+/// 이것을 실패시키는 것: 항목별 대조 대신 쓴 ZIP 항목 이름 전체 집합에 `href` 가
+/// 있는지만 보는 것(두 번째 자산이 그 이름을 차지해 경고가 사라진다).
+#[test]
+fn an_href_naming_another_assets_entry_is_unresolved() {
+    let mut images = ImageStore::new();
+    images.insert("a\u{0}.png", vec![0x89, b'P', b'N', b'G', 1]);
+    images.insert("/a.png", vec![0x89, b'P', b'N', b'G', 2]);
+    let size = |v| HwpUnit::new(v).unwrap();
+    let picture = Image::from_path("BinData/a\u{0}.png", size(1000), size(1000));
+    let outcome = encode_runs(vec![Run::image(picture, CharShapeIndex::new(0))], &images);
+
+    let zip = zip::ZipArchive::new(std::io::Cursor::new(&outcome.bytes)).expect("zip");
+    assert!(zip.file_names().any(|n| n == "BinData/a.png"), "premise: `/a.png` owns the name");
+    let hpf = part(&outcome.bytes, "Contents/content.hpf");
+    assert!(
+        hpf.contains(r#"<opf:item id="a" href="BinData/a.png""#),
+        "premise: the first item's href is that name: {hpf}"
+    );
+    assert!(conflicts(&outcome.warnings).is_empty(), "premise: the ids do not collide");
+    assert_eq!(
+        unresolved(&outcome.warnings),
+        [triple("Contents/section0.xml", "hc:img@binaryItemIDRef", "a")]
+    );
+    assert!(outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
+}
+
+/// The same pair of keys with the picture inside a group: the group's
+/// `<hp:container>` reference is checked against its own asset's entry too.
+///
+/// 이것을 실패시키는 것: 위와 같다(전체 이름 집합으로 판정).
+#[test]
+fn a_group_picture_whose_href_names_another_assets_entry_is_unresolved() {
+    use hwpforge_core::control::{GroupChild, ShapeStyle};
+    let mut images = ImageStore::new();
+    images.insert("a\u{0}.png", vec![0x89, b'P', b'N', b'G', 1]);
+    images.insert("/a.png", vec![0x89, b'P', b'N', b'G', 2]);
+    let size = |v| HwpUnit::new(v).unwrap();
+    let picture = Image::from_path("BinData/a\u{0}.png", size(1000), size(1000));
+    let mut rect = Control::rect(size(1000), size(1000)).unwrap();
+    if let Control::Rect { style, .. } = &mut rect {
+        *style = Some(ShapeStyle::default());
+    }
+    let group = Control::Group {
+        children: vec![GroupChild::Picture(picture), GroupChild::Shape(rect)],
+        width: size(1000),
+        height: size(1000),
+        placement: None,
+        inst_id: None,
+    };
+    let outcome = encode_runs(vec![Run::control(group, CharShapeIndex::new(0))], &images);
+    let section = part(&outcome.bytes, "Contents/section0.xml");
+    assert!(section.contains("<hp:container"), "premise: the picture is written in a group");
+    assert_eq!(
+        unresolved(&outcome.warnings),
+        [triple("Contents/section0.xml", "hc:img@binaryItemIDRef", "a")]
+    );
+}
+
 /// F6: a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's

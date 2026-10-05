@@ -537,7 +537,9 @@ pub enum EncodeWarning {
     /// 같다 — 예: 저장소 키 `a\u{1}.png` 는 ZIP 항목 이름에 U+0001 이 남지만
     /// 금지 문자를 지운 `content.hpf` 의 `href` 는 `BinData/a.png` 라, 그
     /// `href` 를 따라가면 데이터가 없다. ZIP 항목 이름은 고치지 않는다(자산이
-    /// 말없이 개명된다).
+    /// 말없이 개명된다). 그 `href` 가 마침 다른 자산의 ZIP 항목 이름이어도
+    /// 같다 — 예: `a\u{0}.png` 옆의 `/a.png` 는 `BinData/a.png` 로 쓰여, 그
+    /// `href` 는 다른 그림을 가리킨다. 항목마다 제 자산의 항목 이름과 대조한다.
     ///
     /// 참조는 **그대로 남긴다**. 한컴은 이런 문서를 경고 없이 열어 원래
     /// 크기의 빈 그림 상자를 그리고, 다시 저장하면 참조를 빈 값으로 쓴다.
@@ -1220,16 +1222,26 @@ impl HwpxEncoder {
         parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
         let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();
         // A binary item resolves only when its `href` names the entry written
-        // for it (`unresolved_references` looks only at `BinData/` items, so
-        // the other items may drop out here): a key with a character XML forbids keeps it in the entry
-        // name, while the scanned `content.hpf` writes the `href` without it.
-        let entries: Vec<String> = images
+        // for its own asset: a key with a character XML forbids keeps it in
+        // the entry name, while the scanned `content.hpf` writes the `href`
+        // without it. Each written item is compared with the entry of the
+        // manifest item it was rendered from (one `<opf:item>` per item, in
+        // order) — not with the set of all entries, where another asset may
+        // own the cleaned name (`a\u{0}.png` beside `/a.png`). Non-binary
+        // items drop out: `unresolved_references` looks only at `BinData/`.
+        // Embedded-chart OLE ids are the encoder's own `ole{n}`, which the
+        // entry-name cleaning leaves alone, so `image_entry_name` of the
+        // `{id}.ole` path is `ole_entry_name(id)`.
+        let resolvable: Vec<(String, String)> = manifest
             .iter()
-            .map(|(path, _)| package::image_entry_name(path))
-            .chain(embedded_oles.iter().map(|(id, _)| package::ole_entry_name(id)))
+            .zip(&written)
+            .filter(|(item, (_, href))| {
+                item.href
+                    .strip_prefix("BinData/")
+                    .is_some_and(|path| *href == package::image_entry_name(path))
+            })
+            .map(|(_, written_item)| written_item.clone())
             .collect();
-        let resolvable: Vec<(String, String)> =
-            written.iter().filter(|(_, href)| entries.contains(href)).cloned().collect();
         warnings.extend(references::unresolved_references(&resolvable, &parts)?);
         let (bytes, package_warnings) = PackageWriter::write_hwpx_with_content_hpf(
             &content_hpf,
