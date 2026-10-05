@@ -2063,7 +2063,8 @@ fn public_style_mapping_keeps_every_image_fill() {
 /// nothing to warn about. A reference with no name is left out.
 ///
 /// 이것을 실패시키는 것: 형제 함수가 해석 표 대신 `None` 을 넘기는 것
-/// (`BIN0001` + 경고), 저장 이름의 확장자를 떼지 않는 것 (`BIN0006.png`).
+/// (`BIN0001` + 경고), 저장 이름의 확장자를 떼지 않는 것 (`BIN0006.png`),
+/// 이름 없는 참조를 빼면서 경고하지 않는 것, 이름 있는 참조에도 경고하는 것.
 #[test]
 fn bin_data_style_mapping_writes_the_resolved_image() {
     let names: BTreeMap<u16, String> = [(1, "BIN0006.png".to_string())].into();
@@ -2081,9 +2082,24 @@ fn bin_data_style_mapping_writes_the_resolved_image() {
         "{warnings:?}"
     );
 
-    let (unnamed, _) =
+    let (unnamed, warnings) =
         crate::hwp5_style_store_to_hwpx_with_bin_data(&image_fill_store(), &BTreeMap::new());
     assert!(unnamed.border_fill(4).unwrap().image_fill.is_none());
+    let reasons: Vec<&String> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback {
+                subject: "style.border_fill.image_reference",
+                reason,
+            } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasons,
+        ["border_fill_id=4: reference 1 has no BinData storage name; image fill left out"],
+        "a fill left out by this function is reported here"
+    );
 }
 
 #[test]

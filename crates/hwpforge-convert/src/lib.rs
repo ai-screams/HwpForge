@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use hwpforge_foundation::{HeadingType, ParaShapeIndex};
+use hwpforge_smithy_hwp5::schema::border_fill::Hwp5RawBorderFillFill;
 use hwpforge_smithy_hwp5::schema::header::{Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot};
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::{decode_hwp5_to_core, Hwp5Error, Hwp5Result, Hwp5Warning};
@@ -302,7 +303,26 @@ pub fn hwp5_style_store_to_hwpx_with_bin_data(
         .iter()
         .map(|(reference, name)| (*reference, manifest_id(name)))
         .collect();
-    hwp5_style_store_to_hwpx_with_image_ids(store, Some(&image_ids))
+    let (out, mut warnings) = hwp5_style_store_to_hwpx_with_image_ids(store, Some(&image_ids));
+    // The fill is left out below; on the conversion path the decoder has
+    // already said why, but a caller of this function may hand any table,
+    // so the omission is reported here.
+    for slot in store.border_fills() {
+        if let Some(Hwp5RawBorderFillFill::Image(fill)) = slot.fill.as_ref().map(|f| &f.fill) {
+            if !bin_data_reference_names.contains_key(&fill.bindata_id) {
+                push_projection_fallback(
+                    &mut warnings,
+                    "style.border_fill.image_reference",
+                    format!(
+                        "border_fill_id={}: reference {} has no BinData storage name; image \
+                         fill left out",
+                        slot.id, fill.bindata_id
+                    ),
+                );
+            }
+        }
+    }
+    (out, warnings)
 }
 
 /// The manifest id the HWPX encoder writes for image store key `name`: its
