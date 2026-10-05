@@ -37,6 +37,7 @@ pub(super) fn build_picture(
 
     let w = img.width.as_i32();
     let h = img.height.as_i32();
+    let href = picture_href(img, sink);
     let half_w = w / 2;
     let half_h = h / 2;
     let placement = img.placement.as_ref();
@@ -56,7 +57,7 @@ pub(super) fn build_picture(
             .unwrap_or_else(|| "BOTH_SIDES".to_string()),
         lock: 0,
         dropcap_style: DropCapStyle::None.to_string(),
-        href: String::new(),
+        href,
         group_level: 0,
         instid: generate_instid(),
         reverse: 0,
@@ -108,6 +109,26 @@ pub(super) fn build_picture(
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
             .transpose()?,
     })
+}
+
+/// The picture's `href`: its link URL with Hancom's object-link suffix, or
+/// empty. A URL with an unsafe scheme (`javascript:`, `file:`, …) is not
+/// written and is reported as lost; a schemeless one gets `http://`, as a
+/// text hyperlink does.
+fn picture_href(img: &Image, sink: &mut EncodeSink) -> String {
+    let Some(url) = img.hyperlink.as_deref() else { return String::new() };
+    match super::super::normalize_hyperlink_url(url) {
+        Some(safe) if !safe.is_empty() => {
+            format!("{safe}{}", crate::decoder::section::OBJECT_HYPERLINK_SUFFIX)
+        }
+        _ => {
+            sink.content_lost(
+                "picture_hyperlink",
+                format!("picture hyperlink {url:?} is not a safe URL and is left out"),
+            );
+            String::new()
+        }
+    }
 }
 
 pub(super) fn build_picture_position(placement: Option<&ObjectPlacement>) -> HxTablePos {

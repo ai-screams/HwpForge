@@ -2785,6 +2785,33 @@ mod tests {
         );
     }
 
+    /// A picture link is written as Hancom writes it (`<url>;1;0;0;`); a
+    /// schemeless one gets `http://`; an unsafe one is left out and
+    /// reported as lost.
+    /// 이것을 실패시키는 것: `href` 를 빈 값으로 되돌리기 / 접미사 누락 /
+    /// 안전 검사 삭제(각각 따로).
+    #[test]
+    fn picture_hyperlink_is_written_as_hancom_href() {
+        for (url, href, lost) in [
+            ("http://www.korea.kr", "http://www.korea.kr;1;0;0;", false),
+            ("www.korea.kr", "http://www.korea.kr;1;0;0;", false),
+            ("javascript:alert(1)", "", true),
+        ] {
+            let mut img = Image::new(
+                "BinData/image1.png",
+                HwpUnit::new(1000).unwrap(),
+                HwpUnit::new(500).unwrap(),
+                ImageFormat::Png,
+            );
+            img.hyperlink = Some(url.to_string());
+            let mut sink = EncodeSink::new(0);
+            let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+                .unwrap();
+            assert_eq!(hx.href, href, "{url}");
+            assert_eq!(content_lost(&sink.warnings).len(), usize::from(lost), "{url}");
+        }
+    }
+
     #[test]
     fn image_with_explicit_placement_uses_override_values() {
         let img = Image::new(

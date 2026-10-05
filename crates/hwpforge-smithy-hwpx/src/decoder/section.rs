@@ -1123,7 +1123,30 @@ fn convert_picture(hx: &HxPic, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     if let Some(value) = placement {
         image = image.with_placement(value);
     }
+    image.hyperlink = decode_object_hyperlink(&hx.href, ctx);
     Ok(Some(image))
+}
+
+/// What Hancom appends to the URL in an object's `href` (every picture link
+/// in the corpus: `http://www.korea.kr;1;0;0;`).
+pub(crate) const OBJECT_HYPERLINK_SUFFIX: &str = ";1;0;0;";
+
+/// The URL of an object's `href` (`<url>;1;0;0;`). Empty = no link. A value
+/// in any other form is reported as lost rather than guessed at.
+fn decode_object_hyperlink(href: &str, ctx: &mut DecodeCtx) -> Option<String> {
+    if href.is_empty() {
+        return None;
+    }
+    match href.strip_suffix(OBJECT_HYPERLINK_SUFFIX) {
+        Some(url) if !url.is_empty() => Some(url.to_string()),
+        _ => {
+            ctx.content_lost(
+                "picture_hyperlink",
+                format!("unrecognised object hyperlink {href:?}"),
+            );
+            None
+        }
+    }
 }
 
 fn decode_image_placement(hx: &HxPic) -> Option<ObjectPlacement> {
@@ -2890,6 +2913,46 @@ mod tests {
                 assert_eq!(placement.horz_offset.as_i32(), 3400);
             }
             _ => panic!("expected Image"),
+        }
+    }
+
+    /// A Hancom-saved picture with an object hyperlink (element as saved in
+    /// a government press release: `href` plus the `parameterset` copy of
+    /// the same link) decodes to the URL without Hancom's `;1;0;0;` suffix.
+    /// 이것을 실패시키는 것: `image.hyperlink = …` 줄 삭제 / 접미사를 떼지 않는 변이.
+    #[test]
+    fn picture_hyperlink_is_decoded_from_hancom_href() {
+        let xml = r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:pic id="1866836098" zOrder="2" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="http://www.korea.kr;1;0;0;" groupLevel="0" instid="793094275" reverse="0"><hp:offset x="4294966986" y="0"/><hp:orgSz width="9480" height="3300"/><hp:curSz width="6860" height="2388"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="-310" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="0.723629" e2="0" e3="310" e4="0" e5="0.723636" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="9480" y="0"/><hc:pt2 x="9480" y="3300"/><hc:pt3 x="0" y="3300"/></hp:imgRect><hp:imgClip left="0" right="0" top="7080" bottom="2460"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hc:img binaryItemIDRef="image2" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:effects/><hp:parameterset cnt="1" name="539"><hp:listParam cnt="1" name="623"><hp:stringParam name="613">http\://www.korea.kr;1;0;0;</hp:stringParam></hp:listParam></hp:parameterset><hp:sz width="6860" widthRelTo="ABSOLUTE" height="2388" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="4294964867" horzOffset="17644"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>그림입니다.</hp:shapeComment></hp:pic></hp:run></hp:p></hs:sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let RunContent::Image(img) = &result.paragraphs[0].runs[0].content else {
+            panic!("expected Image: {:?}", result.paragraphs[0].runs)
+        };
+        assert_eq!(img.hyperlink.as_deref(), Some("http://www.korea.kr"));
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    /// An `href` in any other form is reported, not guessed at; an empty
+    /// one is no link.
+    /// 이것을 실패시키는 것: 형식 밖 값을 그대로 싣는 변이(경고가 사라진다) /
+    /// 빈 값 조기 반환 삭제(빈 href 가 경고를 낸다).
+    #[test]
+    fn unrecognised_picture_hyperlink_is_reported() {
+        for (href, lost) in [("http://a.kr;0;0;0;", true), (";1;0;0;", true), ("", false)] {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><pic id="1" href="{href}"><img binaryItemIDRef="logo.png"/><curSz width="100" height="100"/></pic></run></p></sec>"#
+            );
+            let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+            let RunContent::Image(img) = &result.paragraphs[0].runs[0].content else { panic!() };
+            assert_eq!(img.hyperlink, None, "{href}");
+            let kinds: Vec<_> = result
+                .warnings
+                .iter()
+                .filter_map(|w| match w {
+                    crate::DecodeWarning::ContentLost { kind, .. } => Some(kind.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(kinds == ["picture_hyperlink"], lost, "{href}: {kinds:?}");
         }
     }
 
