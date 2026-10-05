@@ -262,7 +262,8 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
             let width = parse_length_attr(empty, "img", "data-width-unit", "data-width-mm")?;
             let height = parse_length_attr(empty, "img", "data-height-unit", "data-height-mm")?;
 
-            let image = Image::new(src, width, height, format);
+            let mut image = Image::new(src, width, height, format);
+            image.hyperlink = attr_value(empty, "data-hyperlink")?;
             push_run_to_parent(stack, Run::image(image, char_shape_id))
         }
         "span" => {

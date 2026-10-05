@@ -77,8 +77,14 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 ));
             }
             RunContent::Image(image) => {
+                // The picture's link, when it has one (`Image::hyperlink`).
+                let link = image
+                    .hyperlink
+                    .as_deref()
+                    .map(|url| format!(" data-hyperlink=\"{}\"", escape_html(url)))
+                    .unwrap_or_default();
                 out.push_str(&format!(
-                    "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\" />",
+                    "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{link} />",
                     run.char_shape_id.get(),
                     escape_html(&image.path),
                     escape_html(&image.path),
@@ -920,5 +926,34 @@ mod tests {
         assert!(encoded.contains("<footnote "));
         assert!(encoded.contains("note content"));
         assert!(encoded.contains("</footnote>"));
+    }
+
+    /// A picture's link survives lossless Markdown (and an `&` in it is
+    /// escaped); a picture without one writes no attribute.
+    ///
+    /// 이것을 실패시키는 것: 인코더의 `data-hyperlink` 방출 삭제 / 디코더의 읽기 삭제
+    /// (각각 따로).
+    #[test]
+    fn lossless_keeps_a_picture_hyperlink() {
+        let w = HwpUnit::new(1000).unwrap();
+        let mut linked = Image::new("BinData/a.png", w, w, ImageFormat::Png);
+        linked.hyperlink = Some("http://www.korea.kr/?a=1&b=2".to_string());
+        let plain = Image::new("BinData/b.png", w, w, ImageFormat::Png);
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![
+                Run::image(linked, CharShapeIndex::new(0)),
+                Run::image(plain, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        )]);
+        let md = encode_lossless(&doc).unwrap();
+        assert_eq!(md.matches("data-hyperlink=").count(), 1, "{md}");
+        let back = crate::MdDecoder::decode_lossless(&md).unwrap();
+        let links: Vec<Option<String>> = back.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|r| r.content.as_image().map(|i| i.hyperlink.clone()))
+            .collect();
+        assert_eq!(links, [Some("http://www.korea.kr/?a=1&b=2".to_string()), None]);
     }
 }
