@@ -158,7 +158,7 @@ const PARA2_SLOT: &str = "paragraphs[2].runs[0].text";
 #[test]
 fn patch_removes_a_control_from_the_edited_slot_and_names_the_slot() {
     // 이것을 실패시키는 것: patch 사전 판정에서 `sanitize_edit_text` 대신 원문을 쓰는 것
-    // (인라인 escape 가 U+0001 을 무경고로 지워 글자는 같고 경고만 사라진다).
+    // (인라인 escape 가 U+0001 을 그대로 두어 새 fragment 불변식이 patch 를 거부한다).
     let diagnosed = patch_para2(&clean(), "A\u{1}B");
 
     assert_eq!(texts(&diagnosed.value.bytes)[2], "AB");
@@ -186,7 +186,7 @@ fn patch_keeps_u001f_as_a_fixed_width_space() {
 
 #[test]
 fn patch_reports_a_control_mixed_with_a_tab() {
-    // 이것을 실패시키는 것: patch 사전 판정의 정리 호출을 빼는 것 (탭 경로 escape 가 무경고로 지움).
+    // 이것을 실패시키는 것: patch 사전 판정의 정리 호출을 빼는 것 (새 fragment 불변식이 patch 를 거부한다).
     let diagnosed = patch_para2(&clean(), "A\t\u{1}B");
 
     assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:tab/>B"));
@@ -329,7 +329,7 @@ fn fill_keeps_u001f_as_a_fixed_width_space() {
 
 #[test]
 fn fill_reports_a_control_mixed_with_a_tab() {
-    // 이것을 실패시키는 것: fill 입구 정리를 빼는 것 (탭 경로 escape 가 무경고로 지움).
+    // 이것을 실패시키는 것: fill 입구 정리를 빼는 것 (아래 patch 단계가 지우지만 그 경고는 fill 이 버린다).
     let diagnosed = fill(&clean(), "f1", "A\t\u{1}B").expect("fill");
 
     assert!(section_xml(&diagnosed.value.bytes).contains("A<hp:tab/>B"));
@@ -751,16 +751,20 @@ fn stamp_v2_removes_a_control_from_a_cell_hint() {
 
 #[test]
 fn stamp_v2_keeps_u001f_in_a_cell_hint_as_a_fixed_width_space() {
-    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것.
+    // The entry keeps U+001F, so the shown hint has its fixed-width space. The
+    // field's `Direction` and `Command` parameters are not text runs and cannot
+    // hold it; the section scan removes it there and reports both (R1-5).
+    // 이것을 실패시키는 것: U+001F 를 판정 집합에 넣는 것 (입구 경고가 하나 더 붙는다).
     let diagnosed = stamp_cell("H\u{1F}I").expect("stamp");
 
     assert!(section_xml(&diagnosed.value.bytes).contains("H<hp:fwSpace/>I"));
-    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+    assert_eq!(diagnosed.encode_warnings, vec![removed("hp:stringParam", 2)]);
 }
 
 #[test]
 fn stamp_v2_reports_a_control_mixed_with_a_tab() {
-    // 이것을 실패시키는 것: v2 입구의 `clean_cell_hints` 를 빼는 것 (탭 경로 escape 가 무경고로 지움).
+    // 이것을 실패시키는 것: v2 입구의 `clean_cell_hints` 를 빼는 것
+    // (section 스캔이 `field 'f' hint` 대신 `hp:stringParam`·`hp:t` 로 보고한다).
     let diagnosed = stamp_cell("H\t\u{1}I").expect("stamp");
 
     assert!(section_xml(&diagnosed.value.bytes).contains("H<hp:tab/>I"));

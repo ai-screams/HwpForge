@@ -202,8 +202,6 @@ pub(crate) fn normalize_attr_control_whitespace(xml: &str) -> Cow<'_, str> {
 /// is to leave the character out.
 ///
 /// U+0000 is included: the XML grammar forbids it like the other controls.
-/// The hand-built escape path ([`escape_xml`](crate::encoder::escape_xml))
-/// does not strip it.
 pub(crate) fn is_xml_forbidden_char(c: char) -> bool {
     matches!(c, '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}')
 }

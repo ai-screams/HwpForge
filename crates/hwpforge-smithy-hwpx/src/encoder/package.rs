@@ -11,8 +11,7 @@ use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
-use crate::encoder::escape_xml_text_safe;
-use crate::encoder::EncodeWarning;
+use crate::encoder::{escape_xml, EncodeWarning};
 use crate::error::{HwpxError, HwpxResult};
 
 // ── HWPX constants ───────────────────────────────────────────────
@@ -162,8 +161,8 @@ pub(crate) fn manifest_items(
 /// block. All slots Hancom emits (title/language/creator/subject/
 /// description/lastsaveby/CreatedDate/ModifiedDate/date/keyword) are
 /// **always** emitted to preserve byte-parity with Hancom output —
-/// `None` values self-close, populated values are sanitized and
-/// XML-escaped. Unknown entries in `metadata.extras` are emitted in
+/// `None` values self-close, populated values are XML-escaped (the
+/// package writer's part scan then removes characters XML 1.0 forbids). Unknown entries in `metadata.extras` are emitted in
 /// `BTreeMap` (alphabetical) order so output is deterministic.
 #[cfg(test)]
 fn generate_content_hpf(
@@ -194,8 +193,8 @@ pub(crate) fn render_content_hpf(metadata: &Metadata, items: &[ManifestItem]) ->
     let mut spine_refs = String::new();
     for item in items {
         let ManifestItem { id, href, media_type, is_embeded, in_spine } = item;
-        let id = escape_xml_text_safe(id);
-        let href = escape_xml_text_safe(href);
+        let id = escape_xml(id);
+        let href = escape_xml(href);
         write!(manifest_items, r#"<opf:item id="{id}" href="{href}" media-type="{media_type}""#)
             .expect("write to String is infallible");
         if let Some(flag) = is_embeded {
@@ -246,7 +245,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
     // <opf:title>
     match &meta.title {
         Some(t) => {
-            let _ = write!(out, "<opf:title>{}</opf:title>", escape_xml_text_safe(t));
+            let _ = write!(out, "<opf:title>{}</opf:title>", escape_xml(t));
         }
         None => out.push_str("<opf:title/>"),
     }
@@ -277,7 +276,7 @@ fn build_metadata_block(meta: &Metadata) -> String {
         let _ = write!(
             out,
             r#"<opf:meta name="keyword" content="text">{}</opf:meta>"#,
-            escape_xml_text_safe(&joined),
+            escape_xml(&joined),
         );
     }
 
@@ -307,8 +306,8 @@ fn build_metadata_block(meta: &Metadata) -> String {
         if k == "date" {
             continue;
         }
-        let safe_key = escape_xml_text_safe(k);
-        let safe_val = escape_xml_text_safe(v);
+        let safe_key = escape_xml(k);
+        let safe_val = escape_xml(v);
         if v.is_empty() {
             let _ = write!(out, r#"<opf:meta name="{safe_key}" content="text"/>"#);
         } else {
@@ -336,7 +335,7 @@ fn push_meta(out: &mut String, name: &'static str, value: Option<&str>) {
             let _ = write!(
                 out,
                 r#"<opf:meta name="{name}" content="text">{}</opf:meta>"#,
-                escape_xml_text_safe(v),
+                escape_xml(v),
             );
         }
         None => {
@@ -950,13 +949,58 @@ mod tests {
         assert!(!hpf.contains("<script>"));
     }
 
-    /// C0 control characters (other than tab/LF/CR) must be stripped
-    /// before escape. XML 1.0 rejects them entirely.
+    /// C0 control characters (other than tab/LF/CR) must not reach the
+    /// written `content.hpf`: XML 1.0 rejects them entirely. The encoder
+    /// scans `content.hpf` right after rendering it, removes them and reports
+    /// where.
+    /// 이것을 실패시키는 것: 인코더가 `render_content_hpf` 직후에 하는 `content.hpf` 스캔을 빼는 것.
     #[test]
     fn metadata_strips_xml1_illegal_chars() {
+        use hwpforge_core::run::Run;
+        use hwpforge_core::section::Section;
+        use hwpforge_core::{Document, PageSettings, Paragraph};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
         let meta = Metadata::new().with_title("safe\u{0001}\u{0008}body\u{000B}more\u{FFFE}");
-        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("body", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        doc.set_metadata(meta);
+        let mut styles = crate::style_store::HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(crate::style_store::HwpxCharShape::default());
+        styles.push_para_shape(crate::style_store::HwpxParaShape::default());
+        let outcome = crate::HwpxEncoder::encode_with_diagnostics(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+            crate::EncodeOptions::default(),
+        )
+        .unwrap();
+        let mut hpf = String::new();
+        open_zip(&outcome.bytes)
+            .by_name("Contents/content.hpf")
+            .unwrap()
+            .read_to_string(&mut hpf)
+            .unwrap();
         // The control chars are gone, leaving the legitimate text.
-        assert!(hpf.contains("<opf:title>safebodymore</opf:title>"));
+        assert!(hpf.contains("<opf:title>safebodymore</opf:title>"), "{hpf}");
+        let removed: Vec<_> = outcome
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, EncodeWarning::XmlForbiddenCharsRemoved { .. }))
+            .collect();
+        assert_eq!(
+            removed,
+            [&EncodeWarning::XmlForbiddenCharsRemoved {
+                part: "Contents/content.hpf".to_string(),
+                location: "opf:title".to_string(),
+                count: 4,
+            }]
+        );
     }
 }

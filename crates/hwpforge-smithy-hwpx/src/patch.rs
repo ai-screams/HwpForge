@@ -1805,7 +1805,7 @@ fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxR
 /// Callers clean the text first ([`crate::wire_xml::sanitize_edit_text`]), so
 /// this check never fires on their path; it is the invariant that keeps a
 /// future splice path which forgets to clean from writing a character XML 1.0
-/// forbids (the inline escape drops most of them, but not NUL). Only the new
+/// forbids (the inline escape writes them as they are). Only the new
 /// fragment is checked — the rest of the section is the caller's input,
 /// preserved as it was.
 fn encode_text_inner(text: &str) -> HwpxResult<String> {
@@ -2220,7 +2220,7 @@ mod tests {
     }
 
     // The new-fragment invariant: a text that reaches the splice uncleaned
-    // must not put NUL (which the inline escape keeps) into the section.
+    // must not put NUL (which the inline escape writes as it is) into the section.
     // 이것을 실패시키는 것: `encode_text_inner` 의 금지 문자 검사를 빼는 것.
     #[test]
     fn a_fragment_holding_nul_is_refused_for_every_splice_shape() {

@@ -14,10 +14,14 @@ use hwpforge_core::chart::{ChartData, ChartType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::metadata::Metadata;
+use hwpforge_core::numbering::{BulletDef, ParaHead};
 use hwpforge_core::run::{Run, RunContent};
-use hwpforge_core::section::{MasterPage, Section};
+use hwpforge_core::section::{MasterPage, PageNumber, Section};
 use hwpforge_core::{Document, PageSettings, Paragraph};
-use hwpforge_foundation::{ApplyPageType, CharShapeIndex, FieldType, ParaShapeIndex};
+use hwpforge_foundation::{
+    ApplyPageType, CharShapeIndex, FieldType, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex,
+};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyle, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning, HwpxEncoder, HwpxFiller, HwpxPatcher};
 
@@ -249,6 +253,195 @@ fn a_master_page_loses_nul_and_reports_it() {
         )),
         "{warnings:?}"
     );
+}
+
+// ── hand-built fragments: the part scan is their only remover ───────
+//
+// These strings are written by hand-built XML fragments, not by serde. The
+// fragment escape used to drop U+0001 without a warning, before the part
+// scan could see it; now the part scan removes it and reports where.
+
+/// The removals reported for `part`, in warning order.
+fn removals_in(warnings: &[EncodeWarning], part: &str) -> Vec<(String, usize)> {
+    removals(warnings).into_iter().filter(|(p, _, _)| p == part).map(|(_, l, c)| (l, c)).collect()
+}
+
+fn site(location: &str, count: usize) -> (String, usize) {
+    (location.to_string(), count)
+}
+
+#[test]
+fn a_header_fragment_reports_its_removal() {
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![text_para("body")], PageSettings::a4()));
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    styles.push_char_shape(HwpxCharShape::default());
+    styles.push_para_shape(HwpxParaShape::default());
+    styles.push_style(HwpxStyle::new(0, "PARA", "바탕글", "Normal", 0, 0, 0, 1042, 0));
+    styles.push_bullet(BulletDef {
+        id: 1,
+        bullet_char: "\u{1}●".to_string(),
+        checked_char: None,
+        use_image: false,
+        para_head: ParaHead {
+            start: 1,
+            level: 1,
+            num_format: NumberFormatType::Digit,
+            text: "H\u{1}1".to_string(),
+            checkable: false,
+        },
+    });
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &doc.validate().expect("validate"),
+        &styles,
+        &ImageStore::new(),
+        EncodeOptions::default(),
+    )
+    .expect("encode");
+    let parts = xml_parts(&outcome.bytes);
+
+    assert_no_forbidden_char(&parts);
+    let header = part(&parts, "Contents/header.xml");
+    assert!(header.contains(r#"char="●""#), "{header}");
+    assert_eq!(
+        removals_in(&outcome.warnings, "Contents/header.xml"),
+        vec![site("hh:bullet@char", 1), site("hh:paraHead", 1)]
+    );
+}
+
+#[test]
+fn a_click_here_field_reports_controls_in_its_name_and_hint() {
+    // The P8 edit surfaces keep U+001F (it is a fixed-width space in text), so
+    // it reaches the field's attribute and parameters, where XML cannot hold it.
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001–U+001F 를 지우는 갈래를 되살리는 것.
+    let mut para = Paragraph::new(ParaShapeIndex::new(0));
+    para.runs.push(Run::control(
+        Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("H\u{1F}1".to_string()),
+            help_text: None,
+            name: Some("N\u{1}1".to_string()),
+            display_text: String::new(),
+        },
+        CharShapeIndex::new(0),
+    ));
+    let (parts, warnings) = encode_para(para);
+
+    assert_no_forbidden_char(&parts);
+    let section = part(&parts, "Contents/section0.xml");
+    assert!(section.contains(r#"name="N1""#), "{section}");
+    assert!(section.contains("H<hp:fwSpace/>1"), "the display text keeps it: {section}");
+    assert_eq!(
+        removals_in(&warnings, "Contents/section0.xml"),
+        vec![site("hp:fieldBegin@name", 1), site("hp:stringParam", 2)]
+    );
+}
+
+#[test]
+fn a_memo_reports_controls_in_its_parameters() {
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let mut memo = Control::memo(vec![text_para("note")]);
+    if let Control::Memo { metadata, anchor_runs, .. } = &mut memo {
+        metadata.author = "A\u{1}1".to_string();
+        anchor_runs.push(Run::text("anchor", CharShapeIndex::new(0)));
+    }
+    let para = Paragraph::with_runs(
+        vec![Run::control(memo, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let (parts, warnings) = encode_para(para);
+
+    assert_no_forbidden_char(&parts);
+    assert!(part(&parts, "Contents/section0.xml").contains(">A1</hp:stringParam>"));
+    // The author is written twice: as `Author` and inside the synthesized `Command`.
+    assert_eq!(removals_in(&warnings, "Contents/section0.xml"), vec![site("hp:stringParam", 2)]);
+}
+
+#[test]
+fn a_text_art_reports_controls_in_its_text() {
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let art = Control::TextArt {
+        text: "T\u{1}1".to_string(),
+        shape: "WAVE2".to_string(),
+        font_name: String::new(),
+        font_style: String::new(),
+        align: "LEFT".to_string(),
+        line_spacing: 120,
+        char_spacing: 100,
+        width: HwpUnit::new(6500).expect("width"),
+        height: HwpUnit::new(5000).expect("height"),
+        placement: None,
+        fill_color: None,
+        inst_id: None,
+    };
+    let para = Paragraph::with_runs(
+        vec![Run::control(art, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let (parts, warnings) = encode_para(para);
+
+    assert_no_forbidden_char(&parts);
+    assert!(part(&parts, "Contents/section0.xml").contains(r#"text="T1""#));
+    assert_eq!(removals_in(&warnings, "Contents/section0.xml"), vec![site("hp:textart@text", 1)]);
+}
+
+#[test]
+fn a_text_with_a_tab_reports_a_control_beside_it() {
+    // A tab sends the text through the mixed-content builder instead of serde.
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let (parts, warnings) = encode_para(text_para("a\t\u{1}b"));
+
+    assert_no_forbidden_char(&parts);
+    assert!(part(&parts, "Contents/section0.xml").contains("<hp:t>a<hp:tab/>b</hp:t>"));
+    assert_eq!(removals_in(&warnings, "Contents/section0.xml"), vec![site("hp:t", 1)]);
+}
+
+#[test]
+fn a_page_number_decoration_reports_its_removal() {
+    // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let mut section = Section::with_paragraphs(vec![text_para("body")], PageSettings::a4());
+    let mut number = PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit);
+    number.decoration = "-\u{1}".to_string();
+    section.page_number = Some(number);
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let (parts, warnings) = encode_with(doc, "함초롬돋움", "Normal");
+
+    assert_no_forbidden_char(&parts);
+    assert!(part(&parts, "Contents/section0.xml").contains(r#"sideChar="-""#));
+    assert_eq!(
+        removals_in(&warnings, "Contents/section0.xml"),
+        vec![site("hp:pageNum@sideChar", 1)]
+    );
+}
+
+#[test]
+fn the_package_writer_parts_report_controls_the_escape_used_to_drop() {
+    // 이것을 실패시키는 것: `escape_xml`·`escape_xml_text_safe` 에 U+0001 을 지우는 갈래를 되살리는 것.
+    let mut chart =
+        Control::chart(ChartType::Column, ChartData::category(&["C\u{1}1"], &[("S1", &[1.0])]));
+    if let Control::Chart { title, .. } = &mut chart {
+        *title = Some("T\u{1}1".to_string());
+    }
+    let mut section = Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::control(chart, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    );
+    section.master_pages =
+        Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_para("M\u{1}1")])]);
+    let mut doc = Document::new();
+    doc.add_section(section);
+    doc.set_metadata(Metadata::new().with_title("D\u{1}1"));
+    let (parts, warnings) = encode_with(doc, "함초롬돋움", "Normal");
+
+    assert_no_forbidden_char(&parts);
+    assert_eq!(removals_in(&warnings, "Contents/content.hpf"), vec![site("opf:title", 1)]);
+    assert_eq!(removals_in(&warnings, "Contents/masterpage0.xml"), vec![site("hp:t", 1)]);
+    assert_eq!(removals_in(&warnings, "Chart/chart1.xml"), vec![site("a:t", 1), site("c:v", 1)]);
 }
 
 // ── preserve-first edits leave the parts they do not touch alone ────
