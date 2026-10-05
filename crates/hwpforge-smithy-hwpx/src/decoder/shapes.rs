@@ -1043,6 +1043,10 @@ fn decode_group_children(
         ctx.leave();
     }
 
+    if !container.href.is_empty() {
+        // Core groups have no link; Hancom writes the group's own link here.
+        ctx.content_lost("group_hyperlink", format!("group hyperlink {:?}", container.href));
+    }
     if children.is_empty() {
         ctx.content_lost("group", "no group child can be represented in Core");
         return Ok(None);
@@ -5169,5 +5173,26 @@ mod group_tests {
         let bytes = encode(&doc);
         assert!(section0_xml(&bytes).contains(r#"href="http://www.korea.kr;1;0;0;""#));
         assert_eq!(first_group(&HwpxDecoder::decode(&bytes).unwrap()), g);
+    }
+
+    /// A group's own hyperlink (`<hp:container href>`, 59 groups in the
+    /// corpus) has no place in a Core group and is reported, for a top-level
+    /// and a nested group alike.
+    ///
+    /// 이것을 실패시키는 것: `href` 검사 삭제 / 스키마에서 `@href` 를 읽지 않는 것.
+    #[test]
+    fn group_hyperlink_is_reported() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]));
+        let own = ri(ID, &[(ID, ID), (ID, ID)]);
+        let linked =
+            |xml: String| xml.replacen(r#"href="""#, r#"href="http://www.korea.kr;1;0;0;""#, 1);
+        let (g, w) = decode(&linked(container(
+            (3000, 3000),
+            &rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)])),
+        )));
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["group_hyperlink"]);
+        let (_, w) = decode(&container((3000, 3000), &linked(nested((1000, 1000), &own, &leaf))));
+        assert_eq!(lost_kinds(&w), ["group_hyperlink"]);
     }
 }

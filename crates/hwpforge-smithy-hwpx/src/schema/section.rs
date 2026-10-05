@@ -629,6 +629,8 @@ pub struct HxContainer {
     pub text_wrap: String,
     /// `textFlow` attribute (empty when absent).
     pub text_flow: String,
+    /// `href` attribute: the group's own hyperlink (empty when absent).
+    pub href: String,
 
     /// Offset inside the parent group (`<hp:offset>`, signed).
     pub offset: Option<HxOffset>,
@@ -765,6 +767,8 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
             text_wrap: String,
             #[serde(rename = "@textFlow", default)]
             text_flow: String,
+            #[serde(rename = "@href", default)]
+            href: String,
             #[serde(rename = "$value", default)]
             children: Vec<HxContainerChildDe>,
         }
@@ -776,6 +780,7 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
             instid: de.instid,
             text_wrap: de.text_wrap,
             text_flow: de.text_flow,
+            href: de.href,
             ..HxContainer::default()
         };
         for child in de.children {
