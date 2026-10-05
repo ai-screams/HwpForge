@@ -582,13 +582,7 @@ impl HwpxDecoder {
         // BinData is read before the sections: a group picture without an
         // `<hp:imgDim>` is judged for cropping against its image's own size.
         let image_store = pkg.read_all_bindata()?;
-        let image_pixels: std::collections::HashMap<String, (u32, u32)> = image_store
-            .iter()
-            .filter_map(|(key, bytes)| {
-                let stem = key.rsplit_once('.').map_or(key, |(stem, _)| stem);
-                image_size::pixel_size(bytes).map(|size| (stem.to_string(), size))
-            })
-            .collect();
+        let image_pixels = image_size::pixel_sizes_by_reference(&image_store);
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;

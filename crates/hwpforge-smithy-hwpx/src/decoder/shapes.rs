@@ -5213,4 +5213,42 @@ mod group_tests {
         );
         assert!(reasons(&bare_pic((0, max, 0, max), Some((max, max))), &[]).is_empty());
     }
+
+    /// A picture whose `binaryItemIDRef` keeps the extension
+    /// (`image1.png`, as some writers save it) is judged against its image's
+    /// pixel size like Hancom's extensionless reference: F3a with `imgDim`
+    /// removed and every reference written with its extension loses nothing.
+    ///
+    /// 이것을 실패시키는 것: 픽셀 크기 표에 저장된 전체 이름을 넣지 않는 것(세 그림이
+    /// "크기 모름" 자르기로 보고된다).
+    #[test]
+    fn image_reference_with_its_extension_finds_the_image_size() {
+        use std::io::{Read, Write};
+        let src = fixture("group-f3a-logo.hwpx");
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&src)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            if name == "Contents/section0.xml" {
+                let mut xml = String::from_utf8(data).unwrap();
+                xml = xml.replace(r#"<hp:imgDim dimwidth="22500" dimheight="15000"/>"#, "");
+                for n in 1..=3 {
+                    xml = xml.replace(
+                        &format!(r#"binaryItemIDRef="image{n}""#),
+                        &format!(r#"binaryItemIDRef="image{n}.png""#),
+                    );
+                }
+                assert_eq!(xml.matches(r#".png" bright"#).count(), 3);
+                data = xml.into_bytes();
+            }
+            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
+            out.start_file(name, opts).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        let doc = HwpxDecoder::decode(&out.finish().unwrap().into_inner()).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    }
 }

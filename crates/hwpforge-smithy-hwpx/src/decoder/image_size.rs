@@ -7,6 +7,33 @@
 
 use hwpforge_core::image::ImageFormat;
 
+/// Pixel sizes of the package's images, keyed by every `binaryItemIDRef`
+/// that names them: the BinData name as stored (`logo.png`) and, when no
+/// other image shares it, the name without its extension (`image1` for
+/// `image1.png`, Hancom's form). An image whose header cannot be read is
+/// left out.
+pub(crate) fn pixel_sizes_by_reference(
+    store: &hwpforge_core::image::ImageStore,
+) -> std::collections::HashMap<String, (u32, u32)> {
+    use std::collections::HashMap;
+    let mut out: HashMap<String, (u32, u32)> = HashMap::new();
+    let mut stems: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
+    for (key, bytes) in store.iter() {
+        let Some(size) = pixel_size(bytes) else { continue };
+        out.insert(key.to_string(), size);
+        if let Some((stem, _)) = key.rsplit_once('.') {
+            stems.entry(stem.to_string()).or_default().push(size);
+        }
+    }
+    for (stem, sizes) in stems {
+        // Two images with the same stem: the stem names neither.
+        if let [size] = sizes[..] {
+            out.entry(stem).or_insert(size);
+        }
+    }
+    out
+}
+
 /// `(width, height)` in pixels, or `None` when the header cannot be read.
 pub(crate) fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let be32 =
@@ -99,5 +126,29 @@ mod tests {
         assert_eq!(pixel_size(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]), None);
         assert_eq!(pixel_size(&[0xD7, 0xCD, 0xC6, 0x9A, 0, 0]), None);
         assert_eq!(pixel_size(b"not an image"), None);
+    }
+
+    /// A reference with its extension (`logo.png`) and Hancom's form without
+    /// it (`image1`) both find their image; a stem two images share finds
+    /// neither.
+    ///
+    /// 이것을 실패시키는 것: 전체 이름 등록 삭제(`logo.png` 못 찾음) / 줄기 등록 삭제
+    /// (`image1` 못 찾음) / 줄기 중복 검사 삭제(`dup` 이 한쪽 크기를 얻음).
+    #[test]
+    fn sizes_are_found_by_either_reference_form() {
+        let mut store = hwpforge_core::image::ImageStore::new();
+        store.insert("logo.png", png(94, 33));
+        store.insert("image1.png", png(300, 200));
+        store.insert("dup.png", png(1, 1));
+        store.insert("dup.gif", {
+            let mut g = b"GIF89a".to_vec();
+            g.extend_from_slice(&[2, 0, 2, 0]);
+            g
+        });
+        let map = pixel_sizes_by_reference(&store);
+        assert_eq!(map.get("logo.png"), Some(&(94, 33)));
+        assert_eq!(map.get("image1"), Some(&(300, 200)));
+        assert_eq!(map.get("dup"), None);
+        assert_eq!(map.get("dup.gif"), Some(&(2, 2)));
     }
 }
