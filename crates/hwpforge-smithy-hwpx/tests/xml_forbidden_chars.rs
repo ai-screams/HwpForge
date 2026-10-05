@@ -7,18 +7,19 @@
 //! U+0001. They go through the public encode path, and the test reads the
 //! parts back out of the ZIP.
 
-use std::io::Read;
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
 
 use hwpforge_core::chart::{ChartData, ChartType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::metadata::Metadata;
-use hwpforge_core::run::Run;
+use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{MasterPage, Section};
 use hwpforge_core::{Document, PageSettings, Paragraph};
-use hwpforge_foundation::{ApplyPageType, CharShapeIndex, ParaShapeIndex};
+use hwpforge_foundation::{ApplyPageType, CharShapeIndex, FieldType, ParaShapeIndex};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyle, HwpxStyleStore};
-use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning, HwpxEncoder};
+use hwpforge_smithy_hwpx::{EncodeOptions, EncodeWarning, HwpxEncoder, HwpxFiller, HwpxPatcher};
 
 /// Encodes one paragraph of `body` with one style and one font face.
 fn encode(face: &str, eng_name: &str, body: &str) -> (Vec<(String, String)>, Vec<EncodeWarning>) {
@@ -248,4 +249,118 @@ fn a_master_page_loses_nul_and_reports_it() {
         )),
         "{warnings:?}"
     );
+}
+
+// ── preserve-first edits leave the parts they do not touch alone ────
+//
+// fill and patch rewrite one section through `RawPackage`. Removing forbidden
+// characters there is the entry clean-up's job, for the caller's values only;
+// a part the edit does not touch keeps its bytes, characters included.
+
+/// Two sections: a click-here field `f` and a plain text in section 0, and
+/// a text holding U+0001 in section 1.
+fn two_section_base() -> Vec<u8> {
+    let mut field = Paragraph::new(ParaShapeIndex::new(0));
+    field.runs.push(Run::control(
+        Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("hint".to_string()),
+            help_text: None,
+            name: Some("f".to_string()),
+            display_text: "old".to_string(),
+        },
+        CharShapeIndex::new(0),
+    ));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![field, text_para("edit me")],
+        PageSettings::a4(),
+    ));
+    doc.add_section(Section::with_paragraphs(vec![text_para("keep QQQ")], PageSettings::a4()));
+    let (bytes, _) = encode_bytes(doc);
+    splice_part(&bytes, "Contents/section1.xml", "QQQ", "A\u{1}B")
+}
+
+fn encode_bytes(doc: Document) -> (Vec<u8>, Vec<EncodeWarning>) {
+    let styles = hwpforge_smithy_hwpx::style_store_for_preset("default").expect("preset");
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &doc.validate().expect("validate"),
+        &styles,
+        &ImageStore::new(),
+        EncodeOptions::default(),
+    )
+    .expect("encode");
+    (outcome.bytes, outcome.warnings)
+}
+
+/// Replaces `from` with `to` in the part `name` — the only way to get a
+/// character the encoder refuses into a base package.
+fn splice_part(bytes: &[u8], name: &str, from: &str, to: &str) -> Vec<u8> {
+    let mut zin = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zin.len() {
+        let mut entry = zin.by_index(i).expect("entry");
+        let entry_name = entry.name().to_string();
+        let method = entry.compression();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("read");
+        if entry_name == name {
+            let text = String::from_utf8(data).expect("utf-8");
+            assert!(text.contains(from), "{from:?} not in {text}");
+            data = text.replace(from, to).into_bytes();
+        }
+        out.start_file(
+            entry_name,
+            zip::write::SimpleFileOptions::default().compression_method(method),
+        )
+        .expect("start");
+        out.write_all(&data).expect("write");
+    }
+    out.finish().expect("finish").into_inner()
+}
+
+fn raw_part(bytes: &[u8], name: &str) -> Vec<u8> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+    let mut entry = zip.by_name(name).expect("part");
+    let mut data = Vec::new();
+    entry.read_to_end(&mut data).expect("read");
+    data
+}
+
+#[test]
+fn patch_keeps_a_forbidden_character_in_a_section_it_does_not_edit() {
+    // 이것을 실패시키는 것: `RawPackage::write` 가 쓰는 part 를 `strip_xml_forbidden_chars` 로 훑는 것.
+    let base = two_section_base();
+    let mut exported =
+        HwpxPatcher::export_section_for_edit(&base, 0, false).expect("export").exported;
+    let RunContent::Text(slot) = &mut exported.section.paragraphs[1].runs[0].content else {
+        panic!("paragraph 1 is plain text");
+    };
+    *slot = "edited".to_string();
+    let diagnosed = HwpxPatcher::patch_exported_section_with_codec_diagnostics(&base, 0, &exported)
+        .expect("patch");
+
+    assert!(String::from_utf8(raw_part(&diagnosed.value.bytes, "Contents/section0.xml"))
+        .expect("utf-8")
+        .contains(">edited<"));
+    assert_eq!(
+        raw_part(&diagnosed.value.bytes, "Contents/section1.xml"),
+        raw_part(&base, "Contents/section1.xml")
+    );
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
+}
+
+#[test]
+fn fill_keeps_a_forbidden_character_in_a_section_it_does_not_edit() {
+    // 이것을 실패시키는 것: `RawPackage::write` 가 쓰는 part 를 `strip_xml_forbidden_chars` 로 훑는 것.
+    let base = two_section_base();
+    let values = BTreeMap::from([("f".to_string(), "new".to_string())]);
+    let diagnosed = HwpxFiller::fill_with_codec_diagnostics(&base, &values).expect("fill");
+
+    assert_eq!(diagnosed.value.filled.len(), 1);
+    assert_eq!(
+        raw_part(&diagnosed.value.bytes, "Contents/section1.xml"),
+        raw_part(&base, "Contents/section1.xml")
+    );
+    assert!(diagnosed.encode_warnings.is_empty(), "{:?}", diagnosed.encode_warnings);
 }
