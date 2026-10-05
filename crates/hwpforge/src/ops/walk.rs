@@ -714,4 +714,43 @@ mod tests {
         // never exceed it. Only the visibility probe reaches deeper.
         assert!(counts.top_level_non_empty_paragraphs <= section.paragraphs.len());
     }
+
+    /// `all_images` counts a group's pictures, as the section's XML holds
+    /// them, and a group picture's caption is visited (its table counts).
+    ///
+    /// 이것을 실패시키는 것: `visit_control_for_objects` 의 Picture 갈래에서 `all_images`
+    /// 증가 삭제 / 캡션 방문 삭제.
+    #[test]
+    fn group_pictures_count_in_all_images() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::control::{Control, GroupChild};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::page::PageSettings;
+        use hwpforge_core::section::Section;
+        use hwpforge_core::table::{Table, TableCell, TableRow};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        let w = HwpUnit::new(1000).unwrap();
+        let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], w);
+        let mut caption_para = Paragraph::new(ParaShapeIndex::new(0));
+        caption_para.add_run(Run::table(
+            Table::new(vec![TableRow::new(vec![cell])]),
+            CharShapeIndex::new(0),
+        ));
+        let captioned = Image::new("BinData/a.png", w, w, ImageFormat::Png)
+            .with_caption(Caption::new(vec![caption_para], CaptionSide::Bottom));
+        let group = Control::Group {
+            children: vec![
+                GroupChild::Picture(captioned),
+                GroupChild::Picture(Image::new("BinData/b.png", w, w, ImageFormat::Png)),
+            ],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::control(group, CharShapeIndex::new(0)));
+        let counts = object_counts(&Section::with_paragraphs(vec![host], PageSettings::a4()));
+        assert_eq!((counts.all_images, counts.all_tables), (2, 1));
+    }
 }

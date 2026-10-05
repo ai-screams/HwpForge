@@ -4,7 +4,7 @@
 //! `#[non_exhaustive]` output struct out, no file I/O, warnings carried
 //! beside the payload instead of inside it.
 
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
 use hwpforge_foundation::{CharShapeIndex, FieldType, FontIndex, ParaShapeIndex};
@@ -113,7 +113,7 @@ pub struct InspectMetadata {
 /// | Prefix | Fields | Recurses into | Master pages | Captions |
 /// | -- | -- | -- | -- | -- |
 /// | `top_level_` | paragraphs, tables, images, charts | nothing: the section's own body-flow runs (`Section::paragraphs`, `Section::content_counts()`) | no | no |
-/// | *(none)* | paragraphs, tables, images, charts | `Section::for_each_paragraph` — table cells, text boxes, notes, memos, headers, footers | yes | no |
+/// | *(none)* | paragraphs, tables, images, charts | `Section::for_each_paragraph` — table cells, text boxes, notes, memos, headers, footers; `images` counts a group's pictures too | yes | no |
 /// | `deep_` | paragraphs | headers, footers, table cells, and `TextBox`/`Footnote`/`Endnote`/`Ellipse`/`Polygon`/`Memo` bodies | no | no |
 /// | `all_` | tables, images, text boxes, lines, rectangles, polygons | everything the section's own XML part physically holds, group children and a memo's anchor run included | no | yes |
 ///
@@ -393,6 +393,9 @@ impl Counts {
                 RunContent::Image(_) => self.images += 1,
                 RunContent::Control(control) => match control.as_ref() {
                     Control::Chart { .. } => self.charts += 1,
+                    // A group's pictures are not runs; the paragraph walk
+                    // does not reach them as it does a text box's runs.
+                    Control::Group { children, .. } => self.images += group_pictures(children),
                     Control::Field {
                         field_type: FieldType::ClickHere, name: Some(name), ..
                     } => {
@@ -405,6 +408,18 @@ impl Counts {
             }
         }
     }
+}
+
+/// Pictures in a group, nested groups included.
+fn group_pictures(children: &[GroupChild]) -> usize {
+    children
+        .iter()
+        .map(|c| match c {
+            GroupChild::Picture(_) => 1,
+            GroupChild::Shape(Control::Group { children, .. }) => group_pictures(children),
+            _ => 0,
+        })
+        .sum()
 }
 
 fn summarize_styles(store: &HwpxStyleStore) -> InspectStyles {
@@ -495,5 +510,36 @@ mod tests {
 
         assert_eq!(counts.paragraphs, 1);
         assert!(fields.is_empty());
+    }
+
+    /// A group's pictures count as images, a nested group's too; a group's
+    /// shapes do not.
+    ///
+    /// 이것을 실패시키는 것: `Counts::visit` 의 Group 갈래 삭제 / 중첩 묶음 재귀 삭제.
+    #[test]
+    fn group_pictures_count_as_images() {
+        use hwpforge_core::control::GroupChild;
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit;
+        let w = HwpUnit::new(1000).unwrap();
+        let pic = || GroupChild::Picture(Image::new("BinData/a.png", w, w, ImageFormat::Png));
+        let group = |children| Control::Group {
+            children,
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let nested = group(vec![pic()]);
+        let outer = group(vec![
+            pic(),
+            GroupChild::Shape(Control::rect(w, w).unwrap()),
+            GroupChild::Shape(nested),
+        ]);
+        let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
+        paragraph.runs.push(Run::control(outer, CharShapeIndex::new(0)));
+        let mut counts = Counts::default();
+        counts.visit(&paragraph, &mut Vec::new());
+        assert_eq!(counts.images, 2);
     }
 }
