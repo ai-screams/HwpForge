@@ -2067,6 +2067,75 @@ mod tests {
         assert!(paths.iter().any(|p| p.ends_with("hp:tbl/hp:pos")), "{paths:?}");
     }
 
+    /// Every shape kind written as a group child drops its own `<hp:sz>` and
+    /// `<hp:pos>`, while the table, picture and equation in its caption keep
+    /// both.
+    ///
+    /// 이것을 실패시키는 것: 종류마다 `(hx.sz, hx.pos) = (None, None)` 을 지우는
+    /// 것(그 종류만 직속 배치가 남음), fragment 전체에서 지우는 것(캡션 개체의
+    /// `sz`·`pos` 가 사라짐).
+    #[test]
+    fn every_grouped_kind_drops_only_its_own_placement() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::image::Image;
+        use hwpforge_foundation::ArcType;
+        let hu = |v: i32| HwpUnit::new(v).unwrap();
+        let p = |x, y| ShapePoint::new(x, y);
+        let kinds: Vec<(&str, Control)> = vec![
+            ("hp:rect", Control::rect(hu(4000), hu(2000)).unwrap()),
+            ("hp:rect", Control::text_box(vec![para_of(Vec::new())], hu(4000), hu(2000))),
+            ("hp:line", Control::line(p(0, 0), p(4000, 2000)).unwrap()),
+            ("hp:ellipse", Control::ellipse(hu(4000), hu(2000))),
+            ("hp:ellipse", Control::arc(ArcType::Normal, hu(4000), hu(2000))),
+            ("hp:polygon", Control::polygon(vec![p(0, 0), p(4000, 0), p(2000, 2000)]).unwrap()),
+            ("hp:curve", Control::curve(vec![p(0, 0), p(2000, 2000), p(4000, 0)]).unwrap()),
+            ("hp:connectLine", Control::connect_line(p(0, 0), p(4000, 2000)).unwrap()),
+        ];
+        for (tag, mut shape) in kinds {
+            let caption = Caption::new(
+                vec![para_of(vec![
+                    Run::table(table_of_width(4000), CharShapeIndex::new(0)),
+                    Run::image(
+                        Image::from_path("BinData/image1.png", hu(1000), hu(800)),
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::control(Control::equation("a+b"), CharShapeIndex::new(0)),
+                ])],
+                CaptionSide::Bottom,
+            );
+            match &mut shape {
+                Control::Rect { caption: c, .. }
+                | Control::TextBox { caption: c, .. }
+                | Control::Line { caption: c, .. }
+                | Control::Ellipse { caption: c, .. }
+                | Control::Arc { caption: c, .. }
+                | Control::Polygon { caption: c, .. }
+                | Control::Curve { caption: c, .. }
+                | Control::ConnectLine { caption: c, .. } => *c = Some(caption),
+                _ => unreachable!(),
+            }
+            let name = shape.kind_name();
+            let (xml, _) = encode_group(&group_of(vec![shape]));
+            let paths = placement_paths(&xml);
+            let own = |leaf: &str| format!("hp:container/{tag}/{leaf}");
+            assert!(
+                !paths.contains(&own("hp:sz")) && !paths.contains(&own("hp:pos")),
+                "{name}: {paths:?}"
+            );
+            for object in ["hp:tbl", "hp:pic", "hp:equation"] {
+                for leaf in ["hp:sz", "hp:pos"] {
+                    assert!(
+                        paths
+                            .iter()
+                            .any(|q| q.starts_with(&format!("hp:container/{tag}/hp:caption/"))
+                                && q.ends_with(&format!("{object}/{leaf}"))),
+                        "{name}: {object}/{leaf} missing: {paths:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// A table in the caption of a grouped rectangle keeps its placement.
     ///
     /// 이것을 실패시키는 것: fragment 전체에서 `sz`/`pos` 를 지우는 것.
