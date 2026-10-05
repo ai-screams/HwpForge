@@ -364,6 +364,16 @@ fn guess_image_media_type(path: &str) -> &'static str {
     }
 }
 
+/// The ZIP entry an image stored under `path` is written to.
+pub(crate) fn image_entry_name(path: &str) -> String {
+    format!("BinData/{}", super::sanitize_zip_entry_name(path))
+}
+
+/// The ZIP entry an embedded-chart OLE blob `ole_id` is written to.
+pub(crate) fn ole_entry_name(ole_id: &str) -> String {
+    format!("BinData/{}.ole", super::sanitize_zip_entry_name(ole_id))
+}
+
 // ── PackageWriter ────────────────────────────────────────────────
 
 /// Writes a valid HWPX ZIP archive.
@@ -484,8 +494,7 @@ impl PackageWriter {
 
         // 9. BinData/* — images stored uncompressed (already compressed formats)
         for (path, data) in images {
-            let safe_path = super::sanitize_zip_entry_name(path);
-            zip.start_file(format!("BinData/{safe_path}"), stored_opts)
+            zip.start_file(image_entry_name(path), stored_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
@@ -510,8 +519,7 @@ impl PackageWriter {
         // payload is already a tightly-packed OLE2 compound file, and
         // 한글 reads it raw via `binaryItemIDRef` from content.hpf.
         for (ole_id, data) in embedded_oles {
-            let safe_id = super::sanitize_zip_entry_name(ole_id);
-            zip.start_file(format!("BinData/{safe_id}.ole"), stored_opts)
+            zip.start_file(ole_entry_name(ole_id), stored_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }

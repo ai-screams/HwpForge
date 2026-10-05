@@ -300,6 +300,37 @@ fn a_master_page_picture_without_its_asset_is_reported_in_its_part() {
     );
 }
 
+/// An image key with a character XML cannot carry keeps it in the ZIP entry
+/// name, but the scanned `content.hpf` writes the item's `href` without it
+/// (`BinData/a.png` for the entry `BinData/a\u{1}.png`). The item id still
+/// matches the picture's reference, yet a reader following the `href` finds
+/// no entry: the picture is reported as unresolved, and the entry name is
+/// not cleaned to match (that would rename the asset without a word).
+///
+/// 이것을 실패시키는 것: 해석 집합을 실제로 쓴 ZIP 항목 이름과 대조하지 않는 것
+/// (manifest id 만 보면 `a` 가 있어 경고가 사라진다).
+#[test]
+fn an_item_whose_href_is_not_the_written_entry_is_unresolved() {
+    let mut images = ImageStore::new();
+    images.insert("a\u{1}.png", vec![0x89, b'P', b'N', b'G']);
+    let picture = Image::from_path(
+        "BinData/a\u{1}.png",
+        HwpUnit::new(1000).unwrap(),
+        HwpUnit::new(1000).unwrap(),
+    );
+    let outcome = encode_runs(vec![Run::image(picture, CharShapeIndex::new(0))], &images);
+
+    let zip = zip::ZipArchive::new(std::io::Cursor::new(&outcome.bytes)).expect("zip");
+    assert!(zip.file_names().any(|n| n == "BinData/a\u{1}.png"), "premise: the entry keeps U+0001");
+    let hpf = part(&outcome.bytes, "Contents/content.hpf");
+    assert!(hpf.contains(r#"href="BinData/a.png""#), "premise: the href lost it: {hpf}");
+    assert_eq!(
+        unresolved(&outcome.warnings),
+        [triple("Contents/section0.xml", "hc:img@binaryItemIDRef", "a")]
+    );
+    assert!(outcome.warnings.iter().any(EncodeWarning::is_semantic_loss));
+}
+
 /// F6: a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's

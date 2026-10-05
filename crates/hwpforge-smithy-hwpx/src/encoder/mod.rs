@@ -533,6 +533,11 @@ pub enum EncodeWarning {
     /// (`content.hpf` 에서 `href` 가 `BinData/` 인 항목)의 id 와도 맞지
     /// 않는다 — 예: `from-json` 을 원본 패키지(`--base`) 없이 써서 이미지
     /// 저장소가 비었다. 그림·채우기가 산출물에서 깨지므로 의미 손상이다.
+    /// id 가 맞는 항목이 있어도 그 `href` 가 실제로 쓴 ZIP 항목 이름과 다르면
+    /// 같다 — 예: 저장소 키 `a\u{1}.png` 는 ZIP 항목 이름에 U+0001 이 남지만
+    /// 금지 문자를 지운 `content.hpf` 의 `href` 는 `BinData/a.png` 라, 그
+    /// `href` 를 따라가면 데이터가 없다. ZIP 항목 이름은 고치지 않는다(자산이
+    /// 말없이 개명된다).
     ///
     /// 참조는 **그대로 남긴다**. 한컴은 이런 문서를 경고 없이 열어 원래
     /// 크기의 빈 그림 상자를 그리고, 다시 저장하면 참조를 빈 값으로 쓴다.
@@ -1214,7 +1219,18 @@ impl HwpxEncoder {
         );
         parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
         let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();
-        warnings.extend(references::unresolved_references(&written, &parts)?);
+        // A binary item resolves only when its `href` names the entry written
+        // for it (`unresolved_references` looks only at `BinData/` items, so
+        // the other items may drop out here): a key with a character XML forbids keeps it in the entry
+        // name, while the scanned `content.hpf` writes the `href` without it.
+        let entries: Vec<String> = images
+            .iter()
+            .map(|(path, _)| package::image_entry_name(path))
+            .chain(embedded_oles.iter().map(|(id, _)| package::ole_entry_name(id)))
+            .collect();
+        let resolvable: Vec<(String, String)> =
+            written.iter().filter(|(_, href)| entries.contains(href)).cloned().collect();
+        warnings.extend(references::unresolved_references(&resolvable, &parts)?);
         let (bytes, package_warnings) = PackageWriter::write_hwpx_with_content_hpf(
             &content_hpf,
             &header_xml,
