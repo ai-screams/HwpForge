@@ -299,7 +299,13 @@ fn assert_leaves_match(hwp: &str, ungrouped: &str, extra: usize, skip: &[&str]) 
 /// F1: a group scaled ×1.5/×0.5 (g1), mirrored left-right (g3), and a group
 /// inside a group scaled ×1.2 with a pre-shrunk shape (g4).
 ///
+/// F11: a rect and an ellipse grouped, that group grouped with a rect lying
+/// above and left of it, the outer group stretched ×1.2 along x — the inner
+/// group sits away from the outer corner.
+///
 /// 이것을 실패시키는 것: HWP5 행렬열을 무시하는 것(옛 투영: offset·초기 크기만),
+/// 중첩 묶음 자식을 그 묶음 기준으로 옮기지 않는 것, 중첩 묶음 offset 을 빠뜨리거나
+/// 두 번 더하는 것(F11),
 /// 쌍 적용 순서를 첫 쌍부터로 바꾸는 것, 한 쌍 안에서 sca 를 rot 뒤에 곱하는 것,
 /// 최상위 레코드의 반복 type tag 를 건너뛰지 않는 것(또는 자식에서 건너뛰는 것).
 #[test]
@@ -547,19 +553,16 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
 
 /// The HWP5 group written by the HWPX writer and decoded again gives
 /// the same shapes, leaf by leaf (corners in order and defining points
-/// within 2 HWPUNIT), with no lost content. Every nested group in these
-/// fixtures sits at its parent's corner, so this does not pin the writer's
-/// nested-offset convention (moving a nested child by its parent's offset
-/// twice, the pair 4 failure at P1): no committed fixture has a nested group
-/// off its parent's corner — the projection unit test
-/// `nested_children_are_placed_relative_to_their_direct_group` covers the
-/// decoder side only.
+/// within 2 HWPUNIT), with no lost content. F11's inner group (a rect and
+/// an ellipse) sits away from its outer group's corner, so the writer's
+/// nested-offset convention is pinned too.
 ///
 /// Both steps must lose nothing: the conversion's own warnings carry no
 /// `CONTENT_LOST` and no other semantic loss, and the re-decode none either.
 ///
 /// 이것을 실패시키는 것: HWPX 방출 정책의 행렬 계수를 소수 1자리로 거칠게 쓰는
-/// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋나고 `shape_emission` 경고가 난다).
+/// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋나고 `shape_emission` 경고가 난다),
+/// 인코더가 중첩 묶음 자식에 부모 원점을 더하지 않는 것(F11).
 #[test]
 fn hwp5_groups_survive_the_hwpx_writer() {
     for hwp in [
