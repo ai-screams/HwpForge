@@ -1216,7 +1216,7 @@ fn decode_group_picture(
 }
 
 /// HWPUNIT per image pixel (96 dpi): the unit of `<hp:imgDim>`.
-const HWPUNIT_PER_PIXEL: i32 = 75;
+const HWPUNIT_PER_PIXEL: i64 = 75;
 
 /// What a group picture shows that a Core picture cannot: a crop, an image
 /// effect (`<hc:img>` effect, brightness, contrast, alpha, or anything under
@@ -1233,22 +1233,23 @@ fn group_picture_losses(
     let mut out = Vec::new();
     let reference = pic.img.as_ref().map_or("", |i| i.binary_item_id_ref.as_str());
     if let Some(clip) = pic.img_clip.as_ref() {
+        // In i64: the wire values are any i32, and `right − width` of two
+        // i32 overflows.
         let whole = match pic.img_dim.as_ref() {
-            Some(d) if d.dim_width > 0 && d.dim_height > 0 => Some((d.dim_width, d.dim_height)),
-            _ => image_pixels.get(reference).and_then(|&(w, h)| {
-                let w = i32::try_from(w).ok()?.checked_mul(HWPUNIT_PER_PIXEL)?;
-                let h = i32::try_from(h).ok()?.checked_mul(HWPUNIT_PER_PIXEL)?;
-                Some((w, h))
+            Some(d) if d.dim_width > 0 && d.dim_height > 0 => {
+                Some((i64::from(d.dim_width), i64::from(d.dim_height)))
+            }
+            _ => image_pixels.get(reference).map(|&(w, h)| {
+                (i64::from(w) * HWPUNIT_PER_PIXEL, i64::from(h) * HWPUNIT_PER_PIXEL)
             }),
         };
         match whole {
             Some((w, h)) => {
-                let off = [clip.left, clip.top, clip.right - w, clip.bottom - h]
-                    .iter()
-                    .map(|v| v.unsigned_abs())
-                    .max()
-                    .unwrap_or(0);
-                if off > HWPUNIT_PER_PIXEL.unsigned_abs() {
+                let [left, top, right, bottom] =
+                    [clip.left, clip.top, clip.right, clip.bottom].map(i64::from);
+                let off =
+                    [left, top, right - w, bottom - h].iter().map(|v| v.abs()).max().unwrap_or(0);
+                if off > HWPUNIT_PER_PIXEL {
                     out.push(format!(
                         "crop: imgClip ({}, {}, {}, {}) of a {w}x{h} image",
                         clip.left, clip.top, clip.right, clip.bottom
@@ -5194,5 +5195,22 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["group_hyperlink"]);
         let (_, w) = decode(&container((3000, 3000), &linked(nested((1000, 1000), &own, &leaf))));
         assert_eq!(lost_kinds(&w), ["group_hyperlink"]);
+    }
+
+    /// `imgClip` and `imgDim` are any i32 on the wire: the crop test does not
+    /// overflow at the extremes of either axis, and still reports the crop.
+    ///
+    /// 이것을 실패시키는 것: 뺄셈을 i32 로 되돌리는 것(debug 패닉 / release 에서 차이가
+    /// 1 로 감겨 crop 이 사라짐).
+    #[test]
+    fn crop_rule_survives_extreme_values() {
+        let (min, max) = (i32::MIN, i32::MAX);
+        assert_eq!(reasons(&bare_pic((0, min, 0, 15_000), Some((max, 15_000))), &[]), ["crop"]);
+        assert_eq!(reasons(&bare_pic((0, 22_500, 0, min), Some((22_500, max))), &[]), ["crop"]);
+        assert_eq!(
+            reasons(&bare_pic((min, 22_500, min, 15_000), Some((22_500, 15_000))), &[]),
+            ["crop"]
+        );
+        assert!(reasons(&bare_pic((0, max, 0, max), Some((max, max))), &[]).is_empty());
     }
 }
