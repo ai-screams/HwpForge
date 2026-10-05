@@ -567,14 +567,14 @@ impl<'a> ProjectionImageState<'a> {
         }
     }
 
-    /// Look up the inflated `/BinData/BIN*.OLE` entry by `binary_data_id`, if
-    /// a plan was supplied. `None` means no OLE plan is wired (e.g. inspect
-    /// path) or the plan has no such entry.
-    fn ole_inflated_for_binary_data_id(
+    /// Look up the inflated `/BinData/BIN*.OLE` entry by BinData reference,
+    /// if a plan was supplied. `None` means no OLE plan is wired (e.g.
+    /// inspect path) or the plan has no such entry.
+    fn ole_inflated_for_reference(
         &self,
-        binary_data_id: u16,
+        reference: u16,
     ) -> Option<&'a Result<Vec<u8>, ChartOleError>> {
-        self.ole_assets.and_then(|plan| plan.inflated_for_binary_data_id(binary_data_id))
+        self.ole_assets.and_then(|plan| plan.inflated_for_reference(reference))
     }
 
     fn build_image(
@@ -590,11 +590,11 @@ impl<'a> ProjectionImageState<'a> {
             return None;
         };
         let Some(asset): Option<&Hwp5JoinedImageAsset> =
-            image_assets.asset_for_binary_data_id(image.binary_data_id)
+            image_assets.asset_for_reference(image.binary_data_id)
         else {
             self.warnings.push(Hwp5Warning::DroppedControl {
                 control: "image",
-                reason: format!("missing_image_asset_for_binary_data_id={}", image.binary_data_id),
+                reason: image_assets.missing_asset_reason(image.binary_data_id),
             });
             return None;
         };
@@ -657,9 +657,18 @@ impl<'a> ProjectionImageState<'a> {
         }
     }
 
-    /// The image asset of `binary_data_id`, when the document has one.
-    fn image_asset(&self, binary_data_id: u16) -> Option<&'a Hwp5JoinedImageAsset> {
-        self.image_assets?.asset_for_binary_data_id(binary_data_id)
+    /// The image asset of BinData `reference`, when the document has one.
+    fn image_asset(&self, reference: u16) -> Option<&'a Hwp5JoinedImageAsset> {
+        self.image_assets?.asset_for_reference(reference)
+    }
+
+    /// Why BinData `reference` has no image asset (see
+    /// [`Hwp5JoinedImageAssetPlan::missing_asset_reason`]).
+    fn missing_asset_reason(&self, reference: u16) -> String {
+        match self.image_assets {
+            Some(plan) => plan.missing_asset_reason(reference),
+            None => format!("missing_image_asset_for_binary_data_id={reference}"),
+        }
     }
 
     /// A group picture: the image at the folded size and offset (relative to
@@ -3051,8 +3060,15 @@ fn project_ole_object_run(
     if projection_images.budget_error.is_some() {
         return None;
     }
-    let Some(inflated) = projection_images.ole_inflated_for_binary_data_id(ole.binary_data_id)
-    else {
+    if let Some(reason) =
+        projection_images.ole_assets.and_then(|plan| plan.reference_ambiguity(ole.binary_data_id))
+    {
+        projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "ole.bin_data_reference",
+            reason: reason.to_string(),
+        });
+    }
+    let Some(inflated) = projection_images.ole_inflated_for_reference(ole.binary_data_id) else {
         projection_images.warnings.push(Hwp5Warning::DroppedControl {
             control: "ole_object",
             reason: format!("ole_bin_data_unavailable binary_data_id={}", ole.binary_data_id),
@@ -3932,12 +3948,16 @@ mod tests {
                 bytes,
             })
             .collect();
-        let assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
+        let assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
             .iter()
             .cloned()
             .map(|asset| (asset.payload.binary_data_id, asset))
             .collect();
-        Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }
+        Hwp5JoinedImageAssetPlan {
+            ordered_assets,
+            assets_by_reference,
+            unavailable_reasons: BTreeMap::new(),
+        }
     }
 
     fn image_plan_with_dimensions(
@@ -3959,9 +3979,13 @@ mod tests {
             },
             bytes,
         };
-        let assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> =
+        let assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> =
             [(binary_data_id, asset.clone())].into_iter().collect();
-        Hwp5JoinedImageAssetPlan { ordered_assets: vec![asset], assets_by_binary_data_id }
+        Hwp5JoinedImageAssetPlan {
+            ordered_assets: vec![asset],
+            assets_by_reference,
+            unavailable_reasons: BTreeMap::new(),
+        }
     }
 
     // ── project_to_core ───────────────────────────────────────────────────────
@@ -6069,7 +6093,8 @@ mod tests {
     fn chart_ole_plan(ids: &[u16]) -> Hwp5OleAssetPlan {
         let inflated = crate::decoder::chart_ole::tests::chart_fixture_inflated();
         Hwp5OleAssetPlan {
-            assets_by_binary_data_id: ids.iter().map(|id| (*id, Ok(inflated.clone()))).collect(),
+            assets_by_reference: ids.iter().map(|id| (*id, Ok(inflated.clone()))).collect(),
+            reference_ambiguities: BTreeMap::new(),
         }
     }
 

@@ -191,9 +191,8 @@ fn join_hwp5_image_assets_decompresses_full_report_png_payload() {
     let image_assets = join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED)
         .expect("image assets should join")
         .0;
-    let first_asset = image_assets
-        .asset_for_binary_data_id(1)
-        .expect("full_report should expose binary image id 1");
+    let first_asset =
+        image_assets.asset_for_reference(1).expect("full_report should expose binary image id 1");
 
     assert!(
         first_asset.bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
@@ -472,6 +471,7 @@ fn compressed_bmp_record() -> Hwp5BinDataRecordSummary {
         data_type: "Embedding".to_string(),
         compression: "Compress".to_string(),
         should_decompress: true,
+        reference_ordinal: 1,
     }
 }
 
@@ -692,4 +692,168 @@ fn group_and_group_picture_links_are_read() {
         })
         .collect();
     assert_eq!(links, [Some("http://www.korea.kr"), None, None]);
+}
+
+// ── BinData references are DocInfo positions (§19 C) ─────────────────
+
+/// One level-0 `DocInfo` record: TLV header (tag, level 0, size) + payload.
+fn doc_info_record(tag: u16, payload: &[u8]) -> Vec<u8> {
+    let size = u32::try_from(payload.len()).expect("small record");
+    assert!(size < 0xFFF, "test records stay under the extended-size marker");
+    let header = u32::from(tag) | (size << 20);
+    let mut out = header.to_le_bytes().to_vec();
+    out.extend_from_slice(payload);
+    out
+}
+
+/// An embedded `BIN_DATA` payload storing `id` and `extension`.
+fn embedded_bin_data(id: u16, extension: &str) -> Vec<u8> {
+    let mut out = 0x0001_u16.to_le_bytes().to_vec();
+    out.extend_from_slice(&id.to_le_bytes());
+    let units: Vec<u16> = extension.encode_utf16().collect();
+    out.extend_from_slice(&u16::try_from(units.len()).expect("short").to_le_bytes());
+    units.iter().for_each(|unit| out.extend_from_slice(&unit.to_le_bytes()));
+    out
+}
+
+/// An external-link `BIN_DATA` payload (type 0): two length-prefixed
+/// UTF-16 paths, no id or extension.
+fn link_bin_data(absolute: &str, relative: &str) -> Vec<u8> {
+    let mut out = 0x0000_u16.to_le_bytes().to_vec();
+    for path in [absolute, relative] {
+        let units: Vec<u16> = path.encode_utf16().collect();
+        out.extend_from_slice(&u16::try_from(units.len()).expect("short").to_le_bytes());
+        units.iter().for_each(|unit| out.extend_from_slice(&unit.to_le_bytes()));
+    }
+    out
+}
+
+fn reference_and_id(records: &[Hwp5BinDataRecordSummary]) -> Vec<(u16, u16)> {
+    records.iter().map(|record| (record.reference_ordinal, record.binary_data_id)).collect()
+}
+
+/// C-T2: a `BIN_DATA` record that fails to parse still uses up its
+/// position, so the records after it keep the reference numbers pictures use.
+///
+/// 이것을 실패시키는 것: 위치를 파싱 뒤에 매기는 것(`enumerate` 를
+/// `filter_map` 뒤로) — 셋째 레코드가 순번 2 가 된다.
+#[test]
+fn a_bin_data_record_that_fails_to_parse_keeps_its_position() {
+    let doc_info = [
+        doc_info_record(0x12, &embedded_bin_data(1, "png")),
+        doc_info_record(0x12, &[0x01, 0x00]),
+        doc_info_record(0x12, &embedded_bin_data(2, "png")),
+    ]
+    .concat();
+    let records = summarize_doc_info_bin_data_records(&doc_info, false).expect("summary");
+    assert_eq!(reference_and_id(&records), [(1, 1), (3, 2)]);
+}
+
+/// C-T3 (record level): an external link stores two paths, not an id and
+/// an extension. It takes its position but names no stream — before, the
+/// absolute path's length was read as its id and the path's characters as
+/// its extension.
+///
+/// 이것을 실패시키는 것: 링크 갈래를 지우는 것 — 경로 길이(10)가 id 가 되고
+/// 저장 이름이 `BIN000A.…` 로 지어진다.
+#[test]
+fn an_external_link_takes_a_position_but_names_no_stream() {
+    let doc_info = [
+        doc_info_record(0x12, &link_bin_data("C:\\a\\b.jpg", "b.jpg")),
+        doc_info_record(0x12, &embedded_bin_data(1, "png")),
+    ]
+    .concat();
+    let records = summarize_doc_info_bin_data_records(&doc_info, false).expect("summary");
+    assert_eq!(reference_and_id(&records), [(1, 0), (2, 1)]);
+    assert_eq!(records[0].data_type, "Link");
+    assert_eq!(records[0].storage_name, "");
+    assert_eq!(records[0].extension, "");
+    assert_eq!(records[1].storage_name, "BIN0001.png");
+}
+
+/// C-T1 (join level): image assets and the size hint taken from the
+/// pictures are both keyed by reference. The F17 fixture's three records
+/// are re-presented as stored ids `[3, 1, 2]`, so reference 1 is
+/// `BIN0003.png`; each picture gets its own width.
+///
+/// 이것을 실패시키는 것: 자산 맵 키를 저장 id 로 되돌리는 것(참조 1 이
+/// `BIN0001.png`), 크기 힌트를 저장 id 로 찾는 것(참조 1 의 힌트가 참조 3
+/// 그림의 너비).
+#[test]
+fn image_assets_and_size_hints_are_keyed_by_reference() {
+    let bytes = std::fs::read(fixture_path("images/f17-caption-numbering.hwp")).expect("fixture");
+    let mut intermediate = crate::decoder::decode_intermediate(&bytes).expect("intermediate");
+    let originals = intermediate.bin_data_records.clone();
+    assert_eq!(reference_and_id(&originals), [(1, 1), (2, 2), (3, 3)], "fixture as made");
+    intermediate.bin_data_records = [2, 0, 1]
+        .into_iter()
+        .zip(1..)
+        .map(|(source, reference_ordinal)| Hwp5BinDataRecordSummary {
+            reference_ordinal,
+            ..originals[source].clone()
+        })
+        .collect();
+    let mut width_of_reference = BTreeMap::new();
+    let mut next_width = 1000_u32;
+    for paragraph in &mut intermediate.sections[0].paragraphs {
+        for control in &mut paragraph.controls {
+            if let crate::decoder::section::Hwp5Control::Image(image) = control {
+                image.geometry.width = next_width;
+                width_of_reference.insert(image.binary_data_id, next_width);
+                next_width += 1000;
+            }
+        }
+    }
+    assert_eq!(width_of_reference.len(), 3, "the three pictures reference 1, 2, 3");
+
+    let plan =
+        join_hwp5_image_assets(&bytes, &intermediate, MAX_TOTAL_DECOMPRESSED).expect("join").0;
+    for (reference, storage_name) in [(1, "BIN0003.png"), (2, "BIN0001.png"), (3, "BIN0002.png")] {
+        let asset = plan.asset_for_reference(reference).expect("asset");
+        assert_eq!(asset.payload.storage_name, storage_name, "reference {reference}");
+        let width = i32::try_from(width_of_reference[&reference]).expect("small");
+        assert_eq!(asset.payload.width_hwp, Some(width), "reference {reference}");
+    }
+}
+
+fn summary(
+    reference_ordinal: u16,
+    binary_data_id: u16,
+    storage_name: &str,
+) -> Hwp5BinDataRecordSummary {
+    Hwp5BinDataRecordSummary {
+        binary_data_id,
+        storage_name: storage_name.to_string(),
+        extension: storage_name.rsplit_once('.').map_or("", |(_, ext)| ext).to_string(),
+        data_type: if storage_name.is_empty() { "Link" } else { "Embedding" }.to_string(),
+        compression: "Default".to_string(),
+        should_decompress: false,
+        reference_ordinal,
+    }
+}
+
+/// C-T5 (plan level): the OLE reading check covers every `BIN_DATA` slot,
+/// external links included, and spells out both readings.
+///
+/// 이것을 실패시키는 것: 비교를 로드된 OLE 자산으로만 좁히는 것(순번 3 의
+/// 링크는 자산이 아니어서 빠진다), 외부 링크를 id 0 의 저장 레코드로 세는
+/// 것(이유 문구가 바뀐다).
+#[test]
+fn ole_reference_ambiguity_covers_every_slot() {
+    let records = [
+        summary(1, 1, "BIN0001.png"),
+        summary(2, 2, "BIN0002.png"),
+        summary(3, 0, ""),
+        summary(4, 3, "BIN0003.OLE"),
+    ];
+    let ambiguities = reference_ambiguities(&records);
+    assert_eq!(
+        ambiguities.get(&3).map(String::as_str),
+        Some("ordinal 3 → external link, storage id 3 → BIN0003.OLE")
+    );
+    assert_eq!(
+        ambiguities.get(&4).map(String::as_str),
+        Some("ordinal 4 → BIN0003.OLE, storage id 4 → no parsed record")
+    );
+    assert!(!ambiguities.contains_key(&1) && !ambiguities.contains_key(&2), "{ambiguities:?}");
 }

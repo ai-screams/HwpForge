@@ -237,10 +237,10 @@ impl GroupPlan<'_> {
     }
 }
 
-/// What the planner knows of a picture's image: `None` = the document has
-/// no asset for that BinData id; `Some(size)` = it has one, with its pixel
-/// size when the header could be read.
-type ImageAssets<'f> = &'f dyn Fn(u16) -> Option<Option<(u32, u32)>>;
+/// What the planner knows of a picture's image: `Err(reason)` = the
+/// document has no asset for that BinData reference, and why; `Ok(size)` =
+/// it has one, with its pixel size when the header could be read.
+type ImageAssets<'f> = &'f dyn Fn(u16) -> Result<Option<(u32, u32)>, String>;
 
 fn plan_children<'a>(
     children: &'a [Hwp5GroupChild],
@@ -450,12 +450,12 @@ fn plan_picture<'a>(
         ));
     }
     let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
-    let Some(pixels) = assets(image.binary_data_id) else {
-        after.push(PlanNote::Warning(Hwp5Warning::DroppedControl {
-            control: "image",
-            reason: format!("missing_image_asset_for_binary_data_id={}", image.binary_data_id),
-        }));
-        return dropped(after);
+    let pixels = match assets(image.binary_data_id) {
+        Ok(pixels) => pixels,
+        Err(reason) => {
+            after.push(PlanNote::Warning(Hwp5Warning::DroppedControl { control: "image", reason }));
+            return dropped(after);
+        }
     };
     let render = match &child.render {
         Ok(render) => render,
@@ -704,7 +704,7 @@ fn wire_local_control(
 pub(crate) fn written_group_text(group: &Hwp5GroupControl) -> Vec<&[Hwp5Paragraph]> {
     let mut out = Vec::new();
     // Pictures write no text: whether their images exist does not matter.
-    let assets: ImageAssets<'_> = &|_| Some(None);
+    let assets: ImageAssets<'_> = &|_| Ok(None);
     collect_written_text(&plan_children(&group.children, (0.0, 0.0), assets), &mut out);
     out
 }
@@ -741,7 +741,10 @@ pub(super) fn project_group_run(
     if group.has_link {
         report(vec![group_link_note()], &place, state);
     }
-    let pixels = |id: u16| state.image_asset(id).map(|asset| pixel_size(&asset.bytes));
+    let pixels = |reference: u16| match state.image_asset(reference) {
+        Some(asset) => Ok(pixel_size(&asset.bytes)),
+        None => Err(state.missing_asset_reason(reference)),
+    };
     let plan = plan_children(&group.children, (0.0, 0.0), &pixels);
     let kept = plan.kept();
     let children = emit(plan, &mut place, state);
@@ -1004,7 +1007,8 @@ mod tests {
         };
         crate::Hwp5JoinedImageAssetPlan {
             ordered_assets: vec![asset.clone()],
-            assets_by_binary_data_id: [(1, asset)].into_iter().collect(),
+            assets_by_reference: [(1, asset)].into_iter().collect(),
+            unavailable_reasons: std::collections::BTreeMap::new(),
         }
     }
 

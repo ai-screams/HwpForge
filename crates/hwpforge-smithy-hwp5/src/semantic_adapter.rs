@@ -498,8 +498,10 @@ fn adapt_ole_object_control(
 ) -> Hwp5SemanticControlId {
     let node_id = ids.next_control_id();
     let literal = crate::ctrl_id_ascii(ole.ctrl_id);
-    let joined_record: Option<&Hwp5BinDataRecordSummary> =
-        support.bin_data_records.iter().find(|record| record.binary_data_id == ole.binary_data_id);
+    let joined_record: Option<&Hwp5BinDataRecordSummary> = support
+        .bin_data_records
+        .iter()
+        .find(|record| record.reference_ordinal == ole.binary_data_id);
     let joined_stream_name: Option<&str> = joined_record.and_then(|record| {
         support
             .bin_data_streams
@@ -604,7 +606,7 @@ fn adapt_image_control(
     let node_id = ids.next_control_id();
     let literal = crate::ctrl_id_ascii(image.ctrl_id);
 
-    if let Some(asset) = image_assets.asset_for_binary_data_id(image.binary_data_id) {
+    if let Some(asset) = image_assets.asset_for_reference(image.binary_data_id) {
         let mut payload: Hwp5SemanticImagePayload = asset.payload.clone();
         payload.width_hwp = i32::try_from(image.geometry.width).ok();
         payload.height_hwp = i32::try_from(image.geometry.height).ok();
@@ -1181,7 +1183,8 @@ mod tests {
     fn empty_image_plan() -> Hwp5JoinedImageAssetPlan {
         Hwp5JoinedImageAssetPlan {
             ordered_assets: Vec::new(),
-            assets_by_binary_data_id: BTreeMap::new(),
+            assets_by_reference: BTreeMap::new(),
+            unavailable_reasons: BTreeMap::new(),
         }
     }
 
@@ -1202,12 +1205,16 @@ mod tests {
                 bytes: vec![binary_data_id as u8],
             })
             .collect();
-        let assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
+        let assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> = ordered_assets
             .iter()
             .cloned()
             .map(|asset| (asset.payload.binary_data_id, asset))
             .collect();
-        Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }
+        Hwp5JoinedImageAssetPlan {
+            ordered_assets,
+            assets_by_reference,
+            unavailable_reasons: BTreeMap::new(),
+        }
     }
 
     fn image_controls_in_container(
@@ -1748,6 +1755,7 @@ mod tests {
                 data_type: "Embedding".to_string(),
                 compression: "Default".to_string(),
                 should_decompress: false,
+                reference_ordinal: 1,
             }],
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
@@ -1797,6 +1805,85 @@ mod tests {
         assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::Medium);
         assert_eq!(ole_control.payload, Hwp5SemanticControlPayload::None);
         assert!(ole_control.notes.iter().any(|note| note == "bin_data_stream_missing"));
+    }
+
+    /// §19 C: an OLE reference counts `DocInfo` `BIN_DATA` records — the
+    /// record at position 1 stores id 2, and the reference 1 joins it.
+    ///
+    /// 이것을 실패시키는 것: 저장 id 로 레코드를 찾는 것(id 1 레코드가 없어
+    /// 강등된다).
+    #[test]
+    fn adapter_joins_an_ole_object_to_the_record_at_its_reference_position() {
+        let decoded = DecodedHwp5Intermediate {
+            version: "5.1.1.0".to_string(),
+            compressed: false,
+            package_entries: Vec::new(),
+            bin_data_records: vec![crate::Hwp5BinDataRecordSummary {
+                binary_data_id: 2,
+                storage_name: "BIN0002.OLE".to_string(),
+                extension: "OLE".to_string(),
+                data_type: "Embedding".to_string(),
+                compression: "Default".to_string(),
+                should_decompress: false,
+                reference_ordinal: 1,
+            }],
+            bin_data_streams: vec![crate::Hwp5BinDataStream {
+                name: "BIN0002.OLE".to_string(),
+                size_bytes: 10,
+            }],
+            doc_info: empty_doc_info(),
+            sections: vec![SectionResult {
+                paragraphs: vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
+                    page_break: false,
+                    column_break: false,
+                    text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
+                    controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
+                        ctrl_id: 0x6773_6F20,
+                        geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            x: 10,
+                            y: 20,
+                            width: 5_000,
+                            height: 6_000,
+                        },
+                        binary_data_id: 1,
+                        extent_width: 9_100,
+                        extent_height: 8_200,
+                    })],
+                }],
+                page_def: None,
+                section_def_properties: None,
+                section_def_start_numbers: None,
+                page_border_fills: Vec::new(),
+                column_def: None,
+                warnings: Vec::new(),
+            }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
+            warnings: Vec::new(),
+        };
+
+        let semantic = adapt_to_semantic(&decoded, &empty_image_plan());
+        assert!(semantic.graph_is_coherent());
+
+        let ole_control = semantic.sections[0]
+            .controls
+            .iter()
+            .find(|control| control.kind == Hwp5SemanticControlKind::OleObject)
+            .expect("semantic ole control should exist");
+        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::High);
+        assert!(
+            matches!(
+                &ole_control.payload,
+                Hwp5SemanticControlPayload::OleObject(ole) if ole.storage_name == "BIN0002.OLE"
+            ),
+            "{:?}",
+            ole_control.payload
+        );
     }
 
     #[test]

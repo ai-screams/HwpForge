@@ -540,7 +540,9 @@ pub struct Hwp5RawBinData {
     pub compression: Hwp5BinDataCompression,
     /// Status bits from the property field.
     pub status: u8,
-    /// 1-based binary item ID used by picture controls.
+    /// The id stored in the record, naming its `/BinData/BIN{id:04X}` stream
+    /// (`0` for an external link). Picture, border-fill and OLE references
+    /// do not use it: they count `BIN_DATA` records in `DocInfo` order.
     pub binary_data_id: u16,
     /// File extension used in `/BinData/BINXXXX.ext`.
     pub extension: String,
@@ -558,18 +560,33 @@ impl Hwp5RawBinData {
 
         let mut cur = Cursor::new(data);
         let property = cur.read_u16::<LittleEndian>()?;
-        let binary_data_id = cur.read_u16::<LittleEndian>()?;
-        let extension = read_utf16le_string(&mut cur)?;
         let data_type = Hwp5BinDataType::from_bits((property & 0x000F) as u8);
         let compression = Hwp5BinDataCompression::from_bits(((property >> 4) & 0x0003) as u8);
         let status = ((property >> 8) & 0x0003) as u8;
+        // An external link stores two paths instead of an id and an
+        // extension (HWP 5.0 표 17); it has no `/BinData` stream.
+        if data_type == Hwp5BinDataType::Link {
+            return Ok(Self {
+                property,
+                data_type,
+                compression,
+                status,
+                binary_data_id: 0,
+                extension: String::new(),
+            });
+        }
+        let binary_data_id = cur.read_u16::<LittleEndian>()?;
+        let extension = read_utf16le_string(&mut cur)?;
 
         Ok(Self { property, data_type, compression, status, binary_data_id, extension })
     }
 
-    /// Returns the expected `/BinData/*` filename for this entry.
+    /// Returns the expected `/BinData/*` filename for this entry, or an empty
+    /// string for an external link (which has no stream).
     pub fn storage_name(&self) -> String {
-        if self.extension.is_empty() {
+        if self.data_type == Hwp5BinDataType::Link {
+            String::new()
+        } else if self.extension.is_empty() {
             format!("BIN{:04X}", self.binary_data_id)
         } else {
             format!("BIN{:04X}.{}", self.binary_data_id, self.extension)

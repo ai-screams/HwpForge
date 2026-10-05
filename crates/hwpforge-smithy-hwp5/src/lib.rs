@@ -59,7 +59,7 @@ pub(crate) mod test_support;
 mod warning_utils;
 mod wire_text_map;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -97,10 +97,18 @@ pub(crate) struct Hwp5JoinedImageAsset {
     pub bytes: Vec<u8>,
 }
 
+/// The image assets of one document, keyed by **BinData reference**: the
+/// 1-based position of a `DocInfo` `BIN_DATA` record among all of them, the
+/// number picture, border-fill and OLE records use (not the record's stored
+/// id — the two differ when the stored ids are not `1..n`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hwp5JoinedImageAssetPlan {
     pub ordered_assets: Vec<Hwp5JoinedImageAsset>,
-    pub assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset>,
+    pub assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset>,
+    /// Why a reference whose record exists has no image asset, for the
+    /// records that are not embedded images (an external link, an extension
+    /// that is not an image this crate carries).
+    pub unavailable_reasons: BTreeMap<u16, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,15 +118,23 @@ struct Hwp5ImageGeometryHint {
 }
 
 impl Hwp5JoinedImageAssetPlan {
-    pub(crate) fn asset_for_binary_data_id(
-        &self,
-        binary_data_id: u16,
-    ) -> Option<&Hwp5JoinedImageAsset> {
-        self.assets_by_binary_data_id.get(&binary_data_id)
+    pub(crate) fn asset_for_reference(&self, reference: u16) -> Option<&Hwp5JoinedImageAsset> {
+        self.assets_by_reference.get(&reference)
+    }
+
+    /// The warning reason for a `reference` that has no asset: the record's
+    /// own cause when it is known, otherwise the missing-asset reason (no
+    /// record, a record that could not be parsed, or no `/BinData` stream).
+    pub(crate) fn missing_asset_reason(&self, reference: u16) -> String {
+        self.unavailable_reasons
+            .get(&reference)
+            .cloned()
+            .unwrap_or_else(|| format!("missing_image_asset_for_binary_data_id={reference}"))
     }
 }
 
-/// Per-document plan of OLE-backed BinData entries, keyed by `binary_data_id`.
+/// Per-document plan of OLE-backed BinData entries, keyed by BinData
+/// reference (see [`Hwp5JoinedImageAssetPlan`]).
 ///
 /// This carries the inflated `/BinData/BIN*.OLE` bytes so the projection layer
 /// can attempt chart extraction without re-opening the source CFB. Non-OLE
@@ -126,19 +142,30 @@ impl Hwp5JoinedImageAssetPlan {
 /// [`Hwp5JoinedImageAssetPlan`].
 #[derive(Debug, Default)]
 pub(crate) struct Hwp5OleAssetPlan {
-    /// Inflated `/BinData/*` bytes by `binary_data_id`, or why the entry could
-    /// not be inflated (per-stream cap, ratio limit or a corrupt stream). The
+    /// Inflated `/BinData/*` bytes by reference, or why the entry could not
+    /// be inflated (per-stream cap, ratio limit or a corrupt stream). The
     /// error is reported only if a control references the entry, as the
     /// existing `DroppedControl` warning.
-    pub assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>>,
+    pub assets_by_reference: BTreeMap<u16, Result<Vec<u8>, ChartOleError>>,
+    /// References whose record by position and record by stored id are not
+    /// the same record, with both readings spelled out. An OLE reference is
+    /// read by position like a picture's, but no Hancom file in hand tells
+    /// the two readings apart for OLE (the x7 fixture renumbers ids `1..n`),
+    /// so a disagreement is reported rather than settled silently.
+    pub reference_ambiguities: BTreeMap<u16, String>,
 }
 
 impl Hwp5OleAssetPlan {
-    pub(crate) fn inflated_for_binary_data_id(
+    pub(crate) fn inflated_for_reference(
         &self,
-        binary_data_id: u16,
+        reference: u16,
     ) -> Option<&Result<Vec<u8>, ChartOleError>> {
-        self.assets_by_binary_data_id.get(&binary_data_id)
+        self.assets_by_reference.get(&reference)
+    }
+
+    /// Both readings of an OLE `reference` when they name different records.
+    pub(crate) fn reference_ambiguity(&self, reference: u16) -> Option<&str> {
+        self.reference_ambiguities.get(&reference).map(String::as_str)
     }
 }
 
@@ -341,9 +368,13 @@ pub struct Hwp5BinDataStream {
 /// Summary for a single `DocInfo/BinData` record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Hwp5BinDataRecordSummary {
-    /// 1-based binary item ID.
+    /// The id stored in the record, which names its `/BinData/BIN{id:04X}`
+    /// stream. References do **not** use it: they use the record's position
+    /// (`DocInfo` order), and the two differ when the stored ids are not
+    /// `1..n`. `0` for an external link, which stores no id.
     pub binary_data_id: u16,
-    /// Expected `/BinData/*` storage name derived from the record.
+    /// Expected `/BinData/*` storage name derived from the record; empty for
+    /// an external link, which has no stream.
     pub storage_name: String,
     /// File extension from the record payload.
     pub extension: String,
@@ -355,6 +386,12 @@ pub struct Hwp5BinDataRecordSummary {
     /// `/BinData/*` stream must be DEFLATE-decoded before use.
     #[serde(skip_serializing)]
     pub(crate) should_decompress: bool,
+    /// The number picture, border-fill and OLE records use to name this
+    /// entry: its 1-based position among **all** `DocInfo` `BIN_DATA`
+    /// records, counted before parsing (a record that fails to parse still
+    /// takes its position).
+    #[serde(skip_serializing)]
+    pub(crate) reference_ordinal: u16,
 }
 
 /// Inspects an HWP5 document from bytes and returns a compact audit summary.
@@ -670,12 +707,12 @@ fn supplement_border_fill_image_assets(
     image_store: &mut ImageStore,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    for binary_data_id in hwp5_styles.border_fill_image_binary_ids() {
-        let Some(asset) = image_assets.asset_for_binary_data_id(binary_data_id) else {
+    for reference in hwp5_styles.border_fill_image_binary_ids() {
+        let Some(asset) = image_assets.asset_for_reference(reference) else {
             push_projection_fallback(
                 warnings,
                 "style.border_fill.image",
-                format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
+                image_assets.missing_asset_reason(reference),
             );
             continue;
         };
@@ -700,11 +737,27 @@ fn join_hwp5_image_assets(
     let geometry_hints: BTreeMap<u16, Hwp5ImageGeometryHint> =
         collect_image_geometry_hints(&intermediate.sections);
     let mut ordered_assets: Vec<Hwp5JoinedImageAsset> = Vec::new();
-    let mut assets_by_binary_data_id: BTreeMap<u16, Hwp5JoinedImageAsset> = BTreeMap::new();
+    let mut assets_by_reference: BTreeMap<u16, Hwp5JoinedImageAsset> = BTreeMap::new();
+    let mut unavailable_reasons: BTreeMap<u16, String> = BTreeMap::new();
 
     for record in &intermediate.bin_data_records {
+        let reference = record.reference_ordinal;
+        if record.storage_name.is_empty() {
+            unavailable_reasons.insert(
+                reference,
+                format!("bin_data_reference={reference} is an external link (not carried)"),
+            );
+            continue;
+        }
         let extension = record.extension.to_ascii_lowercase();
         if !is_supported_image_extension(&extension) {
+            unavailable_reasons.insert(
+                reference,
+                format!(
+                    "bin_data_reference={reference} extension '{}' is not a supported image",
+                    record.extension
+                ),
+            );
             continue;
         }
 
@@ -720,16 +773,19 @@ fn join_hwp5_image_assets(
                 storage_name: record.storage_name.clone(),
                 package_path: format!("BinData/{}", record.storage_name),
                 format: semantic_image_format_from_extension(&extension),
-                width_hwp: geometry_hints.get(&record.binary_data_id).map(|hint| hint.width_hwp),
-                height_hwp: geometry_hints.get(&record.binary_data_id).map(|hint| hint.height_hwp),
+                width_hwp: geometry_hints.get(&reference).map(|hint| hint.width_hwp),
+                height_hwp: geometry_hints.get(&reference).map(|hint| hint.height_hwp),
             },
             bytes: data,
         };
-        assets_by_binary_data_id.insert(record.binary_data_id, asset.clone());
+        assets_by_reference.insert(reference, asset.clone());
         ordered_assets.push(asset);
     }
 
-    Ok((Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id }, budget))
+    Ok((
+        Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_reference, unavailable_reasons },
+        budget,
+    ))
 }
 
 /// Inflates every OLE BinData entry once, under the per-stream cap and the
@@ -746,8 +802,7 @@ fn join_hwp5_ole_assets(
     use decoder::package::PackageReader;
 
     let pkg = PackageReader::open(bytes)?;
-    let mut assets_by_binary_data_id: BTreeMap<u16, Result<Vec<u8>, ChartOleError>> =
-        BTreeMap::new();
+    let mut assets_by_reference: BTreeMap<u16, Result<Vec<u8>, ChartOleError>> = BTreeMap::new();
     for record in &intermediate.bin_data_records {
         let extension = record.extension.to_ascii_lowercase();
         if extension != "ole" {
@@ -764,9 +819,48 @@ fn join_hwp5_ole_assets(
             }
             Err(err) => Err(ChartOleError::Inflate(err.to_string())),
         };
-        assets_by_binary_data_id.insert(record.binary_data_id, inflated);
+        assets_by_reference.insert(record.reference_ordinal, inflated);
     }
-    Ok(Hwp5OleAssetPlan { assets_by_binary_data_id })
+    let reference_ambiguities = reference_ambiguities(&intermediate.bin_data_records);
+    Ok(Hwp5OleAssetPlan { assets_by_reference, reference_ambiguities })
+}
+
+/// Every reference whose record by position differs from its record by
+/// stored id, with both readings (`ordinal 3 → external link, storage id 3 →
+/// BIN0003.OLE`). Covers every `BIN_DATA` slot — external links, records
+/// that could not be parsed and records without a stream included — not
+/// just the loaded OLE assets. When several records store the same id, the
+/// first one in `DocInfo` order is the id reading.
+fn reference_ambiguities(records: &[Hwp5BinDataRecordSummary]) -> BTreeMap<u16, String> {
+    let by_position =
+        |reference: u16| records.iter().position(|r| r.reference_ordinal == reference);
+    let by_id = |reference: u16| {
+        records.iter().position(|r| !r.storage_name.is_empty() && r.binary_data_id == reference)
+    };
+    let describe = |slot: Option<usize>| match slot.map(|index| &records[index]) {
+        Some(record) if record.storage_name.is_empty() => "external link".to_string(),
+        Some(record) => record.storage_name.clone(),
+        None => "no parsed record".to_string(),
+    };
+    let references: BTreeSet<u16> = records
+        .iter()
+        .flat_map(|record| [record.reference_ordinal, record.binary_data_id])
+        .filter(|reference| *reference != 0)
+        .collect();
+    references
+        .into_iter()
+        .filter_map(|reference| {
+            let (ordinal, id) = (by_position(reference), by_id(reference));
+            (ordinal != id).then(|| {
+                let reason = format!(
+                    "ordinal {reference} → {}, storage id {reference} → {}",
+                    describe(ordinal),
+                    describe(id)
+                );
+                (reference, reason)
+            })
+        })
+        .collect()
 }
 
 /// Returns the image bytes of one BinData entry, decompressing when the
@@ -971,8 +1065,18 @@ fn summarize_doc_info_bin_data_records(
     Ok(records
         .iter()
         .filter(|record| matches!(TagId::from(record.header.tag_id), TagId::BinData))
-        .filter_map(|record| Hwp5RawBinData::parse(&record.data).ok())
-        .map(|record| Hwp5BinDataRecordSummary {
+        // The position is taken before parsing: references count every
+        // record, so one that fails to parse must still use up its number.
+        .enumerate()
+        .filter_map(|(index, record)| {
+            // A position past u16::MAX cannot be named by any (u16)
+            // reference, so dropping it loses nothing reachable.
+            let reference_ordinal = u16::try_from(index + 1).ok()?;
+            let parsed = Hwp5RawBinData::parse(&record.data).ok()?;
+            Some((reference_ordinal, parsed))
+        })
+        .map(|(reference_ordinal, record)| Hwp5BinDataRecordSummary {
+            reference_ordinal,
             binary_data_id: record.binary_data_id,
             storage_name: record.storage_name(),
             extension: record.extension,
