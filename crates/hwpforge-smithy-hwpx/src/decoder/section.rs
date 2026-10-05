@@ -301,12 +301,6 @@ impl DecodeCtx {
         self.group_child_depth -= 1;
     }
 
-    /// 묶음 자식(깊이 무관)의 글상자 문단·캡션 안에서 표·그림·수식·도형을
-    /// 만나면 임시 손실 경고를 남긴다.
-    ///
-    /// 묶음 인코더가 자식 fragment 의 `<hp:sz>`·`<hp:pos>` 를 깊이와 상관없이
-    /// 지우므로, 그런 입력을 재인코드하면 안쪽 개체의 크기·배치가 사라진다.
-    /// 인코더가 그 둘을 보존하게 되면 이 경고는 없어진다.
     /// 묶음 자식 안의 run 에서 디코더가 담지 못하는 요소(`switch` 의 차트·
     /// OLE, 미지 요소)를 만나면 손실 경고를 남긴다. 최상위 문단의 차트는
     /// 구역 디코드가 따로 되살리지만 묶음 안에는 그 경로가 없다.
@@ -315,15 +309,6 @@ impl DecodeCtx {
             self.content_lost(
                 format!("group_nested_{kind}"),
                 "element inside a group child is not carried by Core",
-            );
-        }
-    }
-
-    fn note_object_in_group_child(&mut self) {
-        if self.group_child_depth > 0 {
-            self.content_lost(
-                "group_nested_object",
-                "nested sz/pos not yet preserved by the group encoder",
             );
         }
     }
@@ -699,12 +684,10 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
                 }
             }
             HxRunChildKind::Table => {
-                ctx.note_object_in_group_child();
                 let core_table = convert_table(&hx.tables[idx], depth, ctx)?;
                 runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
             }
             HxRunChildKind::Picture => {
-                ctx.note_object_in_group_child();
                 if let Some(image) = convert_picture(&hx.pictures[idx], depth, ctx)? {
                     runs.push(Run { content: RunContent::Image(image), char_shape_id });
                 }
@@ -722,17 +705,14 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
                 )?;
             }
             HxRunChildKind::Rect => {
-                ctx.note_object_in_group_child();
                 if let Some(run) = decode_textbox(&hx.rects[idx], char_shape_id, depth, ctx)? {
                     runs.push(run);
                 }
             }
             HxRunChildKind::Line => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_line(&hx.lines[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::Ellipse => {
-                ctx.note_object_in_group_child();
                 let ellipse = &hx.ellipses[idx];
                 if ellipse.has_arc_pr == 1 {
                     runs.push(decode_arc(ellipse, char_shape_id, depth, ctx)?);
@@ -741,30 +721,24 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
                 }
             }
             HxRunChildKind::Polygon => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_polygon(&hx.polygons[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::Curve => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_curve(&hx.curves[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::TextArt => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_textart(&hx.textarts[idx], char_shape_id, depth)?);
             }
             HxRunChildKind::ConnectLine => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_connect_line(&hx.connect_lines[idx], char_shape_id, depth, ctx)?);
             }
             HxRunChildKind::Container => {
-                ctx.note_object_in_group_child();
                 if let Some(run) = decode_container(&hx.containers[idx], char_shape_id, depth, ctx)?
                 {
                     runs.push(run);
                 }
             }
             HxRunChildKind::Equation => {
-                ctx.note_object_in_group_child();
                 runs.push(decode_equation(&hx.equations[idx], char_shape_id)?);
             }
             HxRunChildKind::Dutmal => {

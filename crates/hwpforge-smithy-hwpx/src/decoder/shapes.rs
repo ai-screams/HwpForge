@@ -3833,18 +3833,52 @@ mod group_tests {
     }
 
     /// A table inside a grouped text box (the shape of a public notice whose
-    /// 43779 × 54767 table sits in a group): the group encoder would drop the
-    /// table's size and place, so the decode reports it.
+    /// 43779 × 54767 table sits in a group) decodes without a warning and
+    /// keeps its size through an encode and a second decode.
     ///
-    /// 이것을 실패시키는 것: 묶음 자식 내부 개체 검사(`note_object_in_group_child`)
-    /// 를 지우는 것.
+    /// 이것을 실패시키는 것: 묶음 자식 안 개체 임시 경고를 남기는 것(경고가
+    /// 남음), 그 경고만 지우고 인코더는 fragment 전체의 `sz`/`pos` 를 지우는 것
+    /// (재인코드한 표 `<hp:sz>` 가 사라짐).
     #[test]
-    fn object_inside_a_group_child_is_reported() {
+    fn object_inside_a_group_child_round_trips() {
         let doc = HwpxDecoder::decode(&fixture("group-nested-table.hwpx")).unwrap();
-        assert_eq!(lost_kinds(&doc.warnings), ["group_nested_object"]);
-        let table = first_group(&doc);
-        let Control::TextBox { paragraphs, .. } = &children(&table)[0] else { panic!() };
-        assert!(paragraphs[0].runs.iter().any(|r| r.content.as_table().is_some()));
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let bytes = encode(&doc);
+        let xml = section0_xml(&bytes);
+        // The table height on the wire is a decode-only cache; the table
+        // encoder always writes 0 there, in a group or not.
+        assert!(xml.contains(r#"<hp:sz width="43779" widthRelTo="ABSOLUTE" height="0""#), "{xml}");
+        let again = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+        let table_width = |doc: &crate::HwpxDocument| {
+            let group = first_group(doc);
+            let Control::TextBox { paragraphs, .. } = &children(&group)[0] else { panic!() };
+            paragraphs[0].runs.iter().find_map(|r| r.content.as_table()).and_then(|t| t.width)
+        };
+        assert_eq!(table_width(&again), Some(hwpforge_foundation::HwpUnit::new(43_779).unwrap()));
+        assert_eq!(table_width(&again), table_width(&doc));
+    }
+
+    /// Hancom's F2 (a group → text box → 2×2 table and picture): nothing is
+    /// lost, and the re-encoded table and picture keep the `<hp:sz>` Hancom
+    /// gave them (table width 19842, picture 8504 × 5669).
+    ///
+    /// 이것을 실패시키는 것: 인코더가 묶음 자식 fragment 전체의 `sz`/`pos` 를
+    /// 지우는 것, 묶음 자식 안 개체 임시 경고를 남기는 것.
+    #[test]
+    fn hancom_grouped_text_box_keeps_its_table_and_picture() {
+        let doc = HwpxDecoder::decode(&fixture("group-f2-textbox-table.hwpx")).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let xml = section0_xml(&encode(&doc));
+        let tbl = xml.find("<hp:tbl ").expect("table written");
+        assert!(xml[tbl..].contains(r#"><hp:sz width="19842" widthRelTo="ABSOLUTE""#), "{xml}");
+        let pic = xml.find("<hp:pic ").expect("picture written");
+        assert!(
+            xml[pic..].contains(r#"<hp:sz width="8504" widthRelTo="ABSOLUTE" height="5669""#),
+            "{xml}"
+        );
+        let again = HwpxDecoder::decode(&encode(&doc)).unwrap();
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
     }
 
     /// A table in an ordinary text box is not a group child: no warning.
@@ -3939,22 +3973,25 @@ mod group_tests {
         ));
     }
 
-    /// A table inside a grouped text box is refused too. Here the no-op
-    /// round trip already differs (the group encoder drops the table's size),
-    /// so the older admission check answers first, with the same error type.
+    /// A table inside a grouped text box no longer stops the editors: the
+    /// decode loses nothing and the no-op round trip keeps the table.
+    ///
+    /// 이것을 실패시키는 것: 묶음 자식 안 개체 임시 경고를 남기는 것, 인코더가
+    /// fragment 전체의 `sz`/`pos` 를 지우는 것 (둘 다 `NotRoundTripSafe` 로 거부).
     #[test]
-    fn editors_refuse_an_input_with_an_object_inside_a_group_child() {
-        use crate::stamp::{HwpxStamper, StamperError};
-        use crate::{CellEditError, HwpxCellEditor};
+    fn editors_accept_an_input_with_an_object_inside_a_group_child() {
+        use crate::stamp::{HwpxStamper, StampRequestV2, STAMP_MAP_VERSION};
+        use crate::HwpxCellEditor;
         let bytes = fixture("group-nested-table.hwpx");
-        assert!(matches!(
-            HwpxStamper::stamp(&bytes, &[]),
-            Err(StamperError::NotRoundTripSafe { .. })
-        ));
-        assert!(matches!(
-            HwpxCellEditor::set_cells(&bytes, &[]),
-            Err(CellEditError::NotRoundTripSafe { .. })
-        ));
+        HwpxStamper::stamp(&bytes, &[]).expect("stamp v1");
+        let request = StampRequestV2 {
+            schema_version: STAMP_MAP_VERSION,
+            source_sha256: crate::patch::sha256_hex(&bytes),
+            text: Vec::new(),
+            cells: Vec::new(),
+        };
+        HwpxStamper::stamp_v2(&bytes, &request).expect("stamp v2");
+        HwpxCellEditor::set_cells(&bytes, &[]).expect("set-cell");
     }
 
     /// `bytes` with one more ZIP entry the encoder does not write.

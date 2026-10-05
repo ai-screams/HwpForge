@@ -533,9 +533,10 @@ fn f12_group_in_a_table_cell_matches_hancom() {
 
 /// F2: a group holding a text box with a table and a picture in it. The
 /// group child parser keeps only the text box's own text, so the text box
-/// stays and the two objects in it are reported, one each — as the HWPX
-/// decoder reports them in Hancom's HWPX twin. Before, the picture's records
-/// leaked into the text box's own and the whole text box was dropped.
+/// stays and the two objects in it are reported, one each. Hancom's HWPX twin
+/// carries both objects, so its decode reports nothing. Before, the
+/// picture's records leaked into the text box's own and the whole text box
+/// was dropped.
 ///
 /// 이것을 실패시키는 것: 묶음 자식 아래 `CtrlHeader` 수집을 지우는 것, 자식의
 /// 도형 기록을 자기 수준으로 제한하지 않는 것(글상자가 `unknown` 으로 사라진다),
@@ -562,7 +563,7 @@ fn f2_objects_in_a_grouped_text_box_are_reported() {
             _ => None,
         })
         .collect();
-    assert_eq!(ours, theirs);
+    assert!(theirs.is_empty(), "{theirs:?}");
     // The text box keeps its own paragraphs' text, as the twin has it — not
     // the text of the table cells inside it.
     let text = |c: &Control| -> Vec<String> {

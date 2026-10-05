@@ -145,7 +145,7 @@ pub enum DecodeWarning {
         /// part 안에서 손실이 난 자리의 중첩 경로.
         path: ParagraphPath,
         /// 무엇이 빠졌는지 — wire 요소 이름(`pic`, `ole` …) 또는 손실 분류
-        /// (`group_child_transform`, `group_nested_object` …).
+        /// (`group_child_transform`, `group_nested_switch` …).
         kind: String,
         /// 사람이 읽는 사유 (근사 오차 등).
         reason: String,

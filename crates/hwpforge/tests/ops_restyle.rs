@@ -291,13 +291,13 @@ fn shapes_fixture(name: &str) -> Vec<u8> {
 
 /// An input whose decode lost content is refused before encoding: the
 /// regenerated package would make the loss permanent. Both fixtures decode
-/// with exactly one `CONTENT_LOST` (a sheared group child; a table inside a
-/// grouped text box, which the group encoder cannot place yet).
+/// with exactly one `CONTENT_LOST` (a sheared group child; a group child the
+/// group slants).
 ///
 /// 이것을 실패시키는 것: `restyle` 의 `reject_input_content_loss` 호출을 지우는 것.
 #[test]
 fn input_with_lost_content_is_refused() {
-    for name in ["group-sheared-child.hwpx", "group-nested-table.hwpx"] {
+    for name in ["group-sheared-child.hwpx", "group-slanted-child.hwpx"] {
         let bytes = shapes_fixture(name);
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
         assert_eq!(
@@ -310,4 +310,16 @@ fn input_with_lost_content_is_refused() {
         assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{name}: {err}");
         assert!(err.to_string().contains("input is not round-trip safe"), "{err}");
     }
+}
+
+/// A table inside a grouped text box is no longer a loss: the group encoder
+/// keeps its size and place, so restyle goes through.
+///
+/// 이것을 실패시키는 것: 묶음 자식 안 개체에 임시 `group_nested_object` 경고를
+/// 남기는 것(거부로 바뀜).
+#[test]
+fn grouped_text_box_table_is_restyled() {
+    let bytes = shapes_fixture("group-nested-table.hwpx");
+    assert!(HwpxDecoder::decode(&bytes).unwrap().warnings.is_empty());
+    restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
 }
