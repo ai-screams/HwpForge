@@ -1,14 +1,13 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 159,
-  "fixtures_decoded": 159,
+  "fixtures_scanned": 160,
+  "fixtures_decoded": 160,
   "fixtures_failed": 0,
-  "total_warnings": 24,
+  "total_warnings": 9,
   "categories": {
-    "ContentLost:group": {
-      "count": 4,
+    "ContentLost:group_child_picture": {
+      "count": 3,
       "fixtures": {
-        "tests/fixtures/shapes/group-f3a-logo.hwp": 1,
         "tests/fixtures/shapes/group-f3c-cropped.hwp": 1,
         "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 1,
         "tests/fixtures/shapes/group-f3e-gray.hwp": 1
@@ -24,16 +23,6 @@
       "count": 2,
       "fixtures": {
         "tests/fixtures/shapes/group-f2-textbox-table.hwp": 2
-      }
-    },
-    "ContentLost:pic": {
-      "count": 14,
-      "fixtures": {
-        "tests/fixtures/shapes/group-f3a-logo.hwp": 3,
-        "tests/fixtures/shapes/group-f3b-mixed.hwp": 2,
-        "tests/fixtures/shapes/group-f3c-cropped.hwp": 3,
-        "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 3,
-        "tests/fixtures/shapes/group-f3e-gray.hwp": 3
       }
     },
     "DroppedControl:unknown_control": {
