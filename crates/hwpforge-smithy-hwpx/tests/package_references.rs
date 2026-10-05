@@ -233,6 +233,73 @@ fn a_picture_without_its_asset_is_reported_in_its_section() {
     );
 }
 
+/// A picture inside a group writes its `binaryItemIDRef` in the group's
+/// `<hp:container>`; a missing asset is reported there as for a picture in a
+/// run.
+///
+/// 이것을 실패시키는 것: 묶음 그림 writer 가 참조를 빈 값으로 쓰는 것(빈 값은
+/// 참조로 보지 않아 경고가 사라진다), 또는 section part 를 검사 목록에서 빼는 것.
+#[test]
+fn a_group_picture_without_its_asset_is_reported_in_its_section() {
+    use hwpforge_core::control::{GroupChild, ShapeStyle};
+    let size = |v| HwpUnit::new(v).unwrap();
+    let picture = Image::from_path("BinData/missing.png", size(1000), size(1000));
+    let mut rect = Control::rect(size(1000), size(1000)).unwrap();
+    if let Control::Rect { style, .. } = &mut rect {
+        *style = Some(ShapeStyle::default());
+    }
+    let group = Control::Group {
+        children: vec![GroupChild::Picture(picture), GroupChild::Shape(rect)],
+        width: size(1000),
+        height: size(1000),
+        placement: None,
+        inst_id: None,
+    };
+    let outcome =
+        encode_runs(vec![Run::control(group, CharShapeIndex::new(0))], &ImageStore::new());
+    let section = part(&outcome.bytes, "Contents/section0.xml");
+    assert!(section.contains("<hp:container"), "premise: the picture is written in a group");
+    assert_eq!(
+        unresolved(&outcome.warnings),
+        [triple("Contents/section0.xml", "hc:img@binaryItemIDRef", "missing")]
+    );
+}
+
+/// A picture on a master page is written in that master page's part, which
+/// the check reads too.
+///
+/// 이것을 실패시키는 것: 바탕쪽 part 를 검사 목록에서 빼는 것.
+#[test]
+fn a_master_page_picture_without_its_asset_is_reported_in_its_part() {
+    use hwpforge_core::section::MasterPage;
+    use hwpforge_foundation::ApplyPageType;
+    let size = |v| HwpUnit::new(v).unwrap();
+    let picture = Image::from_path("BinData/missing.png", size(1000), size(1000));
+    let master = Paragraph::with_runs(
+        vec![Run::image(picture, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let body = Paragraph::with_runs(
+        vec![Run::text("본문", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut section = Section::with_paragraphs(vec![body], PageSettings::a4());
+    section.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![master])]);
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &doc.validate().expect("validate"),
+        &styles(),
+        &ImageStore::new(),
+        EncodeOptions::default(),
+    )
+    .expect("encode");
+    assert_eq!(
+        unresolved(&outcome.warnings),
+        [triple("Contents/masterpage0.xml", "hc:img@binaryItemIDRef", "missing")]
+    );
+}
+
 /// F6: a picture whose reference names no item (`image2`, written by an
 /// older encoder). The reference is reported and kept: Hancom opens such a
 /// file without a warning and draws an empty picture box at the picture's
