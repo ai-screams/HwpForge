@@ -183,6 +183,10 @@ impl std::fmt::Display for Run {
 /// assert!(text.is_text());
 /// assert_eq!(text.as_text(), Some("Hello"));
 /// ```
+// `Image` is held unboxed: boxing it would change the public
+// `RunContent::Image(Image)` pattern. Its link field took the variant past
+// the lint's 200-byte difference (248 vs 24 bytes).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum RunContent {

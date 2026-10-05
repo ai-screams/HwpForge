@@ -75,6 +75,10 @@ pub struct Image {
     /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inst_id: Option<ObjectId>,
+    /// URL the picture links to: clicking the picture opens it (Hancom's
+    /// object hyperlink). `None` = the picture links nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<String>,
 }
 
 impl Image {
@@ -109,6 +113,7 @@ impl Image {
             caption: None,
             placement: None,
             inst_id: None,
+            hyperlink: None,
         }
     }
 
@@ -139,7 +144,16 @@ impl Image {
     pub fn from_path(path: impl Into<String>, width: HwpUnit, height: HwpUnit) -> Self {
         let path: String = path.into();
         let format = ImageFormat::from_extension(&path);
-        Self { path, width, height, format, caption: None, placement: None, inst_id: None }
+        Self {
+            path,
+            width,
+            height,
+            format,
+            caption: None,
+            placement: None,
+            inst_id: None,
+            hyperlink: None,
+        }
     }
 
     /// Attaches a caption to the image.
@@ -887,5 +901,22 @@ mod tests {
             (1..=24).map(|i| (format!("image{i}.png"), vec![i as u8])).collect();
         let other_keys: Vec<&str> = other.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, other_keys);
+    }
+
+    /// The link round-trips; a picture without one writes no key, so JSON
+    /// from before the field reads and writes unchanged.
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn hyperlink_round_trips_and_is_absent_when_none() {
+        let w = HwpUnit::new(100).unwrap();
+        let plain = Image::new("BinData/image1.png", w, w, ImageFormat::Png);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("hyperlink"), "{json}");
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), plain);
+        let mut linked = plain.clone();
+        linked.hyperlink = Some("http://www.korea.kr".to_string());
+        let json = serde_json::to_string(&linked).unwrap();
+        assert!(json.contains(r#""hyperlink":"http://www.korea.kr""#), "{json}");
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), linked);
     }
 }

@@ -848,6 +848,13 @@
               "type": "null"
             }
           ]
+        },
+        "hyperlink": {
+          "description": "URL the picture links to: clicking the picture opens it (Hancom's\nobject hyperlink). `None` = the picture links nowhere.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
