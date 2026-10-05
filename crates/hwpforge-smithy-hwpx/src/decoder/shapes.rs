@@ -3547,19 +3547,42 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["group_child_transform"], "{w:?}");
     }
 
-    /// Only a plain opaque colour is carried; a hatch or transparency is
-    /// reported (the TextArt itself stays).
+    /// Only a plain opaque colour is carried; a hatch, transparency, a
+    /// gradation, a picture beside the colour, no fill or a face colour that
+    /// is not one is reported (the TextArt itself stays).
     ///
     /// 이것을 실패시키는 것: 허용 조건을 `winBrush` 가 있는지만으로 줄이는 것
-    /// (무늬·투명도 검사를 지우는 것, 각각).
+    /// (무늬·투명도·그러데이션·그림·채우기 없음·색 아님 검사를 지우는 것, 각각).
     #[test]
-    fn text_art_hatch_or_transparency_is_reported() {
-        for brush in [
-            r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" hatchStyle="CROSS" alpha="0"/></hc:fillBrush>"##,
-            r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" alpha="128"/></hc:fillBrush>"##,
+    fn text_art_fill_other_than_a_plain_colour_is_reported() {
+        for (brush, what) in [
+            (
+                r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" hatchStyle="CROSS" alpha="0"/></hc:fillBrush>"##,
+                "pattern",
+            ),
+            (
+                r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" alpha="128"/></hc:fillBrush>"##,
+                "transparency",
+            ),
+            (
+                r##"<hc:fillBrush><hc:gradation type="LINEAR" angle="90" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0"><hc:color value="#FF0000"/><hc:color value="#0000FF"/></hc:gradation></hc:fillBrush>"##,
+                "gradation",
+            ),
+            (
+                r##"<hc:fillBrush><hc:winBrush faceColor="#FF0000" hatchColor="#000000" alpha="0"/><hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/></hc:imgBrush></hc:fillBrush>"##,
+                "picture",
+            ),
+            ("<hc:fillBrush/>", "empty fill brush"),
+            ("", "missing fill brush"),
+            (
+                r##"<hc:fillBrush><hc:winBrush faceColor="none" hatchColor="#000000" alpha="0"/></hc:fillBrush>"##,
+                "face colour",
+            ),
         ] {
             let (g, w) = decode(&grouped_text_art(ID, brush));
             assert_eq!(lost_kinds(&w), ["textart_fill"], "{brush}");
+            let crate::DecodeWarning::ContentLost { reason, .. } = &w[0] else { unreachable!() };
+            assert!(reason.contains(what), "{what}: {reason}");
             assert_eq!(text_art_geometry(&g.unwrap()).2, None, "{brush}");
         }
     }
