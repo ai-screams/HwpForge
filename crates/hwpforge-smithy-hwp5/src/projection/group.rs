@@ -195,6 +195,9 @@ enum Outcome<'a> {
         size: (i32, i32),
     },
     Dropped,
+    /// A nested group that cannot be placed: nothing of it is written, but
+    /// its children's own losses are still reported.
+    DroppedGroup(GroupPlan<'a>),
 }
 
 struct ChildPlan<'a> {
@@ -213,7 +216,10 @@ struct GroupPlan<'a> {
 
 impl GroupPlan<'_> {
     fn kept(&self) -> usize {
-        self.children.iter().filter(|c| !matches!(c.outcome, Outcome::Dropped)).count()
+        self.children
+            .iter()
+            .filter(|c| !matches!(c.outcome, Outcome::Dropped | Outcome::DroppedGroup(_)))
+            .count()
     }
 }
 
@@ -326,33 +332,43 @@ fn plan_nested<'a>(
                 let (w, h) = (f64::from(size.0), f64::from(size.1));
                 corners.extend([(x, y), (x + w, y + h)]);
             }
-            Outcome::Dropped => {}
+            Outcome::Dropped | Outcome::DroppedGroup(_) => {}
         }
     }
     let mut after = Vec::new();
     let Some(b) = group_bounds(corners) else {
         after.push(note("group", "no group child can be represented in Core"));
-        return ChildPlan { child, before, outcome: Outcome::Dropped, after };
+        return ChildPlan { child, before, outcome: Outcome::DroppedGroup(plan), after };
     };
-    let (dx, dy) = (b.min_x().round() as i32, b.min_y().round() as i32);
+    // The correction stays in f64 until the range check: the provisional
+    // origin can sit far outside the HWPUNIT range.
+    let (dx, dy) = (b.min_x().round(), b.min_y().round());
+    let size = ((b.max_x() - dx).round(), (b.max_y() - dy).round());
+    let offset = (
+        (provisional.0 - parent_origin.0).round() + dx,
+        (provisional.1 - parent_origin.1).round() + dy,
+    );
+    let in_range =
+        |v: f64| (f64::from(HwpUnit::MIN_VALUE)..=f64::from(HwpUnit::MAX_VALUE)).contains(&v);
+    if ![size.0, size.1, offset.0, offset.1].into_iter().all(in_range) {
+        after.push(note("nested_group_placement", "size or offset outside the HWPUNIT range"));
+        return ChildPlan { child, before, outcome: Outcome::DroppedGroup(plan), after };
+    }
+    // The children's own boxes are range-checked, so their bounds are too.
+    let (dx, dy) = (dx as i32, dy as i32);
     for c in &mut plan.children {
         match &mut c.outcome {
             Outcome::Kept { control, .. } => shift_child(control, -dx, -dy),
             Outcome::Nested { offset, .. } => *offset = (offset.0 - dx, offset.1 - dy),
-            Outcome::Dropped => {}
+            Outcome::Dropped | Outcome::DroppedGroup(_) => {}
         }
     }
-    let size =
-        ((b.max_x() - f64::from(dx)).round() as i32, (b.max_y() - f64::from(dy)).round() as i32);
-    let offset = (
-        (provisional.0 - parent_origin.0).round() as i32 + dx,
-        (provisional.1 - parent_origin.1).round() as i32 + dy,
-    );
-    if [size.0, size.1, offset.0, offset.1].iter().any(|&v| HwpUnit::new(v).is_err()) {
-        after.push(note("nested_group_placement", "size or offset outside the HWPUNIT range"));
-        return ChildPlan { child, before, outcome: Outcome::Dropped, after };
-    }
-    ChildPlan { child, before, outcome: Outcome::Nested { plan, offset, size }, after }
+    let outcome = Outcome::Nested {
+        plan,
+        offset: (offset.0 as i32, offset.1 as i32),
+        size: (size.0 as i32, size.1 as i32),
+    };
+    ChildPlan { child, before, outcome, after }
 }
 
 /// A nested group's own matrices should describe the box of its shapes. A
@@ -524,7 +540,7 @@ fn collect_written_text<'a>(plan: &GroupPlan<'a>, out: &mut Vec<&'a [Hwp5Paragra
         match &c.outcome {
             Outcome::Kept { keeps_text: true, .. } => out.push(&c.child.paragraphs),
             Outcome::Nested { plan, .. } => collect_written_text(plan, out),
-            Outcome::Kept { .. } | Outcome::Dropped => {}
+            Outcome::Kept { .. } | Outcome::Dropped | Outcome::DroppedGroup(_) => {}
         }
     }
 }
@@ -602,6 +618,10 @@ fn emit(
                 }
                 Some(*control)
             }
+            Outcome::DroppedGroup(plan) => {
+                report_only(plan, place, state);
+                None
+            }
             Outcome::Dropped => None,
         };
         report(c.after, place, state);
@@ -609,6 +629,19 @@ fn emit(
         place.path.pop();
     }
     out
+}
+
+/// Replays only the losses of a plan whose group is not written.
+fn report_only(plan: GroupPlan<'_>, place: &mut Place, state: &mut ProjectionImageState<'_>) {
+    for (i, c) in plan.children.into_iter().enumerate() {
+        place.path.push(i);
+        report(c.before, place, state);
+        if let Outcome::Nested { plan, .. } | Outcome::DroppedGroup(plan) = c.outcome {
+            report_only(plan, place, state);
+        }
+        report(c.after, place, state);
+        place.path.pop();
+    }
 }
 
 fn attach_text(
@@ -1392,5 +1425,91 @@ mod tests {
         assert_eq!(offset(outer), (2500, 500));
         let [inner] = children(outer) else { panic!() };
         assert_eq!(offset(inner), (0, 0));
+    }
+
+    /// A nested group far beyond the HWPUNIT range (x = 3,000,000,000) is
+    /// dropped and reported — the offset is corrected and range-checked in
+    /// f64, not added up in `i32` (which overflowed).
+    ///
+    /// 이것을 실패시키는 것: 원점 차를 범위 검사 전에 `i32` 로 바꿔 보정량을 더하는
+    /// 것(overflow panic), 범위 검사를 지우는 것.
+    #[test]
+    fn nested_group_beyond_the_range_is_reported_not_overflowed() {
+        let n = nested(
+            at(1000, 1000, 3_000_000_000.0, 0.0),
+            vec![child(
+                polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
+                at(1000, 1000, 3_000_000_000.0, 0.0),
+            )],
+        );
+        let top = group(
+            geo(0, 0, 1000, 1000),
+            at(1000, 1000, 0.0, 0.0),
+            vec![child(rect(), at(1000, 1000, 0.0, 0.0)), n],
+        );
+        let (g, lost) = project(&top);
+        assert_eq!(lost, ["group_display_size", "nested_group_placement"]);
+        assert_eq!(children(&g.unwrap()).len(), 1);
+    }
+
+    /// A nested group that is dropped still reports its children's own
+    /// losses, each at its place: a picture-only nested group reports both
+    /// pictures before the group, a nested group whose only child collapses
+    /// reports the collapse.
+    ///
+    /// 이것을 실패시키는 것: 버려진 중첩 묶음의 자식 계획을 재생하지 않는 것(자식별
+    /// 손실이 사라지고 `group` 만 남는다), 재생이 한 단계 아래로 내려가지 않는 것.
+    #[test]
+    fn dropped_nested_group_still_reports_its_children() {
+        let mut state =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let pics = nested(
+            at(200, 100, 0.0, 0.0),
+            vec![
+                child(picture(), at(100, 100, 0.0, 0.0)),
+                child(picture(), at(100, 100, 100.0, 0.0)),
+            ],
+        );
+        let collapsed = nested(
+            at(100, 100, 0.0, 0.0),
+            vec![child(rect(), Ok(render((100, 100), ID, (flat, ID))))],
+        );
+        // One level deeper: a dropped group holding a picture-only group.
+        let deeper = nested(
+            at(100, 100, 0.0, 0.0),
+            vec![nested(at(100, 100, 0.0, 0.0), vec![child(picture(), at(100, 100, 0.0, 0.0))])],
+        );
+        let top = group(
+            geo(0, 0, 200, 100),
+            at(200, 100, 0.0, 0.0),
+            vec![child(rect(), at(100, 100, 0.0, 0.0)), pics, collapsed, deeper],
+        );
+        assert!(project_group_run(&top, &mut state).is_some());
+        let lost: Vec<(String, String)> = state
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::ContentLost { kind, location, .. } => {
+                    Some((kind.clone(), location.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let want = [
+            ("pic", "group[0].child[1].child[0]"),
+            ("pic", "group[0].child[1].child[1]"),
+            ("group", "group[0].child[1]"),
+            // Its stored box is 100 wide; its only shape is flattened to 0.
+            ("nested_group_placement", "group[0].child[2]"),
+            ("group_child_degenerate", "group[0].child[2].child[0]"),
+            ("group", "group[0].child[2]"),
+            ("pic", "group[0].child[3].child[0].child[0]"),
+            ("group", "group[0].child[3].child[0]"),
+            ("group", "group[0].child[3]"),
+        ];
+        let want: Vec<(String, String)> =
+            want.iter().map(|(k, l)| (k.to_string(), l.to_string())).collect();
+        assert_eq!(lost, want);
     }
 }
