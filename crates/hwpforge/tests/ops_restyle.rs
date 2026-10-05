@@ -323,3 +323,18 @@ fn grouped_text_box_table_is_restyled() {
     assert!(HwpxDecoder::decode(&bytes).unwrap().warnings.is_empty());
     restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
 }
+
+/// A TextArt whose outline Core cannot keep makes restyle refuse the input
+/// (Hancom's F14 with its TextArt given a 33-unit solid outline); the
+/// untouched F14 goes through.
+///
+/// 이것을 실패시키는 것: 글맵시 외곽선 손실 경고를 지우는 것(restyle 이 외곽선
+/// 없이 다시 씀).
+#[test]
+fn text_art_whose_outline_is_lost_is_refused() {
+    let opts = RestyleOptions::default().with_preset("modern");
+    restyle(&shapes_fixture("group-f14-textart.hwpx"), &opts).expect("plain F14 restyles");
+    let err = restyle(&shapes_fixture("group-textart-outline.hwpx"), &opts).unwrap_err();
+    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
+    assert!(err.to_string().contains("textart_outline"), "{err}");
+}

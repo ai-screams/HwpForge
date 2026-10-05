@@ -523,6 +523,14 @@ pub struct HxTextArt {
     /// Fill brush (`<hc:fillBrush>`) — the text's colour.
     #[serde(rename(deserialize = "fillBrush"), default)]
     pub fill_brush: Option<HxFillBrush>,
+    /// Outline (`<hp:lineShape>`). Core TextArt has no outline, so only its
+    /// absence (`style="NONE"`) round-trips.
+    #[serde(rename(deserialize = "lineShape"), default)]
+    pub line_shape: Option<HxLineShape>,
+    /// Shape shadow (`<hp:shadow>`). Core TextArt has no shadow, so only
+    /// `type="NONE"` round-trips.
+    #[serde(rename(deserialize = "shadow"), default)]
+    pub shadow: Option<HxShadow>,
     /// Typography properties (`<hp:textartPr>`).
     #[serde(rename(deserialize = "textartPr"), default)]
     pub textart_pr: Option<HxTextArtPr>,
@@ -549,6 +557,10 @@ pub struct HxTextArtPr {
     /// Text alignment (e.g. `"LEFT"`).
     #[serde(rename = "@align", default)]
     pub align: String,
+    /// Text shadow (`<hp:shadow>` inside `<hp:textartPr>`). Core TextArt has
+    /// no shadow, so only `type="NONE"` round-trips.
+    #[serde(rename(deserialize = "shadow"), default)]
+    pub shadow: Option<HxShadow>,
 }
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.

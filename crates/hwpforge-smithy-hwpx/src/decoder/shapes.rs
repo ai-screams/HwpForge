@@ -648,11 +648,48 @@ pub(crate) fn decode_textart(
             width,
             height,
             placement,
-            fill_color: textart_fill_color(text_art.fill_brush.as_ref(), ctx),
+            fill_color: {
+                report_textart_style(text_art, ctx);
+                textart_fill_color(text_art.fill_brush.as_ref(), ctx)
+            },
             inst_id,
         })),
         char_shape_id,
     })
+}
+
+/// Reports the TextArt styling Core `TextArt` has no field for: a visible
+/// outline (`<hp:lineShape>` whose style is not `NONE`) as `textart_outline`,
+/// and a shape or text shadow (`<hp:shadow>` whose type is not `NONE`) as
+/// `textart_shadow`. The encoder writes neither, so without these warnings
+/// they would be lost silently. An absent element (or attribute) is taken
+/// as the default — there is nothing on the wire to lose.
+fn report_textart_style(text_art: &HxTextArt, ctx: &mut DecodeCtx) {
+    let shown = |value: &str| !value.is_empty() && !value.eq_ignore_ascii_case("NONE");
+    if let Some(line) = text_art.line_shape.as_ref().filter(|l| shown(&l.style)) {
+        ctx.content_lost(
+            "textart_outline",
+            format!(
+                "outline {} {} width {} not carried by Core TextArt",
+                line.style, line.color, line.width
+            ),
+        );
+    }
+    let shadows = [
+        ("shadow", text_art.shadow.as_ref()),
+        ("text shadow", text_art.textart_pr.as_ref().and_then(|p| p.shadow.as_ref())),
+    ];
+    for (what, shadow) in shadows {
+        if let Some(shadow) = shadow.filter(|s| shown(&s.shadow_type)) {
+            ctx.content_lost(
+                "textart_shadow",
+                format!(
+                    "{what} {} {} not carried by Core TextArt",
+                    shadow.shadow_type, shadow.color
+                ),
+            );
+        }
+    }
 }
 
 /// The colour Core `TextArt.fill_color` can carry: a `winBrush` with a valid
@@ -3692,6 +3729,53 @@ mod group_tests {
             assert!(reason.contains(what), "{what}: {reason}");
             assert_eq!(text_art_geometry(&g.unwrap()).2, None, "{brush}");
         }
+    }
+
+    /// A TextArt outline or shadow (shape or text) has no Core field and the
+    /// encoder writes none, so each is reported, in a group or not; the
+    /// defaults Hancom writes (`style="NONE"`, `type="NONE"`) are not.
+    ///
+    /// 이것을 실패시키는 것: 외곽선 검사·도형 그림자 검사·글자 그림자 검사를
+    /// 지우는 것(각각), `NONE` 판정을 뒤집는 것(기본값에도 경고 — F14 테스트가
+    /// 잡는다).
+    #[test]
+    fn text_art_outline_and_shadow_are_reported() {
+        let base = grouped_text_art(ID, &solid_brush("#FF0000"));
+        let outline = base.replace(
+            r##"<hp:lineShape color="#000000" width="0" style="NONE""##,
+            r##"<hp:lineShape color="#000000" width="33" style="SOLID""##,
+        );
+        let shadow = base.replace(
+            r##"<hc:pt0 "##,
+            r##"<hp:shadow type="PARELLEL_RIGHTBOTTOM" color="#B2B2B2" offsetX="283" offsetY="283" alpha="0"/><hc:pt0 "##,
+        );
+        let text_shadow = base.replace(
+            r#"align="LEFT"/>"#,
+            r##"align="LEFT"><hp:shadow type="PARELLEL_RIGHTBOTTOM" color="#000000" offsetX="10" offsetY="10" alpha="0"/></hp:textartPr>"##,
+        );
+        for (xml, kind, what) in [
+            (&outline, "textart_outline", "outline SOLID"),
+            (&shadow, "textart_shadow", "shadow PARELLEL"),
+            (&text_shadow, "textart_shadow", "text shadow PARELLEL"),
+        ] {
+            assert_ne!(xml, &base, "{what}: fixture not changed");
+            let (g, w) = decode(xml);
+            assert!(g.is_some());
+            assert_eq!(lost_kinds(&w), [kind], "{what}");
+            let crate::DecodeWarning::ContentLost { reason, .. } = &w[0] else { unreachable!() };
+            assert!(reason.starts_with(what), "{what}: {reason}");
+        }
+        // The same outline on a TextArt outside groups.
+        let sz = r#"<hp:sz width="7000" widthRelTo="ABSOLUTE" height="3000" heightRelTo="ABSOLUTE" protect="0"/>"#;
+        let body = text_art(0, &ri(ID, &[(ID, ID)]), &solid_brush("#00FF00"), sz)
+            .replace(r#"width="0" style="NONE""#, r#"width="33" style="SOLID""#);
+        let r = crate::decoder::section::parse_section(
+            &section(&body),
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(lost_kinds(&r.warnings), ["textart_outline"]);
     }
 
     /// A TextArt outside groups keeps its colour too (it used to come back
