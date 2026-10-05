@@ -274,20 +274,7 @@ fn plan_child<'a>(
             return dropped(after);
         }
     };
-    for &id in &child.nested_controls {
-        let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
-        if matches!(id, CTRL_ID_TABLE | CTRL_ID_GSO | CTRL_ID_EQED) {
-            after.push(note(
-                "group_nested_object",
-                format!("`{name}` object inside a group child is not decoded"),
-            ));
-        } else {
-            after.push(note(
-                "group_child_control",
-                format!("`{name}` control in a group child's text is not decoded"),
-            ));
-        }
-    }
+    after.extend(nested_control_notes(child));
     let has_text = !child.paragraphs.is_empty();
     let Some(control) = wire_local_control(child, render, has_text, &mut after) else {
         return dropped(after);
@@ -407,6 +394,29 @@ fn plan_nested<'a>(
     ChildPlan { child, before, outcome, after }
 }
 
+/// The controls inside a child's text, which the group child parser does
+/// not decode: an object (table, drawing, equation) or another control.
+fn nested_control_notes(child: &Hwp5GroupChild) -> Vec<PlanNote> {
+    child
+        .nested_controls
+        .iter()
+        .map(|&id| {
+            let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
+            if matches!(id, CTRL_ID_TABLE | CTRL_ID_GSO | CTRL_ID_EQED) {
+                note(
+                    "group_nested_object",
+                    format!("`{name}` object inside a group child is not decoded"),
+                )
+            } else {
+                note(
+                    "group_child_control",
+                    format!("`{name}` control in a group child's text is not decoded"),
+                )
+            }
+        })
+        .collect()
+}
+
 /// The note for a group's own hyperlink, which a Core group cannot hold.
 fn group_link_note() -> PlanNote {
     note("group_hyperlink", "group hyperlink not carried by Core")
@@ -426,7 +436,19 @@ fn plan_picture<'a>(
     origin: (f64, f64),
     assets: ImageAssets<'_>,
 ) -> ChildPlan<'a> {
-    let mut after = Vec::new();
+    // Text and controls recorded under a picture (a list of paragraphs —
+    // a caption, if anything) are not carried: a Core group picture gets
+    // none of them. Reported whether or not the picture itself is kept.
+    let mut after = nested_control_notes(child);
+    if !child.paragraphs.is_empty() {
+        after.push(note(
+            "group_child_text",
+            format!(
+                "text of a picture group child ({} paragraphs) is not carried",
+                child.paragraphs.len()
+            ),
+        ));
+    }
     let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
     let Some(pixels) = assets(image.binary_data_id) else {
         after.push(PlanNote::Warning(Hwp5Warning::DroppedControl {
@@ -1850,5 +1872,23 @@ mod tests {
             vec![child(Hwp5Control::Group(inner), Ok(render_stub()))],
         );
         assert_eq!(project(&outer).1, ["group_hyperlink"]);
+    }
+
+    /// Text and controls recorded under a picture child are reported, as
+    /// for any other child, and the picture is still kept.
+    ///
+    /// 이것을 실패시키는 것: 그림 갈래에서 중첩 컨트롤 보고 삭제 / 글자 보고 삭제
+    /// (각각 따로).
+    #[test]
+    fn text_and_controls_under_a_picture_are_reported() {
+        let mut pic = child(picture(), at(100, 100, 0.0, 0.0));
+        pic.paragraphs.push(paragraph("그림 설명"));
+        pic.nested_controls.push(CTRL_ID_TABLE);
+        pic.nested_controls.push(u32::from_be_bytes(*b"%hlk"));
+        let top = group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![pic]);
+        let (g, lost) = project(&top);
+        assert_eq!(lost, ["group_nested_object", "group_child_control", "group_child_text"]);
+        let Some(Control::Group { children, .. }) = g else { panic!() };
+        assert!(matches!(children[0], GroupChild::Picture(_)));
     }
 }
