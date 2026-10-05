@@ -4551,6 +4551,37 @@ mod tests {
         );
     }
 
+    /// A paragraph holding a group (a logo of pictures, now a Core group) is
+    /// not rendered: the group is refused like every unrendered object, not
+    /// left out of the page.
+    ///
+    /// 이것을 실패시키는 것: admission 에서 묶음 run 을 허용하는 것(묶음이 빠진 채 성공).
+    #[test]
+    fn paragraph_with_a_group_of_pictures_is_refused() {
+        use hwpforge_core::control::{Control, GroupChild};
+        use hwpforge_core::image::{Image, ImageFormat};
+        let w = hwpforge_foundation::HwpUnit::new(1000).unwrap();
+        let group = Control::Group {
+            children: vec![GroupChild::Picture(Image::new(
+                "BinData/a.png",
+                w,
+                w,
+                ImageFormat::Png,
+            ))],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        para.add_run(Run::control(group, CharShapeIndex::new(0)));
+        let err = replay(&doc_of(vec![para]), &PdfOptions::default()).expect_err("must reject");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "got {err:?}"
+        );
+    }
+
     #[test]
     fn line_box_includes_body_left_offset() {
         let doc = doc_of(vec![para_with_cache("가", vec![seg(0, 0)])]);
