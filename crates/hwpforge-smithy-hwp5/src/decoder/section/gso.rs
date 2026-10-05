@@ -445,7 +445,7 @@ impl GsoGroupBuilder {
                         &record.data,
                         warnings,
                     ) {
-                        child.paragraphs.push(buf.finish());
+                        child.paragraphs.push(buf.finish(warnings));
                     }
                 }
             }
@@ -457,6 +457,7 @@ impl GsoGroupBuilder {
                 ) {
                     if let Some(last) = child.paragraphs.last_mut() {
                         last.text_segments = text.segments;
+                        last.silent_wires = text.silent_wires;
                         last.text = segments_to_string(&last.text_segments);
                     }
                 }
@@ -468,7 +469,12 @@ impl GsoGroupBuilder {
                     warnings,
                 ) {
                     if let Some(last) = child.paragraphs.last_mut() {
-                        last.char_shape_runs = runs;
+                        last.char_shape_runs = super::char_shape_runs_to_text_positions(
+                            &last.text_segments,
+                            &last.silent_wires,
+                            &runs,
+                            warnings,
+                        );
                     }
                 }
             }

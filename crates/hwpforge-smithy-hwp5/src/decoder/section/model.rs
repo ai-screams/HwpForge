@@ -31,7 +31,10 @@ pub(crate) struct Hwp5Paragraph {
     pub page_break: bool,
     /// 단 나누기 (ParaHeader divide_sort bit3 — W3).
     pub column_break: bool,
-    /// Character shape runs: (position, char_shape_id) pairs.
+    /// Character shape runs: (position, char_shape_id) pairs, positions in
+    /// [`Self::text`] (UTF-16 units) — moved there from the wire positions
+    /// of `PARA_CHAR_SHAPE` when the paragraph is built, so a tab or an
+    /// object counts one unit and a field marker none.
     pub char_shape_runs: Vec<Hwp5CharShapeRun>,
     /// Format-local line layout cache entries from `ParaLineSeg`.
     pub line_segments: Vec<Hwp5ParaLineSeg>,

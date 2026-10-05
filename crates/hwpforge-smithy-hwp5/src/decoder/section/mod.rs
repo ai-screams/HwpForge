@@ -120,13 +120,20 @@ impl ParaBuf {
         }
     }
 
-    /// Build the final `Hwp5Paragraph`, consuming this buffer.
-    fn finish(self) -> Hwp5Paragraph {
+    /// Build the final `Hwp5Paragraph`, consuming this buffer. Its char
+    /// shape boundaries move from wire positions to positions in `text`.
+    fn finish(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Paragraph {
         let (text_segments, silent_wires) = self.text.map_or_else(
             || (Vec::new(), Vec::new()),
             |paragraph_text| (paragraph_text.segments, paragraph_text.silent_wires),
         );
         let text = segments_to_string(&text_segments);
+        let char_shape_runs = char_shape_runs_to_text_positions(
+            &text_segments,
+            &silent_wires,
+            &self.char_shape_runs,
+            warnings,
+        );
         Hwp5Paragraph {
             silent_wires,
             text,
@@ -137,7 +144,7 @@ impl ParaBuf {
             // 한컴 재저장 HWPX pageBreak="1" 대응 — W3 carry 시작).
             page_break: self.header.divide_sort & 0x04 != 0,
             column_break: self.header.divide_sort & 0x08 != 0,
-            char_shape_runs: self.char_shape_runs,
+            char_shape_runs,
             line_segments: self.line_segments,
             controls: self.controls,
         }
@@ -171,9 +178,9 @@ struct MemoContentCapture {
 }
 
 impl MemoContentCapture {
-    fn into_paragraphs(mut self) -> Vec<Hwp5Paragraph> {
+    fn into_paragraphs(mut self, warnings: &mut Vec<Hwp5Warning>) -> Vec<Hwp5Paragraph> {
         if let Some(buf) = self.current_para.take() {
-            self.paragraphs.push(buf.finish());
+            self.paragraphs.push(buf.finish(warnings));
         }
         self.paragraphs
     }
@@ -234,12 +241,12 @@ impl TableContext {
         );
     }
 
-    fn flush_current_cell_paragraph(&mut self) {
+    fn flush_current_cell_paragraph(&mut self, warnings: &mut Vec<Hwp5Warning>) {
         let Some(buf) = self.current_cell_para.take() else {
             return;
         };
         if let Some(cell) = self.current_cell.as_mut() {
-            cell.cell.paragraphs.push(buf.finish());
+            cell.cell.paragraphs.push(buf.finish(warnings));
         }
     }
 
@@ -256,7 +263,7 @@ impl TableContext {
 
     fn finalize(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
         self.flush_inline_gso(warnings);
-        self.flush_current_cell_paragraph();
+        self.flush_current_cell_paragraph(warnings);
         self.finish_active_cell_if_ready();
         Hwp5Control::Table(self.table)
     }
@@ -685,6 +692,92 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
 // Text rendering
 // ---------------------------------------------------------------------------
 
+/// Moves `PARA_CHAR_SHAPE` boundaries from wire positions (UTF-16 units of
+/// the `PARA_TEXT` stream, where a tab or an inline/extended control takes
+/// 8) to positions in [`Hwp5Paragraph::text`] (UTF-16), the axis projection
+/// splits runs on: text 1:1, a tab or an object 8 → 1, a section/column
+/// definition or a field marker 8 → 0, the paragraph end 1 → 0, a silently
+/// consumed control (`silent_wires`) n → 0.
+///
+/// Boundaries that land on the same text position (zero-width controls in
+/// between) keep the last one, which is the shape the characters there
+/// take. A boundary inside a control's wire units (no file in the corpus
+/// has one) moves to the control's end with a
+/// `char_shape.boundary_inside_control` warning; one past the end of the
+/// text moves to its end.
+fn char_shape_runs_to_text_positions(
+    segments: &[TextSegment],
+    silent_wires: &[crate::schema::section::SilentWire],
+    runs: &[Hwp5CharShapeRun],
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Vec<Hwp5CharShapeRun> {
+    let mut builder = crate::wire_text_map::WireMapBuilder::new();
+    let mut wire = 0u32;
+    let mut silent = silent_wires.iter().peekable();
+    for segment in segments {
+        while let Some(skipped) = silent.next_if(|skipped| skipped.start <= wire) {
+            builder.push_span(skipped.len, 0);
+            wire = wire.saturating_add(skipped.len);
+        }
+        let (wire_len, text_len) = match segment {
+            TextSegment::Text(text) => {
+                let units = text.encode_utf16().count() as u32;
+                (units, units)
+            }
+            TextSegment::LineBreak | TextSegment::NonBreakingSpace | TextSegment::FwSpace => (1, 1),
+            TextSegment::Tab { .. }
+            | TextSegment::ControlRef { .. }
+            | TextSegment::ExtendedControlRef { .. } => (8, 1),
+            TextSegment::SectionColumnDef { .. }
+            | TextSegment::FieldBegin { .. }
+            | TextSegment::FieldEnd => (8, 0),
+            TextSegment::ParaBreak => (1, 0),
+        };
+        if wire_len == text_len {
+            builder.advance_identity(wire_len);
+        } else {
+            builder.push_span(wire_len, text_len);
+        }
+        wire = wire.saturating_add(wire_len);
+    }
+    for skipped in silent {
+        builder.push_span(skipped.len, 0);
+    }
+    let Ok(map) = builder.finish() else {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "char_shape.positions",
+            reason: "paragraph wire length overflows; char shape boundaries kept at wire \
+                     positions"
+                .to_string(),
+        });
+        return runs.to_vec();
+    };
+
+    let mut out: Vec<Hwp5CharShapeRun> = Vec::with_capacity(runs.len());
+    for run in runs {
+        let position = match map.to_core(run.position) {
+            Ok(position) => position,
+            Err(crate::wire_text_map::CacheMapError::InsideContraction { wire }) => {
+                warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "char_shape.boundary_inside_control",
+                    reason: format!(
+                        "char shape {} starts at wire {wire}, inside a control; moved to \
+                         the control's end",
+                        run.char_shape_id
+                    ),
+                });
+                (wire..).find_map(|after| map.to_core(after).ok()).unwrap_or_else(|| map.core_end())
+            }
+            Err(_) => map.core_end(),
+        };
+        match out.last_mut() {
+            Some(last) if last.position == position => last.char_shape_id = run.char_shape_id,
+            _ => out.push(Hwp5CharShapeRun { position, char_shape_id: run.char_shape_id }),
+        }
+    }
+    out
+}
+
 /// Convert a slice of `TextSegment`s into a plain string.
 ///
 /// - `Text(s)` — appended verbatim
@@ -861,7 +954,11 @@ impl BodyTextParserState {
                 self.inline_subtree_gso_ctx.take(),
                 &mut self.warnings,
             );
-            flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
+            flush_subtree_paragraph(
+                &mut self.current_subtree_para,
+                self.subtree_ctx.as_mut(),
+                &mut self.warnings,
+            );
             attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
         }
     }
@@ -897,7 +994,7 @@ impl BodyTextParserState {
             TagId::ListHeader => {
                 if let Some(ctx) = self.table_stack.last_mut() {
                     if ctx.seen_table_body && level == ctx.ctrl_depth.saturating_add(1) {
-                        ctx.flush_current_cell_paragraph();
+                        ctx.flush_current_cell_paragraph(&mut self.warnings);
                         ctx.finish_active_cell_if_ready();
                         match parse_table_cell(&record.data) {
                             Ok((paragraph_count, cell)) => {
@@ -915,7 +1012,7 @@ impl BodyTextParserState {
             TagId::ParaHeader => {
                 if self.table_stack.last().and_then(|ctx| ctx.current_cell.as_ref()).is_some() {
                     if let Some(ctx) = self.table_stack.last_mut() {
-                        ctx.flush_current_cell_paragraph();
+                        ctx.flush_current_cell_paragraph(&mut self.warnings);
                     }
                     if let Some(buf) = Self::parse_para_header_buf(
                         record.header.tag_id,
@@ -1197,6 +1294,7 @@ impl BodyTextParserState {
                     flush_subtree_paragraph(
                         &mut self.current_subtree_para,
                         self.subtree_ctx.as_mut(),
+                        &mut self.warnings,
                     );
                     self.current_subtree_para = Self::parse_para_header_buf(
                         record.header.tag_id,
@@ -1304,7 +1402,7 @@ impl BodyTextParserState {
         match tag {
             TagId::ParaHeader if level == 0 => {
                 if let Some(buf) = self.current.take() {
-                    self.paragraphs.push(buf.finish());
+                    self.paragraphs.push(buf.finish(&mut self.warnings));
                 }
                 self.current = Self::parse_para_header_buf(
                     record.header.tag_id,
@@ -1842,7 +1940,7 @@ impl BodyTextParserState {
             }
             (TagId::ParaHeader, 1) if capture.saw_list_header => {
                 if let Some(buf) = capture.current_para.take() {
-                    capture.paragraphs.push(buf.finish());
+                    capture.paragraphs.push(buf.finish(&mut self.warnings));
                 }
                 capture.current_para = Self::parse_para_header_buf(
                     record.header.tag_id,
@@ -1945,7 +2043,7 @@ impl BodyTextParserState {
     fn flush_memo_content_capture(&mut self) {
         if let Some(capture) = self.memo_content_capture.take() {
             let memo_id = capture.memo_id;
-            let paragraphs = capture.into_paragraphs();
+            let paragraphs = capture.into_paragraphs(&mut self.warnings);
             match self.memo_contents.entry(memo_id) {
                 Entry::Vacant(slot) => {
                     slot.insert(paragraphs);
@@ -2007,11 +2105,15 @@ impl BodyTextParserState {
             self.inline_subtree_gso_ctx.take(),
             &mut self.warnings,
         );
-        flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
+        flush_subtree_paragraph(
+            &mut self.current_subtree_para,
+            self.subtree_ctx.as_mut(),
+            &mut self.warnings,
+        );
         attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
 
         if let Some(buf) = self.current.take() {
-            self.paragraphs.push(buf.finish());
+            self.paragraphs.push(buf.finish(&mut self.warnings));
         }
 
         // Flush any in-flight memo-content capture (cluster at end-of-stream)
@@ -2414,6 +2516,7 @@ fn attach_finished_table(
 fn flush_subtree_paragraph(
     current_subtree_para: &mut Option<ParaBuf>,
     subtree_ctx: Option<&mut NestedSubtreeContext>,
+    warnings: &mut Vec<Hwp5Warning>,
 ) {
     let Some(buf) = current_subtree_para.take() else {
         return;
@@ -2421,7 +2524,7 @@ fn flush_subtree_paragraph(
     let Some(ctx) = subtree_ctx else {
         return;
     };
-    ctx.paragraphs.push(buf.finish());
+    ctx.paragraphs.push(buf.finish(warnings));
 }
 
 fn attach_finished_subtree(
@@ -3297,6 +3400,248 @@ mod tests {
             panic!("expected one group in the text box, got {controls:?}");
         };
         assert_eq!(group.children.len(), 2);
+    }
+
+    // ── §19 D: char shape boundaries are wire positions ──────────────────
+
+    /// A `ParaText` payload from code units; `ctrl(code)` gives the eight
+    /// units of an inline or extended control.
+    fn units_data(units: &[u16]) -> Vec<u8> {
+        units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    fn utf16(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
+    }
+
+    fn ctrl(code: u16) -> Vec<u16> {
+        let mut out = vec![code];
+        out.extend([0u16; 7]);
+        out
+    }
+
+    fn char_shape_runs_data(runs: &[(u32, u32)]) -> Vec<u8> {
+        runs.iter().flat_map(|&(position, id)| char_shape_run_data(position, id)).collect()
+    }
+
+    /// One body paragraph from `units` and wire-position `runs`.
+    fn decode_paragraph(units: &[u16], runs: &[(u32, u32)]) -> SectionResult {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &units_data(units)));
+        stream.extend(make_record(TagId::ParaCharShape, 1, &char_shape_runs_data(runs)));
+        parse_body_text(&stream, &version()).unwrap()
+    }
+
+    /// The text each char shape covers: `(shape, text)` per run, cut from
+    /// `Hwp5Paragraph::text` at the run positions (UTF-16), as projection
+    /// cuts it.
+    fn run_texts(para: &Hwp5Paragraph) -> Vec<(u32, String)> {
+        let text: Vec<u16> = para.text.encode_utf16().collect();
+        let runs = &para.char_shape_runs;
+        runs.iter()
+            .enumerate()
+            .map(|(i, run)| {
+                let end = runs.get(i + 1).map_or(text.len(), |next| next.position as usize);
+                let slice = &text[run.position as usize..end];
+                (run.char_shape_id, String::from_utf16(slice).unwrap())
+            })
+            .collect()
+    }
+
+    fn boundary_warnings(result: &SectionResult) -> usize {
+        result
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Hwp5Warning::ProjectionFallback {
+                        subject: "char_shape.boundary_inside_control",
+                        ..
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// D-T1: a tab is eight wire units and one character. The boundary at
+    /// wire 10 is after "나".
+    ///
+    /// 이것을 실패시키는 것: 변환을 지워 wire 위치를 그대로 쓰는 것.
+    #[test]
+    fn char_shape_boundary_after_a_tab_is_moved_to_text_position() {
+        let units = [utf16("가"), ctrl(0x09), utf16("나다라")].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (10, 2)]);
+        let para = &result.paragraphs[0];
+        assert_eq!(run_texts(para), [(1, "가\t나".to_string()), (2, "다라".to_string())]);
+    }
+
+    /// D-T2: the shape of an underlined phrase after an inline object (the
+    /// 법무부 rec260 form) covers exactly that phrase.
+    ///
+    /// 이것을 실패시키는 것: 개체를 wire 1 칸으로 세는 것.
+    #[test]
+    fn char_shape_after_an_inline_object_covers_exactly_its_phrase() {
+        let after = " 가상상자란 ";
+        let phrase = "가상 사업을 위한 맡김";
+        let units =
+            [utf16(" "), ctrl(0x0B), utf16(after), utf16(phrase), utf16("을 말한다")].concat();
+        let start = (1 + 8 + utf16(after).len()) as u32;
+        let end = start + utf16(phrase).len() as u32;
+        let result = decode_paragraph(&units, &[(0, 1), (start, 2), (end, 1)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [
+                (1, " \u{FFFC} 가상상자란 ".to_string()),
+                (2, phrase.to_string()),
+                (1, "을 말한다".to_string()),
+            ]
+        );
+    }
+
+    /// D-T3: a field begin at the head of the paragraph takes no text, so a
+    /// boundary right after it starts at the first character — and replaces
+    /// the boundary at 0.
+    ///
+    /// 이것을 실패시키는 것: 필드 begin 을 글자 1 칸으로 세는 것.
+    #[test]
+    fn char_shape_boundary_after_a_leading_field_begin_starts_at_the_first_char() {
+        let units = [ctrl(0x03), utf16("본문")].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (8, 2)]);
+        assert_eq!(run_texts(&result.paragraphs[0]), [(2, "본문".to_string())]);
+    }
+
+    /// D-T4: a silently consumed extended control (`0x01`) takes wire units
+    /// but no text.
+    ///
+    /// 이것을 실패시키는 것: `silent_wires` 를 무시하는 것.
+    #[test]
+    fn char_shape_boundary_after_a_silent_control_skips_it() {
+        let units = [utf16("가나"), ctrl(0x01), utf16("다라")].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (10, 2)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [(1, "가나".to_string()), (2, "다라".to_string())]
+        );
+    }
+
+    /// D-T5: a group child's text box paragraph goes through the gso path,
+    /// which writes its text and runs after the paragraph is finished. Its
+    /// boundaries move the same way, silent controls included.
+    ///
+    /// 이것을 실패시키는 것: gso 갈래의 변환 호출을 지우는 것, gso 갈래에서
+    /// `silent_wires` 를 옮기지 않는 것.
+    #[test]
+    fn char_shape_boundaries_of_a_group_child_text_move_too() {
+        let units = [utf16("가"), ctrl(0x09), utf16("나"), ctrl(0x01), utf16("다라")].concat();
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            2,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                3,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+        }
+        stream.extend(make_record(TagId::ListHeader, 4, &[0u8; 8]));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &units_data(&units)));
+        stream.extend(make_record(
+            TagId::ParaCharShape,
+            5,
+            &char_shape_runs_data(&[(0, 1), (18, 2)]),
+        ));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let [Hwp5Control::Group(group)] = &result.paragraphs[0].controls[..] else {
+            panic!("expected one group, got {:?}", result.paragraphs[0].controls);
+        };
+        let child = group.children.last().expect("children");
+        assert_eq!(
+            run_texts(&child.paragraphs[0]),
+            [(1, "가\t나".to_string()), (2, "다라".to_string())]
+        );
+    }
+
+    /// D-T6: a boundary inside an object's eight wire units (no file has
+    /// one) moves to the object's end and is reported.
+    ///
+    /// 이것을 실패시키는 것: 경고 갈래를 지우는 것, 개체 시작으로 붙이는 것.
+    #[test]
+    fn char_shape_boundary_inside_a_control_moves_to_its_end_with_a_warning() {
+        let units = [utf16(" "), ctrl(0x0B), utf16("ab")].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (3, 2)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [(1, " \u{FFFC}".to_string()), (2, "ab".to_string())]
+        );
+        assert_eq!(boundary_warnings(&result), 1, "{:?}", result.warnings);
+        assert_eq!(boundary_warnings(&decode_paragraph(&units, &[(0, 1), (9, 2)])), 0);
+    }
+
+    /// D-T8: inside a field, the character after an object takes the shape
+    /// that starts after the object.
+    ///
+    /// 이것을 실패시키는 것: 필드 begin 을 글자 1 칸으로 세는 것, 개체를 wire
+    /// 1 칸으로 세는 것.
+    #[test]
+    fn char_shape_boundary_after_an_object_inside_a_field() {
+        let units = [ctrl(0x03), utf16("가"), ctrl(0x0B), utf16("나"), ctrl(0x04)].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (17, 2)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [(1, "가\u{FFFC}".to_string()), (2, "나".to_string())]
+        );
+    }
+
+    /// D-T9: a surrogate pair is two UTF-16 units on both axes, so a silent
+    /// control after it (and the tab before that) is found at the right
+    /// wire position.
+    ///
+    /// 이것을 실패시키는 것: 글자를 UTF-16 단위가 아니라 문자 수로 세는 것
+    /// (무음 구간이 뒤로 밀려 경계가 그 안에 떨어진다).
+    #[test]
+    fn char_shape_boundary_after_a_surrogate_pair_and_a_tab() {
+        let units = [utf16("𝒳"), ctrl(0x09), ctrl(0x01), utf16("가나")].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (18, 2)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [(1, "𝒳\t".to_string()), (2, "가나".to_string())]
+        );
+        assert_eq!(boundary_warnings(&result), 0, "{:?}", result.warnings);
+    }
+
+    /// A boundary past the paragraph's wire end (it covers no character)
+    /// moves to the end of the text.
+    ///
+    /// 이것을 실패시키는 것: 범위 밖 경계를 wire 위치 그대로 두는 것.
+    #[test]
+    fn char_shape_boundary_past_the_end_moves_to_the_text_end() {
+        let result = decode_paragraph(&utf16("ab"), &[(0, 1), (1, 2), (10, 3)]);
+        assert_eq!(
+            run_texts(&result.paragraphs[0]),
+            [(1, "a".to_string()), (2, "b".to_string()), (3, String::new())]
+        );
+    }
+
+    /// D-T10: boundaries on a run of zero-width controls (section definition,
+    /// field begin) all land on the same character: the last one wins.
+    ///
+    /// 이것을 실패시키는 것: 같은 위치에 겹친 경계에서 앞 경계를 남기는 것.
+    #[test]
+    fn overlapping_char_shape_boundaries_on_zero_width_controls_keep_the_last() {
+        let units = [ctrl(0x02), ctrl(0x03), utf16("본문"), ctrl(0x04)].concat();
+        let result = decode_paragraph(&units, &[(0, 1), (8, 2), (16, 3)]);
+        assert_eq!(run_texts(&result.paragraphs[0]), [(3, "본문".to_string())]);
     }
 
     /// Build a stream of `depth` tables nested table-in-cell-in-table.
