@@ -61,8 +61,8 @@ use self::shapes::{
     project_ellipse_run, project_line_run, project_polygon_run, project_rect_run, shape_placement,
 };
 use self::text::{
-    char_shape_at, char_shape_id_at_position, char_shape_id_for_visible_position,
-    hwp_unit_from_u32, split_text_by_runs, utf16_boundaries, utf16_offset_to_byte,
+    char_shape_id_at_position, hwp_unit_from_u32, shape_of_previous_char, shape_starting_at,
+    split_text_by_runs, utf16_boundaries, utf16_offset_to_byte,
 };
 /// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
 /// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
@@ -1093,7 +1093,7 @@ fn project_paragraph_with_images_flat(
                     control,
                     projection_images,
                     image_context,
-                    char_shape_at(hwp_para, current_utf16),
+                    shape_starting_at(hwp_para, current_utf16),
                 ) {
                     runs.push(run);
                 }
@@ -1119,7 +1119,7 @@ fn project_paragraph_with_images_flat(
             control,
             projection_images,
             image_context,
-            char_shape_at(hwp_para, current_utf16),
+            shape_starting_at(hwp_para, current_utf16),
         ) {
             runs.push(run);
         }
@@ -1532,7 +1532,7 @@ fn project_paragraph_with_images_structural(
                             control,
                             projection_images,
                             image_context,
-                            char_shape_at(hwp_para, visible_utf16),
+                            shape_starting_at(hwp_para, visible_utf16),
                         ) {
                             runs.push(run);
                         }
@@ -1761,7 +1761,7 @@ fn drain_unconsumed_paragraph_queues(
     image_context: ImageProjectionContext,
 ) {
     for bookmark_name in queues.point_bookmark_names {
-        let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+        let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
             &hwp_para.char_shape_runs,
             visible_utf16,
         ) as usize);
@@ -1776,7 +1776,7 @@ fn drain_unconsumed_paragraph_queues(
             control,
             projection_images,
             image_context,
-            char_shape_at(hwp_para, visible_utf16),
+            shape_starting_at(hwp_para, visible_utf16),
         ) {
             runs.push(run);
         }
@@ -1802,7 +1802,7 @@ fn drain_unconsumed_paragraph_queues(
             runs.push(project_memo_run(
                 &memo,
                 projection_images,
-                char_shape_at(hwp_para, visible_utf16),
+                shape_starting_at(hwp_para, visible_utf16),
                 Vec::new(),
             ));
         }
@@ -2135,7 +2135,7 @@ fn finish_active_field(
             if display_text.is_empty() {
                 return FieldEmissionOutcome::Folded;
             }
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2143,7 +2143,7 @@ fn finish_active_field(
             FieldEmissionOutcome::Folded
         }
         ActiveField::BookmarkSpan { name, start_utf16 } => {
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2168,7 +2168,7 @@ fn finish_active_field(
             // Boundary functions decode the wire codes into typed
             // `RefType` / `RefContentType` / `RefTarget`. The HWPX
             // encoder embeds `display_text` between fieldBegin/fieldEnd.
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2219,7 +2219,7 @@ fn finish_active_field(
                 start_utf16,
                 end_utf16,
             );
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2233,7 +2233,7 @@ fn finish_active_field(
             // the span text (HWP5 wire span is empty between
             // FIELD_BEGIN/FIELD_END; double-emitting would duplicate
             // hint as both placeholder and run text in HWPX).
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2259,7 +2259,7 @@ fn finish_active_field(
             // resolved value accumulated from the FieldBegin..FieldEnd
             // span — 한컴 native HWPX carries it in the body and an empty
             // body triggers the "낮은 보안 수준 복구" warning (#120/#136).
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2282,7 +2282,7 @@ fn finish_active_field(
             // from the `T` prefix convention. The raw HWP5 command pattern
             // is smithy-internal and not carried into the core IR (E6 slice C).
             // `display_text` is the cached resolved date/time (#120/#136).
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -2298,7 +2298,7 @@ fn finish_active_field(
             // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
             // (Unknown for forward compatibility). Wave 12n. `display_text`
             // is the cached resolved path accumulated from the span (#120).
-            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
@@ -4268,6 +4268,63 @@ mod tests {
         assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Para);
         assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Para);
         assert_eq!(document.sections()[0].content_counts().images, 1);
+    }
+
+    /// D-T7: an object takes the char shape that starts at its own
+    /// position — here a boundary right at the object, after "A" (a
+    /// boundary sits at a control's start 3,724 times in 1,163 corpus
+    /// documents, `scan_cs_interior.py`) — not the shape of the character
+    /// before it.
+    ///
+    /// 이것을 실패시키는 것: 개체 조회를 앞 글자(`position - 1`) 조회로
+    /// 되돌리는 것.
+    #[test]
+    fn an_object_takes_the_char_shape_that_starts_at_it() {
+        let image = Hwp5Control::Image(Hwp5ImageControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 3_000,
+                height: 2_000,
+            },
+            binary_data_id: 1,
+            instance_id: 0,
+            ctrl_properties: 0x1,
+            picture: Default::default(),
+            link: None,
+        });
+        let section = make_section(
+            vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
+                page_break: false,
+                column_break: false,
+                text: "A\u{fffc}".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![
+                    Hwp5CharShapeRun { position: 0, char_shape_id: 1 },
+                    Hwp5CharShapeRun { position: 1, char_shape_id: 2 },
+                ],
+                line_segments: Vec::new(),
+                controls: vec![image],
+            }],
+            None,
+        );
+        let image_assets =
+            image_plan([(1, "BIN0001.png", Hwp5SemanticImageFormat::Png, vec![0x89, 0x50])]);
+        let (document, _, _) = project_to_core_with_images(
+            vec![section],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
+        let runs = &document.sections()[0].paragraphs[0].runs;
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].char_shape_id, CharShapeIndex::new(1));
+        assert!(runs[1].content.is_image());
+        assert_eq!(runs[1].char_shape_id, CharShapeIndex::new(2));
     }
 
     #[test]
