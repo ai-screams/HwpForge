@@ -149,29 +149,19 @@ fn collect_flow_paragraph_layout_hints(
     }
 }
 
-/// Collects layout hints from a group's text-bearing children (rect/ellipse
-/// with `drawText`). A child that is itself a nested group recurses so the
-/// inner group's text-bearing leaves (whose `<hp:p>` the encoder still emits)
-/// contribute hints — without this the patcher would underflow on nested
-/// groups.
-///
-/// Only the children whose text the group projection keeps contribute: a
-/// rect or ellipse with a readable matrix chain. The text of any other shape
-/// (a polygon, an arc …) and of a child dropped for an unreadable chain is
-/// reported lost and never written, so its hints would be left over.
+/// Collects layout hints from the group children whose text is written:
+/// the group projection's own plan
+/// ([`written_group_text`](crate::projection::written_group_text)) decides,
+/// so a child whose text is dropped (a polygon's, an arc's), a child the
+/// fold drops (an axis collapsed, out of range) and every child of a nested
+/// group that is dropped leave no hint behind — a leftover hint fails the
+/// whole conversion ("left unconsumed hints").
 fn collect_group_child_layout_hints(
     group: &crate::decoder::section::Hwp5GroupControl,
     scope: &mut ScopeLayoutHints,
 ) {
-    for child in &group.children {
-        if let Hwp5Control::Group(nested) = &child.control {
-            collect_group_child_layout_hints(nested, scope);
-        }
-        let keeps_text = child.render.is_ok()
-            && matches!(child.control, Hwp5Control::Rect(_) | Hwp5Control::Ellipse(_));
-        if keeps_text {
-            collect_scope_paragraphs(&child.paragraphs, scope);
-        }
+    for paragraphs in crate::projection::written_group_text(group) {
+        collect_scope_paragraphs(paragraphs, scope);
     }
 }
 
@@ -406,6 +396,65 @@ mod tests {
                 child(rect(), Err("cut short".into()), 3),
             ],
             render,
+            instance_id: 0,
+        };
+        let mut scope = ScopeLayoutHints::default();
+        collect_group_child_layout_hints(&group, &mut scope);
+        let starts: Vec<u32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].text_start_position).collect();
+        assert_eq!(starts, [1]);
+    }
+
+    /// A rect with text that the fold drops (its x scale is 0) and a nested
+    /// group dropped because its only child collapses leave no hint; the
+    /// kept rect's text does.
+    ///
+    /// 이것을 실패시키는 것: 힌트를 투영 계획이 아니라 자식 종류·행렬열 읽힘만으로
+    /// 고르는 것(접기에서 버려진 글상자의 힌트가 남는다).
+    #[test]
+    fn group_hints_skip_text_the_fold_drops() {
+        use crate::decoder::section::{Hwp5GroupChild, Hwp5GroupControl, Hwp5RectControl};
+        use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
+        let geo = Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 };
+        let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let render = |sca| {
+            Ok(Hwp5ShapeRender {
+                initial: (100, 100),
+                trans: id,
+                pairs: vec![(sca, id)],
+                fill: Hwp5ShapeFill::Plain,
+            })
+        };
+        let rect = |sca, start| Hwp5GroupChild {
+            control: Hwp5Control::Rect(Hwp5RectControl {
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                ctrl_properties: 0,
+            }),
+            paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
+            list_header_properties: None,
+            render: render(sca),
+            nested_controls: Vec::new(),
+        };
+        let nested = Hwp5GroupChild {
+            control: Hwp5Control::Group(Hwp5GroupControl {
+                ctrl_id: 0,
+                geometry: geo.clone(),
+                children: vec![rect(flat, 3)],
+                render: render(id),
+                instance_id: 0,
+            }),
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+            render: render(id),
+            nested_controls: Vec::new(),
+        };
+        let group = Hwp5GroupControl {
+            ctrl_id: 0,
+            geometry: geo.clone(),
+            children: vec![rect(id, 1), rect(flat, 2), nested],
+            render: render(id),
             instance_id: 0,
         };
         let mut scope = ScopeLayoutHints::default();

@@ -36,7 +36,7 @@ use hwpforge_core::ObjectId;
 use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
 
 use crate::ctrl_ids::{CTRL_ID_EQED, CTRL_ID_GSO, CTRL_ID_TABLE};
-use crate::decoder::section::{Hwp5Control, Hwp5GroupChild, Hwp5GroupControl};
+use crate::decoder::section::{Hwp5Control, Hwp5GroupChild, Hwp5GroupControl, Hwp5Paragraph};
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{Hwp5Matrix, Hwp5ShapeFill, Hwp5ShapePoint, Hwp5ShapeRender};
 
@@ -158,6 +158,379 @@ fn has_unsupported_child(children: &[Hwp5GroupChild]) -> bool {
     })
 }
 
+// ── plan: the geometry of a group, decided once ──────────────────
+//
+// The plan is pure: it decides which children stay, their folded Core
+// geometry, which keep their text, and what is lost, without projecting any
+// text. Projection replays it (warnings, text), and the layout-hint
+// collector walks the same plan, so hints are taken for exactly the text
+// that is written.
+
+/// One thing the plan found lost, in the order it is reported.
+enum PlanNote {
+    Lost {
+        kind: &'static str,
+        reason: String,
+    },
+    /// A warning a projection helper raised (TextArt enums).
+    Warning(Hwp5Warning),
+}
+
+fn note(kind: &'static str, reason: impl Into<String>) -> PlanNote {
+    PlanNote::Lost { kind, reason: reason.into() }
+}
+
+enum Outcome<'a> {
+    /// A shape stays, with folded geometry; `keeps_text` = its paragraphs
+    /// are written (a rect or ellipse holding text).
+    Kept {
+        control: Box<Control>,
+        keeps_text: bool,
+    },
+    /// A nested group stays: its children's plan and its own box, relative
+    /// to its parent.
+    Nested {
+        plan: GroupPlan<'a>,
+        offset: (i32, i32),
+        size: (i32, i32),
+    },
+    Dropped,
+}
+
+struct ChildPlan<'a> {
+    child: &'a Hwp5GroupChild,
+    /// Reported before a nested group's children (its own box check).
+    before: Vec<PlanNote>,
+    outcome: Outcome<'a>,
+    /// Reported after (for a shape: everything; for a nested group: an
+    /// empty group or a box out of range).
+    after: Vec<PlanNote>,
+}
+
+struct GroupPlan<'a> {
+    children: Vec<ChildPlan<'a>>,
+}
+
+impl GroupPlan<'_> {
+    fn kept(&self) -> usize {
+        self.children.iter().filter(|c| !matches!(c.outcome, Outcome::Dropped)).count()
+    }
+}
+
+fn plan_children(children: &[Hwp5GroupChild], origin: (f64, f64)) -> GroupPlan<'_> {
+    GroupPlan { children: children.iter().map(|c| plan_child(c, origin)).collect() }
+}
+
+fn plan_child(child: &Hwp5GroupChild, origin: (f64, f64)) -> ChildPlan<'_> {
+    if let Hwp5Control::Group(nested) = &child.control {
+        return plan_nested(child, nested, origin);
+    }
+    let mut after = Vec::new();
+    let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
+    if let Some(kind) = unsupported_kind(&child.control) {
+        after.push(note(kind, "unsupported group child"));
+        return dropped(after);
+    }
+    let render = match &child.render {
+        Ok(render) => render,
+        Err(reason) => {
+            after.push(note("group_child_transform", format!("matrix chain: {reason}")));
+            return dropped(after);
+        }
+    };
+    for &id in &child.nested_controls {
+        let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
+        if matches!(id, CTRL_ID_TABLE | CTRL_ID_GSO | CTRL_ID_EQED) {
+            after.push(note(
+                "group_nested_object",
+                format!("`{name}` object inside a group child is not decoded"),
+            ));
+        } else {
+            after.push(note(
+                "group_child_control",
+                format!("`{name}` control in a group child's text is not decoded"),
+            ));
+        }
+    }
+    let has_text = !child.paragraphs.is_empty();
+    let Some(control) = wire_local_control(child, render, has_text, &mut after) else {
+        return dropped(after);
+    };
+    let keeps_text =
+        has_text && matches!(control, Control::TextBox { .. } | Control::Ellipse { .. });
+    if has_text && !keeps_text {
+        after.push(note(
+            "group_child_text",
+            format!("text of a {} group child is not carried", control.kind_name()),
+        ));
+    }
+    // What turns with the shape, read from the source: its text (written or
+    // not — the source shape's text turned with it) and a directional fill.
+    let mut turns = has_text;
+    match render.fill {
+        Hwp5ShapeFill::Plain => {}
+        Hwp5ShapeFill::Directional(fill) => {
+            after.push(note("group_child_fill", format!("{fill} fill not carried by Core")));
+            turns = true;
+        }
+        Hwp5ShapeFill::Unreadable => {
+            after.push(note("group_child_fill", "fill information unreadable"));
+            turns = true;
+        }
+    }
+    let input = FoldInput::new(chain(render), initial_size(render), origin)
+        .with_geometry_facts(GeometryFacts::new(turns));
+    let (kept, losses) = match fold_group_child(control, &input) {
+        FoldOutcome::Kept { control, losses } => (Some(control), losses),
+        FoldOutcome::Dropped { losses } => (None, losses),
+        _ => (None, Vec::new()),
+    };
+    for loss in losses {
+        let kind = match loss.kind() {
+            FoldLossKind::Degenerate => "group_child_degenerate",
+            _ => "group_child_transform",
+        };
+        after.push(note(kind, loss.detail().to_string()));
+    }
+    let outcome = match kept {
+        Some(control) => Outcome::Kept { control, keeps_text },
+        None => Outcome::Dropped,
+    };
+    ChildPlan { child, before: Vec::new(), outcome, after }
+}
+
+/// A nested group: its children are folded against a provisional origin
+/// near their own corner (so a child far from the outer origin but close to
+/// its group still fits the HWPUNIT range), then the group is sized by
+/// their exact Core corners and they are moved to be relative to it — what
+/// a decode of the HWPX writer's output finds again.
+fn plan_nested<'a>(
+    child: &'a Hwp5GroupChild,
+    nested: &'a Hwp5GroupControl,
+    parent_origin: (f64, f64),
+) -> ChildPlan<'a> {
+    let before = nested_box_notes(nested);
+    let provisional = wire_bounds(&nested.children, false)
+        .map_or(parent_origin, |b| (b.min_x().round(), b.min_y().round()));
+    let mut plan = plan_children(&nested.children, provisional);
+    let mut corners: Vec<(f64, f64)> = Vec::new();
+    for c in &plan.children {
+        match &c.outcome {
+            Outcome::Kept { control, .. } => {
+                corners.extend(
+                    emitted_corners(control, &EmissionPolicy::exact()).into_iter().flatten(),
+                );
+            }
+            Outcome::Nested { offset, size, .. } => {
+                let (x, y) = (f64::from(offset.0), f64::from(offset.1));
+                let (w, h) = (f64::from(size.0), f64::from(size.1));
+                corners.extend([(x, y), (x + w, y + h)]);
+            }
+            Outcome::Dropped => {}
+        }
+    }
+    let mut after = Vec::new();
+    let Some(b) = group_bounds(corners) else {
+        after.push(note("group", "no group child can be represented in Core"));
+        return ChildPlan { child, before, outcome: Outcome::Dropped, after };
+    };
+    let (dx, dy) = (b.min_x().round() as i32, b.min_y().round() as i32);
+    for c in &mut plan.children {
+        match &mut c.outcome {
+            Outcome::Kept { control, .. } => shift_child(control, -dx, -dy),
+            Outcome::Nested { offset, .. } => *offset = (offset.0 - dx, offset.1 - dy),
+            Outcome::Dropped => {}
+        }
+    }
+    let size =
+        ((b.max_x() - f64::from(dx)).round() as i32, (b.max_y() - f64::from(dy)).round() as i32);
+    let offset = (
+        (provisional.0 - parent_origin.0).round() as i32 + dx,
+        (provisional.1 - parent_origin.1).round() as i32 + dy,
+    );
+    if [size.0, size.1, offset.0, offset.1].iter().any(|&v| HwpUnit::new(v).is_err()) {
+        after.push(note("nested_group_placement", "size or offset outside the HWPUNIT range"));
+        return ChildPlan { child, before, outcome: Outcome::Dropped, after };
+    }
+    ChildPlan { child, before, outcome: Outcome::Nested { plan, offset, size }, after }
+}
+
+/// A nested group's own matrices should describe the box of its shapes. A
+/// child Core cannot carry (a picture) still counts in the stored box but
+/// not in the shapes' bounds; it is reported on its own, so the boxes are not
+/// compared then.
+fn nested_box_notes(nested: &Hwp5GroupControl) -> Vec<PlanNote> {
+    if has_unsupported_child(&nested.children) {
+        return Vec::new();
+    }
+    let Some(leaves) = wire_bounds(&nested.children, false) else { return Vec::new() };
+    match &nested.render {
+        Ok(render) => {
+            let Some(own) = group_bounds(render_corners(render)) else { return Vec::new() };
+            let err = (own.min_x() - leaves.min_x())
+                .abs()
+                .max((own.min_y() - leaves.min_y()).abs())
+                .max((own.max_x() - leaves.max_x()).abs())
+                .max((own.max_y() - leaves.max_y()).abs());
+            if err > NESTED_BOX_TOLERANCE {
+                vec![note(
+                    "nested_group_placement",
+                    format!("nested group box differs from its shapes by {err:.2}"),
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+        Err(reason) => {
+            vec![note("nested_group_placement", format!("nested group matrix chain: {reason}"))]
+        }
+    }
+}
+
+fn shift_child(child: &mut Control, dx: i32, dy: i32) {
+    let placement = match child {
+        Control::TextBox { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. }
+        | Control::Line { placement, .. }
+        | Control::TextArt { placement, .. }
+        | Control::EmbeddedChart { placement, .. }
+        | Control::Group { placement, .. } => placement,
+        _ => return,
+    };
+    let (x, y) =
+        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+    *placement = offset_placement(x + dx, y + dy);
+}
+
+/// The child as a Core control with its stored local geometry (points not
+/// rescaled, centre and axes as stored) and, for a rect or ellipse with
+/// text, an empty text list the projection fills. `None` = dropped (noted).
+fn wire_local_control(
+    child: &Hwp5GroupChild,
+    render: &Hwp5ShapeRender,
+    has_text: bool,
+    notes: &mut Vec<PlanNote>,
+) -> Option<Control> {
+    let (width, height) =
+        (hwp_unit_from_u32(render.initial.0), hwp_unit_from_u32(render.initial.1));
+    let mut degenerate = |what: &str| {
+        notes.push(note("group_child_degenerate", format!("{what} has no shape to draw")));
+        None
+    };
+    let control = match &child.control {
+        Hwp5Control::Rect(_) if has_text => Control::text_box(Vec::new(), width, height),
+        Hwp5Control::Rect(_) => match Control::rect(width, height) {
+            Ok(c) => c,
+            Err(_) => return degenerate("rect"),
+        },
+        Hwp5Control::Ellipse(e) => {
+            let mut c = if has_text {
+                Control::ellipse_with_text(width, height, Vec::new())
+            } else {
+                Control::ellipse(width, height)
+            };
+            if let Control::Ellipse { center, axis1, axis2, .. } = &mut c {
+                *center = point(e.shape.center);
+                *axis1 = point(e.shape.axis1);
+                *axis2 = point(e.shape.axis2);
+            }
+            c
+        }
+        Hwp5Control::Arc(a) => {
+            let mut c = Control::arc(ArcType::Normal, width, height);
+            if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut c {
+                *center = point(a.shape.center);
+                *axis1 = point(a.shape.axis1);
+                *axis2 = point(a.shape.axis2);
+                *start1 = point(a.shape.start1);
+                *end1 = point(a.shape.end1);
+                *start2 = point(a.shape.start2);
+                *end2 = point(a.shape.end2);
+            }
+            c
+        }
+        Hwp5Control::Polygon(p) => {
+            match Control::polygon(p.points.iter().copied().map(point).collect()) {
+                Ok(c) => c,
+                Err(_) => return degenerate("polygon"),
+            }
+        }
+        Hwp5Control::Curve(curve) => {
+            let mut c = match Control::curve(curve.points.iter().copied().map(point).collect()) {
+                Ok(c) => c,
+                Err(_) => return degenerate("curve"),
+            };
+            if let Control::Curve { segment_types, .. } = &mut c {
+                let decoded: Vec<CurveSegmentType> = curve
+                    .segment_types
+                    .iter()
+                    .map(|byte| match byte {
+                        0 => CurveSegmentType::Line,
+                        _ => CurveSegmentType::Curve,
+                    })
+                    .collect();
+                if !decoded.is_empty() {
+                    *segment_types = decoded;
+                }
+            }
+            c
+        }
+        Hwp5Control::Line(l) => match Control::line(point(l.start), point(l.end)) {
+            Ok(c) => c,
+            Err(_) => return degenerate("line"),
+        },
+        Hwp5Control::ConnectLine(l) => match Control::connect_line(point(l.start), point(l.end)) {
+            Ok(c) => c,
+            Err(_) => return degenerate("connect line"),
+        },
+        Hwp5Control::TextArt(t) => {
+            let mut warnings = Vec::new();
+            let run = project_text_art_run(t, &mut warnings);
+            notes.extend(warnings.into_iter().map(PlanNote::Warning));
+            match run.content {
+                RunContent::Control(c) => *c,
+                _ => return None,
+            }
+        }
+        Hwp5Control::Equation(e) => match project_equation_run(e).content {
+            RunContent::Control(c) => *c,
+            _ => return None,
+        },
+        // Groups and unsupported kinds never reach here (`plan_child`).
+        _ => return None,
+    };
+    Some(control)
+}
+
+// ── text the plan keeps (for layout hints) ───────────────────────
+
+/// The `drawText` paragraph lists of `group`'s children that projection
+/// writes, in document order: rect and ellipse children the fold keeps,
+/// under nested groups that are kept. Layout hints are taken for exactly
+/// these.
+pub(crate) fn written_group_text(group: &Hwp5GroupControl) -> Vec<&[Hwp5Paragraph]> {
+    let mut out = Vec::new();
+    collect_written_text(&plan_children(&group.children, (0.0, 0.0)), &mut out);
+    out
+}
+
+fn collect_written_text<'a>(plan: &GroupPlan<'a>, out: &mut Vec<&'a [Hwp5Paragraph]>) {
+    for c in &plan.children {
+        match &c.outcome {
+            Outcome::Kept { keeps_text: true, .. } => out.push(&c.child.paragraphs),
+            Outcome::Nested { plan, .. } => collect_written_text(plan, out),
+            Outcome::Kept { .. } | Outcome::Dropped => {}
+        }
+    }
+}
+
+// ── projection: replay the plan ──────────────────────────────────
+
 /// Projects a top-level group into a `Control::Group` run. The group keeps
 /// its displayed size (`CtrlHeader`) and page offset; its children are folded
 /// against the origin of the outermost space. `None` when no child can be
@@ -172,8 +545,10 @@ pub(super) fn project_group_run(
         lost(state, &place, "group_transform", format!("group matrix chain: {reason}"));
     }
     check_display_size(group, &place, state);
-    let children = project_children(&group.children, (0.0, 0.0), &mut place, state);
-    if children.is_empty() {
+    let plan = plan_children(&group.children, (0.0, 0.0));
+    let kept = plan.kept();
+    let children = emit(plan, &mut place, state);
+    if kept == 0 {
         lost(state, &place, "group", "no group child can be represented in Core".to_string());
         return None;
     }
@@ -188,6 +563,70 @@ pub(super) fn project_group_run(
         },
         CharShapeIndex::new(0),
     ))
+}
+
+fn report(notes: Vec<PlanNote>, place: &Place, state: &mut ProjectionImageState<'_>) {
+    for n in notes {
+        match n {
+            PlanNote::Lost { kind, reason } => lost(state, place, kind, reason),
+            PlanNote::Warning(w) => state.warnings.push(w),
+        }
+    }
+}
+
+/// Replays a plan: reports what it lost and builds the kept children, the
+/// text of rect and ellipse children projected in.
+fn emit(
+    plan: GroupPlan<'_>,
+    place: &mut Place,
+    state: &mut ProjectionImageState<'_>,
+) -> Vec<Control> {
+    let mut out = Vec::with_capacity(plan.children.len());
+    for (i, c) in plan.children.into_iter().enumerate() {
+        place.path.push(i);
+        report(c.before, place, state);
+        let control = match c.outcome {
+            Outcome::Nested { plan, offset, size } => {
+                let children = emit(plan, place, state);
+                Some(Control::Group {
+                    children,
+                    width: HwpUnit::new(size.0).unwrap_or(HwpUnit::ZERO),
+                    height: HwpUnit::new(size.1).unwrap_or(HwpUnit::ZERO),
+                    placement: offset_placement(offset.0, offset.1),
+                    inst_id: None,
+                })
+            }
+            Outcome::Kept { mut control, keeps_text } => {
+                if keeps_text {
+                    attach_text(&mut control, c.child, state);
+                }
+                Some(*control)
+            }
+            Outcome::Dropped => None,
+        };
+        report(c.after, place, state);
+        out.extend(control);
+        place.path.pop();
+    }
+    out
+}
+
+fn attach_text(
+    control: &mut Control,
+    child: &Hwp5GroupChild,
+    state: &mut ProjectionImageState<'_>,
+) {
+    let projected =
+        project_nested_paragraphs(&child.paragraphs, state, ImageProjectionContext::TextBox);
+    let valign = shape_vertical_align_from_list_header(child.list_header_properties);
+    match control {
+        Control::TextBox { paragraphs, text_vertical_align, .. }
+        | Control::Ellipse { paragraphs, text_vertical_align, .. } => {
+            *paragraphs = projected;
+            *text_vertical_align = valign;
+        }
+        _ => {}
+    }
 }
 
 /// The displayed size is the extent of every shape the group holds
@@ -223,326 +662,6 @@ fn check_display_size(
             ),
         );
     }
-}
-
-/// Children folded against `origin`, the corner of their direct parent group
-/// in the outermost space.
-fn project_children(
-    children: &[Hwp5GroupChild],
-    origin: (f64, f64),
-    place: &mut Place,
-    state: &mut ProjectionImageState<'_>,
-) -> Vec<Control> {
-    let mut out = Vec::with_capacity(children.len());
-    for (i, child) in children.iter().enumerate() {
-        place.path.push(i);
-        if let Some(control) = project_child(child, origin, place, state) {
-            out.push(control);
-        }
-        place.path.pop();
-    }
-    out
-}
-
-/// A nested group: its children are folded against the parent's corner,
-/// then the group is sized by their exact Core corners and they are moved to
-/// be relative to it — what a decode of the HWPX writer's output finds again.
-fn project_nested_group(
-    nested: &Hwp5GroupControl,
-    parent_origin: (f64, f64),
-    place: &mut Place,
-    state: &mut ProjectionImageState<'_>,
-) -> Option<Control> {
-    check_nested_box(nested, place, state);
-    let mut children = project_children(&nested.children, parent_origin, place, state);
-    let corners: Vec<(f64, f64)> = children
-        .iter()
-        .filter_map(|c| emitted_corners(c, &EmissionPolicy::exact()))
-        .flatten()
-        .collect();
-    let Some(b) = group_bounds(corners) else {
-        lost(state, place, "group", "no group child can be represented in Core".to_string());
-        return None;
-    };
-    let (dx, dy) = (b.min_x().round() as i32, b.min_y().round() as i32);
-    for child in &mut children {
-        shift_child(child, -dx, -dy);
-    }
-    let (w, h) =
-        ((b.max_x() - f64::from(dx)).round() as i32, (b.max_y() - f64::from(dy)).round() as i32);
-    let fits = [w, h, dx, dy].iter().all(|&v| HwpUnit::new(v).is_ok());
-    let (Ok(width), Ok(height), true) = (HwpUnit::new(w), HwpUnit::new(h), fits) else {
-        lost(
-            state,
-            place,
-            "nested_group_placement",
-            "size or offset outside the HWPUNIT range".to_string(),
-        );
-        return None;
-    };
-    Some(Control::Group {
-        children,
-        width,
-        height,
-        placement: offset_placement(dx, dy),
-        inst_id: None,
-    })
-}
-
-/// A nested group's own matrices should describe the box of its shapes. A
-/// child Core cannot carry (a picture) still counts in the stored box but
-/// not in the shapes' bounds; it is reported on its own, so the boxes are not
-/// compared then.
-fn check_nested_box(
-    nested: &Hwp5GroupControl,
-    place: &Place,
-    state: &mut ProjectionImageState<'_>,
-) {
-    if has_unsupported_child(&nested.children) {
-        return;
-    }
-    let Some(leaves) = wire_bounds(&nested.children, false) else { return };
-    match &nested.render {
-        Ok(render) => {
-            let Some(own) = group_bounds(render_corners(render)) else { return };
-            let err = (own.min_x() - leaves.min_x())
-                .abs()
-                .max((own.min_y() - leaves.min_y()).abs())
-                .max((own.max_x() - leaves.max_x()).abs())
-                .max((own.max_y() - leaves.max_y()).abs());
-            if err > NESTED_BOX_TOLERANCE {
-                lost(
-                    state,
-                    place,
-                    "nested_group_placement",
-                    format!("nested group box differs from its shapes by {err:.2}"),
-                );
-            }
-        }
-        Err(reason) => lost(
-            state,
-            place,
-            "nested_group_placement",
-            format!("nested group matrix chain: {reason}"),
-        ),
-    }
-}
-
-fn shift_child(child: &mut Control, dx: i32, dy: i32) {
-    let placement = match child {
-        Control::TextBox { placement, .. }
-        | Control::Rect { placement, .. }
-        | Control::Ellipse { placement, .. }
-        | Control::Arc { placement, .. }
-        | Control::Polygon { placement, .. }
-        | Control::Curve { placement, .. }
-        | Control::ConnectLine { placement, .. }
-        | Control::Line { placement, .. }
-        | Control::TextArt { placement, .. }
-        | Control::EmbeddedChart { placement, .. }
-        | Control::Group { placement, .. } => placement,
-        _ => return,
-    };
-    let (x, y) =
-        placement.as_ref().map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
-    *placement = offset_placement(x + dx, y + dy);
-}
-
-fn project_child(
-    child: &Hwp5GroupChild,
-    parent_origin: (f64, f64),
-    place: &mut Place,
-    state: &mut ProjectionImageState<'_>,
-) -> Option<Control> {
-    if let Hwp5Control::Group(nested) = &child.control {
-        return project_nested_group(nested, parent_origin, place, state);
-    }
-    if let Some(kind) = unsupported_kind(&child.control) {
-        lost(state, place, kind, "unsupported group child".to_string());
-        return None;
-    }
-    let render = match &child.render {
-        Ok(render) => render,
-        Err(reason) => {
-            lost(state, place, "group_child_transform", format!("matrix chain: {reason}"));
-            return None;
-        }
-    };
-    report_nested_controls(child, place, state);
-    let control = wire_local_control(child, render, place, state)?;
-    let turns = match render.fill {
-        Hwp5ShapeFill::Plain => false,
-        Hwp5ShapeFill::Directional(fill) => {
-            // It turns with the shape, so the shape keeps its rotation.
-            lost(state, place, "group_child_fill", format!("{fill} fill not carried by Core"));
-            true
-        }
-        Hwp5ShapeFill::Unreadable => {
-            lost(state, place, "group_child_fill", "fill information unreadable".to_string());
-            true
-        }
-    };
-    let input = FoldInput::new(chain(render), initial_size(render), parent_origin)
-        .with_geometry_facts(GeometryFacts::new(turns));
-    let (kept, losses) = match fold_group_child(control, &input) {
-        FoldOutcome::Kept { control, losses } => (Some(*control), losses),
-        FoldOutcome::Dropped { losses } => (None, losses),
-        _ => (None, Vec::new()),
-    };
-    for loss in losses {
-        let kind = match loss.kind() {
-            FoldLossKind::Degenerate => "group_child_degenerate",
-            _ => "group_child_transform",
-        };
-        lost(state, place, kind, loss.detail().to_string());
-    }
-    kept
-}
-
-/// The group child parser keeps only the text of a child's paragraphs:
-/// every control under the child is lost. Objects (tables, drawing objects,
-/// equations) are `group_nested_object`, the rest `group_child_control`.
-fn report_nested_controls(
-    child: &Hwp5GroupChild,
-    place: &Place,
-    state: &mut ProjectionImageState<'_>,
-) {
-    for &id in &child.nested_controls {
-        let name = String::from_utf8_lossy(&id.to_be_bytes()).into_owned();
-        if matches!(id, CTRL_ID_TABLE | CTRL_ID_GSO | CTRL_ID_EQED) {
-            lost(
-                state,
-                place,
-                "group_nested_object",
-                format!("`{name}` object inside a group child is not decoded"),
-            );
-        } else {
-            lost(
-                state,
-                place,
-                "group_child_control",
-                format!("`{name}` control in a group child's text is not decoded"),
-            );
-        }
-    }
-}
-
-/// The child as a Core control with its stored local geometry (points not
-/// rescaled, centre and axes as stored), ready to fold. `None` = reported
-/// and dropped.
-fn wire_local_control(
-    child: &Hwp5GroupChild,
-    render: &Hwp5ShapeRender,
-    place: &Place,
-    state: &mut ProjectionImageState<'_>,
-) -> Option<Control> {
-    let (width, height) =
-        (hwp_unit_from_u32(render.initial.0), hwp_unit_from_u32(render.initial.1));
-    let has_text = !child.paragraphs.is_empty();
-    let text = |state: &mut ProjectionImageState<'_>| {
-        project_nested_paragraphs(&child.paragraphs, state, ImageProjectionContext::TextBox)
-    };
-    let valign = shape_vertical_align_from_list_header(child.list_header_properties);
-    let degenerate = |state: &mut ProjectionImageState<'_>, what: &str| {
-        lost(state, place, "group_child_degenerate", format!("{what} has no shape to draw"));
-        None
-    };
-    let control = match &child.control {
-        Hwp5Control::Rect(_) if has_text => {
-            let mut c = Control::text_box(text(state), width, height);
-            if let Control::TextBox { text_vertical_align, .. } = &mut c {
-                *text_vertical_align = valign;
-            }
-            c
-        }
-        Hwp5Control::Rect(_) => match Control::rect(width, height) {
-            Ok(c) => c,
-            Err(_) => return degenerate(state, "rect"),
-        },
-        Hwp5Control::Ellipse(e) => {
-            let mut c = if has_text {
-                Control::ellipse_with_text(width, height, text(state))
-            } else {
-                Control::ellipse(width, height)
-            };
-            if let Control::Ellipse { center, axis1, axis2, text_vertical_align, .. } = &mut c {
-                *center = point(e.shape.center);
-                *axis1 = point(e.shape.axis1);
-                *axis2 = point(e.shape.axis2);
-                if has_text {
-                    *text_vertical_align = valign;
-                }
-            }
-            c
-        }
-        Hwp5Control::Arc(a) => {
-            let mut c = Control::arc(ArcType::Normal, width, height);
-            if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut c {
-                *center = point(a.shape.center);
-                *axis1 = point(a.shape.axis1);
-                *axis2 = point(a.shape.axis2);
-                *start1 = point(a.shape.start1);
-                *end1 = point(a.shape.end1);
-                *start2 = point(a.shape.start2);
-                *end2 = point(a.shape.end2);
-            }
-            c
-        }
-        Hwp5Control::Polygon(p) => {
-            match Control::polygon(p.points.iter().copied().map(point).collect()) {
-                Ok(c) => c,
-                Err(_) => return degenerate(state, "polygon"),
-            }
-        }
-        Hwp5Control::Curve(curve) => {
-            let mut c = match Control::curve(curve.points.iter().copied().map(point).collect()) {
-                Ok(c) => c,
-                Err(_) => return degenerate(state, "curve"),
-            };
-            if let Control::Curve { segment_types, .. } = &mut c {
-                let decoded: Vec<CurveSegmentType> = curve
-                    .segment_types
-                    .iter()
-                    .map(|byte| match byte {
-                        0 => CurveSegmentType::Line,
-                        _ => CurveSegmentType::Curve,
-                    })
-                    .collect();
-                if !decoded.is_empty() {
-                    *segment_types = decoded;
-                }
-            }
-            c
-        }
-        Hwp5Control::Line(l) => match Control::line(point(l.start), point(l.end)) {
-            Ok(c) => c,
-            Err(_) => return degenerate(state, "line"),
-        },
-        Hwp5Control::ConnectLine(l) => match Control::connect_line(point(l.start), point(l.end)) {
-            Ok(c) => c,
-            Err(_) => return degenerate(state, "connect line"),
-        },
-        Hwp5Control::TextArt(t) => match project_text_art_run(t, &mut state.warnings).content {
-            RunContent::Control(c) => *c,
-            _ => return None,
-        },
-        Hwp5Control::Equation(e) => match project_equation_run(e).content {
-            RunContent::Control(c) => *c,
-            _ => return None,
-        },
-        // Groups and unsupported kinds never reach here (`project_child`).
-        _ => return None,
-    };
-    let keeps_text = matches!(control, Control::TextBox { .. } | Control::Ellipse { .. });
-    if has_text && !keeps_text {
-        lost(
-            state,
-            place,
-            "group_child_text",
-            format!("text of a {} group child is not carried", control.kind_name()),
-        );
-    }
-    Some(control)
 }
 
 #[cfg(test)]
@@ -720,8 +839,8 @@ mod tests {
     /// | N2 (bounds of C) | (0, 1600) | |
     /// | C | (0, 0) — inline placement | (2500, 5000) |
     ///
-    /// 이것을 실패시키는 것: 중첩 묶음이 자식 offset 을 자기 원점만큼 빼지 않는
-    /// 것(B 가 (2600, 3400)), 두 번 빼는 것(B 가 (−2400, −3400)).
+    /// 이것을 실패시키는 것: 중첩 묶음 offset 을 임시 원점(자식 wire 경계) 대신
+    /// 경계 보정량만으로 두는 것(N1 이 (0, 0)).
     #[test]
     fn nested_children_are_placed_relative_to_their_direct_group() {
         let n2 =
@@ -1178,5 +1297,100 @@ mod tests {
         let (r, lost) = fold(3);
         assert!(r.is_some_and(|a| (a - 30.0).abs() < 1e-3), "pattern: {r:?}");
         assert_eq!(lost, ["group_child_fill"]);
+    }
+
+    /// A nested group far from the outer origin: its children are folded
+    /// against a provisional origin near their own corner, so a child at
+    /// outer x = 110,000,000 (beyond the HWPUNIT range there) but
+    /// 20,000,000 from its group is kept: nested offset 90,000,000, child
+    /// offsets (0, 0) and (20,000,000, 0).
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음 자식을 바깥 원점 기준으로 접고 나서 옮기는 것
+    /// (자식이 범위 밖으로 버려진다).
+    #[test]
+    fn nested_child_far_out_but_near_its_group_is_kept() {
+        let n = nested(
+            at(20_001_000, 1000, 90_000_000.0, 0.0),
+            vec![
+                child(rect(), at(1000, 1000, 90_000_000.0, 0.0)),
+                child(rect(), at(1000, 1000, 110_000_000.0, 0.0)),
+            ],
+        );
+        let top = group(geo(0, 0, 0, 0), Err("not used".into()), vec![n]);
+        let (g, lost) = project(&top);
+        assert_eq!(lost, ["group_transform", "group_display_size"]);
+        let g = g.unwrap();
+        let [n] = children(&g) else { panic!() };
+        assert_eq!(offset(n), (90_000_000, 0));
+        let offs: Vec<_> = children(n).iter().map(offset).collect();
+        assert_eq!(offs, [(0, 0), (20_000_000, 0)]);
+    }
+
+    /// A polygon's text is not carried, but it turned with the polygon in
+    /// the source, so the polygon folds by the box rule: a 30° turn stays a
+    /// rotation (the point rule would bake it into the points), and a shear
+    /// is reported (the point rule would carry it silently in the points).
+    ///
+    /// 이것을 실패시키는 것: 기하 사실을 채우기에서만 읽는 것(버린 글자를 빼먹어 점
+    /// 규칙으로 접힘).
+    #[test]
+    fn polygon_with_dropped_text_still_folds_as_a_box() {
+        let fold = |pair: (Hwp5Matrix, Hwp5Matrix)| {
+            let mut poly = child(
+                polygon(&[(0, 0), (1000, 0), (0, 1000)]),
+                Ok(render((1000, 1000), tr(1000.0, 1000.0), pair)),
+            );
+            poly.paragraphs.push(paragraph("dropped"));
+            let top = group(geo(0, 0, 3000, 3000), at(3000, 3000, 0.0, 0.0), vec![poly]);
+            let (g, lost) = project(&top);
+            (g.map(|g| rotation(&children(&g)[0])), lost)
+        };
+        let (r, lost) = fold((ID, rot(30.0)));
+        assert!(r.flatten().is_some_and(|a| (a - 30.0).abs() < 1e-3), "{r:?}");
+        assert_eq!(lost, ["group_child_text"]);
+        let shear = [1.0, 0.5, 0.0, 0.0, 1.0, 0.0];
+        let (_, lost) = fold((ID, shear));
+        assert_eq!(lost, ["group_child_text", "group_child_transform"]);
+    }
+
+    /// A nested group's Core box is the bounds of its children as written,
+    /// not of their stored boxes: a polygon whose points fill only the lower
+    /// right of its 1000 × 1000 box at (2000, 0) puts the group at
+    /// (2500, 500) and the polygon at the group's corner.
+    ///
+    /// 이것을 실패시키는 것: 최종 경계로 자식 도형을 옮기지 않는 것(다각형 offset 이
+    /// (500, 500) 으로 남아 두 번 옮겨진다), 안쪽 묶음 offset 을 옮기지 않는 것.
+    #[test]
+    fn nested_group_box_is_the_bounds_of_its_written_children() {
+        let n = nested(
+            at(1000, 1000, 2000.0, 0.0),
+            vec![child(
+                polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
+                at(1000, 1000, 2000.0, 0.0),
+            )],
+        );
+        let top = group(geo(0, 0, 3000, 1000), at(3000, 1000, 0.0, 0.0), vec![n]);
+        let (g, _) = project(&top);
+        let g = g.unwrap();
+        let [n] = children(&g) else { panic!() };
+        assert_eq!(offset(n), (2500, 500));
+        assert_eq!(offset(&children(n)[0]), (0, 0));
+
+        // The same one level deeper: the inner group moves with its parent.
+        let inner = nested(
+            at(1000, 1000, 2000.0, 0.0),
+            vec![child(
+                polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
+                at(1000, 1000, 2000.0, 0.0),
+            )],
+        );
+        let outer = nested(at(1000, 1000, 2000.0, 0.0), vec![inner]);
+        let top = group(geo(0, 0, 3000, 1000), at(3000, 1000, 0.0, 0.0), vec![outer]);
+        let (g, _) = project(&top);
+        let g = g.unwrap();
+        let [outer] = children(&g) else { panic!() };
+        assert_eq!(offset(outer), (2500, 500));
+        let [inner] = children(outer) else { panic!() };
+        assert_eq!(offset(inner), (0, 0));
     }
 }

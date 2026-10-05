@@ -5,6 +5,8 @@
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
 mod group;
+
+pub(crate) use group::written_group_text;
 mod shapes;
 mod text;
 
