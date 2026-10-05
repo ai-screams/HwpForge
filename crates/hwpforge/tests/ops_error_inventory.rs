@@ -732,7 +732,8 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     count: 1,
                 }),
             ),
-            // 이것을 실패시키는 것: `encode_warning_code` 의 `ContentLost` 갈래를 빼는 것 (`OTHER`).
+            // 이것을 실패시키는 것: `encode_warning_code` 의 위임 갈래를 `UNCLASSIFIED` 로
+            // 되돌리는 것 (`OTHER`).
             (
                 "ContentLost",
                 OpsWarning::Encode(EncodeWarning::ContentLost {

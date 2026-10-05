@@ -668,13 +668,6 @@ fn convert_warning_parts(warning: &ConvertWarning) -> (&'static str, String, Opt
                 Some(format!("{part} {location}")),
             );
         }
-        ConvertWarning::HwpxEncode(EncodeWarning::ContentLost { part, path, kind, reason }) => {
-            return (
-                "CONTENT_LOST",
-                format!("{kind} lost: {reason}"),
-                Some(format!("{part}:{path}")),
-            );
-        }
         // The CLI has always printed these three under `OTHER` with their
         // Debug text; kept as is (public output contract).
         ConvertWarning::HwpxEncode(

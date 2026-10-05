@@ -187,9 +187,6 @@ fn encode_warning_line(w: &EncodeWarning) -> String {
                 "XML_FORBIDDEN_CHARS_REMOVED at {part} {location}: {count} character(s) removed"
             )
         }
-        EncodeWarning::ContentLost { part, path, kind, reason } => {
-            format!("CONTENT_LOST at {part}:{path}: {kind} lost: {reason}")
-        }
         other => match other.location() {
             Some(location) => format!("{} at {location}: {}", other.code(), other.message()),
             None => format!("{}: {}", other.code(), other.message()),
@@ -272,8 +269,8 @@ mod tests {
 
     #[test]
     fn encode_warning_line_names_the_place_of_lost_content() {
-        // 이것을 실패시키는 것: `encode_warning_line` 의 `ContentLost` 갈래를 빼는 것
-        // (Debug 폴백 `ENCODE_WARNING …` 이 된다).
+        // 이것을 실패시키는 것: `encode_warning_line` 의 접근자 갈래를 Debug 폴백
+        // (`ENCODE_WARNING …`)으로 되돌리는 것.
         let warning = EncodeWarning::ContentLost {
             part: "Contents/section0.xml".into(),
             path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(2)]),
