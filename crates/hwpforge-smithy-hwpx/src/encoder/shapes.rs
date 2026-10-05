@@ -1297,9 +1297,9 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
 /// Encodes one child shape control into its HWPX XML fragment, reusing the
 /// existing per-shape encoders. Text-bearing children (`TextBox`,
 /// `Ellipse`-with-paragraphs) carry their `<hp:drawText>` automatically via
-/// those encoders. Returns `None` for controls that have no flat-shape
-/// representation (these are dropped — the decoder already warns for degraded
-/// nested groups).
+/// those encoders. Returns `None` for controls that have no group-child
+/// form (the caller reports them as
+/// [`EncodeWarning::ContentLost`](super::EncodeWarning::ContentLost)).
 ///
 /// `parent_origin` is where the parent group's box starts in the outermost
 /// group's space. Hancom maps every shape of a nested group straight into
@@ -1383,9 +1383,9 @@ fn encode_group_child_xml(
             serialize_with_root(&hx, "hp:connectLine")?
         }
         Control::TextArt { .. } => encode_text_art_to_xml(child, true)?,
-        // Nested groups are Wave B; in Wave A a group child is always flat.
-        // Anything else (Equation, EmbeddedChart, Group, …) is not emitted as
-        // a container child yet — drop it rather than fabricate.
+        // Anything else (Equation, EmbeddedChart, …) has no container-child
+        // form — Hancom will not group an equation — so it is left out
+        // rather than fabricated; `encode_group_at` reports it as lost.
         _ => return Ok(None),
     };
     // 한컴 positions a container child by its transform-matrix translation;
@@ -1454,13 +1454,13 @@ fn encode_group_at(
     common.push_str(&serialize_with_root(&sc.rendering_info, "hp:renderingInfo")?);
 
     // Children in z-order, each at the next group level. `emitted_idx` only
-    // advances for children that actually produce XML — dropped controls
-    // (Equation/EmbeddedChart/… — see `encode_group_child_xml`) never
-    // acquire a `GroupChild` path segment, so nested cache-drop warnings
-    // index against the emitted sequence, not the source child list.
+    // advances for children that actually produce XML — a dropped control
+    // (Equation/EmbeddedChart/… — see `encode_group_child_xml`) is reported
+    // at the index the next written child takes, so every warning's path
+    // indexes the written sequence, not the source child list.
     let mut children_xml = String::new();
     let mut emitted_idx = 0usize;
-    for child in children {
+    for (source_idx, child) in children.iter().enumerate() {
         sink.enter(PathSeg::GroupChild(emitted_idx));
         let child_result = encode_group_child_xml(
             child,
@@ -1471,6 +1471,17 @@ fn encode_group_at(
             options,
             sink,
         );
+        if let Ok(None) = child_result {
+            // Reported where it would have stood in the written group; the
+            // reason names its place among the Core children.
+            sink.content_lost(
+                child.kind_name(),
+                format!(
+                    "group child {source_idx} ({}) has no HWPX group form and is left out",
+                    child.kind_name()
+                ),
+            );
+        }
         sink.leave();
         if let Some(xml) = child_result? {
             children_xml.push_str(&xml);
@@ -2069,6 +2080,51 @@ mod tests {
             paths.iter().any(|p| p.contains("hp:caption/") && p.ends_with("hp:tbl/hp:sz")),
             "{paths:?}"
         );
+    }
+
+    /// An equation or a chart in a group has no HWPX group form (Hancom will
+    /// not group an equation — F4), so it is left out and reported as a
+    /// semantic loss at the place it would take; the other children stay.
+    ///
+    /// 이것을 실패시키는 것: 버리는 갈래의 `content_lost` 호출을 지우는 것, 경로를
+    /// 쓰인 순번 대신 Core 자식 순번으로 매기는 것.
+    #[test]
+    fn group_equation_and_chart_are_reported_as_lost() {
+        use crate::decoder::PathSeg;
+        let hu = |v: i32| HwpUnit::new(v).unwrap();
+        let chart = Control::EmbeddedChart {
+            chart_xml: String::new(),
+            ole_bytes: Vec::new(),
+            width: hu(3000),
+            height: hu(2000),
+            placement: None,
+        };
+        let group = group_of(vec![
+            Control::rect(hu(1000), hu(1000)).unwrap(),
+            Control::equation("a+b"),
+            chart,
+            Control::rect(hu(2000), hu(1000)).unwrap(),
+        ]);
+        let (xml, sink) = encode_group(&group);
+        assert_eq!(xml.matches("<hp:rect ").count(), 2, "{xml}");
+        assert!(!xml.contains("<hp:equation") && !xml.contains("<hp:ole"), "{xml}");
+        use crate::encoder::EncodeWarning;
+        let lost: Vec<(&str, &str, Option<&PathSeg>)> = sink
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                EncodeWarning::ContentLost { kind, reason, path, .. } => {
+                    Some((kind.as_str(), reason.as_str(), path.0.last()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lost.len(), 2, "{:?}", sink.warnings);
+        assert_eq!((lost[0].0, lost[0].2), ("equation", Some(&PathSeg::GroupChild(1))));
+        assert!(lost[0].1.contains("group child 1"), "{}", lost[0].1);
+        assert_eq!((lost[1].0, lost[1].2), ("embedded_chart", Some(&PathSeg::GroupChild(1))));
+        assert!(lost[1].1.contains("group child 2"), "{}", lost[1].1);
+        assert!(sink.warnings.iter().all(EncodeWarning::is_semantic_loss));
     }
 
     /// Replaces the counter-based `id`/`instid` values with `#` so encoder
