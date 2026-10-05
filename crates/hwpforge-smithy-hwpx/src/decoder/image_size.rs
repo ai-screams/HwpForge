@@ -7,31 +7,32 @@
 
 use hwpforge_core::image::ImageFormat;
 
-/// Pixel sizes of the package's images, keyed by every `binaryItemIDRef`
-/// that names them: the BinData name as stored (`logo.png`) and, when no
-/// other image shares it, the name without its extension (`image1` for
-/// `image1.png`, Hancom's form). An image whose header cannot be read is
-/// left out.
+/// Pixel sizes of the package's images, keyed by every reference that
+/// resolves to one: each stored name (`logo.png`) and each name without its
+/// extension (`image1`, Hancom's form), resolved by the crate's one image
+/// rule ([`resolve_image_key`](crate::style_lookup_bridge::resolve_image_key):
+/// an exact name first, else a stem only one image has). A reference is
+/// given the size of the image it resolves to and no other; when that
+/// image's header cannot be read, or the reference resolves to none, it
+/// gets no size.
 pub(crate) fn pixel_sizes_by_reference(
     store: &hwpforge_core::image::ImageStore,
 ) -> std::collections::HashMap<String, (u32, u32)> {
-    use std::collections::HashMap;
-    let mut out: HashMap<String, (u32, u32)> = HashMap::new();
-    let mut stems: HashMap<String, Vec<(u32, u32)>> = HashMap::new();
-    for (key, bytes) in store.iter() {
-        let Some(size) = pixel_size(bytes) else { continue };
-        out.insert(key.to_string(), size);
+    let mut candidates: Vec<&str> = Vec::new();
+    for (key, _) in store.iter() {
+        candidates.push(key);
         if let Some((stem, _)) = key.rsplit_once('.') {
-            stems.entry(stem.to_string()).or_default().push(size);
+            candidates.push(stem);
         }
     }
-    for (stem, sizes) in stems {
-        // Two images with the same stem: the stem names neither.
-        if let [size] = sizes[..] {
-            out.entry(stem).or_insert(size);
-        }
-    }
-    out
+    candidates
+        .into_iter()
+        .filter_map(|reference| {
+            let key = crate::style_lookup_bridge::resolve_image_key(store, reference)?;
+            let size = pixel_size(store.get(key)?)?;
+            Some((reference.to_string(), size))
+        })
+        .collect()
 }
 
 /// `(width, height)` in pixels, or `None` when the header cannot be read.
@@ -150,5 +151,29 @@ mod tests {
         assert_eq!(map.get("image1"), Some(&(300, 200)));
         assert_eq!(map.get("dup"), None);
         assert_eq!(map.get("dup.gif"), Some(&(2, 2)));
+    }
+
+    /// A reference gets the size of the image the crate's resolver picks and
+    /// no other: a stem shared with an image whose header cannot be read
+    /// (`dup.png` + `dup.wmf`) is ambiguous as the resolver says, and an
+    /// exact name whose own header cannot be read (`logo.wmf`) does not take
+    /// the size of another image whose stem it is (`logo.wmf.png`).
+    ///
+    /// 이것을 실패시키는 것: 크기를 못 읽는 자산을 후보에서 미리 빼는 것(`dup` 이 PNG
+    /// 크기를 얻는다) / 해석된 자산 대신 후보 이름이 가리키는 아무 자산의 크기를 쓰는 것
+    /// (`logo.wmf` 가 `logo.wmf.png` 크기를 얻는다).
+    #[test]
+    fn sizes_follow_the_crate_image_resolver() {
+        let wmf = vec![0xD7, 0xCD, 0xC6, 0x9A, 0, 0];
+        let mut store = hwpforge_core::image::ImageStore::new();
+        store.insert("dup.png", png(10, 10));
+        store.insert("dup.wmf", wmf.clone());
+        store.insert("logo.wmf", wmf);
+        store.insert("logo.wmf.png", png(20, 20));
+        let map = pixel_sizes_by_reference(&store);
+        assert_eq!(map.get("dup"), None);
+        assert_eq!(map.get("logo.wmf"), None);
+        assert_eq!(map.get("dup.png"), Some(&(10, 10)));
+        assert_eq!(map.get("logo.wmf.png"), Some(&(20, 20)));
     }
 }
