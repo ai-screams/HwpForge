@@ -338,3 +338,15 @@ fn text_art_whose_outline_is_lost_is_refused() {
     assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
     assert!(err.to_string().contains("textart_outline"), "{err}");
 }
+
+/// A TextArt whose font type is HTF (Hangul font; Core keeps only TTF)
+/// makes restyle refuse the input (Hancom's F14 with `fontType="HTF"`).
+///
+/// 이것을 실패시키는 것: 글맵시 글꼴 유형 손실 경고를 지우는 것.
+#[test]
+fn text_art_with_a_hangul_font_type_is_refused() {
+    let opts = RestyleOptions::default().with_preset("modern");
+    let err = restyle(&shapes_fixture("group-textart-htf.hwpx"), &opts).unwrap_err();
+    assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
+    assert!(err.to_string().contains("textart_font_type"), "{err}");
+}

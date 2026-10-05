@@ -537,22 +537,38 @@ pub struct HxTextArt {
 }
 
 /// `<hp:textartPr>` — TextArt typography (font / shape / spacing / align).
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+///
+/// An omitted attribute takes its OWPML schema default (`fontStyle="REGULAR"`,
+/// `fontType="TTF"`, `lineSpacing="120"`, `charSpacing="100"`), and so does
+/// a missing `<hp:textartPr>` ([`Default`]).
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HxTextArtPr {
     /// Font family name.
     #[serde(rename = "@fontName", default)]
     pub font_name: String,
     /// Font style label.
-    #[serde(rename = "@fontStyle", default)]
+    #[serde(rename = "@fontStyle", default = "textart_default_font_style")]
     pub font_style: String,
+    /// Font kind: `TTF` (TrueType) or `HTF` (Hangul font). Core TextArt has
+    /// no field for it; the writer always writes `TTF`.
+    #[serde(rename = "@fontType", default = "textart_default_font_type")]
+    pub font_type: String,
     /// HWPX `textShape` name (e.g. `"WAVE2"`).
     #[serde(rename = "@textShape", default)]
     pub text_shape: String,
     /// Line spacing (percent).
-    #[serde(rename = "@lineSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@lineSpacing",
+        default = "textart_default_line_spacing",
+        deserialize_with = "deser_i32_or_u32"
+    )]
     pub line_spacing: i32,
     /// Character spacing (percent).
-    #[serde(rename = "@charSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@charSpacing",
+        default = "textart_default_char_spacing",
+        deserialize_with = "deser_i32_or_u32"
+    )]
     pub char_spacing: i32,
     /// Text alignment (e.g. `"LEFT"`).
     #[serde(rename = "@align", default)]
@@ -561,6 +577,37 @@ pub struct HxTextArtPr {
     /// no shadow, so only `type="NONE"` round-trips.
     #[serde(rename(deserialize = "shadow"), default)]
     pub shadow: Option<HxShadow>,
+}
+
+impl Default for HxTextArtPr {
+    fn default() -> Self {
+        Self {
+            font_name: String::new(),
+            font_style: textart_default_font_style(),
+            font_type: textart_default_font_type(),
+            text_shape: String::new(),
+            line_spacing: textart_default_line_spacing(),
+            char_spacing: textart_default_char_spacing(),
+            align: String::new(),
+            shadow: None,
+        }
+    }
+}
+
+fn textart_default_font_style() -> String {
+    "REGULAR".to_string()
+}
+
+fn textart_default_font_type() -> String {
+    "TTF".to_string()
+}
+
+fn textart_default_line_spacing() -> i32 {
+    120
+}
+
+fn textart_default_char_spacing() -> i32 {
+    100
 }
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.

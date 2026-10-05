@@ -660,7 +660,8 @@ pub(crate) fn decode_textart(
 
 /// Reports the TextArt styling Core `TextArt` has no field for: a visible
 /// outline (`<hp:lineShape>` whose style is not `NONE`) as `textart_outline`,
-/// and a shape or text shadow (`<hp:shadow>` whose type is not `NONE`) as
+/// a font type other than `TTF` (`HTF`) as `textart_font_type`, and a shape
+/// or text shadow (`<hp:shadow>` whose type is not `NONE`) as
 /// `textart_shadow`. The encoder writes neither, so without these warnings
 /// they would be lost silently. An absent element (or attribute) is taken
 /// as the default — there is nothing on the wire to lose.
@@ -673,6 +674,14 @@ fn report_textart_style(text_art: &HxTextArt, ctx: &mut DecodeCtx) {
                 "outline {} {} width {} not carried by Core TextArt",
                 line.style, line.color, line.width
             ),
+        );
+    }
+    if let Some(pr) =
+        text_art.textart_pr.as_ref().filter(|p| !p.font_type.eq_ignore_ascii_case("TTF"))
+    {
+        ctx.content_lost(
+            "textart_font_type",
+            format!("font type {} not carried by Core TextArt", pr.font_type),
         );
     }
     let shadows = [
@@ -3776,6 +3785,62 @@ mod group_tests {
         )
         .unwrap();
         assert_eq!(lost_kinds(&r.warnings), ["textart_outline"]);
+    }
+
+    /// A font type other than TTF (`HTF`) has no Core field and the writer
+    /// always writes TTF, so it is reported.
+    ///
+    /// 이것을 실패시키는 것: 글꼴 유형 검사를 지우는 것.
+    #[test]
+    fn text_art_hangul_font_type_is_reported() {
+        let base = grouped_text_art(ID, &solid_brush("#FF0000"));
+        let htf = base.replace(r#"fontType="TTF""#, r#"fontType="HTF""#);
+        assert_ne!(htf, base);
+        let (g, w) = decode(&htf);
+        assert!(g.is_some());
+        assert_eq!(lost_kinds(&w), ["textart_font_type"]);
+        let (_, w) = decode(&base);
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    /// Typography attributes left out of `<hp:textartPr>` — or the whole
+    /// element — take the OWPML defaults (fontStyle REGULAR, line spacing
+    /// 120, character spacing 100, font type TTF), not empty or zero, and
+    /// the writer puts those values back.
+    ///
+    /// 이것을 실패시키는 것: 생략 기본값을 빈 문자열·0 으로 되돌리는 것(속성별,
+    /// 그리고 요소가 없을 때의 `Default`), fontType 기본값을 비우는 것(TTF 가
+    /// 아니라 손실 경고).
+    #[test]
+    fn text_art_omitted_typography_takes_the_schema_defaults() {
+        let full = r#"<hp:textartPr fontName="함초롬바탕" fontStyle="보통" fontType="TTF" textShape="WAVE2" lineSpacing="120" charSpacing="100" align="LEFT"/>"#;
+        let base = grouped_text_art(ID, &solid_brush("#FF0000"));
+        assert!(base.contains(full));
+        for (case, pr) in [
+            ("attributes", r#"<hp:textartPr fontName="함초롬바탕" textShape="WAVE2"/>"#),
+            ("element", ""),
+        ] {
+            let (g, w) = decode(&base.replace(full, pr));
+            assert!(w.is_empty(), "{case}: {w:?}");
+            let g = g.unwrap();
+            let Control::TextArt { font_style, line_spacing, char_spacing, align, .. } =
+                &children(&g)[0]
+            else {
+                panic!("{case}: {g:?}")
+            };
+            assert_eq!(
+                (font_style.as_str(), *line_spacing, *char_spacing, align.as_str()),
+                ("REGULAR", 120, 100, "LEFT"),
+                "{case}"
+            );
+            let xml =
+                crate::encoder::shapes::encode_text_art_to_xml(&children(&g)[0], true).unwrap();
+            assert!(
+                xml.contains(r#"fontStyle="REGULAR" fontType="TTF""#)
+                    && xml.contains(r#"lineSpacing="120" charSpacing="100""#),
+                "{case}: {xml}"
+            );
+        }
     }
 
     /// A TextArt outside groups keeps its colour too (it used to come back
