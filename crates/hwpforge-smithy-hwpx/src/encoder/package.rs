@@ -3,6 +3,7 @@
 //! Creates the ZIP archive structure required by the HWPX format.
 //! Mirrors the [`crate::decoder::package`] module for symmetry.
 
+use std::borrow::Cow;
 use std::io::{Cursor, Write};
 
 use hwpforge_core::metadata::Metadata;
@@ -11,6 +12,7 @@ use zip::CompressionMethod;
 use zip::ZipWriter;
 
 use crate::encoder::escape_xml_text_safe;
+use crate::encoder::EncodeWarning;
 use crate::error::{HwpxError, HwpxResult};
 
 // ── HWPX constants ───────────────────────────────────────────────
@@ -384,7 +386,7 @@ impl PackageWriter {
         charts: &[(String, String)],
         master_pages: &[(String, String)],
         embedded_oles: &[(String, Vec<u8>)],
-    ) -> HwpxResult<Vec<u8>> {
+    ) -> HwpxResult<(Vec<u8>, Vec<EncodeWarning>)> {
         let manifest = manifest_items(
             section_xmls.len(),
             &images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
@@ -412,6 +414,13 @@ impl PackageWriter {
     /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
     /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
     ///
+    /// The master pages and the charts are scanned here for characters XML
+    /// 1.0 forbids, which are removed and returned as
+    /// [`EncodeWarning::XmlForbiddenCharsRemoved`] (#198) — no earlier stage
+    /// scans them. The header and section parts arrive already scanned, and
+    /// so does `content_hpf`: the encoder scans it before reading it back for
+    /// the manifest checks, so the text checked is the text written.
+    ///
     /// # Errors
     ///
     /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
@@ -423,7 +432,8 @@ impl PackageWriter {
         charts: &[(String, String)],
         master_pages: &[(String, String)],
         embedded_oles: &[(String, Vec<u8>)],
-    ) -> HwpxResult<Vec<u8>> {
+    ) -> HwpxResult<(Vec<u8>, Vec<EncodeWarning>)> {
+        let mut warnings = Vec::new();
         let buf: Vec<u8> = Vec::new();
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
@@ -484,6 +494,7 @@ impl PackageWriter {
         for (path, xml) in master_pages {
             zip.start_file(path.as_str(), deflate_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
+            let xml = scan_part(path, xml, &mut warnings);
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
@@ -491,6 +502,7 @@ impl PackageWriter {
         for (path, xml) in charts {
             zip.start_file(path.as_str(), deflate_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
+            let xml = scan_part(path, xml, &mut warnings);
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
@@ -506,8 +518,16 @@ impl PackageWriter {
         }
 
         let cursor = zip.finish().map_err(|e| HwpxError::Zip(e.to_string()))?;
-        Ok(cursor.into_inner())
+        Ok((cursor.into_inner(), warnings))
     }
+}
+
+/// `xml` without the characters XML 1.0 forbids; each removal is added to
+/// `warnings` under `part`.
+fn scan_part<'a>(part: &str, xml: &'a str, warnings: &mut Vec<EncodeWarning>) -> Cow<'a, str> {
+    let (clean, sites) = crate::wire_xml::strip_xml_forbidden_chars(xml);
+    warnings.extend(super::forbidden_char_warnings(part, sites));
+    clean
 }
 
 #[cfg(test)]
@@ -535,6 +555,7 @@ mod tests {
             &[],
         )
         .unwrap()
+        .0
     }
 
     /// Helper: open a ZipArchive from raw bytes.
@@ -686,7 +707,7 @@ mod tests {
             &[],
         );
         assert!(result.is_ok());
-        let bytes = result.unwrap();
+        let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
         assert!(archive.file_names().any(|n| n == "Contents/header.xml"));
     }
@@ -705,7 +726,8 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let mut archive = open_zip(&bytes);
 
         for i in 0..3 {
@@ -750,7 +772,7 @@ mod tests {
             &[],
         );
         assert!(result.is_ok());
-        let bytes = result.unwrap();
+        let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
         let names: Vec<&str> = archive.file_names().collect();
         // No section entries
@@ -771,7 +793,8 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
         let archive = open_zip(&bytes);
 
         let section_entries = archive
@@ -822,7 +845,8 @@ mod tests {
             &[],
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .0;
 
         let mut archive = open_zip(&bytes);
         let mut entry = archive.by_name("BinData/photo.jpg").unwrap();

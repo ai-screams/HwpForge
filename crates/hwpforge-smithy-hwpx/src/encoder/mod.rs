@@ -1232,7 +1232,11 @@ impl HwpxEncoder {
         );
         // C4: the manifest the writer is about to write, and the parts it
         // writes, checked as they are (the manifest read back from its text).
-        let content_hpf = package::render_content_hpf(document.metadata(), &manifest);
+        // #198: `content.hpf` is scanned for characters XML 1.0 forbids
+        // before it is read back, so the checks read the text that is written.
+        let rendered = package::render_content_hpf(document.metadata(), &manifest);
+        let (content_hpf, sites) = crate::wire_xml::strip_xml_forbidden_chars(&rendered);
+        warnings.extend(forbidden_char_warnings("Contents/content.hpf", sites));
         let written = references::read_manifest(&content_hpf)?;
         warnings.extend(references::manifest_id_conflicts(&written));
         let mut parts: Vec<(String, &str)> = vec![("Contents/header.xml".to_string(), &header_xml)];
@@ -1245,7 +1249,7 @@ impl HwpxEncoder {
         parts.extend(master_pages.iter().map(|(path, xml)| (path.clone(), xml.as_str())));
         let parts: Vec<(&str, &str)> = parts.iter().map(|(n, x)| (n.as_str(), *x)).collect();
         warnings.extend(references::unresolved_references(&written, &parts)?);
-        let bytes = PackageWriter::write_hwpx_with_content_hpf(
+        let (bytes, package_warnings) = PackageWriter::write_hwpx_with_content_hpf(
             &content_hpf,
             &header_xml,
             &section_xmls,
@@ -1254,6 +1258,7 @@ impl HwpxEncoder {
             &master_pages,
             &embedded_oles,
         )?;
+        warnings.extend(package_warnings);
         Ok(EncodeOutcome { bytes, warnings })
     }
 
