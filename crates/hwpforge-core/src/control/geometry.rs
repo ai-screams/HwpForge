@@ -1093,12 +1093,12 @@ fn fold_points(mut control: Control, input: &FoldInput) -> FoldOutcome {
     let (span_x, span_y) = (b.max_x - b.min_x, b.max_y - b.min_y);
     // …and on the stored integer points, which can still land on one spot
     // after the offset absorbs a half unit.
-    let stored_x =
-        local.iter().map(|p| p.0).max().unwrap_or(0) - local.iter().map(|p| p.0).min().unwrap_or(0);
-    let stored_y =
-        local.iter().map(|p| p.1).max().unwrap_or(0) - local.iter().map(|p| p.1).min().unwrap_or(0);
-    let flat_x = w == 0 || span_x < 0.5 || stored_x == 0;
-    let flat_y = h == 0 || span_y < 0.5 || stored_y == 0;
+    // (equality, not a subtraction that could overflow before the range
+    // check)
+    let stored_flat_x = local.iter().all(|p| p.0 == local[0].0);
+    let stored_flat_y = local.iter().all(|p| p.1 == local[0].1);
+    let flat_x = w == 0 || span_x < 0.5 || stored_flat_x;
+    let flat_y = h == 0 || span_y < 0.5 || stored_flat_y;
     let collapsed = match control {
         // A polygon needs area.
         Control::Polygon { .. } => flat_x || flat_y,

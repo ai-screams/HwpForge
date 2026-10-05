@@ -458,3 +458,20 @@ fn an_angle_f32_cannot_hold_on_a_huge_box_is_a_residual() {
     let b = fold_box(100_000_000.0, 1_000.0, &input).unwrap();
     assert_eq!(b.losses().iter().map(FoldLoss::kind).collect::<Vec<_>>(), [FoldLossKind::Residual]);
 }
+
+/// A line stretched past the HWPUNIT range is dropped as out of range, not
+/// a panic from measuring its stored points.
+///
+/// 이것을 실패시키는 것: 저장 점 폭을 뺄셈(`max − min`)으로 재는 것(overflow 검사
+/// 빌드에서 panic).
+#[test]
+fn a_point_shape_stretched_past_the_range_is_dropped() {
+    let line = Control::line(ShapePoint::new(0, 0), ShapePoint::new(100_000_000, 100)).unwrap();
+    let stretch = ShapeTransform::from_matrix([100.0, 0.0, -5_000_000_000.0, 0.0, 1.0, 0.0]);
+    match fold_group_child(line, &FoldInput::new(stretch, (100_000_000.0, 100.0), (0.0, 0.0))) {
+        FoldOutcome::Dropped { losses } => {
+            assert_eq!(kinds(&losses), [FoldLossKind::OutOfRange]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
