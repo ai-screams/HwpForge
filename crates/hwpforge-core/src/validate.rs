@@ -4,7 +4,7 @@
 //! `Document<Draft>` to `Document<Validated>`. It is not part of the
 //! public API; it is called exclusively by `Document<Draft>::validate()`.
 
-use crate::control::Control;
+use crate::control::{Control, GroupChild};
 use crate::error::ValidationError;
 use crate::run::RunContent;
 use crate::section::Section;
@@ -271,16 +271,38 @@ fn validate_control_run(
         // shape-family controls are legitimate children; non-shape variants
         // are rejected so a malformed builder caller can't smuggle a
         // hyperlink/field/memo into a `<hp:container>`.
+        //
+        // A picture child must name its image and have a size: an empty path
+        // is reported as `InvalidGroupChild` (there is no picture to draw), a
+        // width or height of zero or less as `InvalidShapeDimension`.
         Control::Group { children, .. } => {
+            let invalid_child = || ValidationError::InvalidGroupChild {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            };
             for child in children {
-                if !is_group_child_allowed(child) {
-                    return Err(ValidationError::InvalidGroupChild {
-                        section_index: ctx.section_index,
-                        paragraph_index: ctx.paragraph_index,
-                        run_index: ctx.run_index,
-                    });
+                match child {
+                    GroupChild::Picture(image) => {
+                        if image.path.is_empty() {
+                            return Err(invalid_child());
+                        }
+                        if image.width.as_i32() <= 0 || image.height.as_i32() <= 0 {
+                            return Err(ValidationError::InvalidShapeDimension {
+                                section_index: ctx.section_index,
+                                paragraph_index: ctx.paragraph_index,
+                                run_index: ctx.run_index,
+                                shape_type: "Picture",
+                            });
+                        }
+                    }
+                    GroupChild::Shape(control) => {
+                        if !is_group_child_allowed(control) {
+                            return Err(invalid_child());
+                        }
+                        validate_control_run(control, ctx)?;
+                    }
                 }
-                validate_control_run(child, ctx)?;
             }
             Ok(())
         }
@@ -288,8 +310,8 @@ fn validate_control_run(
 }
 
 /// Returns `true` if `control` is a drawing-shape variant permitted as a
-/// child of [`Control::Group`]. Groups may nest the geometric shapes, OLE
-/// objects, images, and further groups — but not text-flow controls
+/// shape child of [`Control::Group`]. Groups may nest the geometric shapes,
+/// OLE objects and further groups (pictures are [`GroupChild::Picture`]) — but not text-flow controls
 /// (hyperlink/field/memo/bookmark/cross-ref/index-mark/page-number).
 fn is_group_child_allowed(control: &Control) -> bool {
     matches!(
@@ -1341,5 +1363,70 @@ mod tests {
         let ctrl = Control::equation("{a+b} over {c+d}");
         let sections = wrap_ctrl(ctrl);
         assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Group children ===
+
+    fn group_doc(children: Vec<GroupChild>) -> Vec<Section> {
+        let w = HwpUnit::new(1000).unwrap();
+        let group =
+            Control::Group { children, width: w, height: w, placement: None, inst_id: None };
+        let para = Paragraph::with_runs(
+            vec![Run::control(group, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        vec![Section::with_paragraphs(vec![para], PageSettings::a4())]
+    }
+
+    fn picture(path: &str, w: i32, h: i32) -> GroupChild {
+        GroupChild::Picture(crate::image::Image::new(
+            path,
+            HwpUnit::new(w).unwrap(),
+            HwpUnit::new(h).unwrap(),
+            crate::image::ImageFormat::Png,
+        ))
+    }
+
+    #[test]
+    fn group_picture_and_shape_children_are_accepted() {
+        let w = HwpUnit::new(1000).unwrap();
+        let children = vec![
+            picture("BinData/image1.png", 10, 10),
+            GroupChild::Shape(Control::rect(w, w).unwrap()),
+        ];
+        assert_eq!(validate_sections(&group_doc(children)), Ok(()));
+    }
+
+    /// 이것을 실패시키는 것: Picture 의 빈 경로 검사 삭제.
+    #[test]
+    fn group_picture_without_a_path_is_rejected() {
+        assert!(matches!(
+            validate_sections(&group_doc(vec![picture("", 10, 10)])),
+            Err(ValidationError::InvalidGroupChild { .. })
+        ));
+    }
+
+    /// 이것을 실패시키는 것: 크기 검사 삭제, 또는 `<= 0` 을 `== 0` 으로(음수 통과).
+    #[test]
+    fn group_picture_without_a_size_is_rejected() {
+        for (w, h) in [(0, 10), (10, 0), (-5, 10)] {
+            assert!(
+                matches!(
+                    validate_sections(&group_doc(vec![picture("a.png", w, h)])),
+                    Err(ValidationError::InvalidShapeDimension { shape_type: "Picture", .. })
+                ),
+                "{w}x{h}"
+            );
+        }
+    }
+
+    /// 이것을 실패시키는 것: Shape 갈래의 `is_group_child_allowed` 검사 삭제.
+    #[test]
+    fn group_shape_child_that_is_not_a_drawing_is_rejected() {
+        let link = Control::Hyperlink { text: "a".into(), url: "https://a.kr".into() };
+        assert!(matches!(
+            validate_sections(&group_doc(vec![GroupChild::Shape(link)])),
+            Err(ValidationError::InvalidGroupChild { .. })
+        ));
     }
 }

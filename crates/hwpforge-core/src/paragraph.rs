@@ -32,8 +32,10 @@ use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::control::{Control, GroupChild};
 use crate::error::{CoreError, CoreResult};
-use crate::run::Run;
+use crate::image::Image;
+use crate::run::{Run, RunContent};
 
 /// A paragraph: an ordered sequence of runs sharing a paragraph shape.
 ///
@@ -141,7 +143,9 @@ impl Paragraph {
     /// 본문과 캡션, 선·사각형·호·곡선·연결선의 캡션, 각주/미주 본문, 메모
     /// 본문과 앵커 run, 묶음 객체 자식이다.
     ///
-    /// **[`crate::image::Image::caption`] 안의 문단은 방문하지 않는다** —
+    /// 묶음 그림([`crate::control::GroupChild::Picture`])의 캡션 문단은
+    /// 방문한다. **run 그림([`crate::run::RunContent::Image`])의
+    /// [`crate::image::Image::caption`] 안의 문단은 방문하지 않는다** —
     /// 알려진 갭이며 `.docs/followups.md` 에 기록돼 있다. 배경과 왜 별도
     /// 슬라이스인지는
     /// [`crate::document::Document::for_each_paragraph_mut`] 참조.
@@ -172,6 +176,114 @@ impl Paragraph {
         for run in &self.runs {
             run.walk_paragraphs(f);
         }
+    }
+
+    /// Visits every picture in this paragraph and the paragraphs nested in
+    /// it: run pictures ([`RunContent::Image`]) and group pictures
+    /// ([`GroupChild::Picture`], nested groups included).
+    ///
+    /// Paragraphs are visited as [`Self::for_each_paragraph`] does (so the
+    /// pictures inside a run picture's caption are not reached); within a
+    /// paragraph, pictures come in run order and a group's pictures in its
+    /// child order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, GroupChild};
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    ///
+    /// let w = HwpUnit::new(1000).unwrap();
+    /// let pic = |p: &str| Image::new(p, w, w, ImageFormat::Png);
+    /// let group = Control::Group {
+    ///     children: vec![GroupChild::Picture(pic("BinData/logo.png"))],
+    ///     width: w,
+    ///     height: w,
+    ///     placement: None,
+    ///     inst_id: None,
+    /// };
+    /// let para = Paragraph::with_runs(
+    ///     vec![
+    ///         Run::image(pic("BinData/photo.png"), CharShapeIndex::new(0)),
+    ///         Run::control(group, CharShapeIndex::new(0)),
+    ///     ],
+    ///     ParaShapeIndex::new(0),
+    /// );
+    /// let mut paths = Vec::new();
+    /// para.for_each_image(|img| paths.push(img.path.clone()));
+    /// assert_eq!(paths, ["BinData/photo.png", "BinData/logo.png"]);
+    /// ```
+    pub fn for_each_image<F: FnMut(&Image)>(&self, mut f: F) {
+        fn group(children: &[GroupChild], f: &mut dyn FnMut(&Image)) {
+            for child in children {
+                match child {
+                    GroupChild::Picture(image) => f(image),
+                    GroupChild::Shape(Control::Group { children, .. }) => group(children, f),
+                    GroupChild::Shape(_) => {}
+                }
+            }
+        }
+        self.walk_paragraphs(&mut |p: &Paragraph| {
+            for run in &p.runs {
+                match &run.content {
+                    RunContent::Image(image) => f(image),
+                    RunContent::Control(control) => {
+                        if let Control::Group { children, .. } = control.as_ref() {
+                            group(children, &mut f);
+                        }
+                    }
+                    RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Table(_) => {}
+                }
+            }
+        });
+    }
+
+    /// [`Self::for_each_image`] with mutable access, in the same order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    ///
+    /// let w = HwpUnit::new(1000).unwrap();
+    /// let mut para = Paragraph::with_runs(
+    ///     vec![Run::image(Image::new("a.png", w, w, ImageFormat::Png), CharShapeIndex::new(0))],
+    ///     ParaShapeIndex::new(0),
+    /// );
+    /// para.for_each_image_mut(|img| img.path = format!("BinData/{}", img.path));
+    /// let mut paths = Vec::new();
+    /// para.for_each_image(|img| paths.push(img.path.clone()));
+    /// assert_eq!(paths, ["BinData/a.png"]);
+    /// ```
+    pub fn for_each_image_mut<F: FnMut(&mut Image)>(&mut self, mut f: F) {
+        fn group(children: &mut [GroupChild], f: &mut dyn FnMut(&mut Image)) {
+            for child in children {
+                match child {
+                    GroupChild::Picture(image) => f(image),
+                    GroupChild::Shape(Control::Group { children, .. }) => group(children, f),
+                    GroupChild::Shape(_) => {}
+                }
+            }
+        }
+        self.walk_paragraphs_mut(&mut |p: &mut Paragraph| {
+            for run in &mut p.runs {
+                match &mut run.content {
+                    RunContent::Image(image) => f(image),
+                    RunContent::Control(control) => {
+                        if let Control::Group { children, .. } = control.as_mut() {
+                            group(children, &mut f);
+                        }
+                    }
+                    RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Table(_) => {}
+                }
+            }
+        });
     }
 
     /// Appends a run to this paragraph.
@@ -616,5 +728,53 @@ mod tests {
         let para = Paragraph::new(ParaShapeIndex::new(0));
         let json = serde_json::to_string(&para).unwrap();
         assert!(!json.contains("style_id"), "None should be skipped in serialization");
+    }
+
+    /// Every picture: run pictures, a group's pictures, a nested group's
+    /// pictures and the pictures in a grouped text box's paragraphs.
+    /// 이것을 실패시키는 것: `for_each_image` 의 Group 갈래 삭제 / 중첩 묶음 재귀 삭제
+    /// (각각 따로 — 경로 수가 바뀐다). `_mut` 판도 같은 목록을 바꾼다.
+    #[test]
+    fn for_each_image_reaches_group_pictures() {
+        use crate::control::{Control, GroupChild};
+        use crate::image::{Image, ImageFormat};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit};
+        let w = HwpUnit::new(1000).unwrap();
+        let pic = |p: &str| Image::new(p, w, w, ImageFormat::Png);
+        let cs = CharShapeIndex::new(0);
+        let boxed = Control::text_box(
+            vec![Paragraph::with_runs(vec![Run::image(pic("in-box"), cs)], ParaShapeIndex::new(0))],
+            w,
+            w,
+        );
+        let nested = Control::Group {
+            children: vec![GroupChild::Picture(pic("nested"))],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let group = Control::Group {
+            children: vec![
+                GroupChild::Picture(pic("first")),
+                GroupChild::Shape(nested),
+                GroupChild::Shape(boxed),
+            ],
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
+        let mut para = Paragraph::with_runs(
+            vec![Run::image(pic("run"), cs), Run::control(group, cs)],
+            ParaShapeIndex::new(0),
+        );
+        let mut seen = Vec::new();
+        para.for_each_image(|i| seen.push(i.path.clone()));
+        assert_eq!(seen, ["run", "first", "nested", "in-box"]);
+        para.for_each_image_mut(|i| i.path.push('!'));
+        let mut seen = Vec::new();
+        para.for_each_image(|i| seen.push(i.path.clone()));
+        assert_eq!(seen, ["run!", "first!", "nested!", "in-box!"]);
     }
 }

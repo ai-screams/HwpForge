@@ -24,7 +24,7 @@
 //! encode warnings.
 
 use hwpforge_core::caption::Caption;
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -696,7 +696,13 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
             children.iter().find_map(|child| {
                 let mut child_path = path.to_vec();
                 child_path.push(PathSeg::GroupChild(emitted_idx));
-                let found = first_in_control(child, &child_path);
+                let found = match child {
+                    GroupChild::Picture(image) => {
+                        first_in_caption(image.caption.as_ref(), &child_path)
+                    }
+                    GroupChild::Shape(control) => first_in_control(control, &child_path),
+                    _ => None,
+                };
                 if group_child_is_emitted(child) {
                     emitted_idx += 1;
                 }
@@ -735,7 +741,8 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
 /// `Memo`, …) is dropped rather than fabricated (Wave A group support), so
 /// it never advances the encoder's own `emitted_idx` counter — see
 /// [`first_in_control`]'s `Control::Group` arm above.
-fn group_child_is_emitted(child: &Control) -> bool {
+fn group_child_is_emitted(child: &GroupChild) -> bool {
+    let GroupChild::Shape(child) = child else { return false };
     matches!(
         child,
         Control::TextBox { .. }

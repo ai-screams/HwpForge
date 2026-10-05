@@ -68,7 +68,7 @@
 //! shared.
 
 use hwpforge_core::caption::Caption;
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
@@ -207,7 +207,15 @@ fn visit_control_for_objects(control: &Control, counts: &mut ObjectCounts) {
             // exactly the policy [`ControlDescent::Group`]'s own doc says a
             // caller must apply for itself.
             for child in children {
-                visit_control_for_objects(child, counts);
+                match child {
+                    GroupChild::Picture(image) => {
+                        counts.all_images += 1;
+                        visit_caption_for_objects(image.caption.as_ref(), counts);
+                    }
+                    GroupChild::Shape(control) => visit_control_for_objects(control, counts),
+                    // `GroupChild` is `#[non_exhaustive]`.
+                    _ => {}
+                }
             }
         }
         ControlDescent::Memo { content, anchor_runs } => {
@@ -254,7 +262,7 @@ pub(crate) enum ControlDescent<'a> {
     /// rather than getting one from this enum, because the two callers'
     /// policies genuinely differ and neither is "more correct" for the
     /// other's purpose.
-    Group(&'a [Control]),
+    Group(&'a [GroupChild]),
     /// A memo's visible content, plus its `anchor_runs` — the latter is a
     /// run list, not a paragraph list, because the encoder flattens it to
     /// plain text and never recurses into a non-text run there (see

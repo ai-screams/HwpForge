@@ -1309,7 +1309,7 @@ mod tests {
         (d0, d1)
     }
 
-    fn first_group_children_mut(doc: &mut HwpxDocument) -> &mut Vec<Control> {
+    fn first_group_shapes_mut(doc: &mut HwpxDocument) -> impl Iterator<Item = &mut Control> {
         doc.document
             .sections_mut()
             .iter_mut()
@@ -1323,6 +1323,11 @@ mod tests {
                 _ => None,
             })
             .expect("a group")
+            .iter_mut()
+            .filter_map(|c| match c {
+                hwpforge_core::control::GroupChild::Shape(c) => Some(c),
+                _ => None,
+            })
     }
 
     /// Hancom's group turned 20° and mirrored (rotflip-group): the folded
@@ -1354,7 +1359,7 @@ mod tests {
         let (d0, _) = no_op_round_trip(&bytes);
         let mut moved = no_op_round_trip(&bytes).1;
         if let Some(Control::Rect { placement: Some(p), .. }) =
-            first_group_children_mut(&mut moved).iter_mut().find(|c| c.is_rect())
+            first_group_shapes_mut(&mut moved).find(|c| c.is_rect())
         {
             p.horz_offset = hwpforge_foundation::HwpUnit::new(p.horz_offset.as_i32() + 3).unwrap();
         } else {
@@ -1364,7 +1369,7 @@ mod tests {
 
         let mut recoloured = no_op_round_trip(&bytes).1;
         if let Some(Control::Rect { style: Some(s), .. }) =
-            first_group_children_mut(&mut recoloured).iter_mut().find(|c| c.is_rect())
+            first_group_shapes_mut(&mut recoloured).find(|c| c.is_rect())
         {
             s.line_width = Some(s.line_width.unwrap_or(0) + 100);
         } else {
@@ -1397,7 +1402,7 @@ mod tests {
     }
 
     fn nudge_rect_child(doc: &mut HwpxDocument, dx: i32) {
-        let child = first_group_children_mut(doc).iter_mut().find(|c| c.is_rect()).unwrap();
+        let child = first_group_shapes_mut(doc).find(|c| c.is_rect()).unwrap();
         let Control::Rect { placement, .. } = child else { unreachable!() };
         nudge(placement, dx);
     }
@@ -1442,7 +1447,7 @@ mod tests {
                 *placement = Some(at(child_x));
             }
             let group = Control::Group {
-                children: vec![rect],
+                children: vec![hwpforge_core::control::GroupChild::Shape(rect)],
                 width: unit(1200),
                 height: unit(700),
                 placement: Some(at(group_x)),
@@ -1491,7 +1496,7 @@ mod tests {
             *style = Some(ShapeStyle { rotation: Some(30.0), ..ShapeStyle::default() });
         }
         let group = Control::Group {
-            children: vec![rect],
+            children: vec![hwpforge_core::control::GroupChild::Shape(rect)],
             width: unit(1_740_000),
             height: unit(1_010_000),
             placement: None,
@@ -1518,7 +1523,7 @@ mod tests {
         let (mut a, _) = no_op_round_trip(&bytes);
         let (_, mut b) = no_op_round_trip(&bytes);
         let place = |doc: &mut HwpxDocument, x: Option<i32>| {
-            let child = first_group_children_mut(doc).iter_mut().find(|c| c.is_rect()).unwrap();
+            let child = first_group_shapes_mut(doc).find(|c| c.is_rect()).unwrap();
             let Control::Rect { placement, .. } = child else { unreachable!() };
             *placement = x.map(|x| hwpforge_core::placement::ObjectPlacement {
                 horz_offset: hwpforge_foundation::HwpUnit::new(x).unwrap(),

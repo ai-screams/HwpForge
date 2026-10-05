@@ -525,7 +525,10 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         // Source order: the dropped Equation comes first, then the cached
         // text box — the whole point of this test is that the encoder's
         // emitted-index counter does not shift with it.
-        children: vec![equation, text_box],
+        children: vec![
+            hwpforge::core::control::GroupChild::Shape(equation),
+            hwpforge::core::control::GroupChild::Shape(text_box),
+        ],
         width: HwpUnit::new(3000).unwrap(),
         height: HwpUnit::new(2000).unwrap(),
         placement: None,

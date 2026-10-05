@@ -7,7 +7,7 @@
 use hwpforge_core::control::geometry::{
     emission_residual, local_transform, AngleRounding, CoefficientRounding, EmissionPolicy,
 };
-use hwpforge_core::control::{Control, Fill, ShapeStyle};
+use hwpforge_core::control::{Control, Fill, GroupChild, ShapeStyle};
 use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip, GradientType};
 
@@ -1305,6 +1305,15 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
     }
 }
 
+/// The name a group child is reported under.
+fn group_child_kind(child: &GroupChild) -> &'static str {
+    match child {
+        GroupChild::Picture(_) => "picture",
+        GroupChild::Shape(control) => control.kind_name(),
+        _ => "unknown",
+    }
+}
+
 /// Encodes one child shape control into its HWPX XML fragment, reusing the
 /// existing per-shape encoders. Text-bearing children (`TextBox`,
 /// `Ellipse`-with-paragraphs) carry their `<hp:drawText>` automatically via
@@ -1318,7 +1327,7 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
 /// `parent_origin` + the child's own offset (for a top-level group the
 /// origin is `(0, 0)`).
 fn encode_group_child_xml(
-    child: &Control,
+    child: &GroupChild,
     depth: usize,
     group_level: u32,
     parent_origin: (i32, i32),
@@ -1326,6 +1335,10 @@ fn encode_group_child_xml(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<Option<String>> {
+    let child = match child {
+        GroupChild::Shape(control) => control,
+        _ => return Ok(None),
+    };
     let (dx, dy) = group_child_offset(child);
     let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
     // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
@@ -1486,10 +1499,10 @@ fn encode_group_at(
             // Reported where it would have stood in the written group; the
             // reason names its place among the Core children.
             sink.content_lost(
-                child.kind_name(),
+                group_child_kind(child),
                 format!(
                     "group child {source_idx} ({}) has no HWPX group form and is left out",
-                    child.kind_name()
+                    group_child_kind(child)
                 ),
             );
         }
@@ -1718,7 +1731,10 @@ mod tests {
             style: None,
         };
         let group = Control::Group {
-            children: vec![child(14_922, 7780, 0, 1365), child(6998, 12_426, 17_360, 0)],
+            children: vec![
+                hwpforge_core::control::GroupChild::Shape(child(14_922, 7780, 0, 1365)),
+                hwpforge_core::control::GroupChild::Shape(child(6998, 12_426, 17_360, 0)),
+            ],
             width: hu(24_358),
             height: hu(12_426),
             placement: None,
@@ -1876,7 +1892,10 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let inner = Control::Group {
-            children: vec![rect, ellipse],
+            children: vec![
+                hwpforge_core::control::GroupChild::Shape(rect),
+                hwpforge_core::control::GroupChild::Shape(ellipse),
+            ],
             width: hu(13_604),
             height: hu(12_512),
             placement: None,
@@ -1896,7 +1915,10 @@ mod tests {
             style: None,
         };
         let outer = Control::Group {
-            children: vec![inner, line],
+            children: vec![
+                hwpforge_core::control::GroupChild::Shape(inner),
+                hwpforge_core::control::GroupChild::Shape(line),
+            ],
             width: hu(42_520),
             height: hu(13_422),
             placement: None,
@@ -1986,7 +2008,7 @@ mod tests {
 
     fn group_of(children: Vec<Control>) -> Control {
         Control::Group {
-            children,
+            children: children.into_iter().map(GroupChild::Shape).collect(),
             width: HwpUnit::new(45_000).unwrap(),
             height: HwpUnit::new(56_000).unwrap(),
             placement: None,
@@ -2271,7 +2293,7 @@ mod tests {
     #[test]
     fn nested_grouped_text_art_adds_its_parent_origin() {
         let inner = Control::Group {
-            children: vec![text_art_at(1200, 800)],
+            children: vec![hwpforge_core::control::GroupChild::Shape(text_art_at(1200, 800))],
             width: HwpUnit::new(9000).unwrap(),
             height: HwpUnit::new(5000).unwrap(),
             placement: Some(ObjectPlacement {

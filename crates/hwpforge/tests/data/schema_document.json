@@ -2163,17 +2163,17 @@
           "additionalProperties": false
         },
         {
-          "description": "A group of drawing objects (묶음 객체 / 개체 묶기).\nMaps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with\nthe `\"$con\"` type tag wrapping child `ShapeComponent`s.\n\n`children` reuses the shape `Control` variants (`Rect`/`Ellipse`/\n`Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,\nrecursively, `Group`). Non-shape variants are rejected by\n`validate` rather than the type system, matching how every other\nrecursive container (`TextBox`/`Footnote`/`Memo.content`) carries a\nloose `Vec<Paragraph>` / `Vec<Run>`.",
+          "description": "A group of drawing objects (묶음 객체 / 개체 묶기).\nMaps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with\nthe `\"$con\"` type tag wrapping child `ShapeComponent`s.\n\n`children` holds pictures ([`GroupChild::Picture`]) and drawing\nshapes ([`GroupChild::Shape`]: the shape `Control` variants and,\nrecursively, `Group`). A shape child that is not a drawing object (a\nhyperlink, field, memo, …) is rejected by `validate` rather than the\ntype system.",
           "type": "object",
           "properties": {
             "Group": {
               "type": "object",
               "properties": {
                 "children": {
-                  "description": "Child drawing objects, in z-order. May nest further `Group`s.",
+                  "description": "Child pictures and drawing objects, in z-order. May nest further\n`Group`s.",
                   "type": "array",
                   "items": {
-                    "$ref": "#/$defs/Control"
+                    "$ref": "#/$defs/GroupChild"
                   }
                 },
                 "width": {
@@ -3499,6 +3499,28 @@
     },
     "CurveSegmentType": {
       "type": "string"
+    },
+    "GroupChild": {
+      "description": "One child of a [`Control::Group`](super::Control::Group) (묶음 개체), in\nz-order.\n\nA picture is an [`Image`], as in a run; every other child is a drawing\nshape [`Control`] (a nested group included).\n\nIn JSON a picture is `{\"Picture\": {…}}` and a shape is the shape's own\n[`Control`] form (`{\"Rect\": {…}}`), so group JSON written before\npictures could be group children reads unchanged.\n\n# Examples\n\n```\nuse hwpforge_core::control::{Control, GroupChild};\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet w = HwpUnit::new(1000).unwrap();\nlet children = vec![\n    GroupChild::Picture(Image::new(\"BinData/image1.png\", w, w, ImageFormat::Png)),\n    GroupChild::Shape(Control::rect(w, w).unwrap()),\n];\nlet json = serde_json::to_string(&children).unwrap();\nassert!(json.starts_with(r#\"[{\"Picture\":{\"#));\nassert!(json.contains(r#\"{\"Rect\":{\"#));\nlet back: Vec<GroupChild> = serde_json::from_str(&json).unwrap();\nassert_eq!(back, children);\n```",
+      "anyOf": [
+        {
+          "description": "A picture placed in the group. Its `placement` offset is relative to\nthe group's top-left corner, like a shape child's.",
+          "type": "object",
+          "properties": {
+            "Picture": {
+              "$ref": "#/$defs/Image"
+            }
+          },
+          "required": [
+            "Picture"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A drawing shape, or a nested [`Control::Group`](super::Control::Group).",
+          "$ref": "#/$defs/Control"
+        }
+      ]
     },
     "BookmarkType": {
       "type": "string"

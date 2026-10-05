@@ -1000,7 +1000,7 @@ mod tests {
         // cannot cause a miss here.
         let inner = Control::footnote_with_id(7, vec![para()]);
         let group = Control::Group {
-            children: vec![inner],
+            children: vec![hwpforge_core::control::GroupChild::Shape(inner)],
             inst_id: None,
             width: HwpUnit::ZERO,
             height: HwpUnit::ZERO,

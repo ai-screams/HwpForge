@@ -23,12 +23,14 @@
 //! ```
 
 mod fields;
+mod group;
 mod metadata;
 mod shapes;
 
 pub mod geometry;
 
 pub use fields::*;
+pub use group::GroupChild;
 pub use metadata::*;
 pub use shapes::*;
 
@@ -480,15 +482,15 @@ pub enum Control {
     /// Maps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with
     /// the `"$con"` type tag wrapping child `ShapeComponent`s.
     ///
-    /// `children` reuses the shape `Control` variants (`Rect`/`Ellipse`/
-    /// `Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,
-    /// recursively, `Group`). Non-shape variants are rejected by
-    /// `validate` rather than the type system, matching how every other
-    /// recursive container (`TextBox`/`Footnote`/`Memo.content`) carries a
-    /// loose `Vec<Paragraph>` / `Vec<Run>`.
+    /// `children` holds pictures ([`GroupChild::Picture`]) and drawing
+    /// shapes ([`GroupChild::Shape`]: the shape `Control` variants and,
+    /// recursively, `Group`). A shape child that is not a drawing object (a
+    /// hyperlink, field, memo, …) is rejected by `validate` rather than the
+    /// type system.
     Group {
-        /// Child drawing objects, in z-order. May nest further `Group`s.
-        children: Vec<Control>,
+        /// Child pictures and drawing objects, in z-order. May nest further
+        /// `Group`s.
+        children: Vec<GroupChild>,
         /// Bounding box width (HWPUNIT).
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
@@ -842,7 +844,10 @@ impl Control {
             | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
             Self::Group { children, .. } => {
                 for child in children {
-                    child.walk_paragraphs_mut(f);
+                    match child {
+                        GroupChild::Picture(image) => walk_caption(&mut image.caption, f),
+                        GroupChild::Shape(control) => control.walk_paragraphs_mut(f),
+                    }
                 }
             }
             Self::Memo { content, anchor_runs, .. } => {
@@ -911,7 +916,10 @@ impl Control {
             | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
             Self::Group { children, .. } => {
                 for child in children {
-                    child.walk_paragraphs(f);
+                    match child {
+                        GroupChild::Picture(image) => walk_caption(&image.caption, f),
+                        GroupChild::Shape(control) => control.walk_paragraphs(f),
+                    }
                 }
             }
             Self::Memo { content, anchor_runs, .. } => {

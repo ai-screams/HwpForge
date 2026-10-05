@@ -4,7 +4,7 @@
 //! Functions here convert `HxRect`, `HxLine`, `HxEllipse`, and `HxPolygon`
 //! into Core `Run` values with the appropriate `Control` variant.
 
-use hwpforge_core::control::{Control, ShapeStyle};
+use hwpforge_core::control::{Control, GroupChild, ShapeStyle};
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_foundation::{
@@ -1003,7 +1003,7 @@ fn decode_group_children(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
-) -> HwpxResult<Option<Vec<Control>>> {
+) -> HwpxResult<Option<Vec<GroupChild>>> {
     use crate::schema::section::HxContainerChildKind as K;
 
     // Bound nested-container recursion (group-in-group) against pathological
@@ -1018,7 +1018,7 @@ fn decode_group_children(
         });
     }
 
-    let mut children: Vec<Control> = Vec::new();
+    let mut children: Vec<GroupChild> = Vec::new();
     for (wire_idx, &(kind, idx)) in container.child_order.iter().enumerate() {
         ctx.enter(super::PathSeg::GroupChild(wire_idx));
         ctx.enter_group_child();
@@ -1031,8 +1031,8 @@ fn decode_group_children(
                 return Err(e);
             }
         };
-        if let Some(control) = decoded {
-            children.push(control);
+        if let Some(child) = decoded {
+            children.push(child);
         } else if let K::Unsupported(name) = kind {
             let reason = match name {
                 "caption" | "parameterset" => "group-level element not carried by Core",
@@ -1060,7 +1060,7 @@ fn decode_group_child(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
-) -> HwpxResult<Option<Control>> {
+) -> HwpxResult<Option<GroupChild>> {
     use crate::schema::section::HxContainerChildKind as K;
 
     let take = |run: Option<Run>| match run.map(|r| r.content) {
@@ -1140,18 +1140,19 @@ fn decode_group_child(
             })
         }
         K::Container => {
-            return decode_nested_container(
+            return Ok(decode_nested_container(
                 &container.containers[idx],
                 origin,
                 char_shape_id,
                 depth + 1,
                 ctx,
-            );
+            )?
+            .map(GroupChild::Shape));
         }
         K::Unsupported(_) => return Ok(None),
     };
     let Some(wire) = wire else { return Ok(None) };
-    Ok(normalize_group_child(wire, origin, ctx))
+    Ok(normalize_group_child(wire, origin, ctx).map(GroupChild::Shape))
 }
 
 /// A nested `<hp:container>`: its Core box is the bounds of its shapes in the
@@ -1237,25 +1238,45 @@ fn decode_nested_container(
 }
 
 /// Corners of a decoded group child's box, relative to its parent group,
-/// at its exact Core position (a nested group is an unrotated box).
-fn core_child_corners(child: &Control) -> Vec<(f64, f64)> {
+/// at its exact Core position (a nested group and a picture are unrotated
+/// boxes).
+fn core_child_corners(child: &GroupChild) -> Vec<(f64, f64)> {
     use hwpforge_core::control::geometry::{emitted_corners, EmissionPolicy};
-    emitted_corners(child, &EmissionPolicy::exact()).map_or_else(Vec::new, |c| c.to_vec())
+    match child {
+        GroupChild::Picture(image) => picture_corners(image).to_vec(),
+        GroupChild::Shape(control) => {
+            emitted_corners(control, &EmissionPolicy::exact()).map_or_else(Vec::new, |c| c.to_vec())
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The four corners of a group picture's (unrotated) box in its parent
+/// group.
+fn picture_corners(image: &hwpforge_core::image::Image) -> [(f64, f64); 4] {
+    let (x, y) = image.placement.as_ref().map_or((0.0, 0.0), |p| {
+        (f64::from(p.horz_offset.as_i32()), f64::from(p.vert_offset.as_i32()))
+    });
+    let (w, h) = (f64::from(image.width.as_i32()), f64::from(image.height.as_i32()));
+    [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
 }
 
 /// Moves a group child by `(dx, dy)` inside its parent group.
-fn shift_child(child: &mut Control, dx: i32, dy: i32) {
+fn shift_child(child: &mut GroupChild, dx: i32, dy: i32) {
     let placement = match child {
-        Control::TextBox { placement, .. }
-        | Control::Rect { placement, .. }
-        | Control::Ellipse { placement, .. }
-        | Control::Arc { placement, .. }
-        | Control::Polygon { placement, .. }
-        | Control::Curve { placement, .. }
-        | Control::ConnectLine { placement, .. }
-        | Control::Line { placement, .. }
-        | Control::TextArt { placement, .. }
-        | Control::Group { placement, .. } => placement,
+        GroupChild::Picture(image) => &mut image.placement,
+        GroupChild::Shape(
+            Control::TextBox { placement, .. }
+            | Control::Rect { placement, .. }
+            | Control::Ellipse { placement, .. }
+            | Control::Arc { placement, .. }
+            | Control::Polygon { placement, .. }
+            | Control::Curve { placement, .. }
+            | Control::ConnectLine { placement, .. }
+            | Control::Line { placement, .. }
+            | Control::TextArt { placement, .. }
+            | Control::Group { placement, .. },
+        ) => placement,
         _ => return,
     };
     let (x, y) =
@@ -2806,7 +2827,9 @@ mod group_tests {
             Control::Group { children, placement, .. } => {
                 let o = if top { (0.0, 0.0) } else { offset_of(placement) };
                 for child in children {
-                    collect_leaves(child, (base.0 + o.0, base.1 + o.1), out, false);
+                    if let hwpforge_core::control::GroupChild::Shape(child) = child {
+                        collect_leaves(child, (base.0 + o.0, base.1 + o.1), out, false);
+                    }
                 }
                 return;
             }
@@ -3118,9 +3141,15 @@ mod group_tests {
         (group, r.warnings)
     }
 
-    fn children(group: &Control) -> &[Control] {
+    fn children(group: &Control) -> Vec<&Control> {
         match group {
-            Control::Group { children, .. } => children,
+            Control::Group { children, .. } => children
+                .iter()
+                .map(|c| match c {
+                    hwpforge_core::control::GroupChild::Shape(c) => c,
+                    other => panic!("not a shape: {other:?}"),
+                })
+                .collect(),
             other => panic!("not a group: {other:?}"),
         }
     }
@@ -3170,7 +3199,7 @@ mod group_tests {
             decode(&container((810, 200), &rect((1000, 400), &ri(ID, &[(s1, ID), (ID, ID)]))));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        assert_eq!(size_and_offset(&children(&g)[0]), (500, 200, (310.0, 0.0)));
+        assert_eq!(size_and_offset(children(&g)[0]), (500, 200, (310.0, 0.0)));
     }
 
     /// A polygon turned 30° on its own, then stretched 2× along x by the
@@ -3195,8 +3224,8 @@ mod group_tests {
         let Control::Polygon { vertices, .. } = &children(&g)[0] else { panic!() };
         let v: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
         assert_eq!(v, [(0, 270), (1466, 0), (1732, 770)]);
-        assert_eq!(size_and_offset(&children(&g)[0]), (1732, 770, (-600.0, 250.0)));
-        assert_eq!(rotation(&children(&g)[0]), (None, None));
+        assert_eq!(size_and_offset(children(&g)[0]), (1732, 770, (-600.0, 250.0)));
+        assert_eq!(rotation(children(&g)[0]), (None, None));
     }
 
     /// A rect in a group the user turned 30°: the rotation is the rect's own.
@@ -3211,8 +3240,8 @@ mod group_tests {
         ));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        assert_eq!(rotation(&children(&g)[0]), (Some(30.0), None));
-        assert_eq!(size_and_offset(&children(&g)[0]).0, 1000);
+        assert_eq!(rotation(children(&g)[0]), (Some(30.0), None));
+        assert_eq!(size_and_offset(children(&g)[0]).0, 1000);
     }
 
     /// A rect mirrored and turned 30° by its group folds to a 30° turn with a
@@ -3228,7 +3257,7 @@ mod group_tests {
             &rect((1000, 400), &ri(ID, &[(mirror, rot(30.0)), (ID, ID)])),
         ));
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(rotation(&children(&g.unwrap())[0]), (Some(30.0), Some(Flip::Horizontal)));
+        assert_eq!(rotation(children(&g.unwrap())[0]), (Some(30.0), Some(Flip::Horizontal)));
     }
 
     /// Shapes the group squashes flat have no Core shape: a rect with a zero
@@ -3338,7 +3367,7 @@ mod group_tests {
         let own = ri(ID, &[(ID, ID), (ID, ID)]);
         let (g, _) = decode(&container((30_000, 30_000), &nested((10_000, 1_000), &own, &leaf)));
         let g = g.unwrap();
-        let (w, h, _) = size_and_offset(&children(&g)[0]);
+        let (w, h, _) = size_and_offset(children(&g)[0]);
         assert!(
             (f64::from(w) - 9131.2).abs() <= 1.0 && (f64::from(h) - 5922.9).abs() <= 1.0,
             "{w}x{h}"
@@ -3372,7 +3401,7 @@ mod group_tests {
         let child = r#"<hp:rect id="1" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="7" ratio="0"><hp:offset x="4294966986" y="0"/><hp:orgSz width="1000" height="400"/></hp:rect>"#;
         let (g, w) = decode(&container((1000, 400), child));
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(size_and_offset(&children(&g.unwrap())[0]).2, (-310.0, 0.0));
+        assert_eq!(size_and_offset(children(&g.unwrap())[0]).2, (-310.0, 0.0));
     }
 
     /// A `scaMatrix` without its `rotMatrix` is malformed, not silently cut.
@@ -3574,7 +3603,9 @@ mod group_tests {
         let at = placement.as_ref().map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
         assert_eq!(at, Some((200, 200)));
         let (size, art_at, _) = text_art_geometry(&Control::Group {
-            children: vec![children(&children(&g)[0])[1].clone()],
+            children: vec![hwpforge_core::control::GroupChild::Shape(
+                children(children(&g)[0])[1].clone(),
+            )],
             width: hwpforge_foundation::HwpUnit::ZERO,
             height: hwpforge_foundation::HwpUnit::ZERO,
             placement: None,
@@ -3597,6 +3628,7 @@ mod group_tests {
         let art = children(&group)
             .iter()
             .find(|c| matches!(c, Control::TextArt { .. }))
+            .copied()
             .expect("TextArt child")
             .clone();
         let Control::TextArt { width, height, placement: at, fill_color, .. } = art else {
@@ -3934,7 +3966,7 @@ mod group_tests {
         );
         let (g, w) = decode(&container((3000, 3000), &child));
         assert_eq!(lost_kinds(&w), ["group_child_fill"]);
-        assert_eq!(rotation(&children(&g.unwrap())[0]), (Some(30.0), None));
+        assert_eq!(rotation(children(&g.unwrap())[0]), (Some(30.0), None));
     }
 
     /// Sizes and offsets outside the HWPUNIT range cannot be stored (they
@@ -4190,14 +4222,14 @@ mod group_tests {
         let Control::Group { placement, inst_id, .. } = first_group(&doc) else { unreachable!() };
         let group = Control::Group {
             children: vec![
-                rect(1000, 500, at(100, 50)),
-                Control::Group {
-                    children: vec![rect(800, 600, None)],
+                hwpforge_core::control::GroupChild::Shape(rect(1000, 500, at(100, 50))),
+                hwpforge_core::control::GroupChild::Shape(Control::Group {
+                    children: vec![hwpforge_core::control::GroupChild::Shape(rect(800, 600, None))],
                     width: HwpUnit::new(800).unwrap(),
                     height: HwpUnit::new(600).unwrap(),
                     placement: at(2000, 3000),
                     inst_id: None,
-                },
+                }),
             ],
             width: HwpUnit::new(2800).unwrap(),
             height: HwpUnit::new(3600).unwrap(),
@@ -4215,10 +4247,10 @@ mod group_tests {
         let back = HwpxDecoder::decode(&bytes).unwrap();
         assert!(back.warnings.is_empty(), "{:?}", back.warnings);
         let g = first_group(&back);
-        assert_eq!(size_and_offset(&children(&g)[0]), (1000, 500, (100.0, 50.0)));
+        assert_eq!(size_and_offset(children(&g)[0]), (1000, 500, (100.0, 50.0)));
         let n = &children(&g)[1];
         assert_eq!(size_and_offset(n), (800, 600, (2000.0, 3000.0)));
-        assert_eq!(size_and_offset(&children(n)[0]), (800, 600, (0.0, 0.0)));
+        assert_eq!(size_and_offset(children(n)[0]), (800, 600, (0.0, 0.0)));
     }
 
     /// `group-converted-from-hwp5.hwpx` with its group replaced by `container`.
@@ -4264,14 +4296,14 @@ mod group_tests {
             container((1000, 600), &nested((1000, 600), &ri(ID, &[(ID, ID), (ID, ID)]), &inset));
         let first = HwpxDecoder::decode(&package_with_group(&group)).unwrap();
         let g1 = first_group(&first);
-        assert_eq!(size_and_offset(&children(&g1)[0]), (984, 584, (8.0, 8.0)));
+        assert_eq!(size_and_offset(children(&g1)[0]), (984, 584, (8.0, 8.0)));
         let second = HwpxDecoder::decode(&encode(&first)).unwrap();
         assert!(second.warnings.is_empty(), "{:?}", second.warnings);
         let g2 = first_group(&second);
         let geometry = |g: &Control| {
             let n = &children(g)[0];
             let Control::Polygon { vertices, .. } = &children(n)[0] else { panic!() };
-            (size_and_offset(n), size_and_offset(&children(n)[0]), vertices.clone())
+            (size_and_offset(n), size_and_offset(children(n)[0]), vertices.clone())
         };
         assert_eq!(geometry(&g2), geometry(&g1));
     }

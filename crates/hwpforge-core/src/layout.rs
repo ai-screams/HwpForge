@@ -158,7 +158,7 @@ mod tests {
     mod traversal {
         use super::*;
         use crate::caption::{Caption, CaptionSide};
-        use crate::control::Control;
+        use crate::control::{Control, GroupChild};
         use crate::document::Document;
         use crate::page::PageSettings;
         use crate::paragraph::Paragraph;
@@ -227,8 +227,20 @@ mod tests {
                 HwpUnit::from_pt(10.0).unwrap(),
                 HwpUnit::from_pt(10.0).unwrap(),
             );
+            // 묶음 그림의 캡션도 방문한다.
+            // 이것을 실패시키는 것: walk_paragraphs(_mut) 의 Picture 갈래를 빈 갈래로.
+            let picture = crate::image::Image::new(
+                "BinData/image1.png",
+                HwpUnit::from_pt(10.0).unwrap(),
+                HwpUnit::from_pt(10.0).unwrap(),
+                crate::image::ImageFormat::Png,
+            )
+            .with_caption(Caption::new(
+                vec![cached_para("group-picture-caption")],
+                CaptionSide::Bottom,
+            ));
             let group = Control::Group {
-                children: vec![child],
+                children: vec![GroupChild::Shape(child), GroupChild::Picture(picture)],
                 width: HwpUnit::from_pt(10.0).unwrap(),
                 height: HwpUnit::from_pt(10.0).unwrap(),
                 placement: None,
@@ -236,7 +248,7 @@ mod tests {
             };
             let mut group_host = cached_para("group-host");
             group_host.add_run(Run::control(group, CharShapeIndex::new(0)));
-            expected += 2; // host + child body
+            expected += 3; // host + child body + picture caption
 
             // 메모: 본문 + 앵커 run 속 표 셀
             let memo = Control::memo_with_anchor(
@@ -293,6 +305,7 @@ mod tests {
                 "tbl-caption",
                 "textbox-caption",
                 "group-child-body",
+                "group-picture-caption",
                 "memo-anchor-cell",
                 "footnote-body",
                 "master",

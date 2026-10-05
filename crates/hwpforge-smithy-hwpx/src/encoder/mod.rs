@@ -1743,7 +1743,10 @@ mod attr_control_whitespace_call_site_tests {
             // not by the section serializer.
             Run::control(
                 Control::Group {
-                    children: vec![connect, plain_line],
+                    children: vec![
+                        hwpforge_core::control::GroupChild::Shape(connect),
+                        hwpforge_core::control::GroupChild::Shape(plain_line),
+                    ],
                     width: HwpUnit::new(2000).unwrap(),
                     height: HwpUnit::new(1000).unwrap(),
                     placement: None,

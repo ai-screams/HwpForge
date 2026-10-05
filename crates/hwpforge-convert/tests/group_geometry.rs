@@ -17,7 +17,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use hwpforge_core::control::geometry::{emitted_corners, local_transform, EmissionPolicy};
-use hwpforge_core::control::{Control, ShapePoint};
+use hwpforge_core::control::{Control, GroupChild, ShapePoint};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
 use hwpforge_smithy_hwp5::{decode_hwp5_with_images, Hwp5Warning};
@@ -244,13 +244,20 @@ fn leaf_points(c: &Control) -> (&'static str, Vec<ShapePoint>) {
     }
 }
 
+/// [`collect_leaves`] for a group child (a picture has no shape leaf).
+fn collect_child(c: &GroupChild, base: (f64, f64), out: &mut Vec<PageShape>) {
+    if let GroupChild::Shape(c) = c {
+        collect_leaves(c, base, out);
+    }
+}
+
 /// Leaves of `c` on the page; `base` = the page position of `c`'s parent
 /// group's corner.
 fn collect_leaves(c: &Control, base: (f64, f64), out: &mut Vec<PageShape>) {
     let o = offset_of(c);
     if let Control::Group { children, .. } = c {
         for child in children {
-            collect_leaves(child, (base.0 + o.0, base.1 + o.1), out);
+            collect_child(child, (base.0 + o.0, base.1 + o.1), out);
         }
         return;
     }
@@ -339,7 +346,7 @@ fn assert_leaves_match(hwp: &str, ungrouped: &str, extra: usize, skip: &[&str]) 
     // The group's own offset is its page position; its children hang off it.
     if let Control::Group { children, .. } = &group {
         for child in children {
-            collect_leaves(child, pos, &mut ours);
+            collect_child(child, pos, &mut ours);
         }
     }
     let theirs = ungrouped_shapes(&fixture(ungrouped));
@@ -485,7 +492,7 @@ fn f12_group_in_a_table_cell_matches_hancom() {
 
     let mut ours = Vec::new();
     for child in children {
-        collect_leaves(child, (0.0, 0.0), &mut ours);
+        collect_child(child, (0.0, 0.0), &mut ours);
     }
     let close = |x: &PageShape, y: &PageShape, shift: (f64, f64)| {
         let moved = |ps: &[(f64, f64)]| -> Vec<(f64, f64)> {
@@ -550,7 +557,7 @@ fn f2_objects_in_a_grouped_text_box_are_reported() {
     assert!(
         children
             .iter()
-            .any(|c| matches!(c, Control::TextBox { paragraphs, .. } if !paragraphs.is_empty())),
+            .any(|c| matches!(c, GroupChild::Shape(Control::TextBox { paragraphs, .. }) if !paragraphs.is_empty())),
         "{children:?}"
     );
     let twin =
@@ -566,8 +573,8 @@ fn f2_objects_in_a_grouped_text_box_are_reported() {
     assert!(theirs.is_empty(), "{theirs:?}");
     // The text box keeps its own paragraphs' text, as the twin has it — not
     // the text of the table cells inside it.
-    let text = |c: &Control| -> Vec<String> {
-        let Control::TextBox { paragraphs, .. } = c else { return Vec::new() };
+    let text = |c: &GroupChild| -> Vec<String> {
+        let GroupChild::Shape(Control::TextBox { paragraphs, .. }) = c else { return Vec::new() };
         paragraphs.iter().map(paragraph_text).collect()
     };
     let twin_group = twin.document.sections()[0]
@@ -631,7 +638,26 @@ fn core_leaves(c: &Control, base: (i64, i64), out: &mut Vec<CoreLeaf>) {
     let at = (base.0 + o.0 as i64, base.1 + o.1 as i64);
     if let Control::Group { children, .. } = c {
         for child in children {
-            core_leaves(child, at, out);
+            match child {
+                GroupChild::Shape(child) => core_leaves(child, at, out),
+                GroupChild::Picture(image) => {
+                    let (x, y) = image.placement.as_ref().map_or((0, 0), |p| {
+                        (i64::from(p.horz_offset.as_i32()), i64::from(p.vert_offset.as_i32()))
+                    });
+                    out.push(CoreLeaf {
+                        kind: "picture",
+                        ints: vec![
+                            i64::from(image.width.as_i32()),
+                            i64::from(image.height.as_i32()),
+                            at.0 + x,
+                            at.1 + y,
+                        ],
+                        rotation: 0.0,
+                        flip: None,
+                    });
+                }
+                _ => {}
+            }
         }
         return;
     }
@@ -751,7 +777,7 @@ fn hwp5_groups_survive_the_hwpx_writer() {
             let mut out = Vec::new();
             if let Control::Group { children, .. } = g {
                 for child in children {
-                    collect_leaves(child, offset_of(g), &mut out);
+                    collect_child(child, offset_of(g), &mut out);
                 }
             }
             out

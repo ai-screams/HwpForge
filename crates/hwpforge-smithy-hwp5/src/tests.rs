@@ -576,7 +576,7 @@ fn grouped_text_box_keeps_its_own_records_only() {
     let texts: Vec<Vec<String>> = children
         .iter()
         .filter_map(|c| match c {
-            Control::TextBox { paragraphs, .. } => Some(
+            hwpforge_core::control::GroupChild::Shape(Control::TextBox { paragraphs, .. }) => Some(
                 paragraphs
                     .iter()
                     .map(|p| {

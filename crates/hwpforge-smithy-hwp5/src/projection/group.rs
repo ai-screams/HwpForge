@@ -30,7 +30,7 @@ use hwpforge_core::control::geometry::{
     emitted_corners, fold_group_child, group_bounds, Bounds, EmissionPolicy, FoldInput,
     FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
 };
-use hwpforge_core::control::{Control, ShapePoint};
+use hwpforge_core::control::{Control, GroupChild, ShapePoint};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::ObjectId;
 use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
@@ -596,7 +596,7 @@ fn emit(
     plan: GroupPlan<'_>,
     place: &mut Place,
     state: &mut ProjectionImageState<'_>,
-) -> Vec<Control> {
+) -> Vec<GroupChild> {
     let mut out = Vec::with_capacity(plan.children.len());
     for (i, c) in plan.children.into_iter().enumerate() {
         place.path.push(i);
@@ -625,7 +625,7 @@ fn emit(
             Outcome::Dropped => None,
         };
         report(c.after, place, state);
-        out.extend(control);
+        out.extend(control.map(GroupChild::Shape));
         place.path.pop();
     }
     out
@@ -829,9 +829,15 @@ mod tests {
         (group, kinds)
     }
 
-    fn children(c: &Control) -> &[Control] {
+    fn children(c: &Control) -> Vec<&Control> {
         match c {
-            Control::Group { children, .. } => children,
+            Control::Group { children, .. } => children
+                .iter()
+                .map(|c| match c {
+                    GroupChild::Shape(c) => c,
+                    other => panic!("not a shape: {other:?}"),
+                })
+                .collect(),
             other => panic!("not a group: {other:?}"),
         }
     }
@@ -890,13 +896,13 @@ mod tests {
         let (g, lost) = project(&top);
         assert!(lost.is_empty(), "{lost:?}");
         let g = g.unwrap();
-        let [a, n1] = children(&g) else { panic!() };
+        let [a, n1] = children(&g)[..] else { panic!() };
         assert_eq!(offset(a), (100, 50));
         assert_eq!(offset(n1), (2500, 3400));
-        let [b, n2] = children(n1) else { panic!() };
+        let [b, n2] = children(n1)[..] else { panic!() };
         assert_eq!(offset(b), (100, 0));
         assert_eq!(offset(n2), (0, 1600));
-        let [c] = children(n2) else { panic!() };
+        let [c] = children(n2)[..] else { panic!() };
         let Control::Rect { placement, .. } = c else { panic!() };
         assert!(placement.is_none(), "a child at its group's corner stays inline");
     }
@@ -914,7 +920,7 @@ mod tests {
         let top = group(geo(0, 0, 400, 140), own, vec![child(rect(), at(100, 100, 300.0, 40.0))]);
         let (g, lost) = project(&top);
         assert!(lost.is_empty(), "{lost:?}");
-        assert_eq!(offset(&children(&g.unwrap())[0]), (300, 40));
+        assert_eq!(offset(children(&g.unwrap())[0]), (300, 40));
     }
 
     /// An unreadable chain drops the child with that reason — not as a
@@ -1014,7 +1020,7 @@ mod tests {
         let pts: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
         assert_eq!(pts, [(0, 500), (3000, 0), (4000, 3500), (2000, 1500)]);
         assert_eq!((width.as_i32(), height.as_i32()), (4000, 3500));
-        assert_eq!(offset(&children(&g.unwrap())[0]), (0, 1500));
+        assert_eq!(offset(children(&g.unwrap())[0]), (0, 1500));
     }
 
     /// Pictures are not Core group children yet: each is reported, and a
@@ -1093,7 +1099,7 @@ mod tests {
                 vec![child(polygon(&[(0, 0), (1000, 0), (0, 1000)]), Ok(r))],
             );
             let (g, lost) = project(&top);
-            (rotation(&children(&g.unwrap())[0]), lost)
+            (rotation(children(&g.unwrap())[0]), lost)
         };
         let (r, lost) = fold(Hwp5ShapeFill::Plain);
         assert_eq!((r, lost.len()), (None, 0));
@@ -1323,7 +1329,7 @@ mod tests {
             let g = g.unwrap();
             let Control::Polygon { style, .. } = &children(&g)[0] else { panic!() };
             assert!(style.as_ref().and_then(|s| s.fill.as_ref()).is_none());
-            (rotation(&children(&g)[0]), lost)
+            (rotation(children(&g)[0]), lost)
         };
         let (r, lost) = fold(-1);
         assert_eq!((r, lost.len()), (None, 0), "solid");
@@ -1353,9 +1359,9 @@ mod tests {
         let (g, lost) = project(&top);
         assert_eq!(lost, ["group_transform", "group_display_size"]);
         let g = g.unwrap();
-        let [n] = children(&g) else { panic!() };
+        let [n] = children(&g)[..] else { panic!() };
         assert_eq!(offset(n), (90_000_000, 0));
-        let offs: Vec<_> = children(n).iter().map(offset).collect();
+        let offs: Vec<_> = children(n).into_iter().map(offset).collect();
         assert_eq!(offs, [(0, 0), (20_000_000, 0)]);
     }
 
@@ -1376,7 +1382,7 @@ mod tests {
             poly.paragraphs.push(paragraph("dropped"));
             let top = group(geo(0, 0, 3000, 3000), at(3000, 3000, 0.0, 0.0), vec![poly]);
             let (g, lost) = project(&top);
-            (g.map(|g| rotation(&children(&g)[0])), lost)
+            (g.map(|g| rotation(children(&g)[0])), lost)
         };
         let (r, lost) = fold((ID, rot(30.0)));
         assert!(r.flatten().is_some_and(|a| (a - 30.0).abs() < 1e-3), "{r:?}");
@@ -1405,9 +1411,9 @@ mod tests {
         let top = group(geo(0, 0, 3000, 1000), at(3000, 1000, 0.0, 0.0), vec![n]);
         let (g, _) = project(&top);
         let g = g.unwrap();
-        let [n] = children(&g) else { panic!() };
+        let [n] = children(&g)[..] else { panic!() };
         assert_eq!(offset(n), (2500, 500));
-        assert_eq!(offset(&children(n)[0]), (0, 0));
+        assert_eq!(offset(children(n)[0]), (0, 0));
 
         // The same one level deeper: the inner group moves with its parent.
         let inner = nested(
@@ -1421,9 +1427,9 @@ mod tests {
         let top = group(geo(0, 0, 3000, 1000), at(3000, 1000, 0.0, 0.0), vec![outer]);
         let (g, _) = project(&top);
         let g = g.unwrap();
-        let [outer] = children(&g) else { panic!() };
+        let [outer] = children(&g)[..] else { panic!() };
         assert_eq!(offset(outer), (2500, 500));
-        let [inner] = children(outer) else { panic!() };
+        let [inner] = children(outer)[..] else { panic!() };
         assert_eq!(offset(inner), (0, 0));
     }
 
