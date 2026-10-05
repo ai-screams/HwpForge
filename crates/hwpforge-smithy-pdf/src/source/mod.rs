@@ -1839,10 +1839,16 @@ fn build_line_text_box(
 
 /// Core `ShapeStyle` 에서 [`TextBoxStyle`] 로 원색·굵기만 증류한다
 /// (dash/rotation 등은 Paint `Line` 이 실선만 그리므로 제외 — §8g w4).
+///
+/// `fill` 이 `fill_color` 를 덮는다는 Core 계약대로, [`Fill::None`](hwpforge_core::control::Fill::None)
+/// (채우기 없음)이면 `fill_color` 가 있어도 채우지 않는다.
 fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxStyle {
+    // 이것을 실패시키는 것: 이 판정을 지우고 `fill_color` 를 그대로 쓰기
+    // (`distill_drops_fill_color_when_fill_is_none`).
+    let no_fill = matches!(style.fill, Some(hwpforge_core::control::Fill::None));
     TextBoxStyle {
         line_color: style.line_color,
-        fill_color: style.fill_color,
+        fill_color: if no_fill { None } else { style.fill_color },
         line_width: style.line_width.map_or(0, |w| w.min(i32::MAX as u32) as i32),
     }
 }
@@ -1932,6 +1938,20 @@ mod tests {
     /// 글상자 원자가 박스 크기·스타일·vertAlign 과 내부 줄(lineseg + 재귀
     /// 원자)을 손실 없이 나르고, 호스트 줄의 텍스트 run 으로 새지 않는지
     /// 잠근다 — w3 이 이 형태를 소비한다.
+    #[test]
+    fn distill_drops_fill_color_when_fill_is_none() {
+        use hwpforge_core::control::{Fill, ShapeStyle};
+        let both = ShapeStyle {
+            fill_color: Some(Color::from_rgb(255, 0, 0)),
+            fill: Some(Fill::None),
+            ..Default::default()
+        };
+        assert_eq!(distill_textbox_style(&both).fill_color, None);
+        let plain =
+            ShapeStyle { fill_color: Some(Color::from_rgb(255, 0, 0)), ..Default::default() };
+        assert_eq!(distill_textbox_style(&plain).fill_color, Some(Color::from_rgb(255, 0, 0)));
+    }
+
     #[test]
     fn line_text_box_carries_size_style_and_recursive_inner_atoms() {
         let inner_text = TextBoxLine {
