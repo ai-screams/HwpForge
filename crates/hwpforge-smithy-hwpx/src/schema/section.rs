@@ -659,6 +659,8 @@ pub struct HxContainer {
     pub containers: Vec<HxContainer>,
     /// `<hp:textart>` children.
     pub textarts: Vec<HxTextArt>,
+    /// `<hp:pic>` children.
+    pub pics: Vec<HxPic>,
 
     /// Child elements in document order: `(kind, index in that kind's Vec)`.
     /// Elements the decoder does not support are recorded as
@@ -685,6 +687,8 @@ pub enum HxContainerChildKind {
     Container,
     /// `<hp:textart>`.
     TextArt,
+    /// `<hp:pic>`.
+    Picture,
     /// An element the decoder cannot carry into Core, named by its local
     /// wire name (`"pic"`, `"ole"`, …; `"unknown"` for an element this
     /// schema does not name).
@@ -729,7 +733,7 @@ enum HxContainerChildDe {
     #[serde(rename = "container")]
     Container(Box<HxContainer>),
     #[serde(rename = "pic")]
-    Pic(serde::de::IgnoredAny),
+    Pic(Box<HxPic>),
     #[serde(rename = "ole")]
     Ole(serde::de::IgnoredAny),
     #[serde(rename = "textart")]
@@ -811,7 +815,10 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
                     c.child_order.push((K::Container, c.containers.len()));
                     c.containers.push(*x);
                 }
-                C::Pic(_) => c.child_order.push((K::Unsupported("pic"), 0)),
+                C::Pic(x) => {
+                    c.child_order.push((K::Picture, c.pics.len()));
+                    c.pics.push(*x);
+                }
                 C::Ole(_) => c.child_order.push((K::Unsupported("ole"), 0)),
                 C::TextArt(x) => {
                     c.child_order.push((K::TextArt, c.textarts.len()));
@@ -2294,6 +2301,30 @@ pub struct HxPic {
         skip_serializing_if = "Option::is_none"
     )]
     pub caption: Option<HxCaption>,
+    /// Border line around the picture. Read only, to judge a group picture:
+    /// Core keeps no picture border and the writer draws none.
+    #[serde(rename(deserialize = "lineShape"), default, skip_serializing)]
+    pub line_shape: Option<HxLineShape>,
+    /// `<hp:effects>` (shadow, glow, soft edge, reflection). Read only, to
+    /// judge a group picture: Core keeps none of them.
+    #[serde(rename(deserialize = "effects"), default, skip_serializing)]
+    pub effects: Option<HxPicEffects>,
+}
+
+/// `<hp:effects>` of a picture — only whether it has any child is read.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxPicEffects {
+    /// One entry per child element.
+    #[serde(rename = "$value", default)]
+    pub items: Vec<HxAnyElement>,
+}
+
+/// Any XML element, its content ignored.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub enum HxAnyElement {
+    /// The element.
+    #[serde(other)]
+    Element,
 }
 
 /// `<hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>`.

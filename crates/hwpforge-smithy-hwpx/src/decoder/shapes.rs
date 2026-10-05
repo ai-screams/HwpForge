@@ -1139,6 +1139,9 @@ fn decode_group_child(
                 picture_fill: false,
             })
         }
+        K::Picture => {
+            return decode_group_picture(&container.pics[idx], origin, depth, ctx);
+        }
         K::Container => {
             return Ok(decode_nested_container(
                 &container.containers[idx],
@@ -1153,6 +1156,123 @@ fn decode_group_child(
     };
     let Some(wire) = wire else { return Ok(None) };
     Ok(normalize_group_child(wire, origin, ctx).map(GroupChild::Shape))
+}
+
+/// A picture in a group: its box folded like a shape's
+/// ([`fold_box`](hwpforge_core::control::geometry::fold_box)), kept as an
+/// unturned [`GroupChild::Picture`]. What a Core picture cannot show is
+/// reported as `group_child_picture`: a turn or mirror (the picture is kept
+/// unturned around the same centre), a crop, an image effect, a border.
+/// `None` = dropped (its loss already reported).
+fn decode_group_picture(
+    pic: &crate::schema::section::HxPic,
+    origin: (f64, f64),
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<GroupChild>> {
+    use hwpforge_core::control::geometry::{fold_box, FoldInput, FoldLossKind};
+
+    let Some(mut image) = super::section::convert_picture(pic, depth, ctx)? else {
+        ctx.content_lost("pic", "picture without an image reference");
+        return Ok(None);
+    };
+    let Some(map) = child_chain(pic.rendering_info.as_ref(), pic.offset.as_ref()) else {
+        ctx.content_lost("group_child_transform", "unparseable transform matrix");
+        return Ok(None);
+    };
+    let org = org_size(pic.org_sz.as_ref(), pic.cur_sz.as_ref());
+    let kind_of = |kind: FoldLossKind| match kind {
+        FoldLossKind::Degenerate => "group_child_degenerate",
+        _ => "group_child_transform",
+    };
+    let fold = match fold_box(org.0, org.1, &FoldInput::new(map.to_transform(), org, origin)) {
+        Ok(fold) => fold,
+        Err(loss) => {
+            ctx.content_lost(kind_of(loss.kind()), loss.detail().to_string());
+            return Ok(None);
+        }
+    };
+    for loss in fold.losses() {
+        ctx.content_lost(kind_of(loss.kind()), loss.detail().to_string());
+    }
+    if fold.rotation().is_some() || fold.flip().is_some() {
+        ctx.content_lost(
+            "group_child_picture",
+            "rotation/flip: a Core picture cannot turn or mirror; kept unturned around the \
+             same centre",
+        );
+    }
+    for reason in group_picture_losses(pic, &ctx.image_pixels) {
+        ctx.content_lost("group_child_picture", reason);
+    }
+    image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
+    image.height = HwpUnit::new(fold.height()).unwrap_or(HwpUnit::ZERO);
+    image.placement = group_child_placement(fold.offset().0, fold.offset().1);
+    Ok(Some(GroupChild::Picture(image)))
+}
+
+/// HWPUNIT per image pixel (96 dpi): the unit of `<hp:imgDim>`.
+const HWPUNIT_PER_PIXEL: i32 = 75;
+
+/// What a group picture shows that a Core picture cannot: a crop, an image
+/// effect (`<hc:img>` effect, brightness, contrast, alpha, or anything under
+/// `<hp:effects>`), a visible border (`<hp:lineShape>`).
+///
+/// A picture is cropped when its `<hp:imgClip>` is more than one pixel off
+/// the whole image: `<hp:imgDim>`, or, when that is missing or zero, the
+/// image's own pixel size × 75 (`image_pixels`). Without either the crop
+/// cannot be ruled out and is reported.
+fn group_picture_losses(
+    pic: &crate::schema::section::HxPic,
+    image_pixels: &std::collections::HashMap<String, (u32, u32)>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let reference = pic.img.as_ref().map_or("", |i| i.binary_item_id_ref.as_str());
+    if let Some(clip) = pic.img_clip.as_ref() {
+        let whole = match pic.img_dim.as_ref() {
+            Some(d) if d.dim_width > 0 && d.dim_height > 0 => Some((d.dim_width, d.dim_height)),
+            _ => image_pixels.get(reference).and_then(|&(w, h)| {
+                let w = i32::try_from(w).ok()?.checked_mul(HWPUNIT_PER_PIXEL)?;
+                let h = i32::try_from(h).ok()?.checked_mul(HWPUNIT_PER_PIXEL)?;
+                Some((w, h))
+            }),
+        };
+        match whole {
+            Some((w, h)) => {
+                let off = [clip.left, clip.top, clip.right - w, clip.bottom - h]
+                    .iter()
+                    .map(|v| v.unsigned_abs())
+                    .max()
+                    .unwrap_or(0);
+                if off > HWPUNIT_PER_PIXEL.unsigned_abs() {
+                    out.push(format!(
+                        "crop: imgClip ({}, {}, {}, {}) of a {w}x{h} image",
+                        clip.left, clip.top, clip.right, clip.bottom
+                    ));
+                }
+            }
+            None => out.push(
+                "crop: the image's size is unknown, so a crop cannot be ruled out".to_string(),
+            ),
+        }
+    }
+    if let Some(img) = pic.img.as_ref() {
+        let plain_effect = img.effect.is_empty() || img.effect == "REAL_PIC";
+        let opaque = img.alpha.is_empty() || img.alpha == "0";
+        if !plain_effect || img.bright != 0 || img.contrast != 0 || !opaque {
+            out.push(format!(
+                "effect: {} (brightness {}, contrast {}, alpha {})",
+                img.effect, img.bright, img.contrast, img.alpha
+            ));
+        }
+    }
+    if pic.effects.as_ref().is_some_and(|e| !e.items.is_empty()) {
+        out.push("effect: shadow, glow, soft edge or reflection".to_string());
+    }
+    if let Some(line) = pic.line_shape.as_ref().filter(|l| l.style != "NONE") {
+        out.push(format!("border: {} line {}", line.style, line.width));
+    }
+    out
 }
 
 /// A nested `<hp:container>`: its Core box is the bounds of its shapes in the
@@ -1284,11 +1404,20 @@ fn shift_child(child: &mut GroupChild, dx: i32, dy: i32) {
     *placement = group_child_placement(x + dx, y + dy);
 }
 
-/// Whether `container` or a group under it has a child Core cannot carry.
+/// Whether `container` or a group under it has a child Core cannot carry
+/// (an unsupported element, or a picture with no image to show).
 fn has_unsupported_child(container: &crate::schema::section::HxContainer) -> bool {
     use crate::schema::section::HxContainerChildKind as K;
-    container.child_order.iter().any(|&(kind, _)| matches!(kind, K::Unsupported(_)))
-        || container.containers.iter().any(has_unsupported_child)
+    container.child_order.iter().any(|&(kind, idx)| match kind {
+        K::Unsupported(_) => true,
+        K::Picture => !has_image(&container.pics[idx]),
+        _ => false,
+    }) || container.containers.iter().any(has_unsupported_child)
+}
+
+/// Whether a picture names an image (one that does not is not carried).
+fn has_image(pic: &crate::schema::section::HxPic) -> bool {
+    pic.img.as_ref().is_some_and(|i| !i.binary_item_id_ref.is_empty())
 }
 
 /// How far a nested group's own box may sit from the bounds of its shapes.
@@ -1348,6 +1477,14 @@ fn leaf_bounds(container: &crate::schema::section::HxContainer) -> Option<(f64, 
             }
             K::TextArt => {
                 let s = &container.textarts[idx];
+                (
+                    child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
+                    org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
+                )
+            }
+            K::Picture if !has_image(&container.pics[idx]) => continue,
+            K::Picture => {
+                let s = &container.pics[idx];
                 (
                     child_chain(s.rendering_info.as_ref(), s.offset.as_ref()),
                     org_size(s.org_sz.as_ref(), s.cur_sz.as_ref()),
@@ -2699,7 +2836,7 @@ mod tests {
 /// Group (묶음) decoding against Hancom's own "ungroup" answers.
 #[cfg(test)]
 mod group_tests {
-    use hwpforge_core::control::Control;
+    use hwpforge_core::control::{Control, GroupChild};
     use hwpforge_core::run::RunContent;
     use hwpforge_foundation::Flip;
 
@@ -2827,7 +2964,7 @@ mod group_tests {
             Control::Group { children, placement, .. } => {
                 let o = if top { (0.0, 0.0) } else { offset_of(placement) };
                 for child in children {
-                    if let hwpforge_core::control::GroupChild::Shape(child) = child {
+                    if let GroupChild::Shape(child) = child {
                         collect_leaves(child, (base.0 + o.0, base.1 + o.1), out, false);
                     }
                 }
@@ -3146,7 +3283,7 @@ mod group_tests {
             Control::Group { children, .. } => children
                 .iter()
                 .map(|c| match c {
-                    hwpforge_core::control::GroupChild::Shape(c) => c,
+                    GroupChild::Shape(c) => c,
                     other => panic!("not a shape: {other:?}"),
                 })
                 .collect(),
@@ -3465,8 +3602,9 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["group_child_transform"]);
     }
 
-    /// A nested group holding a picture: the picture is reported, and its
-    /// absence from Core does not also count as a misplaced group box.
+    /// A nested group holding a picture with no image: the picture is
+    /// reported, and its absence from Core does not also count as a
+    /// misplaced group box.
     ///
     /// 이것을 실패시키는 것: 미지원 자식이 있는 중첩 묶음에서도 상자를 비교하는 것
     /// (`nested_group_placement` 가 더해진다).
@@ -3483,7 +3621,7 @@ mod group_tests {
     }
 
     /// A nested group without its own matrices cannot be checked against its
-    /// shapes; one of pictures only has nothing to place.
+    /// shapes; one holding only a picture with no image has nothing to place.
     ///
     /// 이것을 실패시키는 것: 중첩 묶음의 "행렬 없음" 갈래 방출을 지우는 것, 또는
     /// 잎이 없는 중첩 묶음에서 자식 디코드(그림 보고)를 건너뛰는 것.
@@ -4334,29 +4472,32 @@ mod group_tests {
         assert_eq!(geom(&first), geom(&back));
     }
 
-    /// Supported children keep the wire order; every element Core cannot
-    /// carry is reported by its own name, in order.
+    /// Supported children (a picture among them) keep the wire order; every
+    /// element Core cannot carry is reported by its own name, in order.
     ///
     /// 이것을 실패시키는 것: 미지원 갈래의 방출을 지우는 것, 또는 사이드카 대신
-    /// 종류별 고정 순서로 디코드하는 것.
+    /// 종류별 고정 순서로 디코드하는 것, 또는 사이드카에서 pic 갈래를 빼는 것
+    /// (그림이 다시 `pic` 손실로 보고된다).
     #[test]
     fn unsupported_children_are_reported_in_wire_order() {
         let doc = HwpxDecoder::decode(&fixture("group-unsupported-children.hwpx")).unwrap();
-        assert_eq!(lost_kinds(&doc.warnings), ["pic", "ole", "equation", "unknown"]);
+        assert_eq!(lost_kinds(&doc.warnings), ["ole", "equation", "unknown"]);
         let paths: Vec<String> = doc.warnings.iter().map(|w| w.location().unwrap()).collect();
-        assert!(paths[0].ends_with(".group[1]"), "{paths:?}");
-        assert!(paths[3].ends_with(".group[5]"), "{paths:?}");
+        assert!(paths[0].ends_with(".group[3]"), "{paths:?}");
+        assert!(paths[2].ends_with(".group[5]"), "{paths:?}");
         let g = first_group(&doc);
-        let kinds: Vec<&str> = children(&g)
+        let Control::Group { children, .. } = &g else { unreachable!() };
+        let kinds: Vec<&str> = children
             .iter()
             .map(|c| match c {
-                Control::Rect { .. } => "rect",
-                Control::Polygon { .. } => "polygon",
-                Control::Line { .. } => "line",
+                GroupChild::Picture(_) => "picture",
+                GroupChild::Shape(Control::Rect { .. }) => "rect",
+                GroupChild::Shape(Control::Polygon { .. }) => "polygon",
+                GroupChild::Shape(Control::Line { .. }) => "line",
                 _ => "other",
             })
             .collect();
-        assert_eq!(kinds, ["rect", "polygon", "line"]);
+        assert_eq!(kinds, ["rect", "picture", "polygon", "line"]);
     }
 
     /// A table inside a grouped text box (the shape of a public notice whose
@@ -4573,5 +4714,350 @@ mod group_tests {
             Err(CellEditError::UncarriedZipEntries { entries }) if uncarried(&entries) => {}
             other => panic!("set-cell: {other:?}"),
         }
+    }
+
+    // ── pictures in a group (P5) ─────────────────────────────────────
+
+    /// A group picture as Hancom writes one: no `<hp:sz>`/`<hp:pos>`, its
+    /// whole image clipped (`imgClip` = `imgDim`).
+    fn pic(org: (i32, i32), ri: &str, image: &str, tail: &str) -> String {
+        format!(
+            r#"<hp:pic id="0" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="4" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="{w}" height="{h}"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{ri}<hc:img binaryItemIDRef="{image}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="{w}" y="0"/><hc:pt2 x="{w}" y="{h}"/><hc:pt3 x="0" y="{h}"/></hp:imgRect><hp:imgClip left="0" right="22500" top="0" bottom="15000"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="22500" dimheight="15000"/>{tail}</hp:pic>"#,
+            w = org.0,
+            h = org.1
+        )
+    }
+
+    /// (path, width, height, offset) of each picture child of `group`, in
+    /// child order; shapes are skipped.
+    fn pictures(group: &Control) -> Vec<(String, i32, i32, (f64, f64))> {
+        let Control::Group { children, .. } = group else { panic!("not a group") };
+        children
+            .iter()
+            .filter_map(|c| match c {
+                GroupChild::Picture(i) => Some((
+                    i.path.clone(),
+                    i.width.as_i32(),
+                    i.height.as_i32(),
+                    offset_of(&i.placement),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn lost(warnings: &[crate::DecodeWarning]) -> Vec<(String, String)> {
+        warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::DecodeWarning::ContentLost { kind, reason, .. } => {
+                    Some((kind.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A group of pictures only (written by hand like Hancom's: no `sz`/`pos`
+    /// on the pictures) decodes to one group of three pictures whose size and
+    /// place are the chain's, not `orgSz`.
+    ///
+    /// 이것을 실패시키는 것: 사이드카에서 pic 갈래 삭제(그림이 `pic` 손실, 묶음 소멸) /
+    /// 그림 크기를 `orgSz`·`curSz` 에서 읽기(첫 그림이 1000x600) / sca 이동 성분 무시
+    /// (셋째 그림 offset 0).
+    #[test]
+    fn group_of_pictures_decodes_to_core_pictures() {
+        let half_310 = [0.5, 0.0, 310.0, 0.0, 0.5, 0.0];
+        let children = [
+            pic(
+                (1000, 600),
+                &ri(
+                    [1.0, 0.0, 100.0, 0.0, 1.0, 50.0],
+                    &[([2.0, 0.0, 0.0, 0.0, 0.5, 0.0], ID), (ID, ID)],
+                ),
+                "image1",
+                "",
+            ),
+            pic(
+                (400, 400),
+                &ri([1.0, 0.0, 1000.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, ID)]),
+                "image2",
+                "",
+            ),
+            pic((400, 400), &ri(ID, &[(half_310, ID), (ID, ID)]), "image3", ""),
+        ]
+        .concat();
+        let (g, w) = decode(&container((3000, 3000), &children));
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            pictures(&g.unwrap()),
+            [
+                ("BinData/image1".to_string(), 2000, 300, (100.0, 50.0)),
+                ("BinData/image2".to_string(), 400, 400, (1000.0, 0.0)),
+                ("BinData/image3".to_string(), 200, 200, (310.0, 0.0)),
+            ]
+        );
+    }
+
+    /// Hancom's F3a (three logos grouped) decodes to its three pictures in
+    /// wire order at their own offsets, and loses nothing.
+    ///
+    /// 이것을 실패시키는 것: 그림 갈래를 사이드카 순서 대신 종류별로 모으는 것 /
+    /// 그림 offset 을 원점으로.
+    #[test]
+    fn hancom_logo_group_decodes_to_three_pictures() {
+        let doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        let g = first_group(&doc);
+        let Control::Group { width, height, .. } = &g else { unreachable!() };
+        assert_eq!((width.as_i32(), height.as_i32()), (28_346, 5669));
+        assert_eq!(
+            pictures(&g),
+            [
+                ("BinData/image1".to_string(), 8504, 5669, (9921.0, 0.0)),
+                ("BinData/image2".to_string(), 8504, 5669, (0.0, 0.0)),
+                ("BinData/image3".to_string(), 8504, 5669, (19_842.0, 0.0)),
+            ]
+        );
+    }
+
+    /// Hancom's F3c (a picture cropped before grouping), F3d (one turned
+    /// 30°) and F3e (one in greyscale): each reports what a Core picture
+    /// cannot show, once, and keeps the picture.
+    ///
+    /// 이것을 실패시키는 것: 판정 표의 자르기·회전·효과 행을 각각 지우는 것(그 파일만
+    /// 경고가 사라진다).
+    #[test]
+    fn hancom_picture_crop_turn_and_effect_are_reported() {
+        for (name, reason) in [
+            ("group-f3c-cropped.hwpx", "crop:"),
+            ("group-f3d-rotated-pic.hwpx", "rotation/flip:"),
+            ("group-f3e-gray.hwpx", "effect: GRAY_SCALE"),
+        ] {
+            let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
+            let lost = lost(&doc.warnings);
+            assert_eq!(lost.len(), 1, "{name}: {lost:?}");
+            assert_eq!(lost[0].0, "group_child_picture", "{name}");
+            assert!(lost[0].1.starts_with(reason), "{name}: {lost:?}");
+            assert_eq!(pictures(&first_group(&doc)).len(), 3, "{name}");
+        }
+    }
+
+    /// The turned picture of F3d stays as an unturned box around the same
+    /// centre: Hancom's centre of the 30° picture is T·R·(4252, 2834.5) =
+    /// (15021.0, 4580.5) in the group (its `rotMatrix` turns about the
+    /// box's centre); the Core box is 8504 x 5669 around it.
+    ///
+    /// 이것을 실패시키는 것: 회전한 상자의 모서리(offset)를 축 정렬 상자의 모서리로
+    /// 그대로 쓰는 것(중심이 어긋난다).
+    #[test]
+    fn turned_group_picture_keeps_its_centre() {
+        let doc = HwpxDecoder::decode(&fixture("group-f3d-rotated-pic.hwpx")).unwrap();
+        let (_, w, h, (x, y)) = pictures(&first_group(&doc))[1].clone();
+        assert_eq!((w, h), (8504, 5669));
+        let centre = (x + f64::from(w) / 2.0, y + f64::from(h) / 2.0);
+        assert!(
+            (centre.0 - 15_021.0).abs() <= 1.0 && (centre.1 - 4580.5).abs() <= 1.0,
+            "{centre:?}"
+        );
+    }
+
+    fn bare_pic(
+        clip: (i32, i32, i32, i32),
+        dim: Option<(i32, i32)>,
+    ) -> crate::schema::section::HxPic {
+        use crate::schema::section::{HxImg, HxImgClip, HxImgDim, HxPic};
+        HxPic {
+            img: Some(HxImg {
+                binary_item_id_ref: "image2".to_string(),
+                effect: "REAL_PIC".to_string(),
+                alpha: "0".to_string(),
+                ..Default::default()
+            }),
+            img_clip: Some(HxImgClip { left: clip.0, right: clip.1, top: clip.2, bottom: clip.3 }),
+            img_dim: dim.map(|(w, h)| HxImgDim { dim_width: w, dim_height: h }),
+            ..Default::default()
+        }
+    }
+
+    fn reasons(pic: &crate::schema::section::HxPic, pixels: &[(&str, (u32, u32))]) -> Vec<String> {
+        let map: std::collections::HashMap<String, (u32, u32)> =
+            pixels.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        super::group_picture_losses(pic, &map)
+            .into_iter()
+            .map(|r| r.split(':').next().unwrap().to_string())
+            .collect()
+    }
+
+    /// The crop rule (W0, §8.1): more than one pixel (75 HWPUNIT) off the
+    /// whole image is a crop. The whole image is `imgDim`; without it the
+    /// image's pixel size × 75; without both the crop cannot be ruled out.
+    /// The cases are corpus values: 7050 of 7080 (`imgDim` one pixel off the
+    /// image), a 94 x 33 logo with no `imgDim` (clip 7080 x 2460 = uncropped,
+    /// clip with right 0 and the size in top/bottom = reported), and no size
+    /// at all.
+    ///
+    /// 이것을 실패시키는 것: 허용 폭 `>` 를 `>=` 로(75 가 손실이 된다) / 픽셀 크기
+    /// 대체를 지우는 것 / 크기 없음 갈래 방출 삭제 / `left`·`top` 을 비교에서 빼는 것.
+    #[test]
+    fn group_picture_crop_rule() {
+        assert!(reasons(&bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000))), &[]).is_empty());
+        assert!(reasons(&bare_pic((0, 7050, 0, 2460), Some((7080, 2460))), &[]).is_empty());
+        assert!(reasons(&bare_pic((0, 7005, 0, 2460), Some((7080, 2460))), &[]).is_empty());
+        assert_eq!(reasons(&bare_pic((0, 7004, 0, 2460), Some((7080, 2460))), &[]), ["crop"]);
+        assert_eq!(reasons(&bare_pic((76, 7080, 0, 2460), Some((7080, 2460))), &[]), ["crop"]);
+        let logo = [("image2", (94, 33))];
+        assert!(reasons(&bare_pic((0, 7080, 0, 2460), None), &logo).is_empty());
+        assert!(reasons(&bare_pic((0, 7080, 0, 2460), Some((0, 0))), &logo).is_empty());
+        assert_eq!(reasons(&bare_pic((0, 0, 7080, 2460), None), &logo), ["crop"]);
+        assert_eq!(reasons(&bare_pic((0, 7080, 0, 2460), None), &[]), ["crop"]);
+        assert_eq!(reasons(&bare_pic((0, 7080, 0, 2460), Some((0, 0))), &[]), ["crop"]);
+    }
+
+    /// Image effects and a visible border are reported; `lineShape` NONE and
+    /// an empty `<hp:effects/>` are not.
+    ///
+    /// 이것을 실패시키는 것: effect·bright·contrast·alpha·effects 자식·테두리 조건을
+    /// 각각 지우는 것 / NONE 테두리도 손실로 보는 것.
+    #[test]
+    fn group_picture_effect_and_border_rule() {
+        use crate::schema::section::{HxAnyElement, HxLineShape, HxPicEffects};
+        let base = || bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000)));
+        let mut p = base();
+        p.img.as_mut().unwrap().effect = "GRAY_SCALE".to_string();
+        assert_eq!(reasons(&p, &[]), ["effect"]);
+        let mut p = base();
+        p.img.as_mut().unwrap().bright = -10;
+        assert_eq!(reasons(&p, &[]), ["effect"]);
+        let mut p = base();
+        p.img.as_mut().unwrap().contrast = 5;
+        assert_eq!(reasons(&p, &[]), ["effect"]);
+        let mut p = base();
+        p.img.as_mut().unwrap().alpha = "50".to_string();
+        assert_eq!(reasons(&p, &[]), ["effect"]);
+        let mut p = base();
+        p.effects = Some(HxPicEffects { items: vec![HxAnyElement::Element] });
+        assert_eq!(reasons(&p, &[]), ["effect"]);
+        p.effects = Some(HxPicEffects::default());
+        assert!(reasons(&p, &[]).is_empty());
+        let mut p = base();
+        p.line_shape = Some(HxLineShape {
+            style: "DOT".to_string(),
+            width: 75,
+            ..HxLineShape::default_solid()
+        });
+        assert_eq!(reasons(&p, &[]), ["border"]);
+        p.line_shape =
+            Some(HxLineShape { style: "NONE".to_string(), ..HxLineShape::default_solid() });
+        assert!(reasons(&p, &[]).is_empty());
+    }
+
+    /// A Hancom `<hp:effects>` with a shadow inside is read as having a
+    /// child (the element is parsed, not skipped).
+    ///
+    /// 이것을 실패시키는 것: `HxPic::effects` 의 역직렬화 이름을 지우는 것.
+    #[test]
+    fn group_picture_effects_element_is_read() {
+        let shadow = r#"<hp:effects><hp:shadow style="OUTSIDE" alpha="0.5"/></hp:effects>"#;
+        let one = pic((1000, 600), &ri(ID, &[(ID, ID), (ID, ID)]), "image1", shadow);
+        let (_, w) = decode(&container((3000, 3000), &one));
+        assert_eq!(lost(&w).iter().map(|(_, r)| &r[..7]).collect::<Vec<_>>(), ["effect:"]);
+    }
+
+    /// A picture in a nested group counts in the nested group's box: the
+    /// group (2000 wide) spans a 1000 rect and a 1000 picture beside it, and
+    /// nothing is reported.
+    ///
+    /// 이것을 실패시키는 것: `leaf_bounds` 의 Picture 갈래 삭제
+    /// (`nested_group_placement`) / `core_child_corners` 의 Picture 모서리 삭제
+    /// (Core 중첩 묶음 폭 1000).
+    #[test]
+    fn picture_counts_in_a_nested_group_box() {
+        let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]));
+        let one = pic(
+            (1000, 1000),
+            &ri([1.0, 0.0, 1000.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, ID), (ID, ID)]),
+            "image1",
+            "",
+        )
+        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let own = ri(ID, &[(ID, ID), (ID, ID)]);
+        let (g, w) =
+            decode(&container((3000, 3000), &nested((2000, 1000), &own, &format!("{leaf}{one}"))));
+        assert!(w.is_empty(), "{w:?}");
+        let inner = children(&g.unwrap())[0].clone();
+        let Control::Group { width, .. } = &inner else { panic!("{inner:?}") };
+        assert_eq!(width.as_i32(), 2000);
+        assert_eq!(pictures(&inner), [("BinData/image1".to_string(), 1000, 1000, (1000.0, 0.0))]);
+    }
+
+    /// A group picture whose `<hp:imgDim>` is missing is judged against its
+    /// image's pixel size read from BinData: F3a with `imgDim` removed (its
+    /// logos are 300 x 200 px = 22500 x 15000, the clip) loses nothing.
+    ///
+    /// 이것을 실패시키는 것: 패키지 디코더가 픽셀 크기 표를 넘기지 않는 것(세 그림이
+    /// 모두 "크기 모름" 자르기로 보고된다).
+    #[test]
+    fn missing_image_size_is_read_from_the_image() {
+        use std::io::{Read, Write};
+        let src = fixture("group-f3a-logo.hwpx");
+        let mut zin = zip::ZipArchive::new(std::io::Cursor::new(&src)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zin.len() {
+            let mut f = zin.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                let stripped =
+                    xml.replace(r#"<hp:imgDim dimwidth="22500" dimheight="15000"/>"#, "");
+                assert_ne!(stripped, xml);
+                data = stripped.into_bytes();
+            }
+            let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
+            out.start_file(name, opts).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        let bytes = out.finish().unwrap().into_inner();
+        let doc = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    }
+
+    /// A picture turned 30° alone in a nested group: it stays an unturned
+    /// 1000 x 600 box around its centre (5500, 5300), the nested group is
+    /// sized by that final box (not by the turned one), and the picture sits
+    /// at the group's corner.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음 자식 이동(`shift_child`)의 Picture 갈래 삭제
+    /// (그림 offset 이 회전 상자 모서리 기준으로 남는다) / bounds 를 회전 모서리로.
+    #[test]
+    fn turned_picture_in_a_nested_group_is_an_unturned_box() {
+        let turn = [
+            0.866_025_403_784_438_7,
+            -0.5,
+            216.987_298_107_780_6,
+            0.5,
+            0.866_025_403_784_438_7,
+            -209.807_621_135_331_6,
+        ];
+        let one = pic(
+            (1000, 600),
+            &ri([1.0, 0.0, 5000.0, 0.0, 1.0, 5000.0], &[(ID, ID), (ID, ID), (ID, turn)]),
+            "image1",
+            "",
+        )
+        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let own = ri([1.0, 0.0, 4916.987, 0.0, 1.0, 4790.192], &[(ID, ID), (ID, ID)]);
+        let (g, w) = decode(&container((7000, 7000), &nested((1166, 1020), &own, &one)));
+        assert_eq!(
+            lost(&w).iter().map(|(k, r)| (k.as_str(), &r[..14])).collect::<Vec<_>>(),
+            [("group_child_picture", "rotation/flip:")]
+        );
+        let inner = children(&g.unwrap())[0].clone();
+        let Control::Group { width, height, placement, .. } = &inner else { panic!("{inner:?}") };
+        assert_eq!((width.as_i32(), height.as_i32()), (1000, 600));
+        assert_eq!(offset_of(placement), (5000.0, 5000.0));
+        assert_eq!(pictures(&inner), [("BinData/image1".to_string(), 1000, 600, (0.0, 0.0))]);
     }
 }

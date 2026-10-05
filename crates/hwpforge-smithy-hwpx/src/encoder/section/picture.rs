@@ -108,6 +108,8 @@ pub(super) fn build_picture(
             .as_ref()
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
             .transpose()?,
+        line_shape: None,
+        effects: None,
     })
 }
 

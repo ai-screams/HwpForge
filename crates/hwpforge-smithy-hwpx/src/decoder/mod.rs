@@ -8,6 +8,7 @@
 pub(crate) mod chart;
 pub(crate) mod group_geometry;
 pub(crate) mod header;
+pub(crate) mod image_size;
 pub(crate) mod metadata;
 pub(crate) mod package;
 pub(crate) mod section;
@@ -578,9 +579,21 @@ impl HwpxDecoder {
         let mut masterpage_cursor = 0usize;
         let mut warnings: Vec<DecodeWarning> = Vec::new();
 
+        // BinData is read before the sections: a group picture without an
+        // `<hp:imgDim>` is judged for cropping against its image's own size.
+        let image_store = pkg.read_all_bindata()?;
+        let image_pixels: std::collections::HashMap<String, (u32, u32)> = image_store
+            .iter()
+            .filter_map(|(key, bytes)| {
+                let stem = key.rsplit_once('.').map_or(key, |(stem, _)| stem);
+                image_size::pixel_size(bytes).map(|size| (stem.to_string(), size))
+            })
+            .collect();
+
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let mut result = section::parse_section(&section_xml, i, &chart_xmls)?;
+            let mut result =
+                section::parse_section_with_images(&section_xml, i, &chart_xmls, &image_pixels)?;
             warnings.append(&mut result.warnings);
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
@@ -636,9 +649,6 @@ impl HwpxDecoder {
 
             document.add_section(section);
         }
-
-        // Step 6: Extract binary image data from BinData/
-        let image_store = pkg.read_all_bindata()?;
 
         Ok(HwpxDocument { document, style_store, image_store, warnings })
     }

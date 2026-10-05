@@ -134,10 +134,26 @@ pub struct SectionParseResult {
 ///
 /// `section_index` is used only for error messages (e.g. `"Contents/section0.xml"`).
 /// `chart_xmls` maps chart file paths (e.g. `"Chart/chart1.xml"`) to their OOXML content.
+///
+/// Test entry point: the package decoder calls [`parse_section_with_images`].
+#[cfg(test)]
 pub fn parse_section(
     xml: &str,
     section_index: usize,
     chart_xmls: &HashMap<String, String>,
+) -> HwpxResult<SectionParseResult> {
+    parse_section_with_images(xml, section_index, chart_xmls, &HashMap::new())
+}
+
+/// [`parse_section`] with the pixel sizes of the package's images, keyed by
+/// `binaryItemIDRef` (the BinData name without extension). A group picture
+/// with no `<hp:imgDim>` is judged for cropping against its image's size;
+/// without it, such a picture is reported as possibly cropped.
+pub(crate) fn parse_section_with_images(
+    xml: &str,
+    section_index: usize,
+    chart_xmls: &HashMap<String, String>,
+    image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
     let xml = crate::wire_xml::preserve_ws_only_text(xml);
@@ -148,6 +164,7 @@ pub fn parse_section(
     let mut headers = Vec::new();
     let mut footers = Vec::new();
     let mut ctx = DecodeCtx::new(section_index);
+    ctx.image_pixels = image_pixels.clone();
     let mut page_number = None;
     let mut column_settings = None;
     let mut visibility = None;
@@ -279,6 +296,9 @@ pub(crate) struct DecodeCtx {
     part: String,
     /// 묶음 자식 안으로 들어간 깊이 (0 = 묶음 밖).
     group_child_depth: usize,
+    /// 패키지 그림의 픽셀 크기 (`binaryItemIDRef` → (너비, 높이)) — `imgDim`
+    /// 없는 묶음 그림의 자르기 판정용.
+    pub(crate) image_pixels: HashMap<String, (u32, u32)>,
 }
 
 impl DecodeCtx {
@@ -288,6 +308,7 @@ impl DecodeCtx {
             path: vec![super::PathSeg::Section(section_index)],
             part: format!("Contents/section{section_index}.xml"),
             group_child_depth: 0,
+            image_pixels: HashMap::new(),
         }
     }
 
@@ -1085,7 +1106,11 @@ fn validate_leading_header_rows(rows: &[TableRow]) -> HwpxResult<()> {
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
-fn convert_picture(hx: &HxPic, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Option<Image>> {
+pub(crate) fn convert_picture(
+    hx: &HxPic,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Image>> {
     let img = match hx.img.as_ref() {
         Some(img) if !img.binary_item_id_ref.is_empty() => img,
         _ => return Ok(None),
