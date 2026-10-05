@@ -1,0 +1,594 @@
+{
+  "document": {
+    "sections": [
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Group": {
+                      "children": [
+                        {
+                          "Rect": {
+                            "width": 0,
+                            "height": 0,
+                            "caption": null,
+                            "style": {
+                              "line_color": 0,
+                              "fill_color": 16777215,
+                              "line_width": 33,
+                              "line_style": "Solid",
+                              "rotation": null,
+                              "flip": null,
+                              "head_arrow": null,
+                              "tail_arrow": null,
+                              "fill": null,
+                              "drop_cap_style": "None"
+                            }
+                          }
+                        },
+                        {
+                          "Group": {
+                            "children": [
+                              {
+                                "Rect": {
+                                  "width": 0,
+                                  "height": 0,
+                                  "caption": null,
+                                  "style": {
+                                    "line_color": 0,
+                                    "fill_color": 16777215,
+                                    "line_width": 33,
+                                    "line_style": "Solid",
+                                    "rotation": null,
+                                    "flip": null,
+                                    "head_arrow": null,
+                                    "tail_arrow": null,
+                                    "fill": null,
+                                    "drop_cap_style": "None"
+                                  }
+                                }
+                              },
+                              {
+                                "Line": {
+                                  "start": {
+                                    "x": 0,
+                                    "y": 0
+                                  },
+                                  "end": {
+                                    "x": 8504,
+                                    "y": 5669
+                                  },
+                                  "width": 0,
+                                  "height": 0,
+                                  "caption": null,
+                                  "style": {
+                                    "line_color": 0,
+                                    "fill_color": null,
+                                    "line_width": 33,
+                                    "line_style": "Solid",
+                                    "rotation": null,
+                                    "flip": null,
+                                    "head_arrow": null,
+                                    "tail_arrow": null,
+                                    "fill": null,
+                                    "drop_cap_style": "None"
+                                  }
+                                }
+                              },
+                              {
+                                "Ellipse": {
+                                  "center": {
+                                    "x": 4252,
+                                    "y": 4252
+                                  },
+                                  "axis1": {
+                                    "x": 8504,
+                                    "y": 4252
+                                  },
+                                  "axis2": {
+                                    "x": 4252,
+                                    "y": 8504
+                                  },
+                                  "width": 0,
+                                  "height": 0,
+                                  "paragraphs": [],
+                                  "caption": null,
+                                  "style": {
+                                    "line_color": 0,
+                                    "fill_color": 16777215,
+                                    "line_width": 33,
+                                    "line_style": "Solid",
+                                    "rotation": null,
+                                    "flip": null,
+                                    "head_arrow": null,
+                                    "tail_arrow": null,
+                                    "fill": null,
+                                    "drop_cap_style": "None"
+                                  },
+                                  "text_vertical_align": "Top"
+                                }
+                              },
+                              {
+                                "Polygon": {
+                                  "vertices": [
+                                    {
+                                      "x": 0,
+                                      "y": 5669
+                                    },
+                                    {
+                                      "x": 4252,
+                                      "y": 0
+                                    },
+                                    {
+                                      "x": 8504,
+                                      "y": 5669
+                                    }
+                                  ],
+                                  "width": 0,
+                                  "height": 0,
+                                  "paragraphs": [],
+                                  "caption": null,
+                                  "style": {
+                                    "line_color": 0,
+                                    "fill_color": 16777215,
+                                    "line_width": 33,
+                                    "line_style": "Solid",
+                                    "rotation": null,
+                                    "flip": null,
+                                    "head_arrow": null,
+                                    "tail_arrow": null,
+                                    "fill": null,
+                                    "drop_cap_style": "None"
+                                  },
+                                  "text_vertical_align": "Top"
+                                }
+                              }
+                            ],
+                            "width": 22677,
+                            "height": 14173,
+                            "inst_id": 10
+                          }
+                        }
+                      ],
+                      "width": 27212,
+                      "height": 34012,
+                      "placement": {
+                        "text_wrap": "TopAndBottom",
+                        "text_flow": "BothSides",
+                        "treat_as_char": false,
+                        "flow_with_text": false,
+                        "allow_overlap": true,
+                        "vert_rel_to": "Paper",
+                        "horz_rel_to": "Paper",
+                        "vert_offset": 11339,
+                        "horz_offset": 8503
+                      },
+                      "inst_id": 1211799031
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      }
+    ],
+    "metadata": {
+      "title": null,
+      "author": null,
+      "subject": null,
+      "description": null,
+      "last_saved_by": "SoeBuri",
+      "keywords": [],
+      "created": "2026-10-04T09:09:43Z",
+      "modified": "2026-10-04T08:42:20Z",
+      "extras": {
+        "date": "2026년 10월 4일 일요일 오후 5:44:54",
+        "pid_0x9": "12.30.0.6523 MAC64LEDarwin_27.0.0"
+      }
+    }
+  },
+  "styles": {
+    "style_set": "Modern",
+    "fonts": [
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "HANGUL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "LATIN"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "HANJA"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "JAPANESE"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "OTHER"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "SYMBOL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "USER"
+      }
+    ],
+    "char_shapes": [
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_shape": "Solid",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      }
+    ],
+    "para_shapes": [
+      {
+        "alignment": "Left",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "snap_to_grid": true,
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "line_wrap": "BREAK",
+        "border_fill_id": 1,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "checked": false,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      }
+    ],
+    "styles": [
+      {
+        "id": 0,
+        "style_type": "PARA",
+        "name": "바탕글",
+        "eng_name": "Normal",
+        "para_pr_id_ref": 0,
+        "char_pr_id_ref": 0,
+        "next_style_id_ref": 0,
+        "lang_id": 1042,
+        "lock_form": 0
+      }
+    ],
+    "border_fills": [
+      {
+        "id": 1,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "back_slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "fill": null,
+        "fill_hatch_style": null,
+        "gradient_fill": null,
+        "image_fill": null
+      },
+      {
+        "id": 2,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "back_slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "fill": {
+          "WinBrush": {
+            "face_color": "none",
+            "hatch_color": "#FF000000",
+            "alpha": "0"
+          }
+        },
+        "fill_hatch_style": null,
+        "gradient_fill": null,
+        "image_fill": null
+      }
+    ],
+    "numberings": [
+      {
+        "id": 1,
+        "start": 0,
+        "levels": [
+          {
+            "start": 1,
+            "level": 1,
+            "num_format": "Digit",
+            "text": "^1.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 2,
+            "num_format": "HangulSyllable",
+            "text": "^2.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 3,
+            "num_format": "Digit",
+            "text": "^3)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 4,
+            "num_format": "HangulSyllable",
+            "text": "^4)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 5,
+            "num_format": "Digit",
+            "text": "(^5)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 6,
+            "num_format": "HangulSyllable",
+            "text": "(^6)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 7,
+            "num_format": "CircledDigit",
+            "text": "^7",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 8,
+            "num_format": "CircledHangulSyllable",
+            "text": "^8",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 9,
+            "num_format": "HangulJamo",
+            "text": "",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 10,
+            "num_format": "RomanSmall",
+            "text": "",
+            "checkable": true
+          }
+        ]
+      }
+    ],
+    "bullets": [],
+    "tabs": [
+      {
+        "id": 0,
+        "auto_tab_left": false,
+        "auto_tab_right": false
+      },
+      {
+        "id": 1,
+        "auto_tab_left": true,
+        "auto_tab_right": false
+      },
+      {
+        "id": 2,
+        "auto_tab_left": false,
+        "auto_tab_right": true
+      }
+    ]
+  }
+}

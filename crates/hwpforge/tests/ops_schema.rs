@@ -130,3 +130,70 @@ fn an_unknown_kind_name_is_rejected_with_the_valid_ones_listed() {
     assert_eq!(err.code().as_str(), "INVALID_INPUT", "{err}");
     assert!(err.to_string().contains("exported-section"), "{err}");
 }
+
+/// Group JSON as 0.16.10 wrote it (`to-json` of Hancom's F1 g4, a nested
+/// group, converted from HWP5 by that release; its children are plain shape
+/// controls) validates against the schema this release publishes and reads
+/// into the same groups, every child a shape.
+///
+/// 이것을 실패시키는 것: 스키마에서 `GroupChild` 의 Shape 갈래(`$ref Control`)를 빼는
+/// 것(검증 실패) / `GroupChild` 를 외부 태그 derive 로 바꾸는 것(옛 자식이 읽히지 않음).
+#[test]
+fn group_json_from_0_16_10_still_validates_and_reads() {
+    use hwpforge::core::control::{Control, GroupChild};
+    use hwpforge::core::run::RunContent;
+
+    let old = std::fs::read_to_string(format!("{DATA}v0_16_10_group_document.json")).unwrap();
+    let instance: serde_json::Value = serde_json::from_str(&old).unwrap();
+    let snapshot: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(snapshot_path(SchemaKind::ExportedDocument)).unwrap(),
+    )
+    .unwrap();
+    let mut schemas = boon::Schemas::new();
+    let mut compiler = boon::Compiler::new();
+    compiler.add_resource("urn:hwpforge:exported-document", snapshot).unwrap();
+    let index = compiler.compile("urn:hwpforge:exported-document", &mut schemas).unwrap();
+    if let Err(e) = schemas.validate(&instance, index) {
+        panic!("0.16.10 group JSON no longer validates: {e:#}");
+    }
+
+    let doc: hwpforge::hwpx::ExportedDocument = serde_json::from_str(&old).expect("reads");
+    fn shapes(children: &[GroupChild]) -> usize {
+        children
+            .iter()
+            .map(|c| match c {
+                GroupChild::Shape(Control::Group { children, .. }) => 1 + shapes(children),
+                GroupChild::Shape(_) => 1,
+                _ => panic!("not a shape: {c:?}"),
+            })
+            .sum()
+    }
+    let counted: usize = doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .filter_map(|r| match &r.content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Group { children, .. } => Some(shapes(children)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .sum();
+    // Count the children in the raw JSON the same way.
+    fn raw(v: &serde_json::Value) -> usize {
+        match v {
+            serde_json::Value::Object(m) => match m.get("Group") {
+                Some(g) => g["children"].as_array().unwrap().iter().map(|c| 1 + raw_inner(c)).sum(),
+                None => m.values().map(raw).sum(),
+            },
+            serde_json::Value::Array(a) => a.iter().map(raw).sum(),
+            _ => 0,
+        }
+    }
+    fn raw_inner(child: &serde_json::Value) -> usize {
+        child.get("Group").map_or(0, |_| raw(child))
+    }
+    assert!(counted > 0);
+    assert_eq!(counted, raw(&instance["document"]));
+}
