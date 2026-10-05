@@ -308,6 +308,7 @@ fn f1_groups_match_hancom_ungroup() {
         ("group-f1-g1-scaled.hwp", "group-f1-g1-ungrouped.hwpx"),
         ("group-f1-g3-flipped.hwp", "group-f1-g3-ungrouped.hwpx"),
         ("group-f1-g4-nested.hwp", "group-f1-g4-ungrouped.hwpx"),
+        ("group-f11-nested-offset.hwp", "group-f11-nested-offset-ungrouped.hwpx"),
     ] {
         let (_, warnings) = hwp5_group(hwp);
         assert!(lost_kinds(&warnings).is_empty(), "{hwp}: {warnings:?}");
@@ -514,6 +515,7 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
         ("group-f8-poly-margin.hwp", "group-f8-poly-margin.hwpx"),
         ("group-f10-rot-then-scale.hwp", "group-f10-rot-then-scale.hwpx"),
         ("rotflip-group.hwp", "rotflip-group.hwpx"),
+        ("group-f11-nested-offset.hwp", "group-f11-nested-offset.hwpx"),
     ] {
         let (ours, _) = hwp5_group(hwp);
         let twin = hwpforge_smithy_hwpx::HwpxDecoder::decode(&fixture(hwpx)).unwrap();
@@ -563,6 +565,7 @@ fn hwp5_groups_survive_the_hwpx_writer() {
         "group-f1-g4-nested.hwp",
         "group-f8-poly-margin.hwp",
         "rotflip-group.hwp",
+        "group-f11-nested-offset.hwp",
     ] {
         let (ours, _) = hwp5_group(hwp);
         let (bytes, _) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
