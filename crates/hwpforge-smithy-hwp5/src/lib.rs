@@ -854,26 +854,29 @@ fn join_hwp5_ole_assets(
 /// that could not be parsed and records without a stream included — not
 /// just the loaded OLE assets. When several records store the same id, the
 /// first one in `DocInfo` order is the id reading.
-fn reference_ambiguities(records: &[Hwp5BinDataRecordSummary]) -> BTreeMap<u16, String> {
-    let by_position =
-        |reference: u16| records.iter().position(|r| r.reference_ordinal == reference);
-    let by_id = |reference: u16| {
-        records.iter().position(|r| !r.storage_name.is_empty() && r.binary_data_id == reference)
-    };
+pub(crate) fn reference_ambiguities(records: &[Hwp5BinDataRecordSummary]) -> BTreeMap<u16, String> {
+    // Both readings are indexed once, so the check stays linear in the
+    // number of records (a document may hold 65,535 of them).
+    let mut by_position: BTreeMap<u16, usize> = BTreeMap::new();
+    let mut by_id: BTreeMap<u16, usize> = BTreeMap::new();
+    for (index, record) in records.iter().enumerate() {
+        by_position.insert(record.reference_ordinal, index);
+        if !record.storage_name.is_empty() {
+            by_id.entry(record.binary_data_id).or_insert(index);
+        }
+    }
     let describe = |slot: Option<usize>| match slot.map(|index| &records[index]) {
         Some(record) if record.storage_name.is_empty() => "external link".to_string(),
         Some(record) => record.storage_name.clone(),
         None => "no parsed record".to_string(),
     };
-    let references: BTreeSet<u16> = records
-        .iter()
-        .flat_map(|record| [record.reference_ordinal, record.binary_data_id])
-        .filter(|reference| *reference != 0)
-        .collect();
+    let references: BTreeSet<u16> =
+        by_position.keys().chain(by_id.keys()).copied().filter(|r| *r != 0).collect();
     references
         .into_iter()
         .filter_map(|reference| {
-            let (ordinal, id) = (by_position(reference), by_id(reference));
+            let ordinal = by_position.get(&reference).copied();
+            let id = by_id.get(&reference).copied();
             (ordinal != id).then(|| {
                 let reason = format!(
                     "ordinal {reference} → {}, storage id {reference} → {}",
