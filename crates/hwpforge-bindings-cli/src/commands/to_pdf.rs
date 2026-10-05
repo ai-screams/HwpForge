@@ -477,7 +477,7 @@ mod tests {
         assert_eq!(dto.code, "IMAGE_REFERENCE_UNRESOLVED");
         assert_eq!(
             dto.message,
-            "binaryItemIDRef \"BIN0005\" names no image or OLE item in the package"
+            "binaryItemIDRef \"BIN0005\" does not resolve to image or OLE data in the package"
         );
         assert_eq!(dto.location.as_deref(), Some("Contents/header.xml hc:img@binaryItemIDRef"));
         assert_no_location_prefix(&dto);

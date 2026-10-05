@@ -1,6 +1,6 @@
 //! C4: the encoder checks the package it writes — manifest ids two items
-//! share, and `binaryItemIDRef` values no image or OLE item resolves. The
-//! checks only report; the bytes stay as they are.
+//! share, and `binaryItemIDRef` values that do not resolve to image or OLE
+//! data. The checks only report; the bytes stay as they are.
 
 use std::io::Read;
 

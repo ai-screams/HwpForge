@@ -789,7 +789,8 @@ impl OpsWarning {
     /// `CONTENT_LOST` (decode or encode: input content the model or the
     /// output could not carry), `PACKAGE_ID_CONFLICT` (two `content.hpf`
     /// items share one id) and `IMAGE_REFERENCE_UNRESOLVED` (a
-    /// `binaryItemIDRef` no image or OLE item of the package resolves).
+    /// `binaryItemIDRef` that does not resolve to image or OLE data in the
+    /// package).
     /// `ASSET_DROPPED`
     /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
     /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),

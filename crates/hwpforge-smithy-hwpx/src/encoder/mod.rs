@@ -748,7 +748,7 @@ impl EncodeWarning {
                 format!("{} manifest items share id \"{id}\": {}", hrefs.len(), hrefs.join(", "))
             }
             Self::ImageReferenceUnresolved { reference, .. } => {
-                format!("binaryItemIDRef \"{reference}\" names no image or OLE item in the package")
+                format!("binaryItemIDRef \"{reference}\" does not resolve to image or OLE data in the package")
             }
         }
     }
@@ -829,8 +829,8 @@ impl std::fmt::Display for EncodeWarning {
             ),
             Self::ImageReferenceUnresolved { part, location, reference } => write!(
                 f,
-                "binaryItemIDRef \"{reference}\" at {location} in {part} names no image or OLE \
-                 item in the package"
+                "binaryItemIDRef \"{reference}\" at {location} in {part} does not resolve to \
+                 image or OLE data in the package"
             ),
         }
     }
