@@ -208,6 +208,46 @@ fn hancom_master_page_shapes_and_picture_reach_core() {
     assert_eq!(both.text_content(), "양쪽");
 }
 
+/// A group picture on a master page is judged for a crop against the
+/// package's image sizes like one in the body: Hancom's F3a logo group
+/// (three uncropped pictures, `imgClip` = the whole image) placed on a
+/// master page with its `imgDim` removed decodes without a loss.
+///
+/// 이것을 실패시키는 것: 바탕쪽 디코드 문맥에 패키지 그림 픽셀 크기를 넘기지 않기
+/// (세 그림이 "크기 모름" 자르기로 `ContentLost` 보고된다).
+#[test]
+fn a_master_page_group_picture_without_img_dim_uses_the_image_size() {
+    let path =
+        format!("{}/../../tests/fixtures/shapes/group-f3a-logo.hwpx", env!("CARGO_MANIFEST_DIR"));
+    let hancom = std::fs::read(&path).unwrap();
+    let body = part(&hancom, "Contents/section0.xml");
+    let start = body.find("<hp:container").expect("F3a has a group");
+    let end = body.find("</hp:container>").unwrap() + "</hp:container>".len();
+    let mut group = body[start..end].to_string();
+    assert_eq!(group.matches("<hp:pic ").count(), 3, "premise: three pictures");
+    while let Some(at) = group.find("<hp:imgDim ") {
+        let close = at + group[at..].find("/>").unwrap() + 2;
+        group.replace_range(at..close, "");
+    }
+
+    // This codec's package of F3a (BinData kept) with one master page, whose
+    // body is then swapped for the Hancom group.
+    let mut doc = decode(&hancom);
+    doc.document.sections_mut()[0].master_pages =
+        Some(vec![MasterPage::new(ApplyPageType::Both, vec![para("바탕")])]);
+    let bytes = reencode(doc);
+    let run = format!(r#"<hp:run charPrIDRef="0">{group}</hp:run>"#);
+    let back = decode(&with_master(&bytes, 0, BOTH, &p(&run)));
+
+    assert!(content_lost(&back).is_empty(), "{:?}", back.warnings);
+    let master = &masters(&back, 0)[0];
+    assert!(
+        master.paragraphs[0].runs.iter().any(|r| matches!(&r.content, RunContent::Control(c)
+            if matches!(c.as_ref(), hwpforge_core::control::Control::Group { .. }))),
+        "the group reached the master page: {master:?}"
+    );
+}
+
 // 이것을 실패시키는 것: 인코더가 루트·subList 값을 하드코딩하기(범위·쪽 번호·
 // 겹침·앞으로·크기 중 하나), 또는 글자 아닌 run 을 버리기.
 #[test]

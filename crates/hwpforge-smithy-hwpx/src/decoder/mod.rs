@@ -601,7 +601,8 @@ impl HwpxDecoder {
                 let end = (masterpage_cursor + mp_cnt).min(masterpage_xmls.len());
                 let mut slice = Vec::with_capacity(end - masterpage_cursor);
                 for (global, xml) in &masterpage_xmls[masterpage_cursor..end] {
-                    let (master, mut mp_warnings) = section::parse_master_page(xml, i, *global)?;
+                    let (master, mut mp_warnings) =
+                        section::parse_master_page(xml, i, *global, &image_pixels)?;
                     warnings.append(&mut mp_warnings);
                     slice.push(master);
                 }

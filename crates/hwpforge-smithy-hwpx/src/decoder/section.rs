@@ -2205,7 +2205,9 @@ fn convert_header_footer(
 ///
 /// The `<hp:subList>` goes through the common paragraph decoder, so the
 /// master page carries every run kind the body does. Warnings name the real
-/// part and a `section[s].masterpage[global]…` path.
+/// part and a `section[s].masterpage[global]…` path. `image_pixels` are the
+/// package's image sizes, so a group picture without `imgDim` is judged for
+/// a crop as in the body.
 ///
 /// # Errors
 ///
@@ -2215,6 +2217,7 @@ pub(crate) fn parse_master_page(
     xml: &str,
     section_index: usize,
     global: usize,
+    image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<(hwpforge_core::section::MasterPage, Vec<super::DecodeWarning>)> {
     use hwpforge_core::section::{MasterPage, MasterPageSpecial};
 
@@ -2223,6 +2226,7 @@ pub(crate) fn parse_master_page(
     let hx: crate::schema::section::HxMasterPage = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file, detail: xml_error_detail(&e) })?;
     let mut ctx = DecodeCtx::for_master_page(section_index, global);
+    ctx.image_pixels = image_pixels.clone();
 
     // xs:nonNegativeInteger; 결측 = 0. 해석 불가는 아래에서 손실로 보고한다.
     let page_number = match hx.page_number.trim() {
