@@ -753,21 +753,25 @@ const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 /// - `horzRelTo` bits 8-9 (`0`=Paper `1`=Page `2`=Column `3`=Para)
 /// - `flowWithText` bit 13 (`vertRelTo`=Para 일 때만 유의 — 그 외엔 false)
 /// - `allowOverlap` bit 14 (`flowWithText`=1 이면 표 70 규약상 강제 false)
-/// - `textWrap` bits 21-23 (`0`=Square `1`=Tight `2`=Through `3`=TopAndBottom
-///   `4`=BehindText `5`=InFrontOfText)
+/// - `textWrap` bits 21-23 (`0`=Square `1`=TopAndBottom `2`=BehindText
+///   `3`=InFrontOfText — **한컴 저장본의 4값**이다. 공식 스펙 rev1.3 표 70·
+///   hwp-rs·hwp.js 의 6값(Square·Tight·Through·TopAndBottom·BehindText·
+///   InFrontOfText)은 한컴이 쓰는 값과 다르다: X2 fixture(`x2-wrap-modes`)
+///   4/4·한컴 짝의 떠 있는 개체 457/457 이 이 4값과 일치, `wire-gotchas.md`
+///   #38)
 /// - `textFlow` bits 24-25 (`0`=BothSides `1`=LeftOnly `2`=RightOnly
-///   `3`=LargestOnly — `textWrap`∈{Square,Tight,Through} 일 때만 유의)
+///   `3`=LargestOnly — `textWrap`=Square 일 때만 유의)
 ///
 /// `align`(bits 5-7·10-12)·`width/heightRelTo`(15-19)·`protect`(20)·
 /// `numbering`(26-28) 은 Core 가 carry 하지 않으므로 무시한다. `offset_x`/
 /// `offset_y` 는 CtrlHeader 오프셋 필드(이미 signed `i32` 로 디코드됨 —
 /// corpus 의 음수 오프셋 실재)를 그대로 싣는다.
 ///
-/// **Fail-closed (no-fake-support)**: `vertRelTo`(bits 3-4)·`textWrap`(bits
-/// 21-23)에서 레퍼런스 enum 범위 밖 값(각각 `3`, `6`/`7` — hwp-rs
-/// `VerticalRelativeTo`/`TextWrap` 에 대응 variant 없음)이 나오면 임의 known
+/// **Fail-closed (no-fake-support)**: `vertRelTo`(bits 3-4)에서 레퍼런스 enum
+/// 범위 밖 값 `3`(hwp-rs `VerticalRelativeTo` 에 대응 variant 없음), 또는
+/// `textWrap`(bits 21-23)에서 한컴이 쓰지 않는 `4`–`7` 이 나오면 임의 known
 /// 값으로 정규화하지 않고 [`Hwp5Warning::ProjectionFallback`] 를 방출한 뒤 가장
-/// 보수적인 기본값(Paper/Square)으로 폴백한다 — 유효 HWP5 에는 없는 값이라
+/// 보수적인 기본값(Paper/Square)으로 폴백한다 — 코퍼스 HWP5 에는 없는 값이라
 /// 실무엔 안 뜨지만, 뜨면 속성 word 오프셋 오정렬의 canary 로 표면화한다.
 fn object_placement_from_ctrl_properties(
     ctrl_properties: u32,
@@ -790,12 +794,12 @@ fn object_placement_from_ctrl_properties(
     let vert_rel_to = vert_relative_to_from_bits(vert_bits);
     let horz_rel_to = horz_relative_to_from_bits((ctrl_properties >> 8) & 0x3);
     let wrap_bits = (ctrl_properties >> 21) & 0x7;
-    if wrap_bits >= 6 {
+    if wrap_bits >= 4 {
         warnings.push(Hwp5Warning::ProjectionFallback {
             subject: "object_placement.text_wrap",
             reason: format!(
-                "gso property word textWrap bits 21-23 = {wrap_bits} is outside the HWP5 \
-                 reference range (0..=5); falling back to Square"
+                "gso property word textWrap bits 21-23 = {wrap_bits} is outside the values \
+                 Hancom writes (0..=3); falling back to Square"
             ),
         });
     }
@@ -806,9 +810,10 @@ fn object_placement_from_ctrl_properties(
         vert_rel_to == ObjectRelativeTo::Para && (ctrl_properties >> 13) & 0x1 != 0;
     // 표 70: flowWithText 가 참이면 allowOverlap 은 무조건 false 로 간주한다.
     let allow_overlap = if flow_with_text { false } else { (ctrl_properties >> 14) & 0x1 != 0 };
-    // 표 70: textFlow 는 wrap 이 Square/Tight/Through 일 때만 정의된다. 다른
-    // wrap(TopAndBottom/BehindText/InFrontOfText)에서는 bits 24-25 가 무의미
-    // 하므로 기본값 BothSides 로 둔다 (잡값이 사이드 흐름을 뒤집는 것을 방지).
+    // textFlow 는 글이 개체 옆으로 흐르는 wrap 에서만 의미가 있다. 한컴 4값
+    // 중 그런 것은 Square 뿐이고(Tight/Through 는 이 표에서 나오지 않는다),
+    // 다른 wrap 에서는 bits 24-25 가 무의미하므로 기본값 BothSides 로 둔다
+    // (잡값이 사이드 흐름을 뒤집는 것을 방지).
     let text_flow = match text_wrap {
         ObjectTextWrap::Square | ObjectTextWrap::Tight | ObjectTextWrap::Through => {
             object_text_flow_from_bits((ctrl_properties >> 24) & 0x3)
@@ -859,17 +864,16 @@ fn horz_relative_to_from_bits(bits: u32) -> ObjectRelativeTo {
 
 /// 표 70 `textWrap`(bits 21-23)을 Core [`ObjectTextWrap`] 로 매핑한다.
 ///
-/// 스펙 정의값은 `0`~`5` 다 — 3비트 필드의 미정의 값 `6`/`7` 은 유효 파일에
-/// 나타나지 않으므로 기본 `Square` 로 폴백한다 (경고 방출은 호출부
+/// 한컴이 쓰는 값은 `0` 어울림·`1` 자리 차지·`2` 글 뒤로·`3` 글 앞으로의
+/// 4값이다(스펙·hwp-rs·hwp.js 의 6값 순서가 아니다 — X2 fixture 4/4, 한컴 짝
+/// 457/457). `4`–`7` 은 기본 `Square` 로 폴백한다 (경고 방출은 호출부
 /// [`object_placement_from_ctrl_properties`] 담당).
 fn object_text_wrap_from_bits(bits: u32) -> ObjectTextWrap {
     match bits {
         0 => ObjectTextWrap::Square,
-        1 => ObjectTextWrap::Tight,
-        2 => ObjectTextWrap::Through,
-        3 => ObjectTextWrap::TopAndBottom,
-        4 => ObjectTextWrap::BehindText,
-        5 => ObjectTextWrap::InFrontOfText,
+        1 => ObjectTextWrap::TopAndBottom,
+        2 => ObjectTextWrap::BehindText,
+        3 => ObjectTextWrap::InFrontOfText,
         _ => ObjectTextWrap::Square,
     }
 }
@@ -4810,6 +4814,47 @@ mod tests {
         );
         assert!(placement.treat_as_char, "TextBox context must respect bit0=1 (inline)");
         assert_eq!(placement, ObjectPlacement::legacy_inline_defaults());
+    }
+
+    /// E-T1: bits 21–23 are Hancom's four-value table (X2 fixture and the
+    /// 457 floating objects of the Hancom pairs), not the spec's six.
+    ///
+    /// 이것을 실패시키는 것: 6값 스펙 표로 되돌리는 것, 1·2·3 중 둘을
+    /// 맞바꾸는 것.
+    #[test]
+    fn text_wrap_bits_are_hancoms_four_values() {
+        for (bits, wrap) in [
+            (0, ObjectTextWrap::Square),
+            (1, ObjectTextWrap::TopAndBottom),
+            (2, ObjectTextWrap::BehindText),
+            (3, ObjectTextWrap::InFrontOfText),
+        ] {
+            let mut warnings = Vec::new();
+            let placement = object_placement_from_ctrl_properties(bits << 21, 0, 0, &mut warnings);
+            assert_eq!(placement.text_wrap, wrap, "bits {bits}");
+            assert!(warnings.is_empty(), "bits {bits}: {warnings:?}");
+        }
+    }
+
+    /// E-T2: 4–7 are outside what Hancom writes: a canary warning and the
+    /// most conservative wrap.
+    ///
+    /// 이것을 실패시키는 것: 경고 조건을 `>= 6` 으로 되돌리는 것(4·5 가
+    /// 무경고로 다른 감싸기가 된다).
+    #[test]
+    fn text_wrap_bits_four_to_seven_warn_and_fall_back_to_square() {
+        for bits in 4..=7 {
+            let mut warnings = Vec::new();
+            let placement = object_placement_from_ctrl_properties(bits << 21, 0, 0, &mut warnings);
+            assert_eq!(placement.text_wrap, ObjectTextWrap::Square, "bits {bits}");
+            assert!(
+                matches!(
+                    warnings.as_slice(),
+                    [Hwp5Warning::ProjectionFallback { subject: "object_placement.text_wrap", .. }]
+                ),
+                "bits {bits}: {warnings:?}"
+            );
+        }
     }
 
     #[test]

@@ -40,5 +40,6 @@
 35. 인코더 전체-run 치환 placeholder(HWPHL/HWPFD/HWPBM 등 13종) = **run 직렬화 문자열 전체가 치환 키** — titleMark 등 후주입으로 run 을 바꾸면 내부 마커가 XML 로 유출. 판정은 등록 키와 **정확 일치**로만 (substring 은 정상 텍스트 "0"·"hp" 오탐)
 36. `BeginNum.footnote/endnote` 는 `<hp:startNum>` wire 에 **속성 자체가 없음** — 디코더가 1 을 합성 (첫 섹션만 header `<hh:beginNum>` 실값 병합). 재시작 신호로 읽으면 공개 왕복에서 각주 번호 1,2,3→1,2,1 리셋
 37. `hp:newNum@num` = **xs:integer** (0 유효 wire — verbatim 캐리) / `xs:positiveInteger` 는 footNotePr `numbering@newNum` 쪽. 두 XSD 를 혼동해 0 을 거르면 wire-캐시 의미 분열
+38. HWP5 개체 속성 word **bit 21–23 textWrap 은 한컴 4값** (`0` 어울림 SQUARE · `1` 자리 차지 TOP_AND_BOTTOM · `2` 글 뒤로 BEHIND_TEXT · `3` 글 앞으로 IN_FRONT_OF_TEXT) — 스펙 rev1.3 표 70·hwp-rs·hwp.js 의 6값(Tight·Through 포함) 순서가 아니다. 한컴 저작 X2(`tests/fixtures/shapes/x2-wrap-modes.hwp`) 4/4·한컴 짝 떠 있는 개체 457/457. `4`–`7` 은 경고 + Square (`HWP5_WIRE_SPEC.md §22.5`)
 
 ---

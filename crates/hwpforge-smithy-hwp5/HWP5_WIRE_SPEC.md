@@ -943,17 +943,26 @@ hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
 | 15-17 | widthRelTo                   | **Core 미carry**                                                                                                             |
 | 18-19 | heightRelTo                  | **Core 미carry**                                                                                                             |
 | 20    | protect (크기 보호)          | vertRelTo=Para 일 때만 — **Core 미carry**                                                                                    |
-| 21-23 | textWrap                     | `text_wrap`: `0`=Square `1`=Tight `2`=Through `3`=TopAndBottom `4`=BehindText `5`=InFrontOfText (`6`/`7` 미정의 → Square)    |
-| 24-25 | textFlow                     | `text_flow`: `0`=BothSides `1`=LeftOnly `2`=RightOnly `3`=LargestOnly (wrap∈{Square,Tight,Through} 일 때만)                  |
+| 21-23 | textWrap                     | `text_wrap`: `0`=Square `1`=TopAndBottom `2`=BehindText `3`=InFrontOfText — 한컴 4값 (스펙 6값 아님, 아래). `4`–`7` → Square |
+| 24-25 | textFlow                     | `text_flow`: `0`=BothSides `1`=LeftOnly `2`=RightOnly `3`=LargestOnly (wrap=Square 일 때만)                                  |
 | 26-28 | numbering (번호 범주, mod 4) | Figure/Table/Equation — **Core 미carry**                                                                                     |
 
 - **오프셋** (속성 DWORD 직후 `[8..12]` vertOffset · `[12..16]` horzOffset)
   은 이미 `read_i32` (signed) — corpus 에 음수 실재(문단 위 돌출), u32 로
   읽지 말 것 (기존 디코드 정상, 정정 불요).
-- **미정의 값 폴백 (typed 경고 + 보수 기본값)**: `vertRelTo`=3 ·
-  `textWrap`∈{6,7} 은 레퍼런스 enum (hwp-rs `VerticalRelativeTo`/`TextWrap`)에
-  대응 variant 이 **없는 값** — 유효 HWP5 에는 나타나지 않으므로, 실제
-  출현은 손상/미문서 파일 신호다. `Hwp5Warning::ProjectionFallback`
+- **textWrap 은 한컴 4값이다**: 공식 스펙 rev1.3 표 70·hwp-rs `TextWrap`·
+  hwp.js `TextFlowMethod` 는 6값(Square·Tight·Through·TopAndBottom·
+  BehindText·InFrontOfText) 순서로 읽지만, 한컴 저장본은 `0` 어울림·`1`
+  자리 차지·`2` 글 뒤로·`3` 글 앞으로를 쓴다. 근거: 한컴 저작 X2
+  (`tests/fixtures/shapes/x2-wrap-modes.hwp` — 사각형 4 개 속성 word
+  `0x040a4000`·`0x042a4000`·`0x046a4000`·`0x044a4000`, bit 21–23 = 0·1·3·2,
+  HWPX 짝 `SQUARE`·`TOP_AND_BOTTOM`·`IN_FRONT_OF_TEXT`·`BEHIND_TEXT`) 4/4,
+  한컴 `.hwp`/`.hwpx` 짝의 떠 있는 개체 457/457. 코퍼스의 떠 있는 개체 값은
+  0–3 뿐이다.
+- **미정의 값 폴백 (typed 경고 + 보수 기본값)**: `vertRelTo`=3 은 레퍼런스
+  enum (hwp-rs `VerticalRelativeTo`)에 대응 variant 이 **없는 값**,
+  `textWrap`∈{4..7} 은 한컴이 쓰지 않는 값 — 유효 HWP5 에는 나타나지
+  않으므로, 실제 출현은 손상/미문서 파일 신호다. `Hwp5Warning::ProjectionFallback`
   typed 경고 + 보수 기본값(Paper/Square) 폴백으로 처리한다 (§13 Dutmal
   의 unknown align → CENTER + `ProjectionFallback` 관례와 동일). 추측
   **매핑**을 발명하지 않는 것이 house rule 의 요지이고 (§22.4 대각선
