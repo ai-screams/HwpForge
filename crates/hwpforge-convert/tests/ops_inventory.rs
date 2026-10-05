@@ -122,6 +122,7 @@ const AUDITED: &[Audited] = &[
             ("LayoutCacheDropped", "OTHER"),
             // Reported under the decoder's own code (`DecodeWarning::code`).
             ("ContentLost", "CONTENT_LOST"),
+            ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
         ],
     },
     Audited {

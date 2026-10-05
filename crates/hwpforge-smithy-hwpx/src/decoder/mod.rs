@@ -150,7 +150,21 @@ pub enum DecodeWarning {
         /// 사람이 읽는 사유 (근사 오차 등).
         reason: String,
     },
+    /// header `<hh:beginNum>` 의 시작 번호가 `0` 이라 다시 쓸 때 `1` 로 고친다.
+    ///
+    /// 문서 시작 번호는 XSD 상 1 이상(`positiveInteger`)이고 한컴은 언제나 1
+    /// 을 쓴다. `0` 은 옛 HwpForge 재인코드 출력의 흔적이다(한컴은 그 파일을
+    /// 다시 저장해도 0 을 둔다). 한컴은 header 쪽 번호 0 인 문서를 0 쪽부터
+    /// 세고 홀짝 바탕쪽을 뒤바꾼다. 고침이지 손실이 아니므로 편집기는 이
+    /// 입력을 거부하지 않는다 ([`DecodeWarning::is_content_loss`] 는 `false`).
+    BeginNumRepaired {
+        /// 0 이던 축 — `page`·`pic`·`tbl`·`equation` 중, 그 순서대로.
+        axes: Vec<&'static str>,
+    },
 }
+
+/// The header part every [`DecodeWarning::BeginNumRepaired`] points at.
+const HEADER_PART: &str = "Contents/header.xml";
 
 impl DecodeWarning {
     /// 이 경고의 안정 코드.
@@ -177,6 +191,7 @@ impl DecodeWarning {
             Self::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::ContentLost { .. } => "CONTENT_LOST",
+            Self::BeginNumRepaired { .. } => "BEGIN_NUM_REPAIRED",
         }
     }
 
@@ -205,6 +220,7 @@ impl DecodeWarning {
         match self {
             Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => None,
             Self::ContentLost { part, .. } => Some(part),
+            Self::BeginNumRepaired { .. } => Some(HEADER_PART),
         }
     }
 
@@ -232,6 +248,7 @@ impl DecodeWarning {
             Self::UnknownEnumValue { attribute, .. } => Some((*attribute).to_string()),
             Self::LayoutCacheDropped { path, .. } => Some(path.to_string()),
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
+            Self::BeginNumRepaired { .. } => Some("hh:beginNum".to_string()),
         }
     }
 
@@ -261,6 +278,9 @@ impl DecodeWarning {
             }
             Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
             Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
+            Self::BeginNumRepaired { axes } => {
+                format!("start number 0 on {} is not valid; a re-encode writes 1", axes.join(", "))
+            }
         }
     }
 
@@ -291,7 +311,9 @@ impl DecodeWarning {
     #[must_use]
     pub fn is_content_loss(&self) -> bool {
         match self {
-            Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => false,
+            Self::UnknownEnumValue { .. }
+            | Self::LayoutCacheDropped { .. }
+            | Self::BeginNumRepaired { .. } => false,
             Self::ContentLost { .. } => true,
         }
     }
@@ -309,6 +331,11 @@ impl std::fmt::Display for DecodeWarning {
             Self::ContentLost { part, path, kind, reason } => {
                 write!(f, "{kind} lost at {part}:{path}: {reason}")
             }
+            Self::BeginNumRepaired { axes } => write!(
+                f,
+                "hh:beginNum: start number 0 on {} is not valid; a re-encode writes 1",
+                axes.join(", ")
+            ),
         }
     }
 }
@@ -406,6 +433,7 @@ pub mod warning_samples {
                 kind: "pic".to_string(),
                 reason: "sample".to_string(),
             },
+            DecodeWarning::BeginNumRepaired { axes: vec!["page", "pic"] },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
@@ -413,7 +441,8 @@ pub mod warning_samples {
             match sample {
                 DecodeWarning::UnknownEnumValue { .. }
                 | DecodeWarning::LayoutCacheDropped { .. }
-                | DecodeWarning::ContentLost { .. } => {}
+                | DecodeWarning::ContentLost { .. }
+                | DecodeWarning::BeginNumRepaired { .. } => {}
             }
         }
         samples
@@ -589,7 +618,7 @@ impl HwpxDecoder {
         let section_count = pkg.section_count();
         // Track how many masterpages have been assigned across sections
         let mut masterpage_cursor = 0usize;
-        let mut warnings: Vec<DecodeWarning> = Vec::new();
+        let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
 
         // BinData is read before the sections: a group picture without an
         // `<hp:imgDim>` is judged for cropping against its image's own size.
@@ -681,6 +710,43 @@ impl HwpxDecoder {
         let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)
     }
+}
+
+/// What re-encoding does to the header's start numbers (`<hh:beginNum>`):
+/// page/pic/tbl/equation are written as Hancom's `1`, because Core keeps
+/// only the first section's restart numbers (footnote and endnote are
+/// merged into it and kept). A `0` there is a schema violation that this
+/// fixes ([`DecodeWarning::BeginNumRepaired`]); a valid value other than
+/// `1` has nowhere to go in Core and is lost
+/// ([`DecodeWarning::ContentLost`] `begin_num`, which editors refuse).
+fn header_begin_num_warnings(header: Option<&BeginNum>) -> Vec<DecodeWarning> {
+    let Some(bn) = header else {
+        return Vec::new();
+    };
+    let axes = [("page", bn.page), ("pic", bn.pic), ("tbl", bn.tbl), ("equation", bn.equation)];
+    let mut warnings = Vec::new();
+    let zero: Vec<&'static str> =
+        axes.iter().filter(|(_, value)| *value == 0).map(|(name, _)| *name).collect();
+    if !zero.is_empty() {
+        warnings.push(DecodeWarning::BeginNumRepaired { axes: zero });
+    }
+    let lost: Vec<String> = axes
+        .iter()
+        .filter(|(_, value)| *value > 1)
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    if !lost.is_empty() {
+        warnings.push(DecodeWarning::ContentLost {
+            part: HEADER_PART.to_string(),
+            path: ParagraphPath::default(),
+            kind: "begin_num".to_string(),
+            reason: format!(
+                "header beginNum {} is not carried (a re-encode writes 1)",
+                lost.join(" ")
+            ),
+        });
+    }
+    warnings
 }
 
 // ── Masterpage helpers ────────────────────────────────────────────
@@ -1122,7 +1188,7 @@ mod warning_accessor_tests {
             warning_samples::decode().iter().map(DecodeWarning::code).collect();
         assert_eq!(
             codes.into_iter().collect::<Vec<_>>(),
-            ["CONTENT_LOST", "LAYOUT_CACHE_DROPPED", "UNKNOWN_ENUM_VALUE"]
+            ["BEGIN_NUM_REPAIRED", "CONTENT_LOST", "LAYOUT_CACHE_DROPPED", "UNKNOWN_ENUM_VALUE"]
         );
     }
 

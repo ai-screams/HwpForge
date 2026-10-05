@@ -788,9 +788,10 @@ impl OpsWarning {
     /// `XML_FORBIDDEN_CHARS_REMOVED`, `IMAGE_EMBED_SKIPPED`, and
     /// `CONTENT_LOST` (decode or encode: input content the model or the
     /// output could not carry), `PACKAGE_ID_CONFLICT` (two `content.hpf`
-    /// items share one id) and `IMAGE_REFERENCE_UNRESOLVED` (a
+    /// items share one id), `IMAGE_REFERENCE_UNRESOLVED` (a
     /// `binaryItemIDRef` that does not resolve to image or OLE data in the
-    /// package).
+    /// package) and `BEGIN_NUM_REPAIRED` (a header start number of 0, written
+    /// back as 1).
     /// `ASSET_DROPPED`
     /// and `ASSET_REMOTE` are **reserved, not emitted**: `convert_md` reports
     /// an excluded image once, through the Markdown warning (`IMAGE_EMBED_SKIPPED`, the CLI's wording),

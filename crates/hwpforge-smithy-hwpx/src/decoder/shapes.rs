@@ -3868,7 +3868,12 @@ mod group_tests {
     #[test]
     fn f14_grouped_text_art_matches_hancom() {
         let (w, size, at, colour) = f14_text_art("group-f14-textart.hwpx");
-        assert!(w.is_empty(), "{w:?}");
+        // F14's base came from an older HwpForge with header start numbers
+        // of 0 (Hancom keeps them): that repair is the only warning.
+        assert!(
+            w.iter().all(|w| matches!(w, crate::DecodeWarning::BeginNumRepaired { .. })),
+            "{w:?}"
+        );
         assert!(near(size, (11_338, 5669)), "{size:?}");
         assert!(near(at, (8559, 11_338)), "{at:?}");
         assert_eq!(colour, f14_colour());
@@ -3883,7 +3888,10 @@ mod group_tests {
     #[test]
     fn f14_scaled_text_art_matches_hancom_ungroup() {
         let (w, size, at, colour) = f14_text_art("group-f14-textart-scaled.hwpx");
-        assert!(w.is_empty(), "{w:?}");
+        assert!(
+            w.iter().all(|w| matches!(w, crate::DecodeWarning::BeginNumRepaired { .. })),
+            "{w:?}"
+        );
         let ungrouped = section0_xml(&fixture("group-f14-textart-scaled-ungrouped.hwpx"));
         let art = &ungrouped[ungrouped.find("<hp:textart ").unwrap()..];
         let attr = |tag: &str, name: &str| -> i32 {

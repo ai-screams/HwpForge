@@ -295,6 +295,7 @@ const WARNING_MAPPING: Table = &[
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             ("ContentLost", "CONTENT_LOST"),
+            ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
         ],
     ),
     ("StructuralWarning", &[("IndexMarkRemoved", "INDEX_MARK_REMOVED")]),
@@ -814,6 +815,12 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     kind: "pic".into(),
                     reason: "unsupported group child".into(),
                 }),
+            ),
+            (
+                // 이것을 실패시키는 것: `decode_warning_code` 의 위임 갈래를
+                // `UNCLASSIFIED` 로 되돌리는 것 (`OTHER`).
+                "BeginNumRepaired",
+                OpsWarning::Decode(DecodeWarning::BeginNumRepaired { axes: vec!["page"] }),
             ),
         ],
     );

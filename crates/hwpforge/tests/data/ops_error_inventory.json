@@ -805,6 +805,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "BeginNumRepaired",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

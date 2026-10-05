@@ -17,7 +17,7 @@ use hwpforge_core::section::{BeginNum, Section};
 use hwpforge_core::{Document, PageSettings, Paragraph};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder, HwpxEncoder};
 
 fn fixture(path: &str) -> Vec<u8> {
     let path = format!("{}/../../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
@@ -129,6 +129,72 @@ fn f5c_with_header(beginnum: &str) -> Vec<u8> {
     );
     assert!(header.contains(beginnum), "the fixture's header has the default start numbers");
     with_part(&source, "Contents/header.xml", &header)
+}
+
+fn repaired_axes(warnings: &[DecodeWarning]) -> Vec<Vec<&'static str>> {
+    warnings
+        .iter()
+        .filter_map(|w| match w {
+            DecodeWarning::BeginNumRepaired { axes } => Some(axes.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn lost_begin_num(warnings: &[DecodeWarning]) -> Vec<&DecodeWarning> {
+    warnings
+        .iter()
+        .filter(|w| matches!(w, DecodeWarning::ContentLost { kind, .. } if kind == "begin_num"))
+        .collect()
+}
+
+/// T5: a header start number of 0 (a schema violation our older output
+/// wrote) is reported once, naming the axes, and a re-encode writes 1. It is a
+/// repair, not a loss: editors still accept the input.
+///
+/// 이것을 실패시키는 것: 0 경고 갈래를 지우는 것, 축 판정을 page 하나로
+/// 줄이는 것, 0 을 손실(`ContentLost`)로 보고하는 것.
+#[test]
+fn a_zero_header_start_number_is_repaired_and_reported() {
+    let all = f5c_with_header(
+        r#"<hh:beginNum page="0" footnote="1" endnote="1" pic="0" tbl="0" equation="0"/>"#,
+    );
+    let doc = HwpxDecoder::decode(&all).expect("decode");
+    assert_eq!(repaired_axes(&doc.warnings), [vec!["page", "pic", "tbl", "equation"]]);
+    assert!(lost_begin_num(&doc.warnings).is_empty(), "{:?}", doc.warnings);
+    assert!(!doc.warnings.iter().any(DecodeWarning::is_content_loss), "{:?}", doc.warnings);
+    assert_eq!(header_numbers(&reencode(&all)), ones());
+
+    let pic_only = f5c_with_header(
+        r#"<hh:beginNum page="1" footnote="1" endnote="1" pic="0" tbl="1" equation="1"/>"#,
+    );
+    let doc = HwpxDecoder::decode(&pic_only).expect("decode");
+    assert_eq!(repaired_axes(&doc.warnings), [vec!["pic"]]);
+
+    let clean = HwpxDecoder::decode(&fixture("master_pages/f5c-odd-even.hwpx")).expect("decode");
+    assert!(repaired_axes(&clean.warnings).is_empty(), "{:?}", clean.warnings);
+}
+
+/// A valid header start number other than 1 has no place in Core (no
+/// document layer, option B), so a re-encode writes 1: reported as lost
+/// content, so editors that re-encode refuse the input.
+///
+/// 이것을 실패시키는 것: 손실 갈래를 지우는 것, 손실 판정을 `> 2` 로 하는 것
+/// (2 가 빠진다), 1 도 손실로 보는 것.
+#[test]
+fn a_header_start_number_core_cannot_carry_is_lost() {
+    let source = f5c_with_header(
+        r#"<hh:beginNum page="5" footnote="1" endnote="1" pic="2" tbl="1" equation="1"/>"#,
+    );
+    let doc = HwpxDecoder::decode(&source).expect("decode");
+    let lost = lost_begin_num(&doc.warnings);
+    assert_eq!(lost.len(), 1, "{:?}", doc.warnings);
+    let DecodeWarning::ContentLost { part, reason, .. } = lost[0] else { unreachable!() };
+    assert_eq!(part, "Contents/header.xml");
+    assert_eq!(reason, "header beginNum page=5 pic=2 is not carried (a re-encode writes 1)");
+    assert!(lost[0].is_content_loss());
+    assert!(repaired_axes(&doc.warnings).is_empty());
+    assert_eq!(header_numbers(&reencode(&source)), ones());
 }
 
 /// G-T7: without a section `startNum` the first section continues (0) and
