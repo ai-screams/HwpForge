@@ -414,12 +414,13 @@ impl PackageWriter {
     /// * `section_xmls` — Serialized section XML strings (`Contents/section0.xml`, etc.).
     /// * `images` — Pairs of `(filename, data)` written under `BinData/`.
     ///
-    /// The master pages and the charts are scanned here for characters XML
-    /// 1.0 forbids, which are removed and returned as
+    /// The charts are scanned here for characters XML 1.0 forbids, which are
+    /// removed and returned as
     /// [`EncodeWarning::XmlForbiddenCharsRemoved`] (#198) — no earlier stage
-    /// scans them. The header and section parts arrive already scanned, and
-    /// so does `content_hpf`: the encoder scans it before reading it back for
-    /// the manifest checks, so the text checked is the text written.
+    /// scans them. The header, section and master page parts arrive already
+    /// scanned (each when it is assembled), and so does `content_hpf`: the
+    /// encoder scans it before reading it back for the manifest checks, so
+    /// the text checked is the text written.
     ///
     /// # Errors
     ///
@@ -494,7 +495,6 @@ impl PackageWriter {
         for (path, xml) in master_pages {
             zip.start_file(path.as_str(), deflate_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
-            let xml = scan_part(path, xml, &mut warnings);
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 

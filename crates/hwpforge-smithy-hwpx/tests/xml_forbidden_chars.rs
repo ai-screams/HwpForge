@@ -170,10 +170,10 @@ fn a_clean_document_raises_no_warning() {
     assert!(warnings.is_empty(), "{warnings:?}");
 }
 
-// ── parts no earlier stage scans: content.hpf, master pages, charts ──
+// ── parts outside the header and section scans: content.hpf, master pages, charts ──
 //
 // U+0000 is the probe: the hand-built escape that writes these parts never
-// removed it, so before the package writer scanned them it reached the part.
+// removed it, so before these parts were scanned it reached the part.
 
 #[test]
 fn a_chart_part_loses_nul_and_reports_it() {
@@ -228,7 +228,7 @@ fn content_hpf_loses_nul_and_reports_it() {
 
 #[test]
 fn a_master_page_loses_nul_and_reports_it() {
-    // 이것을 실패시키는 것: `PackageWriter::write_hwpx_with_content_hpf` 의 바탕쪽 `scan_part` 호출을 빼는 것.
+    // 이것을 실패시키는 것: 바탕쪽 조립(`encoder/section/header_footer.rs`)의 금지 문자 스캔을 빼는 것.
     // 경고 순서가 아니라 포함으로 단언한다 — 바탕쪽을 일반 문단 인코더로 쓰는 쪽에서는
     // 같은 경고가 section 경고들 사이에서 나온다.
     let mut section = Section::with_paragraphs(vec![text_para("body")], PageSettings::a4());
