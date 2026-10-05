@@ -742,7 +742,12 @@ fn first_in_control(control: &Control, path: &[PathSeg]) -> Option<ParagraphPath
 /// it never advances the encoder's own `emitted_idx` counter — see
 /// [`first_in_control`]'s `Control::Group` arm above.
 fn group_child_is_emitted(child: &GroupChild) -> bool {
-    let GroupChild::Shape(child) = child else { return false };
+    let child = match child {
+        // A picture is written as a `<hp:pic>` group child.
+        GroupChild::Picture(_) => return true,
+        GroupChild::Shape(control) => control,
+        _ => return false,
+    };
     matches!(
         child,
         Control::TextBox { .. }

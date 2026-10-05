@@ -1337,6 +1337,18 @@ fn encode_group_child_xml(
 ) -> HwpxResult<Option<String>> {
     let child = match child {
         GroupChild::Shape(control) => control,
+        GroupChild::Picture(image) => {
+            return encode_group_picture_xml(
+                image,
+                depth,
+                group_level,
+                parent_origin,
+                hyperlink_entries,
+                options,
+                sink,
+            )
+            .map(Some);
+        }
         _ => return Ok(None),
     };
     let (dx, dy) = group_child_offset(child);
@@ -1419,6 +1431,36 @@ fn encode_group_child_xml(
     let raw = set_group_child_translate(&raw, x, y);
     let raw = zero_cur_sz(&raw);
     Ok(Some(set_group_level(&raw, group_level)))
+}
+
+/// Encodes a group picture as Hancom writes one: a `<hp:pic>` placed by its
+/// matrix (no `<hp:sz>`/`<hp:pos>`/`<hp:outMargin>`), `numberingType`
+/// NONE (every group picture in the corpus) and `textWrap` TOP_AND_BOTTOM
+/// (2,091 of the 2,162; the rest SQUARE), its offset written into
+/// `<hp:offset>` and the `transMatrix` translation like a shape child's.
+fn encode_group_picture_xml(
+    image: &hwpforge_core::image::Image,
+    depth: usize,
+    group_level: u32,
+    parent_origin: (i32, i32),
+    hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
+    sink: &mut EncodeSink,
+) -> HwpxResult<String> {
+    let (dx, dy) = image
+        .placement
+        .as_ref()
+        .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
+    let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
+    let mut hx = super::section::build_picture(image, depth, hyperlink_entries, options, sink)?;
+    (hx.sz, hx.pos, hx.out_margin) = (None, None, None);
+    hx.numbering_type = "NONE".to_string();
+    hx.text_wrap = "TOP_AND_BOTTOM".to_string();
+    let raw = serialize_with_root(&hx, "hp:pic")?;
+    let raw = set_group_child_offset(&raw, x, y);
+    let raw = set_group_child_translate(&raw, x, y);
+    let raw = zero_cur_sz(&raw);
+    Ok(set_group_level(&raw, group_level))
 }
 
 /// Encodes a Core `Control::Group` (묶음 객체) into a complete `<hp:container>`

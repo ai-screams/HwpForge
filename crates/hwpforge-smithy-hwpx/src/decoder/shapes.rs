@@ -5060,4 +5060,114 @@ mod group_tests {
         assert_eq!(offset_of(placement), (5000.0, 5000.0));
         assert_eq!(pictures(&inner), [("BinData/image1".to_string(), 1000, 600, (0.0, 0.0))]);
     }
+
+    /// The `<hp:pic>` elements of a written section, as raw XML.
+    fn written_pics(xml: &str) -> Vec<&str> {
+        xml.match_indices("<hp:pic ")
+            .map(|(i, _)| &xml[i..i + xml[i..].find("</hp:pic>").unwrap()])
+            .collect()
+    }
+
+    /// Hancom's F3a and F3b (pictures between shapes) written back keep every
+    /// picture, in order, as Hancom writes a group picture — no
+    /// `<hp:sz>`/`<hp:pos>`/`<hp:outMargin>`, `numberingType` NONE,
+    /// `textWrap` TOP_AND_BOTTOM, `groupLevel` 1, its offset in `<hp:offset>`
+    /// and the `transMatrix` translation, `curSz` 0 — and decode again to the
+    /// same pictures with no warning.
+    ///
+    /// 이것을 실패시키는 것: 인코더 Picture 갈래 삭제(그림이 CONTENT_LOST 로 빠짐) /
+    /// `sz`·`pos`·`outMargin` None 설정 삭제 / NONE·TOP_AND_BOTTOM 줄 삭제 / offset 을
+    /// 원점으로 / `set_group_level` 생략(각각 따로).
+    #[test]
+    fn hancom_picture_groups_round_trip() {
+        for (name, pic_offsets) in [
+            ("group-f3a-logo.hwpx", vec![(9921, 0), (0, 0), (19_842, 0)]),
+            ("group-f3b-mixed.hwpx", vec![]),
+        ] {
+            let doc = HwpxDecoder::decode(&fixture(name)).unwrap();
+            let validated = doc.document.clone().validate().expect("validate");
+            let out = crate::HwpxEncoder::encode_with_diagnostics(
+                &validated,
+                &doc.style_store,
+                &doc.image_store,
+                crate::EncodeOptions::default(),
+            )
+            .unwrap();
+            assert!(out.warnings.is_empty(), "{name}: {:?}", out.warnings);
+            let bytes = out.bytes;
+            let xml = section0_xml(&bytes);
+            let pics = written_pics(&xml);
+            assert_eq!(pics.len(), pictures(&first_group(&doc)).len(), "{name}");
+            for p in &pics {
+                for absent in ["<hp:sz ", "<hp:pos ", "<hp:outMargin "] {
+                    assert!(!p.contains(absent), "{name}: {absent} in {p}");
+                }
+                for present in [
+                    r#"numberingType="NONE""#,
+                    r#"textWrap="TOP_AND_BOTTOM""#,
+                    r#"groupLevel="1""#,
+                    r#"<hp:curSz width="0" height="0"/>"#,
+                ] {
+                    assert!(p.contains(present), "{name}: no {present} in {p}");
+                }
+            }
+            for (p, (x, y)) in pics.iter().zip(&pic_offsets) {
+                assert!(p.contains(&format!(r#"<hp:offset x="{x}" y="{y}"/>"#)), "{p}");
+                assert!(p.contains(&format!(r#"e3="{x}" e4="0" e5="1" e6="{y}""#)), "{p}");
+            }
+            let again = HwpxDecoder::decode(&bytes).unwrap();
+            assert!(again.warnings.is_empty(), "{name}: {:?}", again.warnings);
+            assert_eq!(first_group(&again), first_group(&doc), "{name}");
+        }
+    }
+
+    /// The turned picture of a nested group (kept as an unturned box) is
+    /// written as that box and decodes again to the same group: decoding is
+    /// stable on its own output.
+    ///
+    /// 이것을 실패시키는 것: 인코더가 그림 offset 에 부모 원점을 더하지 않는 것(중첩
+    /// 그림이 바깥 묶음 모서리로 간다).
+    #[test]
+    fn turned_picture_in_a_nested_group_round_trips() {
+        let turn = [
+            0.866_025_403_784_438_7,
+            -0.5,
+            216.987_298_107_780_6,
+            0.5,
+            0.866_025_403_784_438_7,
+            -209.807_621_135_331_6,
+        ];
+        let one = pic(
+            (1000, 600),
+            &ri([1.0, 0.0, 5000.0, 0.0, 1.0, 5000.0], &[(ID, ID), (ID, ID), (ID, turn)]),
+            "image1",
+            "",
+        )
+        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let own = ri([1.0, 0.0, 4916.987, 0.0, 1.0, 4790.192], &[(ID, ID), (ID, ID)]);
+        let (g, _) = decode(&container((7000, 7000), &nested((1166, 1020), &own, &one)));
+        let g = g.unwrap();
+        let mut doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
+        replace_first_group(&mut doc, g.clone());
+        let again = HwpxDecoder::decode(&encode(&doc)).unwrap();
+        assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+        let back = first_group(&again);
+        assert_eq!(children(&back)[0], children(&g)[0]);
+    }
+
+    /// A group picture's link is written into its `href` and read back.
+    ///
+    /// 이것을 실패시키는 것: 묶음 그림 인코드에서 `build_picture` 대신 `href` 를 비우는 것.
+    #[test]
+    fn group_picture_hyperlink_round_trips() {
+        let mut doc = HwpxDecoder::decode(&fixture("group-f3a-logo.hwpx")).unwrap();
+        let mut g = first_group(&doc);
+        let Control::Group { children, .. } = &mut g else { unreachable!() };
+        let GroupChild::Picture(first) = &mut children[0] else { panic!() };
+        first.hyperlink = Some("http://www.korea.kr".to_string());
+        replace_first_group(&mut doc, g.clone());
+        let bytes = encode(&doc);
+        assert!(section0_xml(&bytes).contains(r#"href="http://www.korea.kr;1;0;0;""#));
+        assert_eq!(first_group(&HwpxDecoder::decode(&bytes).unwrap()), g);
+    }
 }

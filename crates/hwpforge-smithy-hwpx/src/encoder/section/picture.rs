@@ -21,7 +21,7 @@ use super::*;
 /// Generates all required sub-elements (offset, orgSz, curSz, flip,
 /// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
 /// img, sz, pos, outMargin) to match 한글's expected structure.
-pub(super) fn build_picture(
+pub(crate) fn build_picture(
     img: &Image,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,

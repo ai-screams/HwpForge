@@ -562,6 +562,66 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     );
 }
 
+/// A group picture is written as a group child, so the text box after it is
+/// `group[1]` in the encoder's numbering and in `from_json`'s warning.
+///
+/// 이것을 실패시키는 것: `group_child_is_emitted` 의 Picture 갈래를 `false` 로.
+#[test]
+fn from_json_group_child_path_counts_a_group_picture() {
+    use hwpforge::core::control::{Control, GroupChild};
+    use hwpforge::core::image::{Image, ImageFormat};
+    use hwpforge::core::layout::{LayoutCache, LineSeg};
+    use hwpforge::core::{Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::ExportedDocument;
+
+    let line = LineSeg {
+        textpos: 0,
+        vertpos: 0,
+        vertsize: 1000,
+        textheight: 1000,
+        baseline: 850,
+        spacing: 600,
+        horzpos: 0,
+        horzsize: 48188,
+        flags: 0,
+    };
+    let mut boxed_para = Paragraph::with_runs(
+        vec![Run::text("boxed", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    boxed_para.layout_cache = Some(LayoutCache::new(vec![line]));
+    let w = HwpUnit::new(2000).unwrap();
+    let group = Control::Group {
+        children: vec![
+            GroupChild::Picture(Image::new("BinData/image1.png", w, w, ImageFormat::Png)),
+            GroupChild::Shape(Control::text_box(vec![boxed_para], w, w)),
+        ],
+        width: HwpUnit::new(3000).unwrap(),
+        height: w,
+        placement: None,
+        inst_id: None,
+    };
+    let host = Paragraph::with_runs(
+        vec![Run::control(group, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
+    let exported = ExportedDocument { document, styles: Some(styles) };
+    let json = serde_json::to_string(&exported).expect("serialise");
+
+    let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
+    let warning = out
+        .meta()
+        .warnings
+        .into_iter()
+        .find(|w| w.code == "LAYOUT_CACHE_DROPPED")
+        .expect("warning present");
+    assert!(warning.message.contains("section[0].para[0].group[1]"), "{}", warning.message);
+}
+
 /// R1-1: a JSON `Unknown` control has no HWPX form. `from_json` still writes
 /// the document (generation is not fail-closed) but says what it left out,
 /// under its own code, where it was.

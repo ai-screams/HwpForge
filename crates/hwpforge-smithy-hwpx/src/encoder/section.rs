@@ -95,7 +95,7 @@ use self::header_footer::{
     build_masterpage_entries, build_masterpage_refs, inject_header_footer_pagenum,
 };
 use self::memo::{build_memo_anchor_xml, build_memo_run_xml, encode_memo_sublist};
-use self::picture::build_picture;
+pub(crate) use self::picture::build_picture;
 #[cfg(test)]
 use self::section_pr::show_mode_to_hwpx;
 use self::section_pr::{build_sec_pr, enrich_sec_pr};
