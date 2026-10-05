@@ -82,6 +82,8 @@ struct SemanticSupport<'a> {
     bin_data_records: &'a [Hwp5BinDataRecordSummary],
     bin_data_streams: &'a [Hwp5BinDataStream],
     image_assets: &'a Hwp5JoinedImageAssetPlan,
+    /// OLE references whose two readings (position, stored id) differ.
+    reference_ambiguities: &'a BTreeMap<u16, String>,
 }
 
 pub(crate) fn adapt_to_semantic(
@@ -89,10 +91,12 @@ pub(crate) fn adapt_to_semantic(
     image_assets: &Hwp5JoinedImageAssetPlan,
 ) -> Hwp5SemanticDocument {
     let mut ids = SemanticIdAlloc::default();
+    let reference_ambiguities = crate::reference_ambiguities(&decoded.bin_data_records);
     let support = SemanticSupport {
         bin_data_records: &decoded.bin_data_records,
         bin_data_streams: &decoded.bin_data_streams,
         image_assets,
+        reference_ambiguities: &reference_ambiguities,
     };
     let mut document = Hwp5SemanticDocument::new(adapt_package_meta(decoded));
     document.doc_info = adapt_doc_info(&decoded.doc_info);
@@ -510,7 +514,7 @@ fn adapt_ole_object_control(
             .map(|stream| stream.name.as_str())
     });
 
-    let (payload, confidence, extra_notes) =
+    let (payload, mut confidence, mut extra_notes) =
         if let (Some(record), Some(stream_name)) = (joined_record, joined_stream_name) {
             (
                 Hwp5SemanticControlPayload::OleObject(Hwp5SemanticOlePayload {
@@ -543,6 +547,14 @@ fn adapt_ole_object_control(
                 vec!["ole bin data record missing".to_string()],
             )
         };
+    // The join reads the reference by position, as the projection does; no
+    // Hancom file settles which reading OLE uses, so when the stored-id
+    // reading names another record the join is only a low-confidence
+    // interpretation, with both readings spelled out.
+    if let Some(reason) = support.reference_ambiguities.get(&ole.binary_data_id) {
+        confidence = Hwp5SemanticConfidence::Low;
+        extra_notes.push(format!("bin_data_reference_ambiguous: {reason}"));
+    }
 
     let mut notes: Vec<String> = vec![
         format!("raw_ctrl_id=0x{:08X}", ole.ctrl_id),
@@ -1808,13 +1820,17 @@ mod tests {
     }
 
     /// §19 C: an OLE reference counts `DocInfo` `BIN_DATA` records — the
-    /// record at position 1 stores id 2, and the reference 1 joins it.
+    /// record at position 1 stores id 2, and the reference 1 joins it. No
+    /// record stores id 1, so the stored-id reading differs: the join is
+    /// only a low-confidence interpretation, with both readings in its notes.
+    /// When the record at position 1 also stores id 1, the join is certain.
     ///
     /// 이것을 실패시키는 것: 저장 id 로 레코드를 찾는 것(id 1 레코드가 없어
-    /// 강등된다).
+    /// 강등된다), 모호성 표시를 지우는 것(High 로 남는다), 모호하지 않아도
+    /// 낮추는 것.
     #[test]
     fn adapter_joins_an_ole_object_to_the_record_at_its_reference_position() {
-        let decoded = DecodedHwp5Intermediate {
+        let mut decoded = DecodedHwp5Intermediate {
             version: "5.1.1.0".to_string(),
             compressed: false,
             package_entries: Vec::new(),
@@ -1875,7 +1891,7 @@ mod tests {
             .iter()
             .find(|control| control.kind == Hwp5SemanticControlKind::OleObject)
             .expect("semantic ole control should exist");
-        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::High);
+        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::Low);
         assert!(
             matches!(
                 &ole_control.payload,
@@ -1884,6 +1900,25 @@ mod tests {
             "{:?}",
             ole_control.payload
         );
+        assert!(
+            ole_control.notes.iter().any(|note| note
+                == "bin_data_reference_ambiguous: ordinal 1 → BIN0002.OLE, storage id 1 → no parsed record"),
+            "{:?}",
+            ole_control.notes
+        );
+
+        decoded.bin_data_records[0].binary_data_id = 1;
+        let semantic = adapt_to_semantic(&decoded, &empty_image_plan());
+        let ole_control = semantic.sections[0]
+            .controls
+            .iter()
+            .find(|control| control.kind == Hwp5SemanticControlKind::OleObject)
+            .expect("semantic ole control should exist");
+        assert_eq!(ole_control.confidence, Hwp5SemanticConfidence::High);
+        assert!(!ole_control
+            .notes
+            .iter()
+            .any(|note| note.starts_with("bin_data_reference_ambiguous")));
     }
 
     #[test]
