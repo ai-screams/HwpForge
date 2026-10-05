@@ -555,8 +555,11 @@ fn hwp5_and_hwpx_saves_decode_to_the_same_group() {
 /// `nested_children_are_placed_relative_to_their_direct_group` covers the
 /// decoder side only.
 ///
+/// Both steps must lose nothing: the conversion's own warnings carry no
+/// `CONTENT_LOST` and no other semantic loss, and the re-decode none either.
+///
 /// 이것을 실패시키는 것: HWPX 방출 정책의 행렬 계수를 소수 1자리로 거칠게 쓰는
-/// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋난다).
+/// 것(F1 크기 변경 묶음의 잎이 2 넘게 어긋나고 `shape_emission` 경고가 난다).
 #[test]
 fn hwp5_groups_survive_the_hwpx_writer() {
     for hwp in [
@@ -568,7 +571,19 @@ fn hwp5_groups_survive_the_hwpx_writer() {
         "group-f11-nested-offset.hwp",
     ] {
         let (ours, _) = hwp5_group(hwp);
-        let (bytes, _) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
+        let (bytes, conversion) = hwpforge_convert::hwp5_to_hwpx_bytes(&fixture(hwp)).unwrap();
+        let conversion_loss: Vec<_> = conversion
+            .iter()
+            .filter(|w| match w {
+                hwpforge_convert::ConvertWarning::Hwp5(w) => {
+                    matches!(w, hwpforge_smithy_hwp5::Hwp5Warning::ContentLost { .. })
+                }
+                hwpforge_convert::ConvertWarning::HwpxEncode(w) => w.is_semantic_loss(),
+                // Any future kind counts as a loss until it is classified.
+                _ => true,
+            })
+            .collect();
+        assert!(conversion_loss.is_empty(), "{hwp}: {conversion_loss:?}");
         let back = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
         let lost: Vec<_> = back
             .warnings
