@@ -476,9 +476,9 @@ pub(crate) fn encode_section_with_note_counters(
 /// one pass over the (usually empty) remainder.
 ///
 /// Resolution happens here, at the end, rather than inside each sublist
-/// encoder: group children go through first-match / strip-all rewrites
-/// (`set_group_child_offset`, `remove_self_closing_element(.., "hp:pos")` in
-/// `shapes.rs`) while their nested content is still markers. Resolving early
+/// encoder: group children go through first-match rewrites
+/// (`set_group_child_offset`, `set_group_child_translate` in `shapes.rs`)
+/// while their nested content is still markers. Resolving early
 /// would expose nested memo or text-box content to those rewrites.
 ///
 /// # Errors
@@ -1463,7 +1463,7 @@ fn build_runs(
                         // and the scaMatrix entries are derived, so we build the
                         // full fragment and inject it via the marker-substitution
                         // path (mirroring group/chart/hyperlink).
-                        let textart_xml = super::shapes::encode_text_art_to_xml(ctrl)?;
+                        let textart_xml = super::shapes::encode_text_art_to_xml(ctrl, false)?;
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPTAT", field_id);
                         let real_xml = format!(

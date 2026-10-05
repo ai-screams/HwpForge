@@ -1125,26 +1125,6 @@ fn set_group_child_offset(xml: &str, x: i32, y: i32) -> String {
     xml.replacen(r#"<hp:offset x="0" y="0"/>"#, &format!(r#"<hp:offset x="{x}" y="{y}"/>"#), 1)
 }
 
-/// Removes every self-closing `<hp:{local} .../>` element from `xml`.
-///
-/// Top-level shape encoders emit `<hp:sz>` + `<hp:pos>` for placement
-/// relative to the page/paragraph. A container child is positioned by its
-/// `<hp:offset>` within the group instead — native 한컴 omits `sz`/`pos` on
-/// group children — so we strip them from the child fragment (the container's
-/// own `sz`/`pos`, added later by `encode_group_to_xml`, are unaffected).
-fn remove_self_closing_element(xml: &str, local: &str) -> String {
-    let open = format!("<{local} ");
-    let mut out = String::with_capacity(xml.len());
-    let mut rest = xml;
-    while let Some(start) = rest.find(&open) {
-        let Some(end_rel) = rest[start..].find("/>") else { break };
-        out.push_str(&rest[..start]);
-        rest = &rest[start + end_rel + 2..];
-    }
-    out.push_str(rest);
-    out
-}
-
 /// Encodes a Core `Control::TextArt` (글맵시) into its full `<hp:textart>` XML
 /// fragment.
 ///
@@ -1154,7 +1134,10 @@ fn remove_self_closing_element(xml: &str, local: &str) -> String {
 /// the native 한컴 element directly (mirroring the group/chart raw-XML path).
 /// `text` and string attributes are XML-escaped; the fill color falls back to
 /// the native default `#0000FF` when none is carried.
-pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
+///
+/// `as_group_child` = the TextArt sits in a group: it is placed by its
+/// matrix there, so no `<hp:sz>`/`<hp:pos>` is written.
+pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> HwpxResult<String> {
     let (
         text,
         shape,
@@ -1222,9 +1205,19 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
     let font_name_esc = escape_xml(font_name);
     let font_style_esc = escape_xml(font_style);
     let align_esc = escape_xml(align);
+    let placement = if as_group_child {
+        String::new()
+    } else {
+        format!(
+            r#"{sz}<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>"#,
+            sz = format_args!(
+                r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#
+            ),
+        )
+    };
 
     Ok(format!(
-        r##"<hp:textart id="{id}" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr><hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
+        r##"<hp:textart id="{id}" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
         id = id,
         instid = instid,
         text = text_esc,
@@ -1243,6 +1236,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
         line_spacing = line_spacing,
         char_spacing = char_spacing,
         align = align_esc,
+        placement = placement,
     ))
 }
 
@@ -1329,52 +1323,66 @@ fn encode_group_child_xml(
     // a `groupLevel="0"` placeholder that a container never has). The other
     // post-processors are nesting-safe — the container's own shape-common
     // block precedes its children, so first-match ops hit the container's own
-    // `offset`/`transMatrix`/`curSz`, and the children's `sz`/`pos` were
-    // already stripped during their own recursion.
+    // `offset`/`transMatrix`/`curSz`, and the children their own `sz`/`pos` (a group child is placed by its
+    // matrix, not anchored to the page).
     if let Control::Group { .. } = child {
-        let raw =
-            encode_group_at(child, depth, group_level, (x, y), hyperlink_entries, options, sink)?;
+        let raw = encode_group_at(
+            child,
+            depth,
+            group_level,
+            (x, y),
+            true,
+            hyperlink_entries,
+            options,
+            sink,
+        )?;
         let raw = set_group_child_offset(&raw, x, y);
         let raw = set_group_child_translate(&raw, x, y);
         let raw = zero_cur_sz(&raw);
-        let raw = remove_self_closing_element(&raw, "hp:sz");
-        let raw = remove_self_closing_element(&raw, "hp:pos");
         return Ok(Some(raw));
     }
     let raw = match child {
-        Control::TextBox { .. } => serialize_with_root(
-            &encode_textbox_to_rect(child, depth, hyperlink_entries, options, sink)?,
-            "hp:rect",
-        )?,
-        Control::Rect { .. } => serialize_with_root(
-            &encode_rect_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:rect",
-        )?,
-        Control::Line { .. } => serialize_with_root(
-            &encode_line_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:line",
-        )?,
-        Control::Ellipse { .. } => serialize_with_root(
-            &encode_ellipse_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:ellipse",
-        )?,
-        Control::Arc { .. } => serialize_with_root(
-            &encode_arc_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:ellipse",
-        )?,
-        Control::Polygon { .. } => serialize_with_root(
-            &encode_polygon_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:polygon",
-        )?,
-        Control::Curve { .. } => serialize_with_root(
-            &encode_curve_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:curve",
-        )?,
-        Control::ConnectLine { .. } => serialize_with_root(
-            &encode_connect_line_to_hx(child, depth, hyperlink_entries, options, sink)?,
-            "hp:connectLine",
-        )?,
-        Control::TextArt { .. } => encode_text_art_to_xml(child)?,
+        Control::TextBox { .. } => {
+            let mut hx = encode_textbox_to_rect(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:rect")?
+        }
+        Control::Rect { .. } => {
+            let mut hx = encode_rect_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:rect")?
+        }
+        Control::Line { .. } => {
+            let mut hx = encode_line_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:line")?
+        }
+        Control::Ellipse { .. } => {
+            let mut hx = encode_ellipse_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:ellipse")?
+        }
+        Control::Arc { .. } => {
+            let mut hx = encode_arc_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:ellipse")?
+        }
+        Control::Polygon { .. } => {
+            let mut hx = encode_polygon_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:polygon")?
+        }
+        Control::Curve { .. } => {
+            let mut hx = encode_curve_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:curve")?
+        }
+        Control::ConnectLine { .. } => {
+            let mut hx = encode_connect_line_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            (hx.sz, hx.pos) = (None, None);
+            serialize_with_root(&hx, "hp:connectLine")?
+        }
+        Control::TextArt { .. } => encode_text_art_to_xml(child, true)?,
         // Nested groups are Wave B; in Wave A a group child is always flat.
         // Anything else (Equation, EmbeddedChart, Group, …) is not emitted as
         // a container child yet — drop it rather than fabricate.
@@ -1386,11 +1394,6 @@ fn encode_group_child_xml(
     let raw = set_group_child_offset(&raw, x, y);
     let raw = set_group_child_translate(&raw, x, y);
     let raw = zero_cur_sz(&raw);
-    // Container children are placed within the group, not relative to the
-    // page; strip the top-level `<hp:sz>`/`<hp:pos>` placement elements the
-    // per-shape encoders emit (native 한컴 omits them on group children).
-    let raw = remove_self_closing_element(&raw, "hp:sz");
-    let raw = remove_self_closing_element(&raw, "hp:pos");
     Ok(Some(set_group_level(&raw, group_level)))
 }
 
@@ -1411,16 +1414,22 @@ pub(crate) fn encode_group_to_xml(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
-    encode_group_at(ctrl, depth, group_level, (0, 0), hyperlink_entries, options, sink)
+    encode_group_at(ctrl, depth, group_level, (0, 0), false, hyperlink_entries, options, sink)
 }
 
 /// [`encode_group_to_xml`] for a group whose box starts at `origin` in the
 /// outermost group's space (`(0, 0)` for the outermost group itself).
+///
+/// `as_child` = the group is itself a group child: it is placed by its
+/// matrix inside its parent, so it writes no `<hp:sz>`/`<hp:pos>` of its own
+/// (native nested containers have neither).
+#[allow(clippy::too_many_arguments)]
 fn encode_group_at(
     ctrl: &Control,
     depth: usize,
     group_level: u32,
     origin: (i32, i32),
+    as_child: bool,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
@@ -1481,6 +1490,7 @@ fn encode_group_at(
         "hp:sz",
     )?;
     let pos = serialize_with_root(&shape_position(placement), "hp:pos")?;
+    let (sz, pos) = if as_child { (String::new(), String::new()) } else { (sz, pos) };
     let out_margin = serialize_with_root(
         &HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 },
         "hp:outMargin",
@@ -1504,11 +1514,14 @@ fn encode_group_at(
 mod tests {
     use super::*;
     use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
+    use hwpforge_core::paragraph::Paragraph;
     use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+    use hwpforge_core::run::Run;
     use hwpforge_foundation::{
         ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
         PatternType, VerticalAlign,
     };
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
     fn empty_hyperlinks() -> Vec<(String, String)> {
         vec![]
@@ -1715,6 +1728,10 @@ mod tests {
         // Children carry groupLevel=1; only the container itself owns <hp:pos>.
         assert!(xml.contains(r#"groupLevel="1""#), "child groupLevel not set");
         assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the container has <hp:pos>");
+        assert_eq!(
+            normalize_ids(&xml),
+            r##"<hp:container id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="#"><hp:offset x="0" y="0"/><hp:orgSz width="24358" height="12426"/><hp:curSz width="24358" height="12426"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="12179" centerY="6213" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:rect id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="#" ratio="0"><hp:offset x="0" y="1365"/><hp:orgSz width="14922" height="7780"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="7461" centerY="3890" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="1365"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14922" y="0"/><hc:pt2 x="14922" y="7780"/><hc:pt3 x="0" y="7780"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>사각형입니다.</hp:shapeComment></hp:rect><hp:rect id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="#" ratio="0"><hp:offset x="17360" y="0"/><hp:orgSz width="6998" height="12426"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="3499" centerY="6213" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="17360" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="6998" y="0"/><hc:pt2 x="6998" y="12426"/><hc:pt3 x="0" y="12426"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>사각형입니다.</hp:shapeComment></hp:rect><hp:sz width="24358" widthRelTo="ABSOLUTE" height="12426" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>묶음 개체입니다.</hp:shapeComment></hp:container>"##
+        );
     }
 
     #[test]
@@ -1735,7 +1752,7 @@ mod tests {
             fill_color: None,
             inst_id: Some(hwpforge_core::ObjectId::new(40_257_166)),
         };
-        let xml = encode_text_art_to_xml(&ta).unwrap();
+        let xml = encode_text_art_to_xml(&ta, false).unwrap();
         assert!(xml.contains("<hp:textart "), "missing textart open: {xml}");
         assert!(xml.contains(r#"text="글맵시""#), "text attr missing");
         assert!(xml.contains(r#"textShape="WAVE2""#), "textShape missing");
@@ -1767,7 +1784,7 @@ mod tests {
             fill_color: None,
             inst_id: None,
         };
-        let xml = encode_text_art_to_xml(&ta).unwrap();
+        let xml = encode_text_art_to_xml(&ta, false).unwrap();
         let value = xml.split(" text=\"").nth(1).expect("text attribute");
         value[..value.find('"').expect("text attribute closes")].to_string()
     }
@@ -1889,6 +1906,192 @@ mod tests {
         );
         // Only the outermost container owns <hp:pos>; nested ones omit it.
         assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the outer container has <hp:pos>");
+        assert_eq!(
+            normalize_ids(&xml),
+            r##"<hp:container id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="#"><hp:offset x="0" y="0"/><hp:orgSz width="42520" height="13422"/><hp:curSz width="42520" height="13422"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="21260" centerY="6711" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:container id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="#"><hp:offset x="0" y="0"/><hp:orgSz width="13604" height="12512"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="6802" centerY="6256" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:rect id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="2" instid="#" ratio="0"><hp:offset x="0" y="0"/><hp:orgSz width="12440" height="6000"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="6220" centerY="3000" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="12440" y="0"/><hc:pt2 x="12440" y="6000"/><hc:pt3 x="0" y="6000"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>사각형입니다.</hp:shapeComment></hp:rect><hp:ellipse id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="2" instid="#" intervalDirty="0" hasArcPr="0" arcType="NORMAL"><hp:offset x="1164" y="6512"/><hp:orgSz width="10232" height="6000"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="5116" centerY="3000" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="1164" e4="0" e5="1" e6="6512"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="#FFFFFF" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:center x="5116" y="3000"/><hc:ax1 x="10232" y="3000"/><hc:ax2 x="5116" y="6000"/><hc:start1 x="0" y="0"/><hc:end1 x="0" y="0"/><hc:start2 x="0" y="0"/><hc:end2 x="0" y="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>타원입니다.</hp:shapeComment></hp:ellipse><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>묶음 개체입니다.</hp:shapeComment></hp:container><hp:line id="#" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="1" instid="#" isReverseHV="0"><hp:offset x="525" y="13422"/><hp:orgSz width="20000" height="0"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="10000" centerY="0" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="525" e4="0" e5="1" e6="13422"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:startPt x="0" y="0"/><hc:endPt x="20000" y="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>선입니다.</hp:shapeComment></hp:line><hp:sz width="42520" widthRelTo="ABSOLUTE" height="13422" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>묶음 개체입니다.</hp:shapeComment></hp:container>"##
+        );
+    }
+
+    /// Element paths (`hp:container/hp:rect/hp:sz`, …) of every `<hp:sz>` and
+    /// `<hp:pos>` in `xml`, read with an XML reader so depth is exact.
+    fn placement_paths(xml: &str) -> Vec<String> {
+        use quick_xml::events::Event;
+        let mut reader = quick_xml::Reader::from_str(xml);
+        let mut stack: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) => {
+                    stack.push(e.name().as_ref().to_owned());
+                }
+                Event::Empty(e) => {
+                    let name = e.name().as_ref().to_owned();
+                    if name == "hp:sz" || name == "hp:pos" {
+                        out.push(format!("{}/{name}", stack.join("/")));
+                    }
+                }
+                Event::End(_) => {
+                    stack.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn table_of_width(width: i32) -> hwpforge_core::table::Table {
+        use hwpforge_core::table::{Table, TableCell, TableRow};
+        let cell = |t: &str| {
+            TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text(t, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::new(width / 2).unwrap(),
+            )
+        };
+        let mut table = Table::new(vec![TableRow::new(vec![cell("A"), cell("B")])]);
+        table.width = Some(HwpUnit::new(width).unwrap());
+        table
+    }
+
+    fn para_of(runs: Vec<Run>) -> Paragraph {
+        Paragraph::with_runs(runs, ParaShapeIndex::new(0))
+    }
+
+    fn group_of(children: Vec<Control>) -> Control {
+        Control::Group {
+            children,
+            width: HwpUnit::new(45_000).unwrap(),
+            height: HwpUnit::new(56_000).unwrap(),
+            placement: None,
+            inst_id: None,
+        }
+    }
+
+    fn encode_group(group: &Control) -> (String, EncodeSink) {
+        let mut sink = EncodeSink::new(0);
+        let xml =
+            encode_group_to_xml(group, 0, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+                .unwrap();
+        (xml, sink)
+    }
+
+    /// A table and an equation in a grouped text box keep their own `<hp:sz>`
+    /// and `<hp:pos>`; only the text box itself, a direct group child, has
+    /// none (Hancom's F2 keeps the inner table's `<hp:sz width="19842">`).
+    ///
+    /// 이것을 실패시키는 것: 직속 자식 구조체의 `sz`/`pos` 를 `None` 으로 두지
+    /// 않는 것(rect 에 남음), fragment 전체에서 지우는 것(tbl·equation 에서
+    /// 사라짐).
+    #[test]
+    fn grouped_text_box_keeps_its_objects_placement() {
+        let text_box = Control::text_box(
+            vec![para_of(vec![
+                Run::table(table_of_width(43_779), CharShapeIndex::new(0)),
+                Run::control(Control::equation("a+b"), CharShapeIndex::new(0)),
+            ])],
+            HwpUnit::new(45_000).unwrap(),
+            HwpUnit::new(56_000).unwrap(),
+        );
+        let (xml, _) = encode_group(&group_of(vec![text_box]));
+        let paths = placement_paths(&xml);
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.starts_with("hp:container/hp:rect/hp:") && p.matches('/').count() == 2),
+            "direct child keeps placement: {paths:?}"
+        );
+        for tag in ["hp:tbl/hp:sz", "hp:tbl/hp:pos", "hp:equation/hp:sz", "hp:equation/hp:pos"] {
+            assert!(
+                paths.iter().any(|p| p.starts_with("hp:container/hp:rect/hp:drawText/")
+                    && p.ends_with(tag)),
+                "{tag} missing: {paths:?}"
+            );
+        }
+        assert!(xml.contains(r#"<hp:sz width="43779""#), "{xml}");
+    }
+
+    /// A nested group writes no `<hp:sz>`/`<hp:pos>` of its own; a table in a
+    /// text box under it keeps both.
+    ///
+    /// 이것을 실패시키는 것: 중첩 묶음에서도 자기 배치를 쓰는 것(자식 여부 무시),
+    /// fragment 전체에서 지우는 것.
+    #[test]
+    fn nested_group_omits_only_its_own_placement() {
+        let text_box = Control::text_box(
+            vec![para_of(vec![Run::table(table_of_width(20_000), CharShapeIndex::new(0))])],
+            HwpUnit::new(30_000).unwrap(),
+            HwpUnit::new(20_000).unwrap(),
+        );
+        let (xml, _) = encode_group(&group_of(vec![group_of(vec![text_box])]));
+        let paths = placement_paths(&xml);
+        assert_eq!(
+            paths.iter().filter(|p| p.matches('/').count() == 1).count(),
+            2,
+            "only the outer container has its own sz/pos: {paths:?}"
+        );
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.starts_with("hp:container/hp:container/hp:")
+                    && p.matches('/').count() == 2),
+            "{paths:?}"
+        );
+        assert!(paths.iter().any(|p| p.ends_with("hp:tbl/hp:sz")), "{paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("hp:tbl/hp:pos")), "{paths:?}");
+    }
+
+    /// A table in the caption of a grouped rectangle keeps its placement.
+    ///
+    /// 이것을 실패시키는 것: fragment 전체에서 `sz`/`pos` 를 지우는 것.
+    #[test]
+    fn grouped_rect_caption_table_keeps_its_placement() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        let mut rect =
+            Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
+        if let Control::Rect { caption, .. } = &mut rect {
+            *caption = Some(Caption::new(
+                vec![para_of(vec![Run::table(table_of_width(8000), CharShapeIndex::new(0))])],
+                CaptionSide::Bottom,
+            ));
+        }
+        let (xml, _) = encode_group(&group_of(vec![rect]));
+        let paths = placement_paths(&xml);
+        assert!(
+            !paths
+                .iter()
+                .any(|p| p.starts_with("hp:container/hp:rect/hp:s") && p.matches('/').count() == 2),
+            "{paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.contains("hp:caption/") && p.ends_with("hp:tbl/hp:sz")),
+            "{paths:?}"
+        );
+    }
+
+    /// Replaces the counter-based `id`/`instid` values with `#` so encoder
+    /// output can be compared byte for byte.
+    fn normalize_ids(xml: &str) -> String {
+        let mut out = String::with_capacity(xml.len());
+        let mut rest = xml;
+        loop {
+            let next = [" id=\"", " instid=\""]
+                .iter()
+                .filter_map(|key| rest.find(key).map(|at| (at, key.len())))
+                .min();
+            let Some((at, len)) = next else { break };
+            out.push_str(&rest[..at + len]);
+            rest = &rest[at + len..];
+            let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 0 {
+                out.push('#');
+            }
+            rest = &rest[digits..];
+        }
+        out.push_str(rest);
+        out
     }
 
     #[test]
