@@ -27,7 +27,15 @@ pub struct HxLineShape {
     #[serde(rename = "@color", default)]
     pub color: String,
     /// Stroke width in HWPUNIT (33 ≈ 0.12mm, the standard thin border).
-    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
+    ///
+    /// `0` is a real width. A missing attribute (the XSD gives no default)
+    /// reads as [`LINE_WIDTH_ABSENT`] and is never written back.
+    #[serde(
+        rename = "@width",
+        default = "line_width_absent",
+        deserialize_with = "deser_i32_or_u32",
+        skip_serializing_if = "is_line_width_absent"
+    )]
     pub width: i32,
     /// Line style: SOLID, DASH, DOT, etc.
     #[serde(rename = "@style", default)]
@@ -59,6 +67,17 @@ pub struct HxLineShape {
     /// Alpha transparency (0 = opaque).
     #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
+}
+
+/// [`HxLineShape::width`] when the wire has no `width` attribute.
+pub const LINE_WIDTH_ABSENT: i32 = -1;
+
+fn line_width_absent() -> i32 {
+    LINE_WIDTH_ABSENT
+}
+
+fn is_line_width_absent(width: &i32) -> bool {
+    *width == LINE_WIDTH_ABSENT
 }
 
 impl HxLineShape {

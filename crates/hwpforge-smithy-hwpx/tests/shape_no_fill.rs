@@ -1,4 +1,4 @@
-//! 채우기 없는 도형은 다시 써도 채우기가 없다.
+//! 채우기 없는 도형은 다시 써도 채우기가 없고, 굵기 0 인 선은 다시 써도 0 이다.
 //!
 //! 한컴은 채우기 없는 도형에 `<hc:fillBrush>` 를 쓰지 않는다. Core 의
 //! `ShapeStyle.fill == None` 은 "인코더 기본값(흰 채우기)" 이라, 디코더가 이
@@ -55,4 +55,23 @@ fn a_hancom_shape_without_fill_stays_without_fill_through_reencode() {
     assert!(section.contains("<hp:polygon"), "{section}");
     assert!(!section.contains("<hc:fillBrush"), "no-fill shape got a fill: {section}");
     assert_eq!(polygon_fill(&again), Some(Fill::None));
+}
+
+// 이것을 실패시키는 것: 디코더가 굵기 0 을 `None` 으로 받기 — 인코더가 기본
+// 굵기 33 을 쓴다.
+#[test]
+fn a_hancom_zero_width_outline_stays_zero_through_reencode() {
+    let original = fixture("shapes/polygon_simple.hwpx");
+    let wire = part(&original, "Contents/section0.xml");
+    assert!(wire.contains(r##"<hp:lineShape color="#000000" width="0""##), "premise");
+
+    let doc = HwpxDecoder::decode(&original).expect("decode");
+    let validated = doc.document.validate().expect("validate");
+    let again =
+        HwpxEncoder::encode(&validated, &doc.style_store, &doc.image_store).expect("encode");
+    let section = part(&again, "Contents/section0.xml");
+    let line = &section[section.find("<hp:lineShape").expect("lineShape")..];
+    let line = &line[..line.find('>').unwrap()];
+    assert!(line.contains(r#"width="0""#), "{line}");
+    assert!(line.contains(r#"style="SOLID""#), "{line}");
 }

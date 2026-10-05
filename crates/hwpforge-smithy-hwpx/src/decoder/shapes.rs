@@ -399,7 +399,11 @@ pub(crate) fn decode_shape_style_full(
         None => (None, None, None),
         Some(ls) => (
             if ls.color.is_empty() { None } else { parse_hex_color(&ls.color) },
-            if ls.width == 0 { None } else { u32::try_from(ls.width).ok() },
+            // 굵기 0 도 실제 값이다 — `None` 으로 받으면 인코더가 기본 굵기 33 을
+            // 쓴다. 속성이 없을 때(`LINE_WIDTH_ABSENT`, 음수)만 `None`.
+            // 이것을 실패시키는 것: 0 을 `None` 으로 되돌리기
+            // (`zero_line_width_decodes_as_zero`, `tests/shape_no_fill.rs`).
+            u32::try_from(ls.width).ok(),
             if ls.style.is_empty() {
                 None
             } else {
@@ -1576,6 +1580,30 @@ fn fits_hwpunit(values: &[i32]) -> bool {
 mod tests {
     use super::*;
 
+    // 이것을 실패시키는 것: 결측 `width` 의 기본값을 0 으로 되돌리기(결측이
+    // 굵기 0 으로 읽힘), 또는 결측 표식을 직렬화에서 빼지 않기(`width="-1"`).
+    #[test]
+    fn missing_line_width_stays_unspecified() {
+        let ls: HxLineShape =
+            crate::decoder::xml_from_str(r##"<lineShape color="#000000" style="SOLID"/>"##)
+                .unwrap();
+        let style =
+            decode_shape_style_full(&Some(ls.clone()), &None, false, None, None, "None").unwrap();
+        assert_eq!(style.line_width, None);
+        #[allow(clippy::disallowed_methods)]
+        let back = quick_xml::se::to_string(&ls).unwrap();
+        assert!(!back.contains("width"), "{back}");
+    }
+
+    #[test]
+    fn zero_line_width_decodes_as_zero() {
+        let line =
+            HxLineShape { width: 0, style: "NONE".to_string(), ..HxLineShape::default_solid() };
+        let style = decode_shape_style_full(&Some(line), &None, false, None, None, "None").unwrap();
+        assert_eq!(style.line_width, Some(0));
+        assert_eq!(style.line_style, Some(hwpforge_core::control::LineStyle::None));
+    }
+
     #[test]
     fn no_fill_shape_decodes_as_fill_none() {
         use hwpforge_core::control::Fill;
@@ -1787,11 +1815,21 @@ mod tests {
 
     #[test]
     fn decode_shape_style_empty_color_fields_returns_none() {
-        // Empty color string and zero width should not produce a style
-        let ls =
-            make_line_shape("", 0, "", "NORMAL", "NORMAL", 1, 1, "MEDIUM_MEDIUM", "MEDIUM_MEDIUM");
+        // Empty color, missing width and empty style should not produce a style.
+        // (Width 0 is a real value — `zero_line_width_decodes_as_zero`.)
+        let ls = make_line_shape(
+            "",
+            crate::schema::shapes::LINE_WIDTH_ABSENT,
+            "",
+            "NORMAL",
+            "NORMAL",
+            1,
+            1,
+            "MEDIUM_MEDIUM",
+            "MEDIUM_MEDIUM",
+        );
         let result = decode_shape_style(&Some(ls), &None, "None");
-        assert!(result.is_none(), "empty color + zero width + empty style should be None");
+        assert!(result.is_none(), "empty color + missing width + empty style should be None");
     }
 
     #[test]
