@@ -647,6 +647,15 @@ pub struct Hwp5Decoded {
     pub metadata: hwpforge_core::metadata::Metadata,
     /// Non-fatal warnings collected during decoding and Core projection.
     pub warnings: Vec<Hwp5Warning>,
+    /// The `/BinData` storage name (`BIN0006.png`) of every BinData
+    /// reference, keyed by the reference: the 1-based position of the
+    /// `DocInfo` `BIN_DATA` record, which is what picture and border-fill
+    /// image references count — not the id stored in the record.
+    ///
+    /// External links and records that could not be parsed have no entry.
+    /// An output format resolves a style's image reference through this map
+    /// (see `hwpforge_convert::hwp5_style_store_to_hwpx_with_bin_data`).
+    pub bin_data_reference_names: BTreeMap<u16, String>,
 }
 
 /// Decodes an HWP5 document into the neutral [`Hwp5Decoded`] bundle.
@@ -671,6 +680,12 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
     budget_limit: u64,
 ) -> Hwp5Result<Hwp5Decoded> {
     let intermediate = decoder::decode_intermediate(bytes)?;
+    let bin_data_reference_names: BTreeMap<u16, String> = intermediate
+        .bin_data_records
+        .iter()
+        .filter(|record| !record.storage_name.is_empty())
+        .map(|record| (record.reference_ordinal, record.storage_name.clone()))
+        .collect();
     let (image_assets, mut budget) = join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
     let ole_assets = join_hwp5_ole_assets(bytes, &intermediate, &mut budget)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
@@ -698,7 +713,15 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         &mut warnings,
     );
 
-    Ok(Hwp5Decoded { document, image_store, style_store, layout_hints, metadata, warnings })
+    Ok(Hwp5Decoded {
+        document,
+        image_store,
+        style_store,
+        layout_hints,
+        metadata,
+        warnings,
+        bin_data_reference_names,
+    })
 }
 
 fn supplement_border_fill_image_assets(
