@@ -26,12 +26,15 @@ pub(crate) mod shapes;
 /// If a future caller places escaped values inside single-quoted XML
 /// attributes, `&apos;` escaping must be added.
 ///
-/// Characters XML 1.0 forbids pass through unchanged. Every part the
-/// encoder writes is scanned once it is assembled
+/// Characters XML 1.0 forbids pass through unchanged. Each part that can
+/// hold document strings (header, sections, `content.hpf`, master pages,
+/// charts) is scanned once it is assembled
 /// ([`strip_xml_forbidden_chars`](crate::wire_xml::strip_xml_forbidden_chars)),
-/// which removes them and reports each removal as an
+/// and the scan reports what it removes as
 /// [`EncodeWarning::XmlForbiddenCharsRemoved`]. Removing them here as well
 /// would hide them from that scan, so the caller would get no warning.
+/// (Font names are the exception: `clean_font_name` drops every control
+/// character before serialization; only `hh:font@face` removals are counted.)
 /// The preserve-first edits splice escaped text without a part scan, so
 /// they clean the caller's text first and check the new fragment
 /// ([`sanitize_edit_text`](crate::wire_xml::sanitize_edit_text)).
