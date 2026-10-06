@@ -18,7 +18,9 @@ use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use hwpforge_core::placement::{
+    HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
+};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
@@ -987,44 +989,76 @@ fn object_placement_from_ctrl_properties(
     offset_y: i32,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> ObjectPlacement {
-    if ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0 {
+    effective_placement(&parse_object_placement_wire(ctrl_properties, offset_x, offset_y), warnings)
+}
+
+/// 표 70 개체 속성 word 의 placement 비트를 정규화 없이 읽은 것 (§19.16 A-v2).
+/// 표는 이 wire 값을 그대로 Core 에 싣고([`table_placement_from_wire`]), 도형·
+/// 그림은 렌더 의미로 정규화한다([`effective_placement`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WirePlacement {
+    treat_as_char: bool,
+    /// bit 2.
+    affect_line_spacing: bool,
+    /// bits 3-4.
+    vert_rel_bits: u32,
+    /// bits 5-7.
+    vert_align_bits: u32,
+    /// bits 8-9.
+    horz_rel_bits: u32,
+    /// bits 10-12.
+    horz_align_bits: u32,
+    /// bit 13.
+    flow_with_text: bool,
+    /// bit 14.
+    allow_overlap: bool,
+    /// bits 21-23.
+    wrap_bits: u32,
+    /// bits 24-25.
+    flow_bits: u32,
+    x: i32,
+    y: i32,
+}
+
+fn parse_object_placement_wire(ctrl_properties: u32, x: i32, y: i32) -> WirePlacement {
+    WirePlacement {
+        treat_as_char: ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0,
+        affect_line_spacing: (ctrl_properties >> 2) & 0x1 != 0,
+        vert_rel_bits: (ctrl_properties >> 3) & 0x3,
+        vert_align_bits: (ctrl_properties >> 5) & 0x7,
+        horz_rel_bits: (ctrl_properties >> 8) & 0x3,
+        horz_align_bits: (ctrl_properties >> 10) & 0x7,
+        flow_with_text: (ctrl_properties >> 13) & 0x1 != 0,
+        allow_overlap: (ctrl_properties >> 14) & 0x1 != 0,
+        wrap_bits: (ctrl_properties >> 21) & 0x7,
+        flow_bits: (ctrl_properties >> 24) & 0x3,
+        x,
+        y,
+    }
+}
+
+/// 도형·그림의 렌더 의미 placement (W5 w0 규칙 그대로): 글자처럼 취급이면
+/// inline 기본값, 아니면 flowWithText 는 vertRelTo=Para 일 때만, overlap 은
+/// flow 가 거짓일 때만 읽는다. 정렬(bits 5-7·10-12)은 떠 있는 개체에 싣는다.
+fn effective_placement(wire: &WirePlacement, warnings: &mut Vec<Hwp5Warning>) -> ObjectPlacement {
+    if wire.treat_as_char {
         return ObjectPlacement::legacy_inline_defaults();
     }
-    let vert_bits = (ctrl_properties >> 3) & 0x3;
-    if vert_bits == 3 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "object_placement.vert_rel_to",
-            reason: "gso property word vertRelTo bits 3-4 = 3 is outside the HWP5 reference \
-                     range (0=Paper 1=Page 2=Para); falling back to Paper"
-                .to_string(),
-        });
-    }
-    let vert_rel_to = vert_relative_to_from_bits(vert_bits);
-    let horz_rel_to = horz_relative_to_from_bits((ctrl_properties >> 8) & 0x3);
-    let wrap_bits = (ctrl_properties >> 21) & 0x7;
-    if wrap_bits >= 4 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "object_placement.text_wrap",
-            reason: format!(
-                "gso property word textWrap bits 21-23 = {wrap_bits} is outside the values \
-                 Hancom writes (0..=3); falling back to Square"
-            ),
-        });
-    }
-    let text_wrap = object_text_wrap_from_bits(wrap_bits);
+    let vert_rel_to = checked_vert_relative_to(wire.vert_rel_bits, warnings);
+    let horz_rel_to = horz_relative_to_from_bits(wire.horz_rel_bits);
+    let text_wrap = checked_text_wrap(wire.wrap_bits, warnings);
     // 표 70: flowWithText 는 vertRelTo=Para 일 때만 정의된다. 그 외 기준에서는
     // bit 13 을 읽지 않고 false 로 둔다 (hwp-rs 의 `Option` 조건과 동형).
-    let flow_with_text =
-        vert_rel_to == ObjectRelativeTo::Para && (ctrl_properties >> 13) & 0x1 != 0;
+    let flow_with_text = vert_rel_to == ObjectRelativeTo::Para && wire.flow_with_text;
     // 표 70: flowWithText 가 참이면 allowOverlap 은 무조건 false 로 간주한다.
-    let allow_overlap = if flow_with_text { false } else { (ctrl_properties >> 14) & 0x1 != 0 };
+    let allow_overlap = if flow_with_text { false } else { wire.allow_overlap };
     // textFlow 는 글이 개체 옆으로 흐르는 wrap 에서만 의미가 있다. 한컴 4값
     // 중 그런 것은 Square 뿐이고(Tight/Through 는 이 표에서 나오지 않는다),
     // 다른 wrap 에서는 bits 24-25 가 무의미하므로 기본값 BothSides 로 둔다
     // (잡값이 사이드 흐름을 뒤집는 것을 방지).
     let text_flow = match text_wrap {
         ObjectTextWrap::Square | ObjectTextWrap::Tight | ObjectTextWrap::Through => {
-            object_text_flow_from_bits((ctrl_properties >> 24) & 0x3)
+            object_text_flow_from_bits(wire.flow_bits)
         }
         _ => ObjectTextFlow::BothSides,
     };
@@ -1032,8 +1066,115 @@ fn object_placement_from_ctrl_properties(
         .with_text_flow(text_flow)
         .with_flow_with_text(flow_with_text)
         .with_allow_overlap(allow_overlap)
-        .with_vert_offset(HwpUnit::new(offset_y).unwrap_or(HwpUnit::ZERO))
-        .with_horz_offset(HwpUnit::new(offset_x).unwrap_or(HwpUnit::ZERO))
+        .with_vert_offset(HwpUnit::new(wire.y).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(wire.x).unwrap_or(HwpUnit::ZERO))
+        .with_vert_align(vert_align_from_bits(wire.vert_align_bits, warnings))
+        .with_horz_align(horz_align_from_bits(wire.horz_align_bits, warnings))
+}
+
+/// 표의 placement: wire 값을 정규화 없이 싣는다 (§19.16 A-v2 — 글자처럼
+/// 취급 표의 기준·정렬·flow 도 보존). HWPX 인코더가 `None` 에 쓰는 기본 flow
+/// 와 모든 필드가 같을 때만 `None`. `holdAnchorAndSO` 는 HWP5 비트가 확인되지
+/// 않아 기본값(false).
+///
+/// 이것을 실패시키는 것: 접기 조건에서 필드 하나를 빼거나 기본값을 바꾸기
+/// (`table_placement_carries_wire_values_and_folds_the_default`) / 표에
+/// `effective_placement` 를 쓰기(글자처럼 취급 표의 기준이 사라짐).
+fn table_placement_from_wire(
+    wire: &WirePlacement,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<ObjectPlacement> {
+    let placement = ObjectPlacement::new(
+        checked_text_wrap(wire.wrap_bits, warnings),
+        checked_vert_relative_to(wire.vert_rel_bits, warnings),
+        horz_relative_to_from_bits(wire.horz_rel_bits),
+    )
+    .with_text_flow(object_text_flow_from_bits(wire.flow_bits))
+    .with_treat_as_char(wire.treat_as_char)
+    .with_flow_with_text(wire.flow_with_text)
+    .with_allow_overlap(wire.allow_overlap)
+    .with_affect_line_spacing(wire.affect_line_spacing)
+    .with_vert_offset(HwpUnit::new(wire.y).unwrap_or(HwpUnit::ZERO))
+    .with_horz_offset(HwpUnit::new(wire.x).unwrap_or(HwpUnit::ZERO))
+    .with_vert_align(vert_align_from_bits(wire.vert_align_bits, warnings))
+    .with_horz_align(horz_align_from_bits(wire.horz_align_bits, warnings));
+    let default = ObjectPlacement::new(
+        ObjectTextWrap::TopAndBottom,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Column,
+    )
+    .with_flow_with_text(true);
+    (placement != default).then_some(placement)
+}
+
+fn checked_vert_relative_to(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> ObjectRelativeTo {
+    if bits == 3 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "object_placement.vert_rel_to",
+            reason: "gso property word vertRelTo bits 3-4 = 3 is outside the HWP5 reference \
+                     range (0=Paper 1=Page 2=Para); falling back to Paper"
+                .to_string(),
+        });
+    }
+    vert_relative_to_from_bits(bits)
+}
+
+fn checked_text_wrap(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> ObjectTextWrap {
+    if bits >= 4 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "object_placement.text_wrap",
+            reason: format!(
+                "gso property word textWrap bits 21-23 = {bits} is outside the values \
+                 Hancom writes (0..=3); falling back to Square"
+            ),
+        });
+    }
+    object_text_wrap_from_bits(bits)
+}
+
+/// 표 70 세로 정렬(bits 5-7). 한컴 짝으로 확인된 값은 0 = Top 뿐이다 —
+/// 1–4 는 스펙 순서(Center·Bottom·Inside·Outside)로 읽되 확인 전이라 경고하고
+/// 값은 보존한다(warn-and-preserve, §19.19 S1). 5–7 은 정의 밖 → 경고 + Top.
+///
+/// 이것을 실패시키는 것: 1–4 의 경고를 지우기 / 5–7 을 경고 없이 읽기.
+fn vert_align_from_bits(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> VertAlign {
+    let value = match bits {
+        0 => return VertAlign::Top,
+        1 => Some(VertAlign::Center),
+        2 => Some(VertAlign::Bottom),
+        3 => Some(VertAlign::Inside),
+        4 => Some(VertAlign::Outside),
+        _ => None,
+    };
+    align_warning(warnings, "vertical", bits, value.is_some());
+    value.unwrap_or(VertAlign::Top)
+}
+
+/// 표 70 가로 정렬(bits 10-12). 0 = Left·1 = Center·2 = Right 는 한컴 짝으로
+/// 확인됐다(도형 8·표 10). 3·4 는 스펙 순서(Inside·Outside)로 읽되 경고,
+/// 5–7 은 경고 + Left.
+fn horz_align_from_bits(bits: u32, warnings: &mut Vec<Hwp5Warning>) -> HorzAlign {
+    let value = match bits {
+        0 => return HorzAlign::Left,
+        1 => return HorzAlign::Center,
+        2 => return HorzAlign::Right,
+        3 => Some(HorzAlign::Inside),
+        4 => Some(HorzAlign::Outside),
+        _ => None,
+    };
+    align_warning(warnings, "horizontal", bits, value.is_some());
+    value.unwrap_or(HorzAlign::Left)
+}
+
+fn align_warning(warnings: &mut Vec<Hwp5Warning>, axis: &str, bits: u32, kept: bool) {
+    warnings.push(Hwp5Warning::ProjectionFallback {
+        subject: "object_placement.align_unverified",
+        reason: if kept {
+            format!("{axis} alignment value {bits} is read in the spec's order but unverified against Hancom")
+        } else {
+            format!("{axis} alignment value {bits} is outside the spec's range; written as the default")
+        },
+    });
 }
 
 /// 표 70 `vertRelTo`(bits 3-4)를 Core [`ObjectRelativeTo`] 로 매핑한다.
@@ -3893,6 +4034,11 @@ fn apply_table_projection_metadata(
         .transpose()
         .unwrap_or(None);
     core_table.border_fill_id = table.border_fill_id.map(u32::from);
+    // §19.6 A: 표 자신의 CtrlHeader 속성 word·오프셋 → `Table::placement`.
+    if let Some(ctrl) = &table.ctrl {
+        let wire = parse_object_placement_wire(ctrl.properties, ctrl.geometry.x, ctrl.geometry.y);
+        core_table.placement = table_placement_from_wire(&wire, warnings);
+    }
     // Wave 12p Step 3: HWP5 Table CtrlHeader trailer instance ID 통과.
     // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
     // unset (Step 1c-1 fallback).
@@ -5307,6 +5453,20 @@ mod tests {
         }
     }
 
+    /// 떠 있는 도형·그림은 정렬 비트를 싣고, 글자처럼 취급이면 그대로 inline
+    /// 기본값이다(P1b·P5 예측 집합 보호). 이것을 실패시키는 것: 도형 경로에서
+    /// 정렬을 빼기 / 글자처럼 취급에도 정렬을 싣기.
+    #[test]
+    fn floating_object_gets_alignment_and_inline_object_does_not() {
+        let floating = (1u32 << 10) | (2 << 3);
+        let mut w = Vec::new();
+        let p = object_placement_from_ctrl_properties(floating, 0, 0, &mut w);
+        assert_eq!(p.horz_align, HorzAlign::Center);
+        assert!(w.is_empty(), "{w:?}");
+        let inline = object_placement_from_ctrl_properties(floating | 1, 0, 0, &mut w);
+        assert_eq!(inline, ObjectPlacement::legacy_inline_defaults());
+    }
+
     #[test]
     fn object_placement_from_ctrl_properties_fails_closed_on_out_of_range_bits() {
         // W5 w0 fail-closed: 레퍼런스 범위 밖 relTo/wrap 값은 임의 known 값으로
@@ -5423,6 +5583,7 @@ mod tests {
                 border_fill_id: Some(8),
                 cells: vec![],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
         let section = make_section(vec![para], None);
@@ -5437,6 +5598,102 @@ mod tests {
         assert!(!table.repeat_header);
         assert_eq!(table.cell_spacing, Some(HwpUnit::new(120).unwrap()));
         assert_eq!(table.border_fill_id, Some(8));
+    }
+
+    fn table_with_ctrl(properties: u32, x: i32, y: i32) -> Hwp5Table {
+        Hwp5Table {
+            rows: 1,
+            cols: 1,
+            page_break: Hwp5TablePageBreak::Cell,
+            repeat_header: false,
+            cell_spacing: 0,
+            border_fill_id: None,
+            cells: vec![grid_test_cell(0, 0, 1, 1)],
+            instance_id: 0,
+            ctrl: Some(crate::decoder::section::Hwp5TableCtrl {
+                properties,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    x,
+                    y,
+                    width: 50_737,
+                    height: 43_643,
+                },
+            }),
+        }
+    }
+
+    fn projected_table_placement(table: Hwp5Table) -> (Option<ObjectPlacement>, Vec<String>) {
+        let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
+            page_break: false,
+            column_break: false,
+            text: String::new(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(table)],
+        };
+        let (doc, warnings) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        let table = doc.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| r.content.as_table())
+            .expect("table")
+            .clone();
+        (table.placement, warnings.iter().map(|w| format!("{w:?}")).collect())
+    }
+
+    /// A-T3 (법무부 실측 속성 word): 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
+    /// overlap·offset (13, 27415); 머리 표 `0x082a2311` = 글자처럼 취급·PARA/PARA·
+    /// flowWithText — 글자처럼 취급 표도 wire 기준·flow 를 그대로 싣는다(한컴
+    /// 짝 5,131/5,131). 기본 flow word 는 `None`.
+    ///
+    /// 이것을 실패시키는 것: 표에 `effective_placement` 를 쓰기(머리 표가 inline
+    /// 기본값) / 속성 word 를 표에 안 넘기기(둘 다 `None`) / 접기 기본값에서
+    /// flowWithText 를 빼기(기본 word 가 `Some`).
+    #[test]
+    fn table_placement_carries_wire_values_and_folds_the_default() {
+        let (body, _) = projected_table_placement(table_with_ctrl(0x082a_4310, 13, 27_415));
+        let body = body.expect("floating table");
+        assert!(!body.treat_as_char && body.allow_overlap && !body.flow_with_text);
+        assert_eq!(
+            (body.vert_rel_to.clone(), body.horz_rel_to.clone()),
+            (ObjectRelativeTo::Para, ObjectRelativeTo::Para)
+        );
+        assert_eq!((body.horz_offset.as_i32(), body.vert_offset.as_i32()), (13, 27_415));
+        assert_eq!(body.text_wrap, ObjectTextWrap::TopAndBottom);
+
+        let (head, _) = projected_table_placement(table_with_ctrl(0x082a_2311, 0, 0));
+        let head = head.expect("inline table");
+        assert!(head.treat_as_char && head.flow_with_text && !head.affect_line_spacing);
+        // bit 2 = affectLSpacing (한컴 짝 `affectLSpacing="1"` 표).
+        let (spacing, _) = projected_table_placement(table_with_ctrl(0x082a_2311 | 0b100, 0, 0));
+        assert!(spacing.expect("inline table").affect_line_spacing);
+        assert_eq!(head.horz_rel_to, ObjectRelativeTo::Para);
+
+        // treatAsChar 0 · flowWithText · PARA/COLUMN · wrap 1 · offset 0 = 기본 flow.
+        let default_word = (2 << 3) | (2 << 8) | (1 << 13) | (1 << 21);
+        assert_eq!(projected_table_placement(table_with_ctrl(default_word, 0, 0)).0, None);
+    }
+
+    /// S1 HWP5 정렬: 가로 2 = Right 는 확인값(경고 없음), 세로 1 = Center 는
+    /// 스펙 순서로 읽되 미확인 경고, 가로 7 은 범위 밖 → 경고 + Left.
+    /// 이것을 실패시키는 것: 정렬 비트를 읽지 않기 / 미확인 경고 삭제 / 확인값
+    /// 2 에 경고.
+    #[test]
+    fn table_alignment_bits_are_read_and_unverified_values_reported() {
+        let default_word: u32 = (2 << 3) | (2 << 8) | (1 << 13) | (1 << 21);
+        let (p, w) = projected_table_placement(table_with_ctrl(default_word | (2 << 10), 0, 0));
+        assert_eq!(p.expect("aligned").horz_align, HorzAlign::Right);
+        assert!(!w.iter().any(|w| w.contains("align_unverified")), "{w:?}");
+        let (p, w) = projected_table_placement(table_with_ctrl(default_word | (1 << 5), 0, 0));
+        assert_eq!(p.expect("aligned").vert_align, VertAlign::Center);
+        assert_eq!(w.iter().filter(|w| w.contains("align_unverified")).count(), 1, "{w:?}");
+        let (p, w) = projected_table_placement(table_with_ctrl(default_word | (7 << 10), 0, 0));
+        assert_eq!(p, None, "out of range reads as the default");
+        assert_eq!(w.iter().filter(|w| w.contains("align_unverified")).count(), 1, "{w:?}");
     }
 
     fn grid_test_cell(row: u16, column: u16, row_span: u16, col_span: u16) -> Hwp5TableCell {
@@ -5491,6 +5748,7 @@ mod tests {
                 border_fill_id: None,
                 cells,
                 instance_id: 0,
+                ctrl: None,
             })],
         }
     }
@@ -5596,6 +5854,7 @@ mod tests {
                     }],
                 }],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
 
@@ -5673,6 +5932,7 @@ mod tests {
                     }],
                 }],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
 
@@ -5780,6 +6040,7 @@ mod tests {
                     },
                 ],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
 
@@ -5860,6 +6121,7 @@ mod tests {
                     header_cell(2, true, "restated-head"),
                 ],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
 
@@ -5946,6 +6208,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![pgnp_cell()],
                 instance_id: 0,
+                ctrl: None,
             })],
         };
 
@@ -6019,6 +6282,7 @@ mod tests {
                     border_fill_id: None,
                     cells: vec![cell],
                     instance_id: 0,
+                    ctrl: None,
                 })],
             }
         }
@@ -6287,6 +6551,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![],
                 instance_id: 0,
+                ctrl: None,
             },
             &mut warnings,
         );
@@ -6312,6 +6577,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![],
                 instance_id: 0,
+                ctrl: None,
             },
             &mut warnings,
         );
@@ -6335,6 +6601,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![],
                 instance_id: 0,
+                ctrl: None,
             },
             &mut warnings,
         );
@@ -6357,6 +6624,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![],
                 instance_id: 0,
+                ctrl: None,
             },
             &mut warnings,
         );

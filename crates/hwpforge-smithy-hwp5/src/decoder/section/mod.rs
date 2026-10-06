@@ -229,6 +229,7 @@ impl TableContext {
                 border_fill_id: None,
                 cells: Vec::new(),
                 instance_id,
+                ctrl: None,
             },
             seen_table_body: false,
             current_cell: None,
@@ -991,6 +992,13 @@ impl BodyTextParserState {
         }
     }
 
+    /// Keeps the just-opened table's `CtrlHeader` placement facts.
+    fn note_table_ctrl(&mut self, data: &[u8]) {
+        if let Some(ctx) = self.table_stack.last_mut() {
+            ctx.table.ctrl = Hwp5TableCtrl::parse(data);
+        }
+    }
+
     fn prepare_for_record(&mut self, level: u16) {
         if self
             .table_stack
@@ -1283,6 +1291,7 @@ impl BodyTextParserState {
                         level,
                         extract_ctrl_header_instance_id(&record.data, ctrl_id),
                     );
+                    self.note_table_ctrl(&record.data);
                 } else if let Some(ctx) = self.table_stack.last_mut() {
                     // 이것을 실패시키는 것: 이 갈래를 지우기 — 칸 안 꼬리말
                     // 문단이 칸 문단으로 새고 제어는 unknown 으로 버려진다
@@ -1812,6 +1821,7 @@ impl BodyTextParserState {
         let ctrl_id = parse_ctrl_id(&record.data);
         if ctrl_id == CTRL_ID_TABLE {
             self.push_table_context(level, extract_ctrl_header_instance_id(&record.data, ctrl_id));
+            self.note_table_ctrl(&record.data);
         } else if matches!(
             ctrl_id,
             CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO

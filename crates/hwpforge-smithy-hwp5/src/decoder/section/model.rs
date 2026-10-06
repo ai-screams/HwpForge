@@ -548,6 +548,31 @@ pub(crate) struct Hwp5Table {
     /// attribute 로 emit. 추출 불가하면 0.
     #[allow(dead_code)]
     pub instance_id: u32,
+    /// The table's own `CtrlHeader` placement facts (§19.6 A); `None` when the
+    /// header is too short to hold them.
+    pub ctrl: Option<Hwp5TableCtrl>,
+}
+
+/// Placement facts of a table's `CtrlHeader` (표 70 object common header):
+/// the property word and the position/size block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5TableCtrl {
+    /// Object property word (bytes 4..8).
+    pub properties: u32,
+    /// Offsets (`x` = horizontal, `y` = vertical) and size (bytes 8..24);
+    /// `height` is the table's height as Hancom saved it.
+    pub geometry: crate::schema::section::Hwp5ShapeComponentGeometry,
+}
+
+impl Hwp5TableCtrl {
+    /// Reads the facts from a table `CtrlHeader` payload.
+    pub(crate) fn parse(data: &[u8]) -> Option<Self> {
+        let properties = u32::from_le_bytes(data.get(4..8)?.try_into().ok()?);
+        let geometry =
+            crate::schema::section::Hwp5ShapeComponentGeometry::parse_from_ctrl_header(data)
+                .ok()?;
+        Some(Self { properties, geometry })
+    }
 }
 
 /// HWP5 table page break policy recovered from the table body record.

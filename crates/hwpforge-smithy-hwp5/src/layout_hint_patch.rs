@@ -246,7 +246,21 @@ fn collect_table_layout_hints(table: &Hwp5Table, scope: &mut ScopeLayoutHints) {
     }
 }
 
+/// The table's `sz height`: the height Hancom saved in the table's own
+/// `CtrlHeader` (Hancom twins: 5,130 of 5,131 tables), else the old
+/// derivation from row heights.
+///
+/// 이것을 실패시키는 것: `CtrlHeader` 높이를 건너뛰기
+/// (`table_height_hint_is_the_ctrl_header_height`).
 fn derive_table_height(table: &Hwp5Table) -> Option<i32> {
+    if let Some(height) = table
+        .ctrl
+        .as_ref()
+        .and_then(|ctrl| i32::try_from(ctrl.geometry.height).ok())
+        .filter(|&h| h > 0)
+    {
+        return Some(height);
+    }
     if table.rows == 0 || table.cells.iter().any(|cell| cell.row_span != 1) {
         return None;
     }
@@ -323,6 +337,35 @@ mod tests {
         }
     }
 
+    /// A-T4: the table height hint is the table `CtrlHeader` height (법무부
+    /// 본문 표 43643, not the cell-height derived 102508).
+    /// 이것을 실패시키는 것: `CtrlHeader` 높이를 건너뛰기.
+    #[test]
+    fn table_height_hint_is_the_ctrl_header_height() {
+        let mut table = Hwp5Table {
+            rows: 0,
+            cols: 0,
+            page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
+            repeat_header: false,
+            cell_spacing: 0,
+            border_fill_id: None,
+            cells: vec![],
+            instance_id: 0,
+            ctrl: None,
+        };
+        assert_eq!(derive_table_height(&table), None);
+        table.ctrl = Some(crate::decoder::section::Hwp5TableCtrl {
+            properties: 0,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 50_737,
+                height: 43_643,
+            },
+        });
+        assert_eq!(derive_table_height(&table), Some(43_643));
+    }
+
     #[test]
     fn derive_table_height_uses_line_segments_and_cell_margin() {
         let table = Hwp5Table {
@@ -366,6 +409,7 @@ mod tests {
                 }],
             }],
             instance_id: 0,
+            ctrl: None,
         };
 
         assert_eq!(derive_table_height(&table), Some(4482));
