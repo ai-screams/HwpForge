@@ -864,6 +864,15 @@ impl Hwp5ShapeRender {
     /// `DocInfo` border fill layout and goes through the same parser
     /// ([`parse_fill_payload`](super::border_fill::parse_fill_payload)); its
     /// error is kept, not guessed past.
+    /// The initial (unscaled) width and height of a `ShapeComponent`
+    /// rendering block (bytes 16–24 after the type tag) — HWPX `orgSz`.
+    pub(crate) fn initial_size(data: &[u8], type_repeated: bool) -> Option<(u32, u32)> {
+        let data = if type_repeated { data.get(4..)? } else { data };
+        let word =
+            |at: usize| data.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        Some((word(16)?, word(20)?))
+    }
+
     pub(crate) fn parse_look(data: &[u8], type_repeated: bool) -> Option<Hwp5ShapeLook> {
         let data = if type_repeated { data.get(4..)? } else { data };
         let chain_end = Self::chain_end(data).ok()?;

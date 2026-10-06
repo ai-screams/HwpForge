@@ -209,6 +209,25 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     shape.checked = raw.checked();
     shape.tab_pr_id_ref = tab_pr_id_ref;
     shape.condense = raw.condense();
+    // PARA_SHAPE bits 20–21 (Hancom twins: per-document value multisets equal
+    // in 452 of 477 pairs; the rest differ in the HWPX, not in another byte)
+    // and bytes 34–42, bits 28–29 (42,599 / 36 / 11 twin matches).
+    shape.vertical_align = match raw.vertical_align_raw() {
+        1 => "TOP",
+        2 => "CENTER",
+        3 => "BOTTOM",
+        _ => "BASELINE",
+    }
+    .to_string();
+    shape.border_offset = [
+        raw.border_offset_left,
+        raw.border_offset_right,
+        raw.border_offset_top,
+        raw.border_offset_bottom,
+    ]
+    .map(|v| to_unit(i32::from(v)));
+    shape.border_connect = raw.border_connect();
+    shape.border_ignore_margin = raw.border_ignore_margin();
     shape
 }
 
@@ -251,11 +270,8 @@ fn append_para_shape_projection_warnings(
 ) {
     warn_on_para_line_spacing_kind(raw, raw_id, warnings);
     warn_on_para_break_latin_word(raw, raw_id, warnings);
-    warn_on_para_vertical_align(raw, raw_id, warnings);
     warn_on_para_font_line_height(raw, raw_id, warnings);
     warn_on_para_auto_spacing(raw, raw_id, warnings);
-    warn_on_para_border_offsets(raw, raw_id, warnings);
-    warn_on_para_border_flags(raw, raw_id, warnings);
 }
 
 fn warn_on_char_vertical_position_conflict(
@@ -415,24 +431,6 @@ fn warn_on_para_break_latin_word(
     }
 }
 
-fn warn_on_para_vertical_align(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.vertical_align_raw() == 0 {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.para_shape.vertical_align",
-        format!(
-            "para shape {raw_id} vertical align mode {} was dropped because the current style surface only carries horizontal alignment",
-            raw.vertical_align_raw()
-        ),
-    );
-}
-
 fn warn_on_para_font_line_height(
     raw: &Hwp5RawParaShape,
     raw_id: usize,
@@ -473,58 +471,6 @@ fn warn_on_para_auto_spacing(
             enabled.join(", ")
         ),
     );
-}
-
-fn warn_on_para_border_offsets(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    let border_offsets = [
-        raw.border_offset_left,
-        raw.border_offset_right,
-        raw.border_offset_top,
-        raw.border_offset_bottom,
-    ];
-    if !border_offsets.into_iter().any(|offset| offset != 0) {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.para_shape.border_offsets",
-        format!(
-            "para shape {raw_id} border offsets [{}, {}, {}, {}] were dropped because the current style surface only carries borderFill references",
-            raw.border_offset_left,
-            raw.border_offset_right,
-            raw.border_offset_top,
-            raw.border_offset_bottom
-        ),
-    );
-}
-
-fn warn_on_para_border_flags(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.border_connect() {
-        push_projection_fallback(
-            warnings,
-            "style.para_shape.border_connect",
-            format!(
-                "para shape {raw_id} border-connect flag was dropped because the current style surface does not carry paragraph border adjacency semantics"
-            ),
-        );
-    }
-    if raw.border_ignore_margin() {
-        push_projection_fallback(
-            warnings,
-            "style.para_shape.border_ignore_margin",
-            format!(
-                "para shape {raw_id} border-ignore-margin flag was dropped because the current style surface does not carry that rendering mode"
-            ),
-        );
-    }
 }
 
 fn hwp5_heading_wire_parts(raw: &Hwp5RawParaShape) -> (HeadingType, u32, u32) {

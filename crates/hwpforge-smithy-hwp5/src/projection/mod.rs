@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, VecDeque};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
-use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::placement::{
     HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
@@ -659,7 +659,33 @@ impl<'a> ProjectionImageState<'a> {
             core_image.inst_id = Some(ObjectId::new(u64::from(image.instance_id)));
         }
         core_image.hyperlink = self.picture_hyperlink(image);
+        let display = (resolved_dimensions.width_hwp, resolved_dimensions.height_hwp);
+        self.carry_picture_frame(&mut core_image, image, display, &asset.bytes);
+        let original = image
+            .original_size
+            .and_then(|(w, h)| Some((i32::try_from(w).ok()?, i32::try_from(h).ok()?)));
+        if let Some(original) = original.filter(|&(w, h)| w > 0 && h > 0 && (w, h) != display) {
+            core_image.original_size = units(original);
+        }
         Some(core_image)
+    }
+
+    /// Sets a picture's crop and image extent from its `ShapePicture`
+    /// record ([`picture_crop`]); what cannot be carried exactly is
+    /// reported.
+    fn carry_picture_frame(
+        &mut self,
+        core_image: &mut Image,
+        image: &Hwp5ImageControl,
+        display: (i32, i32),
+        bytes: &[u8],
+    ) {
+        let frame = picture_crop(&image.picture, display, image_size::pixel_size(bytes));
+        core_image.crop = frame.crop;
+        core_image.image_extent = frame.extent;
+        if let Some(reason) = frame.note {
+            push_projection_fallback(&mut self.warnings, "picture.crop", reason);
+        }
     }
 
     /// The picture's link URL, or `None`; a link record in another form is
@@ -917,7 +943,89 @@ impl<'a> ProjectionImageState<'a> {
         );
         core_image.placement = shapes::offset_placement(x, y);
         core_image.hyperlink = hyperlink;
+        // A group picture's box is folded from its matrices, so its own
+        // display size is not the size the record's extent is compared to:
+        // the extent is always kept with a crop, and dropped without one.
+        let bytes = asset.bytes.clone();
+        self.carry_picture_frame(&mut core_image, image, (width, height), &bytes);
         Some(core_image)
+    }
+}
+
+/// `(w, h)` as HWPUNITs, or `None` outside the HWPUNIT range.
+fn units((w, h): (i32, i32)) -> Option<(HwpUnit, HwpUnit)> {
+    Some((HwpUnit::new(w).ok()?, HwpUnit::new(h).ok()?))
+}
+
+/// HWPUNIT per image pixel (96 dpi) — the one-pixel tolerance of the
+/// whole-image test for a picture record without its image size.
+const HWPUNIT_PER_PIXEL: i64 = 75;
+
+/// A picture's crop and image extent, and why they are not carried exactly.
+#[derive(Debug, PartialEq)]
+struct PictureFrame {
+    crop: Option<ImageCrop>,
+    extent: Option<(HwpUnit, HwpUnit)>,
+    note: Option<String>,
+}
+
+/// The crop of a `ShapePicture` record (bytes 44–60, HWPX `imgClip`) in the
+/// coordinates of its image size (bytes 82–90, HWPX `imgDim`), folded as
+/// the HWPX decoder folds them: the whole extent is no crop, and the extent
+/// is left out when it equals the display size and there is no crop.
+/// Without the image size (a record with picture effects stores it
+/// elsewhere) a crop within one pixel of the image's pixel size × 75 is the
+/// whole image; any other crop is kept without an extent and noted — the
+/// pixel size never stands in for the extent.
+fn picture_crop(
+    picture: &crate::schema::section::Hwp5ShapePicture,
+    display: (i32, i32),
+    pixels: Option<(u32, u32)>,
+) -> PictureFrame {
+    let [l, t, r, b] = picture.crop;
+    let none = |note: Option<String>| PictureFrame { crop: None, extent: None, note };
+    let dim = picture
+        .dimension
+        .and_then(|(w, h)| Some((i32::try_from(w).ok()?, i32::try_from(h).ok()?)))
+        .filter(|&(w, h)| w > 0 && h > 0);
+    // An all-zero rectangle is a record that holds no crop (none in the
+    // corpus; synthetic records): the whole image.
+    let whole = match (dim, pixels) {
+        _ if [l, t, r, b] == [0; 4] => true,
+        (Some((w, h)), _) => [l, t, r, b] == [0, 0, w, h],
+        (None, Some((pw, ph))) => {
+            let (pw, ph) = (i64::from(pw) * HWPUNIT_PER_PIXEL, i64::from(ph) * HWPUNIT_PER_PIXEL);
+            let [l, t, r, b] = [l, t, r, b].map(i64::from);
+            [l, t, r - pw, b - ph].iter().all(|v| v.abs() <= HWPUNIT_PER_PIXEL)
+        }
+        (None, None) => false,
+    };
+    if whole {
+        let extent = dim.filter(|&d| d != display).and_then(units);
+        return PictureFrame { crop: None, extent, note: None };
+    }
+    if r <= l || b <= t {
+        return none(Some(format!("crop ({l}, {t}, {r}, {b}) is empty; the whole image is shown")));
+    }
+    let edge = |v: i32| HwpUnit::new(v).ok();
+    let (Some(left), Some(top), Some(right), Some(bottom)) = (edge(l), edge(t), edge(r), edge(b))
+    else {
+        return none(Some(format!("crop ({l}, {t}, {r}, {b}) is out of range; not carried")));
+    };
+    let crop = Some(ImageCrop { left, top, right, bottom });
+    match dim {
+        Some(d) => match units(d) {
+            Some(extent) => PictureFrame { crop, extent: Some(extent), note: None },
+            None => none(Some(format!("image size {d:?} is out of range; crop not carried"))),
+        },
+        None => PictureFrame {
+            crop,
+            extent: None,
+            note: Some(format!(
+                "crop ({l}, {t}, {r}, {b}) kept without the image size, which the record does \
+                 not hold"
+            )),
+        },
     }
 }
 
@@ -4702,6 +4810,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
+            original_size: None,
             instance_id: 0,
             // W2p: treat_as_char 는 이제 raw bit0 이 유일한 진실 — 좌표
             // (0,0) 만으로는 더 이상 inline 판정이 되지 않는다.
@@ -4778,6 +4887,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0x1,
             picture: Default::default(),
@@ -4834,6 +4944,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0x1,
             picture: Default::default(),
@@ -4889,6 +5000,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 7,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
             picture: Default::default(),
@@ -4968,6 +5080,7 @@ mod tests {
                 height: 900,
             },
             binary_data_id: 3,
+            original_size: None,
             instance_id: 0,
             // W5 w0: 배치가 이제 속성 word 실비트로 결정되므로, 실측 anchored
             // 이미지 word(anchored_zero_origin_png native fixture, 0x040a2310 →
@@ -5070,6 +5183,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 99,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
             picture: Default::default(),
@@ -5119,6 +5233,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 5,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
             picture: Default::default(),
@@ -5180,6 +5295,7 @@ mod tests {
                     height: 100,
                 },
                 binary_data_id: 5,
+                original_size: None,
                 instance_id: 0,
                 ctrl_properties: 0,
                 picture: Default::default(),
@@ -5244,6 +5360,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 6,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
             picture: Default::default(),
@@ -7224,5 +7341,57 @@ mod shape_style_tests {
             (pattern_type.to_string(), bg_color.to_hex_rgb()),
             ("SLASH".into(), "#FFFF00".into())
         );
+    }
+
+    /// A picture record's crop and image size → Core crop and extent,
+    /// folded as the HWPX decoder folds `imgClip`/`imgDim`: the whole
+    /// extent is no crop (extent kept only when it is not the display
+    /// size); a crop keeps its extent; without the record's image size a
+    /// crop within one pixel of pixels × 75 is the whole image and any other
+    /// is kept without extent, noted; an empty or out-of-range crop is
+    /// noted and not carried. The crop (0, 0, 7474, 15000) of 22500 x 15000
+    /// is Hancom's F3c.
+    ///
+    /// 이것을 실패시키는 것: 전체 비교를 지우는 것 / 자르기에서 범위를 버리는 것 /
+    /// 픽셀 허용 폭을 0 으로 / 크기 모름 자르기를 버리거나 경고를 지우는 것 /
+    /// 빈 자르기 검사를 지우는 것.
+    #[test]
+    fn picture_crop_folds_like_the_hwpx_decoder() {
+        use crate::schema::section::Hwp5ShapePicture;
+        let u = |v: i32| HwpUnit::new(v).unwrap();
+        let pic = |crop: [i32; 4], dimension: Option<(u32, u32)>| Hwp5ShapePicture {
+            crop,
+            dimension,
+            ..Default::default()
+        };
+        let display = (8000, 5000);
+        let dim = Some((22_500, 15_000));
+        let whole = picture_crop(&pic([0, 0, 22_500, 15_000], dim), display, None);
+        assert_eq!(
+            whole,
+            PictureFrame { crop: None, extent: Some((u(22_500), u(15_000))), note: None }
+        );
+        let same = picture_crop(&pic([0, 0, 8000, 5000], Some((8000, 5000))), display, None);
+        assert_eq!(same, PictureFrame { crop: None, extent: None, note: None });
+        let f3c = picture_crop(&pic([0, 0, 7474, 15_000], dim), display, None);
+        assert_eq!(
+            f3c,
+            PictureFrame {
+                crop: Some(ImageCrop { left: u(0), top: u(0), right: u(7474), bottom: u(15_000) }),
+                extent: Some((u(22_500), u(15_000))),
+                note: None,
+            }
+        );
+        // No image size in the record: a 300 x 200 px image is 22500 x 15000.
+        let px = Some((300, 200));
+        assert_eq!(picture_crop(&pic([0, 0, 22_440, 15_000], None), display, px).crop, None);
+        let kept = picture_crop(&pic([0, 0, 7474, 15_000], None), display, px);
+        assert!(kept.crop.is_some() && kept.extent.is_none() && kept.note.is_some(), "{kept:?}");
+        let unset = picture_crop(&pic([0, 0, 0, 0], None), display, None);
+        assert_eq!(unset, PictureFrame { crop: None, extent: None, note: None });
+        let empty = picture_crop(&pic([10, 0, 10, 15_000], dim), display, None);
+        assert!(empty.crop.is_none() && empty.note.is_some(), "{empty:?}");
+        let far = picture_crop(&pic([0, 0, i32::MAX, 15_000], dim), display, None);
+        assert!(far.crop.is_none() && far.note.is_some(), "{far:?}");
     }
 }

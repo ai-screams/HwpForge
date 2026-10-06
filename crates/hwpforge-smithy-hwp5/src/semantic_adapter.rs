@@ -1702,6 +1702,7 @@ mod tests {
                             height: 4_560,
                         },
                         binary_data_id: 1,
+                        original_size: None,
                         instance_id: 0,
                         ctrl_properties: 0,
                         picture: Default::default(),

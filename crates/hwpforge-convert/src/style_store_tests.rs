@@ -1047,8 +1047,15 @@ fn hwp5_para_shape_warns_on_unknown_latin_break_mode_3() {
     assert_eq!(hwpx.break_latin_word, WordBreakType::KeepWord);
 }
 
+/// Vertical alignment (bits 20–21), border offsets (bytes 34–42) and the
+/// border connect / ignore-margin flags (bits 28–29) are carried into the
+/// HWPX paragraph shape (§19.16 I, S11) and no longer reported; the font
+/// line height and auto-spacing flags still are.
+///
+/// 이것을 실패시키는 것: 세로 정렬 비트 대응을 바꾸는 것(2 → CENTER) / 오프셋
+/// 순서를 바꾸거나 하나를 버리는 것 / 두 플래그 중 하나를 버리는 것.
 #[test]
-fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
+fn hwp5_para_shape_carries_vertical_align_and_border_offsets() {
     let mut raw = default_para_shape();
     raw.property1 = (2 << 20) | (1 << 22) | (1 << 28) | (1 << 29);
     raw.property2 = Some((1 << 4) | (1 << 5));
@@ -1061,7 +1068,7 @@ fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
         id_mappings: None,
         fonts: vec![],
         char_shapes: vec![],
-        para_shapes: vec![raw],
+        para_shapes: vec![raw.clone()],
         numberings: vec![],
         bullets: vec![],
         tab_defs: vec![],
@@ -1069,44 +1076,30 @@ fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
         border_fills: vec![],
     };
 
-    let (_, warnings) = crate::hwp5_style_store_to_hwpx(&store);
-
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. }
-            if *subject == "style.para_shape.vertical_align"
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. }
-            if *subject == "style.para_shape.font_line_height"
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.para_shape.auto_spacing"
-                && reason.contains("kr_eng")
-                && reason.contains("kr_num")
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.para_shape.border_offsets"
-                && reason.contains("10")
-                && reason.contains("-20")
-                && reason.contains("30")
-                && reason.contains("-40")
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. }
-            if *subject == "style.para_shape.border_connect"
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. }
-            if *subject == "style.para_shape.border_ignore_margin"
-    )));
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let subjects: Vec<&str> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback { subject, .. } => Some(*subject),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        subjects,
+        ["style.para_shape.font_line_height", "style.para_shape.auto_spacing"],
+        "{warnings:?}"
+    );
+    let shape = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(shape.vertical_align, "CENTER");
+    let unit = |v: i32| hwpforge_foundation::HwpUnit::new(v).unwrap();
+    assert_eq!(shape.border_offset, [unit(10), unit(-20), unit(30), unit(-40)]);
+    assert!(shape.border_connect && shape.border_ignore_margin);
+    for (bits, name) in [(0, "BASELINE"), (1, "TOP"), (3, "BOTTOM")] {
+        raw.property1 = bits << 20;
+        assert_eq!(hwp5_para_shape_to_hwpx(&raw).vertical_align, name);
+    }
 }
 
 #[test]

@@ -196,6 +196,9 @@ pub(crate) struct Hwp5ImageControl {
     pub ctrl_properties: u32,
     /// The whole `ShapePicture` record (crop, effects, border, image size).
     pub picture: Hwp5ShapePicture,
+    /// The picture's initial (unscaled) box from its `ShapeComponent` —
+    /// HWPX `orgSz`; `None` for a group child or an unreadable component.
+    pub original_size: Option<(u32, u32)>,
     /// The picture's hyperlink command from its `CtrlData` record
     /// (`URL;1;0;0;`), or why that record could not be read. `None` = no
     /// link.

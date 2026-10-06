@@ -414,6 +414,8 @@ struct NestedSubtreeContext {
     caption_paragraphs: usize,
     /// A rectangle's corner ratio read without a look to carry it.
     unread_corner_ratio: u8,
+    /// Initial box of the scope's first `ShapeComponent` (HWPX `orgSz`).
+    original_size: Option<(u32, u32)>,
 }
 
 impl NestedSubtreeContext {
@@ -449,6 +451,7 @@ impl NestedSubtreeContext {
             look: None,
             caption_paragraphs: 0,
             unread_corner_ratio: 0,
+            original_size: None,
         }
     }
 
@@ -492,6 +495,7 @@ impl NestedSubtreeContext {
             self.paragraphs.clear();
             self.saw_list_header = false;
             self.list_header_properties = None;
+            self.original_size = crate::schema::section::Hwp5ShapeRender::initial_size(data, true);
         }
         self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
@@ -644,6 +648,7 @@ impl NestedSubtreeContext {
                 look: self.look,
                 paragraphs: self.paragraphs,
                 list_header_properties: self.list_header_properties,
+                original_size: self.original_size,
             }),
         }
     }
@@ -747,6 +752,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             instance_id: gso_instance_id,
             ctrl_properties: input.ctrl_properties,
             picture,
+            original_size: input.original_size,
             link: input.link,
         }),
         (Some(geometry), None, Some(ole), None, None) => {
@@ -5347,6 +5353,7 @@ mod tests {
             look: None,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
         }

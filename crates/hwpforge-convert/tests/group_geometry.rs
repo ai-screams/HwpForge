@@ -617,16 +617,17 @@ fn paragraph_text(p: &hwpforge_core::paragraph::Paragraph) -> String {
 /// F3: picture groups (a logo of three pictures, a rect with two pictures, a
 /// cropped, a turned and a grey-scale picture group). Every picture is a
 /// Core group child; what a Core picture cannot show is reported, once per
-/// picture: the crop of F3c, the turn of F3d, the grey scale of F3e.
+/// picture: the turn of F3d, the grey scale of F3e. F3c's crop is carried,
+/// the same as the HWPX decoder reads it from Hancom's HWPX save.
 ///
-/// 이것을 실패시키는 것: HWP5 판정 표의 자르기·회전·효과 행을 각각 지우는 것 /
-/// 그림을 미지원 자식으로 되돌리는 것(`pic` 손실).
+/// 이것을 실패시키는 것: HWP5 판정 표의 회전·효과 행을 각각 지우는 것 /
+/// 그림을 미지원 자식으로 되돌리는 것(`pic` 손실) / 묶음 그림 자르기를 싣지 않는 것.
 #[test]
 fn f3_picture_groups_keep_their_pictures() {
     for (name, pictures, expected) in [
         ("group-f3a-logo.hwp", 3, None),
         ("group-f3b-mixed.hwp", 2, None),
-        ("group-f3c-cropped.hwp", 3, Some("crop:")),
+        ("group-f3c-cropped.hwp", 3, None),
         ("group-f3d-rotated-pic.hwp", 3, Some("rotation/flip:")),
         ("group-f3e-gray.hwp", 3, Some("effect: 1")),
     ] {
@@ -653,6 +654,24 @@ fn f3_picture_groups_keep_their_pictures() {
         let count = children.iter().filter(|c| matches!(c, GroupChild::Picture(_))).count();
         assert_eq!(count, pictures, "{name}");
     }
+    let crops = |group: Control| match group {
+        Control::Group { children, .. } => children
+            .into_iter()
+            .filter_map(|c| match c {
+                GroupChild::Picture(img) => Some((img.crop, img.image_extent)),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        _ => unreachable!(),
+    };
+    let ours = crops(first_group(
+        &decode_hwp5_with_images(&fixture("group-f3c-cropped.hwp")).unwrap().document,
+    ));
+    let twin =
+        hwpforge_smithy_hwpx::HwpxDecoder::decode(&fixture("group-f3c-cropped.hwpx")).unwrap();
+    let theirs = crops(first_group(&twin.document));
+    assert_eq!(ours, theirs);
+    assert_eq!(ours.iter().filter(|(c, _)| c.is_some()).count(), 1, "{ours:?}");
 }
 
 // ── twin: the HWPX decoder on Hancom's HWPX save of the same group ──

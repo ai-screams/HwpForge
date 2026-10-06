@@ -65,6 +65,8 @@ pub(super) struct InlineGsoContext {
     look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// A rectangle's corner ratio read without a look to carry it.
     unread_corner_ratio: u8,
+    /// Initial box of the scope's first `ShapeComponent`.
+    original_size: Option<(u32, u32)>,
 }
 
 pub(super) struct GsoClassificationInput {
@@ -99,6 +101,9 @@ pub(super) struct GsoClassificationInput {
     /// a text box before classification.
     pub(super) paragraphs: Vec<super::Hwp5Paragraph>,
     pub(super) list_header_properties: Option<u32>,
+    /// The initial box of the scope's first `ShapeComponent` (single
+    /// shapes; `None` for group children).
+    pub(super) original_size: Option<(u32, u32)>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -212,6 +217,7 @@ impl GsoChildBuilder {
             look: None,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            original_size: None,
         });
         Hwp5GroupChild {
             control,
@@ -571,6 +577,7 @@ impl InlineGsoContext {
             inner: None,
             look: None,
             unread_corner_ratio: 0,
+            original_size: None,
         }
     }
 
@@ -798,6 +805,7 @@ impl InlineGsoContext {
             // The component right under the control header writes its type
             // tag twice.
             self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
+            self.original_size = crate::schema::section::Hwp5ShapeRender::initial_size(data, true);
         }
         self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
@@ -904,6 +912,7 @@ impl InlineGsoContext {
             look: self.look,
             paragraphs: self.paragraphs,
             list_header_properties: self.list_header_properties,
+            original_size: self.original_size,
         })
     }
 }

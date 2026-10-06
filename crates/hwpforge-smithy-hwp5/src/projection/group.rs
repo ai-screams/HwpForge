@@ -22,7 +22,7 @@
 //!
 //! Whatever Core cannot carry is reported as [`Hwp5Warning::ContentLost`]:
 //! what the fold cannot place exactly, an unreadable chain, OLE objects, a
-//! picture's turn, crop, effect or border, a link that is not in Hancom's
+//! picture's turn, effect or border, a link that is not in Hancom's
 //! form, the group's own link, the text of a shape that does not keep it,
 //! the controls inside a child's text (the group child parser keeps only
 //! text), a directional fill (HWP5 shape styles are not projected at all
@@ -422,14 +422,11 @@ fn group_link_note() -> PlanNote {
     note("group_hyperlink", "group hyperlink not carried by Core")
 }
 
-/// HWPUNIT per image pixel (96 dpi): the unit of the crop rectangle and the
-/// image size in `ShapePicture`.
-const HWPUNIT_PER_PIXEL: i64 = 75;
-
 /// A picture in a group: its box folded like a shape's (`fold_box`), kept
 /// unturned. What a Core picture cannot show is noted as
 /// `group_child_picture` — a turn or mirror (kept around the same centre),
-/// a crop, an image effect, a border — as the HWPX decoder does.
+/// an image effect, a border — as the HWPX decoder does. Its crop is
+/// carried like a body picture's.
 fn plan_picture<'a>(
     child: &'a Hwp5GroupChild,
     image: &'a Hwp5ImageControl,
@@ -450,13 +447,10 @@ fn plan_picture<'a>(
         ));
     }
     let dropped = |after| ChildPlan { child, before: Vec::new(), outcome: Outcome::Dropped, after };
-    let pixels = match assets(image.binary_data_id) {
-        Ok(pixels) => pixels,
-        Err(reason) => {
-            after.push(PlanNote::Warning(Hwp5Warning::DroppedControl { control: "image", reason }));
-            return dropped(after);
-        }
-    };
+    if let Err(reason) = assets(image.binary_data_id) {
+        after.push(PlanNote::Warning(Hwp5Warning::DroppedControl { control: "image", reason }));
+        return dropped(after);
+    }
     let render = match &child.render {
         Ok(render) => render,
         Err(reason) => {
@@ -486,7 +480,7 @@ fn plan_picture<'a>(
              same centre",
         ));
     }
-    after.extend(picture_losses(image, pixels).into_iter().map(|r| note("group_child_picture", r)));
+    after.extend(picture_losses(image).into_iter().map(|r| note("group_child_picture", r)));
     let hyperlink = match object_link_url(image.link.as_ref()) {
         Ok(url) => url,
         Err(reason) => {
@@ -504,29 +498,12 @@ fn plan_picture<'a>(
 }
 
 /// What a group picture shows that a Core picture cannot (the HWPX
-/// decoder's rule on the same fields): a crop more than one pixel off the
-/// whole image — the record's image size, or the image's pixel size × 75,
-/// or, without either, a crop that cannot be ruled out; an effect
-/// (brightness, contrast, effect, or any picture-effect flag); a border
-/// (a thickness above zero).
-fn picture_losses(image: &Hwp5ImageControl, pixels: Option<(u32, u32)>) -> Vec<String> {
+/// decoder's rule on the same fields): an effect (brightness, contrast,
+/// effect, or any picture-effect flag); a border (a thickness above zero).
+/// A crop is carried (`build_group_picture`).
+fn picture_losses(image: &Hwp5ImageControl) -> Vec<String> {
     let p = &image.picture;
     let mut out = Vec::new();
-    let whole = match p.dimension {
-        Some((w, h)) if w > 0 && h > 0 => Some((i64::from(w), i64::from(h))),
-        _ => pixels
-            .map(|(w, h)| (i64::from(w) * HWPUNIT_PER_PIXEL, i64::from(h) * HWPUNIT_PER_PIXEL)),
-    };
-    let [left, top, right, bottom] = p.crop.map(i64::from);
-    match whole {
-        Some((w, h)) => {
-            let off = [left, top, right - w, bottom - h].iter().map(|v| v.abs()).max().unwrap_or(0);
-            if off > HWPUNIT_PER_PIXEL {
-                out.push(format!("crop: ({left}, {top}, {right}, {bottom}) of a {w}x{h} image"));
-            }
-        }
-        None => out.push("crop: the image's size is unknown, so a crop cannot be ruled out".into()),
-    }
     if p.brightness != 0
         || p.contrast != 0
         || p.effect != 0
@@ -964,6 +941,7 @@ mod tests {
             ctrl_id: CTRL_ID_GSO,
             geometry: geo(0, 0, 0, 0),
             binary_data_id: 1,
+            original_size: None,
             instance_id: 0,
             ctrl_properties: 0,
             picture: Hwp5ShapePicture {
@@ -1803,32 +1781,34 @@ mod tests {
         group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![child(pic, at(100, 100, 0.0, 0.0))])
     }
 
-    /// The crop rule (as the HWPX decoder's): more than 75 HWPUNIT off the
-    /// whole image; the whole image is the record's size, or the image's
-    /// pixel size × 75, or — when neither is known — a crop is reported.
+    /// A group picture's crop is carried (not reported): the record's crop
+    /// with its image size, nothing for the whole image.
     ///
-    /// 이것을 실패시키는 것: `>` 를 `>=` 로 / 픽셀 크기 대체 삭제 / 크기 모름 갈래 삭제 /
-    /// `left`·`top` 을 비교에서 빼는 것.
+    /// 이것을 실패시키는 것: `build_group_picture` 가 자르기를 싣지 않는 것 /
+    /// 자르기를 다시 손실로 보고하는 것.
     #[test]
-    fn group_picture_crop_rule() {
-        let crop = |c: [i32; 4], dim: Option<(u32, u32)>| {
+    fn group_picture_crop_is_carried() {
+        let crop = |c: [i32; 4]| {
             picture_group(|i| {
                 i.picture.crop = c;
-                i.picture.dimension = dim;
+                i.picture.dimension = Some((22_500, 15_000));
             })
         };
-        let whole = Some((22_500, 15_000));
-        assert!(project(&crop([0, 0, 22_425, 15_000], whole)).1.is_empty());
-        assert_eq!(project(&crop([0, 0, 22_424, 15_000], whole)).1, ["group_child_picture"]);
-        assert_eq!(project(&crop([0, 76, 22_500, 15_000], whole)).1, ["group_child_picture"]);
-        // No size in the record: the 300 x 200 px image gives 22500 x 15000.
-        assert!(project(&crop([0, 0, 22_500, 15_000], None)).1.is_empty());
-        assert!(project(&crop([0, 0, 22_500, 15_000], Some((0, 0)))).1.is_empty());
-        let unreadable = assets_of(b"not an image".to_vec());
-        assert_eq!(
-            project_with(&crop([0, 0, 22_500, 15_000], None), unreadable).1,
-            ["group_child_picture"]
-        );
+        let picture_crop = |g: &Option<Control>| match g {
+            Some(Control::Group { children, .. }) => match &children[0] {
+                GroupChild::Picture(img) => {
+                    img.crop.map(|c| [c.left, c.top, c.right, c.bottom].map(|v| v.as_i32()))
+                }
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        };
+        let (g, lost) = project(&crop([0, 0, 7474, 15_000]));
+        assert!(lost.is_empty(), "{lost:?}");
+        assert_eq!(picture_crop(&g), Some([0, 0, 7474, 15_000]));
+        let (g, lost) = project(&crop([0, 0, 22_500, 15_000]));
+        assert!(lost.is_empty(), "{lost:?}");
+        assert_eq!(picture_crop(&g), None);
     }
 
     /// Effects and a border are reported; a plain picture is not.
