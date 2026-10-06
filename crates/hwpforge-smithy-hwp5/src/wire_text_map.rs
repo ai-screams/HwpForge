@@ -31,6 +31,19 @@
 
 use std::fmt;
 
+#[cfg(test)]
+thread_local! {
+    /// 변환이 검사한 span 수 — 테스트가 시간 대신 일의 양으로 상한을 건다
+    /// (스레드별).
+    pub(crate) static SPAN_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// span 하나를 검사했다고 센다 (테스트 빌드에서만).
+fn visit_span() {
+    #[cfg(test)]
+    SPAN_VISITS.with(|visits| visits.set(visits.get() + 1));
+}
+
 /// 비-1:1 wire 소비 구간 하나.
 ///
 /// `wire_len != core_len` 이 불변식이다 (1:1 은 span 이 아니라 구간).
@@ -111,6 +124,7 @@ impl WireTextMap {
         let mut wire_cursor = 0u32;
         let mut core_cursor = 0u32;
         for span in &self.spans {
+            visit_span();
             if wire <= span.wire_start {
                 // 1:1 구간 (span 시작점 포함 — 시작점의 core 값은 구간
                 // 공식과 동일).
@@ -157,6 +171,7 @@ impl WireToCoreCursor<'_> {
             self.core_cursor = 0;
         }
         while let Some(span) = self.map.spans.get(self.next_span) {
+            visit_span();
             if wire <= span.wire_start {
                 return Ok(self.core_cursor + (wire - self.wire_cursor));
             }

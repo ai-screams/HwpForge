@@ -3637,12 +3637,13 @@ mod tests {
     }
 
     /// A paragraph of 50,000 tab-separated characters with a boundary at
-    /// every character converts within half a second: one cursor walks the
-    /// spans once for all boundaries. Rescanning the spans for each boundary
-    /// makes this over a billion span checks.
+    /// every character: one cursor walks the spans once for all boundaries,
+    /// so the spans checked stay within boundaries + spans — counted, not
+    /// timed. Rescanning the spans for each boundary checks about
+    /// boundaries × spans / 2 (over a billion here).
     ///
     /// 이것을 실패시키는 것: 경계마다 `WireTextMap::to_core` 로 처음부터 다시
-    /// 훑는 것(시간 한도를 넘는다).
+    /// 훑는 것(검사한 span 수가 곱으로 는다).
     #[test]
     fn char_shape_conversion_is_linear_in_boundaries_and_spans() {
         let count = 50_000u32;
@@ -3666,14 +3667,16 @@ mod tests {
             .iter()
             .map(|&(position, char_shape_id)| Hwp5CharShapeRun { position, char_shape_id })
             .collect();
-        let started = std::time::Instant::now();
+        crate::wire_text_map::SPAN_VISITS.with(|visits| visits.set(0));
         let converted =
             char_shape_runs_to_text_positions(&segments, &[], &wire_runs, &mut Vec::new());
-        let elapsed = started.elapsed();
+        let visits = crate::wire_text_map::SPAN_VISITS.with(std::cell::Cell::get);
         assert_eq!(converted.len(), wire_runs.len());
         assert_eq!(converted.last().map(|run| run.position), Some((count - 1) * 2));
         assert_eq!(paragraph.char_shape_runs, converted);
-        assert!(elapsed < std::time::Duration::from_millis(500), "took {elapsed:?}");
+        // 50,000 tab spans and 50,000 boundaries.
+        let bound = 2 * (u64::from(count) + u64::from(count));
+        assert!(visits <= bound, "{visits} span checks for {count} boundaries and spans");
     }
 
     /// A boundary past the paragraph's wire end (it covers no character)
