@@ -232,7 +232,7 @@ impl Hwp5FillPatternKind {
     /// the two slashes the same way (WG#21).
     ///
     /// [`PatternType`]: hwpforge_foundation::PatternType
-    pub fn pattern_type(self) -> Option<hwpforge_foundation::PatternType> {
+    pub(crate) fn pattern_type(self) -> Option<hwpforge_foundation::PatternType> {
         use hwpforge_foundation::PatternType;
         match self {
             Self::None | Self::Unknown(_) => None,
@@ -451,15 +451,42 @@ impl Hwp5RawBorderFill {
     }
 }
 
+/// Bytes left after the cursor.
+fn remaining(cur: &Cursor<&[u8]>) -> u64 {
+    (cur.get_ref().len() as u64).saturating_sub(cur.position())
+}
+
+/// `count` items of `size` bytes, read from what is left — refused before
+/// anything is allocated when the record cannot hold them (a damaged length
+/// word would otherwise ask for gigabytes).
+fn checked_len(cur: &Cursor<&[u8]>, count: u64, size: u64, what: &str) -> Hwp5Result<usize> {
+    let bytes = count.saturating_mul(size);
+    if bytes > remaining(cur) {
+        return Err(Hwp5Error::RecordParse {
+            offset: cur.position() as usize,
+            detail: format!(
+                "fill {what}: {count} items do not fit the {} bytes left",
+                remaining(cur)
+            ),
+        });
+    }
+    Ok(count as usize)
+}
+
 /// Parses a fill block (kind word already read): `DocInfo` border fills and
 /// shape components (after their line information) share this layout.
+///
+/// Every length word is checked against the bytes left before it sizes an
+/// allocation (review r1). 이것을 실패시키는 것: 이 검사를 지우기
+/// (`fill_lengths_beyond_the_record_are_refused_before_allocating`).
 pub(crate) fn parse_fill_payload(
     fill_kind: u32,
     cur: &mut Cursor<&[u8]>,
 ) -> Hwp5Result<Hwp5RawBorderFillFill> {
     match fill_kind {
         0x0000_0000 => {
-            let extra_len = cur.read_u32::<LittleEndian>()? as usize;
+            let extra_len = cur.read_u32::<LittleEndian>()?;
+            let extra_len = checked_len(cur, u64::from(extra_len), 1, "extra data")?;
             let mut ignored_extra_data = vec![0u8; extra_len];
             cur.read_exact(&mut ignored_extra_data)?;
             Ok(Hwp5RawBorderFillFill::None)
@@ -469,7 +496,8 @@ pub(crate) fn parse_fill_payload(
             let pattern_color = cur.read_u32::<LittleEndian>()?;
             let pattern_kind = Hwp5FillPatternKind::from_raw(cur.read_i32::<LittleEndian>()?);
             let alpha = cur.read_u8()?;
-            let extra_len = cur.read_u32::<LittleEndian>()? as usize;
+            let extra_len = cur.read_u32::<LittleEndian>()?;
+            let extra_len = checked_len(cur, u64::from(extra_len), 1, "extra data")?;
             let mut extra_data = vec![0u8; extra_len];
             cur.read_exact(&mut extra_data)?;
             Ok(Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
@@ -522,7 +550,8 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
     let center_x = cur.read_i32::<LittleEndian>()?;
     let center_y = cur.read_i32::<LittleEndian>()?;
     let blur = cur.read_u32::<LittleEndian>()?;
-    let color_count = cur.read_u32::<LittleEndian>()? as usize;
+    let color_count = cur.read_u32::<LittleEndian>()?;
+    let color_count = checked_len(cur, u64::from(color_count), 4, "gradation colours")?;
     let mut colors = Vec::with_capacity(color_count);
     for _ in 0..color_count {
         colors.push(cur.read_u32::<LittleEndian>()?);
@@ -551,6 +580,27 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fill whose length word claims more than the record holds is
+    /// refused before anything is allocated: an empty fill's or a colour
+    /// fill's extra-data length, a gradation's colour count — each
+    /// `u32::MAX` in a few-byte record.
+    ///
+    /// 이것을 실패시키는 것: 세 길이 검사 중 하나를 지우기(수 GB 할당 요청 —
+    /// 테스트가 메모리 부족으로 죽거나 `read_exact` 전에 멈춘다).
+    #[test]
+    fn fill_lengths_beyond_the_record_are_refused_before_allocating() {
+        let huge = u32::MAX.to_le_bytes();
+        let none = huge.to_vec();
+        let mut colour = vec![0u8; 13];
+        colour.extend_from_slice(&huge);
+        let mut gradation = vec![0u8; 17];
+        gradation.extend_from_slice(&huge);
+        for (kind, data) in [(0u32, none), (1, colour), (4, gradation)] {
+            let err = parse_fill_payload(kind, &mut Cursor::new(&data[..])).unwrap_err();
+            assert!(err.to_string().contains("do not fit"), "kind {kind}: {err}");
+        }
+    }
 
     fn border_line(kind: u8, width: u8, color: u32) -> Vec<u8> {
         let mut data = Vec::new();
