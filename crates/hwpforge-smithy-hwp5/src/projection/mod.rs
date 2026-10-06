@@ -7160,8 +7160,26 @@ mod shape_style_tests {
         for (ratio, want, warned) in [(20u8, Some(20u8), 0usize), (0, None, 0), (60, Some(50), 1)] {
             let mut l = look(1, 0, Hwp5RawBorderFillFill::None);
             l.corner_ratio = ratio;
-            let (s, w) = style(&l, true);
-            assert_eq!((s.corner_ratio, w), (want, warned), "{ratio}");
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
+            let s = images.shape_style(&l, true);
+            assert_eq!(s.corner_ratio, want, "{ratio}");
+            // The cap is reported under its own subject (review r1: a count
+            // alone passed a wrong subject).
+            let capped = images
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        Hwp5Warning::ProjectionFallback { subject: "shape.corner_ratio", .. }
+                    )
+                })
+                .count();
+            assert_eq!((capped, images.warnings.len()), (warned, warned), "{ratio}");
         }
     }
 

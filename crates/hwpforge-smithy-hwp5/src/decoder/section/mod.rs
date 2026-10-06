@@ -412,6 +412,8 @@ struct NestedSubtreeContext {
     look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// Caption paragraphs read before the shape's component (not carried).
     caption_paragraphs: usize,
+    /// A rectangle's corner ratio read without a look to carry it.
+    unread_corner_ratio: u8,
 }
 
 impl NestedSubtreeContext {
@@ -446,6 +448,7 @@ impl NestedSubtreeContext {
             group: None,
             look: None,
             caption_paragraphs: 0,
+            unread_corner_ratio: 0,
         }
     }
 
@@ -465,8 +468,12 @@ impl NestedSubtreeContext {
     /// 이것을 실패시키는 것: 비율 읽기를 지우기(`rect_corner_ratio_is_read`).
     fn note_shape_rectangle(&mut self, data: &[u8]) {
         self.saw_shape_rectangle = true;
-        if let (Some(look), Some(&ratio)) = (self.look.as_mut(), data.first()) {
-            look.corner_ratio = ratio;
+        match (self.look.as_mut(), data.first()) {
+            (Some(look), Some(&ratio)) => look.corner_ratio = ratio,
+            // No outline/fill block to carry it with (review r1): reported
+            // when the shape is classified, not dropped.
+            (None, Some(&ratio)) => self.unread_corner_ratio = ratio,
+            _ => {}
         }
     }
 
@@ -553,6 +560,17 @@ impl NestedSubtreeContext {
         // the gso scope wrapped child shapes rather than a single shape.
         if let Some(group) = self.group {
             return group.into_control(warnings);
+        }
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`corner_ratio_without_a_look_is_reported`).
+        if self.unread_corner_ratio > 0 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "shape.corner_ratio",
+                reason: format!(
+                    "corner ratio {} not carried: the shape's outline and fill block is unreadable",
+                    self.unread_corner_ratio
+                ),
+            });
         }
         if self.caption_paragraphs > 0 {
             warnings.push(Hwp5Warning::DroppedControl {
@@ -3651,6 +3669,49 @@ mod tests {
         assert_eq!(ratio(&result.paragraphs[0].controls[0]), Some(20));
         let Hwp5Control::Table(table) = &result.paragraphs[1].controls[0] else { panic!() };
         assert_eq!(ratio(&table.cells[0].paragraphs[0].controls[0]), Some(20));
+    }
+
+    /// A rectangle whose component has no readable outline/fill block (here
+    /// the bare type tags) cannot carry its corner ratio: the ratio is
+    /// reported — for a body shape and for one in a table cell — not dropped
+    /// (review r1). A ratio of 0 is not reported.
+    #[test]
+    fn corner_ratio_without_a_look_is_reported() {
+        let rect = |stream: &mut Vec<u8>, level: u16, ratio: u8| {
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                level,
+                &gso_ctrl_header_data(0, 0, 3000, 1000),
+            ));
+            stream.extend(make_record(TagId::ShapeComponent, level + 1, b"cer$cer$"));
+            let mut body = vec![ratio];
+            body.extend([0u8; 32]);
+            stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &body));
+        };
+        let reported = |ratio: u8| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+            rect(&mut stream, 0, ratio);
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            one_cell_table(&mut stream, 1);
+            stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+            rect(&mut stream, 2, ratio);
+            let result = parse_body_text(&stream, &version()).unwrap();
+            result
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        Hwp5Warning::ProjectionFallback { subject: "shape.corner_ratio", .. }
+                    )
+                })
+                .count()
+        };
+        assert_eq!(reported(20), 2);
+        assert_eq!(reported(0), 0);
     }
 
     /// A footer in a cell paragraph: its paragraph becomes the footer's, not

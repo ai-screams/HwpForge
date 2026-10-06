@@ -2780,6 +2780,8 @@ mod tests {
             PdfError::UnsupportedContent { kind: "text box with rounded corners", .. }
         ));
         assert!(with_ratio(None).is_ok());
+        // A ratio of 0 is a square box (review r1: `is_some()` would refuse it).
+        assert!(with_ratio(Some(0)).is_ok());
     }
 
     /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·

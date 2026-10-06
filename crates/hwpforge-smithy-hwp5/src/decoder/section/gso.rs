@@ -63,6 +63,8 @@ pub(super) struct InlineGsoContext {
     inner: Option<Box<InlineGsoContext>>,
     /// Outline and fill from the scope's first `ShapeComponent`.
     look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// A rectangle's corner ratio read without a look to carry it.
+    unread_corner_ratio: u8,
 }
 
 pub(super) struct GsoClassificationInput {
@@ -568,6 +570,7 @@ impl InlineGsoContext {
             current_para: None,
             inner: None,
             look: None,
+            unread_corner_ratio: 0,
         }
     }
 
@@ -804,8 +807,12 @@ impl InlineGsoContext {
 
     pub(super) fn note_shape_rectangle(&mut self, data: &[u8]) {
         self.saw_shape_rectangle = true;
-        if let (Some(look), Some(&ratio)) = (self.look.as_mut(), data.first()) {
-            look.corner_ratio = ratio;
+        match (self.look.as_mut(), data.first()) {
+            (Some(look), Some(&ratio)) => look.corner_ratio = ratio,
+            // No outline/fill block to carry it with (review r1): reported
+            // when the shape is classified, not dropped.
+            (None, Some(&ratio)) => self.unread_corner_ratio = ratio,
+            _ => {}
         }
     }
 
@@ -848,6 +855,15 @@ impl InlineGsoContext {
     pub(super) fn into_control(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
         if let Some(group) = self.group {
             return group.into_control(warnings);
+        }
+        if self.unread_corner_ratio > 0 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "shape.corner_ratio",
+                reason: format!(
+                    "corner ratio {} not carried: the shape's outline and fill block is unreadable",
+                    self.unread_corner_ratio
+                ),
+            });
         }
         self.close_inner(warnings);
         if let Some(buf) = self.current_para.take() {
