@@ -648,9 +648,22 @@ impl HwpxStructuralEditor {
         // ── declared delta: the new paragraphs spliced into the Core doc ──
         let mut expected = d0.document.clone();
         {
-            let paragraphs = &mut expected.sections_mut()[anchor.section].paragraphs;
+            let section = &mut expected.sections_mut()[anchor.section];
+            let count = new_paras.len();
             for (offset, new_para) in new_paras.into_iter().enumerate() {
-                paragraphs.insert(insert_index + offset, new_para);
+                section.paragraphs.insert(insert_index + offset, new_para);
+            }
+            // A header/footer control sits in its anchor paragraph's bytes, so
+            // it moves down with that paragraph.
+            // 이것을 실패시키는 것: 이 이동을 지우기 — 새 문단이 앵커 자리에
+            // 인코드되어 꼬리말이 둘이 된다(self-verify 거부,
+            // `structural_edits_move_an_anchored_footer_with_its_paragraph`).
+            for hf in section.headers.iter_mut().chain(section.footers.iter_mut()) {
+                if let Some(anchor_paragraph) = hf.anchor_paragraph {
+                    if anchor_paragraph >= insert_index {
+                        hf.anchor_paragraph = Some(anchor_paragraph + count);
+                    }
+                }
             }
         }
         expected
@@ -826,9 +839,23 @@ fn remove_targets(document: &mut Document<Draft>, targets: &[ParagraphLocator]) 
     for (section_idx, mut indices) in by_section {
         if let Some(section) = sections.get_mut(section_idx) {
             indices.sort_unstable_by(|a, b| b.cmp(a));
-            for idx in indices {
+            for &idx in &indices {
                 if idx < section.paragraphs.len() {
                     section.paragraphs.remove(idx);
+                }
+            }
+            // A header/footer control sits in its anchor paragraph's bytes:
+            // deleting that paragraph deletes it (as in Hancom), and the
+            // anchors after a deleted paragraph move up.
+            // 이것을 실패시키는 것: 이 갱신을 지우기
+            // (`structural_edits_move_an_anchored_footer_with_its_paragraph`).
+            for list in [&mut section.headers, &mut section.footers] {
+                list.retain(|hf| hf.anchor_paragraph.is_none_or(|a| !indices.contains(&a)));
+                for hf in list.iter_mut() {
+                    if let Some(a) = hf.anchor_paragraph {
+                        let removed_before = indices.iter().filter(|&&i| i < a).count();
+                        hf.anchor_paragraph = Some(a - removed_before).filter(|&a| a > 0);
+                    }
                 }
             }
         }

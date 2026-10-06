@@ -137,3 +137,29 @@ fn set_cell_and_stamp_keep_an_anchored_footer_in_place() {
         stamp(&source, &StampMap::Legacy(specs), &StampOptions::default()).expect("stamp");
     assert_eq!(paragraphs_with(&section_xml(&stamped.bytes), "<hp:footer "), [1], "stamp");
 }
+
+/// Paragraph insert/delete splice raw bytes, so the footer control moves with
+/// its paragraph; the Core document the editor checks against must move the
+/// anchor too (before, an insert at the anchor encoded a second footer and
+/// the self-verify refused the edit).
+/// 이것을 실패시키는 것: 삽입 뒤 앵커 이동을 지우기 / 삭제 뒤 앵커 갱신을
+/// 지우기(둘 다 self-verify 거부).
+#[test]
+fn structural_edits_move_an_anchored_footer_with_its_paragraph() {
+    use hwpforge::ops::edit::{delete_para, insert_para, DeleteParaOptions, InsertParaOptions};
+    let source = editable();
+    let inserted = insert_para(
+        &source,
+        &InsertParaOptions::default().with_anchor(0).with_text(vec!["new".into()]),
+    )
+    .expect("insert after paragraph 0");
+    assert_eq!(paragraphs_with(&section_xml(&inserted.bytes), "<hp:footer "), [2]);
+
+    let deleted = delete_para(&inserted.bytes, &DeleteParaOptions::default().with_indexes(vec![1]))
+        .expect("delete the paragraph before the anchor");
+    assert_eq!(paragraphs_with(&section_xml(&deleted.bytes), "<hp:footer "), [1]);
+
+    let gone = delete_para(&source, &DeleteParaOptions::default().with_indexes(vec![1]))
+        .expect("delete the anchor paragraph");
+    assert!(!section_xml(&gone.bytes).contains("<hp:footer "), "deleted with its paragraph");
+}
