@@ -52,6 +52,9 @@ pub struct LineImage {
     pub width: i32,
     /// 표시 높이 (HWPUNIT).
     pub height: i32,
+    /// 보이는 부분 — 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]`(0–1).
+    /// `None` = 그림 전체. 이 부분이 표시 상자를 채운다 (`picture_crop`).
+    pub crop: Option<[f64; 4]>,
 }
 
 /// 줄 안 인라인(글자취급) 글상자 원자 (W4 w2).
@@ -250,6 +253,8 @@ pub struct LaidAnchoredImage {
     pub width: i32,
     /// 표시 높이 (HWPUNIT).
     pub height: i32,
+    /// 보이는 부분 — [`LineImage::crop`] 과 같다.
+    pub crop: Option<[f64; 4]>,
 }
 
 /// 한 쪽의 배치 결과.
@@ -712,6 +717,7 @@ fn collect_anchored_images(
             y,
             width: img.width.as_i32(),
             height: img.height.as_i32(),
+            crop: picture_crop(img, location)?,
         }],
         marker_idx,
     ))
@@ -1713,6 +1719,36 @@ pub(crate) fn build_inline_object_line_atoms(
     Ok(atoms)
 }
 
+/// 그림 원자 — 자르기를 비율로 싣는다 ([`picture_crop`]).
+fn line_image(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<LineImage> {
+    Ok(LineImage {
+        canonical_key: img.path.clone(),
+        width: img.width.as_i32(),
+        height: img.height.as_i32(),
+        crop: picture_crop(img, location)?,
+    })
+}
+
+/// 그림의 자르기를 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]` 로 (§19.20
+/// PDF-v3, P18). 자르기는 그림 좌표계(`image_extent`)에 있으므로 범위를
+/// 모르면 사상할 수 없어 거부한다 — 화소 크기로 대신하지 않는다(`imgDim` ≠
+/// 화소×75 가 대부분). 빈 자르기도 거부. 이것을 실패시키는 것: 범위 나눗셈을
+/// 지우기 / 범위 모름 거부를 지우기 (`picture_crop_fractions`).
+fn picture_crop(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<Option<[f64; 4]>> {
+    let Some(crop) = img.crop else { return Ok(None) };
+    let refuse = |kind| Err(PdfError::UnsupportedContent { kind, location: location.to_string() });
+    let Some((ew, eh)) = img.image_extent else {
+        return refuse("cropped picture without its image size");
+    };
+    let (ew, eh) = (f64::from(ew.as_i32()), f64::from(eh.as_i32()));
+    let [l, t, r, b] =
+        [crop.left, crop.top, crop.right, crop.bottom].map(|v| f64::from(v.as_i32()));
+    if ew <= 0.0 || eh <= 0.0 || r <= l || b <= t {
+        return refuse("cropped picture with an empty crop");
+    }
+    Ok(Some([l / ew, t / eh, r / ew, b / eh]))
+}
+
 /// 인라인 이미지 문단의 원자를 캐시 줄별로 귀속한다 (W2b §4 D2).
 ///
 /// [`build_inline_object_line_atoms`] 에 이미지 classifier(기대 높이 =
@@ -1727,11 +1763,7 @@ pub(crate) fn build_inline_image_line_atoms(
             RunContent::Image(img) => Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: true,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }),
             _ => None,
         })
@@ -1752,11 +1784,7 @@ pub(crate) fn build_cell_image_line_atoms(
             RunContent::Image(img) => Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: false,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }),
             _ => None,
         })
@@ -1824,11 +1852,7 @@ pub(crate) fn build_textbox_inner_line_atoms(
             Ok(Some(ClassifiedObject {
                 height: img.height.as_i32(),
                 sub_line_capable: true,
-                atom: LineAtom::Image(LineImage {
-                    canonical_key: img.path.clone(),
-                    width: img.width.as_i32(),
-                    height: img.height.as_i32(),
-                }),
+                atom: LineAtom::Image(line_image(img, location)?),
             }))
         }
         RunContent::Image(_) => Err(PdfError::UnsupportedContent {
@@ -2104,6 +2128,7 @@ mod tests {
                 canonical_key: "BinData/inner.png".to_string(),
                 width: 500,
                 height: 500,
+                crop: None,
             })],
             alignment: Alignment::Center,
             is_last_line: true,
@@ -2319,6 +2344,108 @@ mod tests {
         ] {
             assert!(doc_with(edit).is_err());
         }
+    }
+
+    /// P18 (PDF-v3): every path that draws a picture — inline, in a cell,
+    /// in a text box, anchored — carries its crop as fractions of the whole
+    /// image (crop / image extent); a crop whose image size is unknown, or
+    /// an empty one, is refused; no crop = `None`.
+    ///
+    /// 이것을 실패시키는 것: 범위 나눗셈을 지우기 / 범위 모름·빈 자르기 거부를
+    /// 지우기 / 앵커 그림에 자르기를 싣지 않는 것.
+    #[test]
+    fn picture_crop_fractions() {
+        use hwpforge_core::image::ImageCrop;
+        let u = |v: i32| HwpUnit::new(v).unwrap();
+        let with = |mut run: Run, crop: Option<[i32; 4]>, extent: Option<(i32, i32)>| {
+            if let RunContent::Image(img) = &mut run.content {
+                img.crop = crop.map(|[l, t, r, b]| ImageCrop {
+                    left: u(l),
+                    top: u(t),
+                    right: u(r),
+                    bottom: u(b),
+                });
+                img.image_extent = extent.map(|(w, h)| (u(w), u(h)));
+            }
+            run
+        };
+        let para = |run: Run| {
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            p
+        };
+        let crop_of = |r: PdfResult<Vec<Vec<LineAtom>>>| -> PdfResult<Option<[f64; 4]>> {
+            Ok(r?
+                .into_iter()
+                .flatten()
+                .find_map(|a| match a {
+                    LineAtom::Image(img) => Some(img.crop),
+                    _ => None,
+                })
+                .expect("image atom"))
+        };
+        type Build = fn(&Paragraph, &LayoutCache, &str) -> PdfResult<Vec<Vec<LineAtom>>>;
+        let builds: [Build; 3] = [
+            build_inline_image_line_atoms,
+            build_cell_image_line_atoms,
+            build_textbox_inner_line_atoms,
+        ];
+        let quarter = Some([1000, 0, 3000, 2000]);
+        for (n, build) in builds.into_iter().enumerate() {
+            let run = |c, e| with(inline_img("BinData/a.png"), c, e);
+            let atoms = |c, e| {
+                let p = para(run(c, e));
+                build(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+            };
+            assert_eq!(
+                crop_of(atoms(quarter, Some((4000, 4000)))).unwrap(),
+                Some([0.25, 0.0, 0.75, 0.5]),
+                "{n}"
+            );
+            assert_eq!(crop_of(atoms(None, None)).unwrap(), None, "{n}");
+            assert!(
+                matches!(
+                    crop_of(atoms(quarter, None)),
+                    Err(PdfError::UnsupportedContent {
+                        kind: "cropped picture without its image size",
+                        ..
+                    })
+                ),
+                "{n}"
+            );
+            assert!(
+                matches!(
+                    crop_of(atoms(Some([3000, 0, 3000, 2000]), Some((4000, 4000)))),
+                    Err(PdfError::UnsupportedContent {
+                        kind: "cropped picture with an empty crop",
+                        ..
+                    })
+                ),
+                "{n}"
+            );
+        }
+        let run = with(
+            anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            ),
+            quarter,
+            Some((4000, 4000)),
+        );
+        let mut p = Paragraph::with_runs(
+            vec![run, Run::text("본문", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let layout = replay(&doc_of(vec![p]), &PdfOptions::default()).unwrap();
+        assert_eq!(layout.pages[0].anchored_images[0].crop, Some([0.25, 0.0, 0.75, 0.5]));
     }
 
     fn a4_body_top_left() -> (i32, i32) {
