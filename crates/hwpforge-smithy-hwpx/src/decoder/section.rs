@@ -172,6 +172,14 @@ pub(crate) fn parse_section_with_images(
     let mut page_border_fills = None;
     let mut text_direction = TextDirection::Horizontal;
     let mut begin_num = None;
+    for hx_para in &section.paragraphs {
+        for_each_liftable_ctrl(&hx_para.runs, &mut |ctrl| {
+            if ctrl.header.is_some() || ctrl.footer.is_some() {
+                ctx.lifted_header_footers.insert(std::ptr::from_ref(ctrl) as usize);
+            }
+            Ok(())
+        })?;
+    }
 
     let paragraphs = section
         .paragraphs
@@ -296,6 +304,10 @@ pub(crate) struct DecodeCtx {
     /// 되살리지만 바탕쪽에는 그 경로가 없어, run 변환이 버리는 요소를 손실로
     /// 보고한다.
     in_master_page: bool,
+    /// 구역 목록으로 올린 머리말·꼬리말 `<hp:ctrl>` 의 주소
+    /// ([`lift_header_footers`]). run 변환이 이 밖의 머리말·꼬리말을 만나면
+    /// 손실로 보고한다.
+    lifted_header_footers: std::collections::HashSet<usize>,
 }
 
 impl DecodeCtx {
@@ -307,6 +319,7 @@ impl DecodeCtx {
             group_child_depth: 0,
             image_pixels: HashMap::new(),
             in_master_page: false,
+            lifted_header_footers: std::collections::HashSet::new(),
         }
     }
 
@@ -320,6 +333,7 @@ impl DecodeCtx {
             group_child_depth: 0,
             image_pixels: HashMap::new(),
             in_master_page: true,
+            lifted_header_footers: std::collections::HashSet::new(),
         }
     }
 
@@ -845,6 +859,21 @@ fn convert_ctrl_child<'a>(
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<()> {
     {
+        // §19.7 F (review r1): a header/footer is carried only where
+        // [`lift_header_footers`] reaches — a body paragraph, its table cells
+        // and text boxes, Hancom applying it from the top-level paragraph.
+        // Anywhere else (a group's text box, a note, a caption, a master
+        // page) its meaning is unconfirmed: reported lost, not dropped.
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`header_outside_the_lifted_places_is_reported_lost`).
+        let lifted = ctx.lifted_header_footers.contains(&(std::ptr::from_ref(ctrl) as usize));
+        for (present, kind) in
+            [(ctrl.header.is_some(), "header"), (ctrl.footer.is_some(), "footer")]
+        {
+            if present && !lifted {
+                ctx.content_lost(kind, format!("{kind} in a place a {kind} is not carried from"));
+            }
+        }
         if let Some(run) = decode_footnote(ctrl, char_shape_id, depth, ctx)? {
             runs.push(run);
         }
@@ -2153,6 +2182,31 @@ fn lift_header_footers(
     footers: &mut Vec<HeaderFooter>,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<()> {
+    for_each_liftable_ctrl(runs, &mut |ctrl| {
+        ctx.enter(super::PathSeg::Header(headers.len()));
+        let header_result = convert_ctrl_header(ctrl, ctx);
+        ctx.leave();
+        if let Some(hf) = header_result? {
+            headers.push(anchored(hf, para_idx));
+        }
+        ctx.enter(super::PathSeg::Footer(footers.len()));
+        let footer_result = convert_ctrl_footer(ctrl, ctx);
+        ctx.leave();
+        if let Some(hf) = footer_result? {
+            footers.push(anchored(hf, para_idx));
+        }
+        Ok(())
+    })
+}
+
+/// Every `<hp:ctrl>` whose header/footer is carried from a top-level
+/// paragraph's `runs`: the paragraph's own, and those in its table cells
+/// and text boxes, recursively (§19.17 X4: Hancom applies a header/footer in
+/// a cell as if it sat in the paragraph holding the table).
+fn for_each_liftable_ctrl<'a>(
+    runs: &'a [HxRun],
+    visit: &mut dyn FnMut(&'a HxCtrl) -> HwpxResult<()>,
+) -> HwpxResult<()> {
     use crate::schema::section::HxRunChildKind as K;
     for hx_run in runs {
         let order = if hx_run.child_order.is_empty() {
@@ -2162,28 +2216,14 @@ fn lift_header_footers(
         };
         for (kind, idx) in order {
             match kind {
-                K::Ctrl => {
-                    let ctrl = &hx_run.ctrls[idx];
-                    ctx.enter(super::PathSeg::Header(headers.len()));
-                    let header_result = convert_ctrl_header(ctrl, ctx);
-                    ctx.leave();
-                    if let Some(hf) = header_result? {
-                        headers.push(anchored(hf, para_idx));
-                    }
-                    ctx.enter(super::PathSeg::Footer(footers.len()));
-                    let footer_result = convert_ctrl_footer(ctrl, ctx);
-                    ctx.leave();
-                    if let Some(hf) = footer_result? {
-                        footers.push(anchored(hf, para_idx));
-                    }
-                }
+                K::Ctrl => visit(&hx_run.ctrls[idx])?,
                 // 이것을 실패시키는 것: 이 갈래를 지우기
                 // (`nested_footer_in_table_cell_is_lifted_with_its_anchor`).
                 K::Table => {
                     for cell in hx_run.tables[idx].rows.iter().flat_map(|row| &row.cells) {
                         if let Some(sub_list) = &cell.sub_list {
                             for para in &sub_list.paragraphs {
-                                lift_header_footers(&para.runs, para_idx, headers, footers, ctx)?;
+                                for_each_liftable_ctrl(&para.runs, visit)?;
                             }
                         }
                     }
@@ -2193,7 +2233,7 @@ fn lift_header_footers(
                 K::Rect => {
                     if let Some(draw_text) = &hx_run.rects[idx].draw_text {
                         for para in &draw_text.sub_list.paragraphs {
-                            lift_header_footers(&para.runs, para_idx, headers, footers, ctx)?;
+                            for_each_liftable_ctrl(&para.runs, visit)?;
                         }
                     }
                 }
@@ -3204,6 +3244,60 @@ mod tests {
         };
         assert_eq!(img.hyperlink.as_deref(), Some("http://www.korea.kr"));
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    /// A header/footer outside the places it is carried from — here in a
+    /// footnote and in an ellipse's text — is reported lost with its path
+    /// (and not lifted), so editors refuse the input instead of dropping it.
+    ///
+    /// 이것을 실패시키는 것: `convert_ctrl_child` 의 손실 보고를 지우기 /
+    /// 들어 올린 위치까지 보고하기(본문·칸·글상자 머리말에 손실).
+    #[test]
+    fn header_outside_the_lifted_places_is_reported_lost() {
+        let lost = |xml: &str| -> Vec<(String, String)> {
+            let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+            assert!(result.headers.is_empty() && result.footers.is_empty(), "{xml}");
+            result
+                .warnings
+                .iter()
+                .filter_map(|w| match w {
+                    crate::DecodeWarning::ContentLost { kind, path, .. } => {
+                        Some((kind.clone(), path.to_string()))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let in_note = format!(
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><ctrl><footNote number="1"><subList><p paraPrIDRef="0"><run charPrIDRef="0">{}<t>note</t></run></p></subList></footNote></ctrl></run></p></sec>"#,
+            hf_ctrl("footer", "BOTH", "lost"),
+        );
+        let found = lost(&in_note);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "footer");
+        assert!(found[0].1.contains("footnote"), "{found:?}");
+        let in_ellipse = format!(
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><ellipse id="1"><sz width="1000" height="1000"/><pos treatAsChar="1"/><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">{}<t>e</t></run></p></subList></drawText></ellipse></run></p></sec>"#,
+            hf_ctrl("header", "BOTH", "lost"),
+        );
+        assert_eq!(
+            lost(&in_ellipse).iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+            ["header"]
+        );
+
+        // The lifted places report nothing.
+        let lifted = format!(
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0">{}{}</run></p></sec>"#,
+            hf_ctrl("header", "BOTH", "top"),
+            cell_with(&hf_ctrl("footer", "BOTH", "cell")),
+        );
+        let result = parse_section(&lifted, 0, &HashMap::new()).unwrap();
+        assert_eq!((result.headers.len(), result.footers.len()), (1, 1));
+        assert!(
+            !result.warnings.iter().any(|w| matches!(w, crate::DecodeWarning::ContentLost { .. })),
+            "{:?}",
+            result.warnings
+        );
     }
 
     fn hf_ctrl(tag: &str, page: &str, text: &str) -> String {
