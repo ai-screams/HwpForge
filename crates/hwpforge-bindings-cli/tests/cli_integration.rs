@@ -1382,8 +1382,12 @@ fn audit_hwp5_table_border_fill_notes_source_truth() {
 
 #[test]
 fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
-    // W4 표면 게이트: human 모드 요약 라인 + `--json` 의 warning_details 에
-    // 집계 드롭 경고(부처 실물 fixture 의 중첩 'foot' 1건)가 우선 노출된다.
+    // W4 표면 게이트였던 부처 실물 fixture 의 집계 드롭 경고(표 칸 안 'foot'
+    // 1건)는 §19.7 F 로 사라졌다 — 칸 안 꼬리말을 이제 구역 꼬리말로 옮긴다.
+    // human 요약 라인·`--json` warning_details 표면은 그대로 확인하고, 집계
+    // 경고의 문구·묶음은 projection 단위 테스트
+    // (`unknown_control_drops_are_aggregated_into_one_warning_per_id`)가 잠근다.
+    // 이것을 실패시키는 것: 칸 안 꼬리말을 다시 버리기(경고 재등장·꼬리말 0).
     let tmp = test_tmp();
     let source = fixture("table_20_real_world_ministry_stress.hwp");
 
@@ -1391,7 +1395,7 @@ fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
     let (stdout, _, code) =
         run(&["convert-hwp5", source.to_str().unwrap(), "-o", out_h.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("Converted") && stdout.contains("warnings"), "{stdout}");
+    assert!(stdout.contains("Converted"), "{stdout}");
 
     let out_j = tmp.join("stress_json.hwpx");
     let (val, _, code) =
@@ -1399,12 +1403,18 @@ fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
     assert_eq!(code, 0);
     let details = val["warning_details"].as_array().expect("details array");
     assert!(
-        details
-            .first()
-            .and_then(|d| d.as_str())
-            .is_some_and(|d| d.contains("unknown_control") && d.contains("'foot'")),
-        "집계 경고가 첫 항목이어야 함: {details:?}"
+        !details.iter().filter_map(|d| d.as_str()).any(|d| d.contains("'foot'")),
+        "the cell footer is carried, not dropped: {details:?}"
     );
+    let file = std::fs::File::open(&out_j).expect("open hwpx");
+    let mut zip = zip::ZipArchive::new(file).expect("zip");
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("Contents/section0.xml").expect("section0"),
+        &mut xml,
+    )
+    .expect("read section0");
+    assert_eq!(xml.matches("<hp:footer ").count(), 1, "the cell footer reaches the section");
 }
 
 #[test]
