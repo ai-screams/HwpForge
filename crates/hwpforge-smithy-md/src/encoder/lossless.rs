@@ -104,7 +104,17 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(text)
                     ));
                 }
-                Control::TextBox { paragraphs, width, height, .. } => {
+                Control::TextBox { paragraphs, width, height, style, .. } => {
+                    // §19.5 1c (review r1): the lossless grammar has no place
+                    // for a rounded corner yet (P5b) — refuse rather than
+                    // write a square box. 이것을 실패시키는 것: 이 거부를 지우기
+                    // (`rounded_text_box_is_refused`).
+                    if style.as_ref().is_some_and(|s| s.corner_ratio.is_some()) {
+                        return Err(MdError::UnsupportedStructure {
+                            detail: "text box corner ratio is not carried by the lossless encoder"
+                                .to_string(),
+                        });
+                    }
                     out.push_str(&format!(
                         "<textbox data-char-shape=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\">",
                         run.char_shape_id.get(),
@@ -298,6 +308,36 @@ fn escape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A text box with a rounded corner is refused (the grammar cannot
+    /// carry it yet); a square one is written.
+    #[test]
+    fn rounded_text_box_is_refused() {
+        use hwpforge_core::control::ShapeStyle;
+        let doc = |ratio: Option<u8>| {
+            let unit = hwpforge_foundation::HwpUnit::new(3000).unwrap();
+            let inner = Paragraph::with_runs(
+                vec![Run::text("box", hwpforge_foundation::CharShapeIndex::new(0))],
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+            let mut tb = Control::text_box(vec![inner], unit, unit);
+            if let Control::TextBox { style, .. } = &mut tb {
+                *style = Some(ShapeStyle { corner_ratio: ratio, ..Default::default() });
+            }
+            let para = Paragraph::with_runs(
+                vec![Run::control(tb, hwpforge_foundation::CharShapeIndex::new(0))],
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
+            d.validate().unwrap()
+        };
+        assert!(matches!(
+            encode_lossless(&doc(Some(20))),
+            Err(MdError::UnsupportedStructure { .. })
+        ));
+        assert!(encode_lossless(&doc(None)).is_ok());
+    }
     use hwpforge_core::{
         Control, Document, Image, ImageFormat, Paragraph, Run, Section, TableCell, TableRow,
     };
