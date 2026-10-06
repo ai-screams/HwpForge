@@ -3907,6 +3907,15 @@
         "text_height": {
           "description": "컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).\n\n밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측\n전이므로 렌더는 fail-closed 로 다룬다 (W5-a).",
           "$ref": "#/$defs/HwpUnit"
+        },
+        "anchor_paragraph": {
+          "description": "The body paragraph this header/footer is anchored to: the index into\n[`Section::paragraphs`] of the **top-level** paragraph the control\nsits in. A header/footer written inside a table cell is anchored to\nthe top-level paragraph that holds the table.\n\nHancom applies a header/footer from the page that paragraph starts on,\nnot to earlier pages, and a later header/footer of the same page type\nreplaces an earlier one. `None` means the first paragraph (index 0),\nwhich is how every header/footer was written before this field\nexisted — decoders write `None` for paragraph 0 too.\n\nThe index goes stale when paragraphs are inserted or removed before\nit; [`Document::validate`](crate::Document::validate) rejects an index\nthat is out of range.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
         }
       },
       "required": [

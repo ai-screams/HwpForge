@@ -317,6 +317,23 @@ pub enum ValidationError {
         /// Zero-based master page index within the section.
         master_page_index: usize,
     },
+
+    /// A header or footer is anchored to a paragraph the section does not
+    /// have ([`HeaderFooter::anchor_paragraph`](crate::section::HeaderFooter::anchor_paragraph)
+    /// is past the last body paragraph).
+    #[error("{kind} {index} in section {section_index} is anchored to paragraph {anchor_paragraph}, but the section has {paragraph_count} paragraph(s)")]
+    HeaderFooterAnchorOutOfRange {
+        /// Zero-based section index.
+        section_index: usize,
+        /// `"header"` or `"footer"`.
+        kind: &'static str,
+        /// Zero-based index within the section's headers or footers.
+        index: usize,
+        /// The anchor that is out of range.
+        anchor_paragraph: usize,
+        /// Number of body paragraphs in the section.
+        paragraph_count: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +396,8 @@ pub enum CoreErrorCode {
     InvalidGroupChild = 2020,
     /// A master page combines a special scope with an even/odd restriction.
     InvalidMasterPageScope = 2021,
+    /// A header or footer is anchored past the section's last paragraph.
+    HeaderFooterAnchorOutOfRange = 2022,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -413,6 +432,9 @@ impl ValidationError {
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
+            Self::HeaderFooterAnchorOutOfRange { .. } => {
+                CoreErrorCode::HeaderFooterAnchorOutOfRange
+            }
         }
     }
 }

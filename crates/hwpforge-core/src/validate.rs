@@ -33,6 +33,7 @@ struct RunValidationContext {
 /// 7. TextBox controls have at least 1 paragraph
 /// 8. Footnote controls have at least 1 paragraph
 /// 9. A master page with a special scope applies to both page types
+/// 10. A header/footer anchor points at an existing body paragraph
 ///
 /// Errors carry precise location context.
 pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationError> {
@@ -58,6 +59,25 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
                     &run.content,
                     RunValidationContext { section_index: si, paragraph_index: pi, run_index: ri },
                 )?;
+            }
+        }
+
+        // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `<` 를 `<=` 로
+        // (`header_footer_anchor_*` 두 테스트 — 마지막 문단 index 는 통과,
+        // 문단 수와 같은 index 는 거부).
+        for (kind, list) in [("header", &section.headers), ("footer", &section.footers)] {
+            for (index, hf) in list.iter().enumerate() {
+                if let Some(anchor) = hf.anchor_paragraph {
+                    if anchor >= section.paragraphs.len() {
+                        return Err(ValidationError::HeaderFooterAnchorOutOfRange {
+                            section_index: si,
+                            kind,
+                            index,
+                            anchor_paragraph: anchor,
+                            paragraph_count: section.paragraphs.len(),
+                        });
+                    }
+                }
             }
         }
 
@@ -549,6 +569,45 @@ mod tests {
         let special = Some(MasterPageSpecial::OptionalPage { page_number: 3 });
         assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Both, special)]), Ok(()));
         assert_eq!(validate_sections(&[section_with_master(ApplyPageType::Odd, None)]), Ok(()));
+    }
+
+    // === Rule 10: header/footer anchor in range ===
+
+    fn section_with_anchored_footer(paragraphs: usize, anchor: usize) -> Section {
+        let mut section = Section::with_paragraphs(
+            (0..paragraphs).map(|_| simple_paragraph()).collect(),
+            PageSettings::a4(),
+        );
+        section.headers.push(crate::section::HeaderFooter::all_pages(vec![simple_paragraph()]));
+        section.footers.push(
+            crate::section::HeaderFooter::all_pages(vec![simple_paragraph()])
+                .with_anchor_paragraph(anchor),
+        );
+        section
+    }
+
+    // 이것을 실패시키는 것: Rule 10 검사를 지우기, 또는 `>=` 를 `>` 로.
+    #[test]
+    fn header_footer_anchor_equal_to_paragraph_count_rejected() {
+        let err = validate_sections(&[section_with_anchored_footer(3, 3)]).unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::HeaderFooterAnchorOutOfRange {
+                section_index: 0,
+                kind: "footer",
+                index: 0,
+                anchor_paragraph: 3,
+                paragraph_count: 3,
+            }
+        );
+        assert_eq!(err.code() as u32, 2022);
+    }
+
+    // 이것을 실패시키는 것: 비교를 `anchor + 1 >= len` 으로 당기기(마지막
+    // 문단 거부).
+    #[test]
+    fn header_footer_anchor_on_last_paragraph_accepted() {
+        assert_eq!(validate_sections(&[section_with_anchored_footer(3, 2)]), Ok(()));
     }
 
     // === Rule 1: At least 1 section ===
