@@ -59,9 +59,38 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     if let Some(ref_list) = &head.ref_list {
         populate_store_from_ref_list(&mut store, ref_list);
         warnings = per_language_scalar_losses(ref_list);
+        warnings.extend(border_offset_losses(ref_list));
     }
 
     Ok(HeaderParseResult { style_store: store, begin_num, warnings })
+}
+
+/// A `paraPr` border offset outside the HWPUNIT range: the style store
+/// cannot hold it and keeps 0 (review r1: it was dropped without a word).
+/// 이것을 실패시키는 것: 이 보고를 지우기
+/// (`para_border_offset_out_of_range_is_reported_lost`).
+fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(para_props) = &ref_list.para_properties else { return Vec::new() };
+    para_props
+        .items
+        .iter()
+        .filter_map(|pp| {
+            let b = pp.border.as_ref()?;
+            let bad: Vec<i32> = [b.offset_left, b.offset_right, b.offset_top, b.offset_bottom]
+                .into_iter()
+                .filter(|&v| HwpUnit::new(v).is_err())
+                .collect();
+            (!bad.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "para_border_offset".to_string(),
+                reason: format!(
+                    "paraPr {} border offset {bad:?} is out of range; kept as 0",
+                    pp.id
+                ),
+            })
+        })
+        .collect()
 }
 
 /// A `charPr` whose ratio, spacing, relative size or offset differs between

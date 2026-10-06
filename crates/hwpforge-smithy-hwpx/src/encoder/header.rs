@@ -1942,6 +1942,27 @@ mod tests {
         assert_eq!(back[0].vertical_align, "BASELINE");
     }
 
+    /// A paraPr border offset outside the HWPUNIT range is reported lost
+    /// (it is kept as 0); one in range is not.
+    #[test]
+    fn para_border_offset_out_of_range_is_reported_lost() {
+        let mut store = HwpxStyleStore::new();
+        let mut shaped = HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        };
+        shaped.border_offset[0] = HwpUnit::new(100).unwrap();
+        store.push_para_shape(shaped);
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
+        let far = xml.replacen(r#"offsetLeft="100""#, r#"offsetLeft="100000001""#, 1);
+        let warnings = crate::decoder::header::parse_header(&far).unwrap().warnings;
+        assert!(
+            matches!(warnings.as_slice(), [crate::DecodeWarning::ContentLost { kind, .. }] if kind == "para_border_offset"),
+            "{warnings:?}"
+        );
+    }
+
     /// The new paraPr fields are left out of JSON when they hold the
     /// default, so a style store exported before them reads and writes the
     /// same.
