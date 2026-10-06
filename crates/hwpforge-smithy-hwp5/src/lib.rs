@@ -848,6 +848,24 @@ fn join_hwp5_ole_assets(
     Ok(Hwp5OleAssetPlan { assets_by_reference, reference_ambiguities })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Records [`reference_ambiguities`] has looked at, counted per thread
+    /// in tests so a test can bound the work without timing it.
+    pub(crate) static RECORD_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `records`, iterated — every scan of the `BIN_DATA` records in
+/// [`reference_ambiguities`] goes through here so tests can count it.
+fn record_visits(
+    records: &[Hwp5BinDataRecordSummary],
+) -> impl Iterator<Item = &Hwp5BinDataRecordSummary> {
+    records.iter().inspect(|_| {
+        #[cfg(test)]
+        RECORD_VISITS.with(|visits| visits.set(visits.get() + 1));
+    })
+}
+
 /// Every reference whose record by position differs from its record by
 /// stored id, with both readings (`ordinal 3 → external link, storage id 3 →
 /// BIN0003.OLE`). Covers every `BIN_DATA` slot — external links, records
@@ -859,7 +877,7 @@ pub(crate) fn reference_ambiguities(records: &[Hwp5BinDataRecordSummary]) -> BTr
     // number of records (a document may hold 65,535 of them).
     let mut by_position: BTreeMap<u16, usize> = BTreeMap::new();
     let mut by_id: BTreeMap<u16, usize> = BTreeMap::new();
-    for (index, record) in records.iter().enumerate() {
+    for (index, record) in record_visits(records).enumerate() {
         by_position.insert(record.reference_ordinal, index);
         if !record.storage_name.is_empty() {
             by_id.entry(record.binary_data_id).or_insert(index);

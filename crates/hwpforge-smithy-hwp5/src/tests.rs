@@ -858,21 +858,23 @@ fn ole_reference_ambiguity_covers_every_slot() {
     assert!(!ambiguities.contains_key(&1) && !ambiguities.contains_key(&2), "{ambiguities:?}");
 }
 
-/// The OLE reading check indexes both readings once: 65,535 records (the
-/// most a document can name) finish within half a second (about 40 ms
-/// measured).
-/// A per-reference scan of all records would make that billions of
-/// comparisons.
+/// The OLE reading check indexes both readings once, so the records it
+/// looks at grow with the number of records, not with its square: counted,
+/// not timed (65,535 records — the most a document can name — are visited
+/// once each).
 ///
-/// 이것을 실패시키는 것: 참조마다 레코드 전체를 다시 훑는 것(두 `position()`
-/// — 시간 한도를 넘는다).
+/// 이것을 실패시키는 것: 참조마다 레코드 전체를 다시 훑는 것(방문 수가
+/// 레코드 수의 제곱으로 는다).
 #[test]
 fn ole_reference_ambiguity_is_linear_in_the_records() {
-    let records: Vec<Hwp5BinDataRecordSummary> =
-        (1..=u16::MAX).map(|ordinal| summary(ordinal, 0, "")).collect();
-    let started = std::time::Instant::now();
-    let ambiguities = reference_ambiguities(&records);
-    let elapsed = started.elapsed();
-    assert_eq!(ambiguities.len(), usize::from(u16::MAX), "every link slot has no id reading");
-    assert!(elapsed < std::time::Duration::from_millis(500), "took {elapsed:?}");
+    let visits_for = |count: u16| {
+        let records: Vec<Hwp5BinDataRecordSummary> =
+            (1..=count).map(|ordinal| summary(ordinal, 0, "")).collect();
+        RECORD_VISITS.with(|visits| visits.set(0));
+        let ambiguities = reference_ambiguities(&records);
+        assert_eq!(ambiguities.len(), usize::from(count), "every link slot has no id reading");
+        RECORD_VISITS.with(std::cell::Cell::get)
+    };
+    let count = u16::MAX;
+    assert!(visits_for(count) <= 2 * u64::from(count), "{} visits", visits_for(count));
 }
