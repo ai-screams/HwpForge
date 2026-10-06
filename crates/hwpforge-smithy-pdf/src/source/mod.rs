@@ -1932,6 +1932,16 @@ fn build_line_text_box(
             });
         }
     }
+    // §19.20 PDF-v3 (P17): 테두리·채움은 각진 사각형으로만 그린다 — 둥근
+    // 모서리 글상자는 거부(렌더는 후속).
+    // 이것을 실패시키는 것: 이 거부를 지우기
+    // (`text_box_with_round_corners_is_refused`).
+    if style.as_ref().and_then(|s| s.corner_ratio).is_some_and(|r| r > 0) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "text box with rounded corners",
+            location: location.to_string(),
+        });
+    }
     Ok(LineTextBox {
         width: width.as_i32(),
         height: textbox_expected_host_height(height.as_i32(), extent)?,
@@ -2742,6 +2752,34 @@ mod tests {
             assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{fill:?}: {err:?}");
         }
         assert!(with_fill(None).is_ok(), "a plain colour fill renders");
+    }
+
+    /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    #[test]
+    fn text_box_with_round_corners_is_refused() {
+        use hwpforge_core::control::{Control, ShapeStyle};
+        use hwpforge_foundation::VerticalAlign;
+        let with_ratio = |ratio: Option<u8>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { style, .. } = c.as_mut() {
+                    *style = Some(ShapeStyle { corner_ratio: ratio, ..Default::default() });
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default())
+        };
+        assert!(matches!(
+            with_ratio(Some(20)).unwrap_err(),
+            PdfError::UnsupportedContent { kind: "text box with rounded corners", .. }
+        ));
+        assert!(with_ratio(None).is_ok());
     }
 
     /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·
