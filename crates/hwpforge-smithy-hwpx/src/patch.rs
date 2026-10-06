@@ -541,7 +541,14 @@ fn build_section_preservation(
     section_path: &str,
     section: &Section,
 ) -> HwpxResult<SectionPreservation> {
-    let hx_section: HxSection = xml_from_str(section_xml).map_err(|error| HwpxError::XmlParse {
+    // Parsed as the decoder parses it: a whitespace-only `<hp:t>` (the " "
+    // after a caption number) keeps its text instead of reading as empty, so
+    // the raw slots match the decoded runs. Element order is unchanged, so
+    // the spans below still come from the original XML.
+    // 이것을 실패시키는 것: 이 정규화를 지우기(F17 캡션의 " " 슬롯이 사라져
+    // 보존 슬롯 수 불일치 — `caption_text_after_its_number_is_patched`).
+    let normalized = crate::wire_xml::preserve_ws_only_text(section_xml);
+    let hx_section: HxSection = xml_from_str(&normalized).map_err(|error| HwpxError::XmlParse {
         file: section_path.to_string(),
         detail: crate::decoder::xml_error_detail(&error),
     })?;
@@ -1199,7 +1206,14 @@ fn collect_raw_ctrl_child_slots<'a>(
             // 디코더는 PAGE 와 TOTAL_PAGE 를 InlinePageNumber run 으로
             // 복원한다 (decoder/section.rs) — 카운터가 PAGE 만 세면 이후
             // 슬롯 인덱스가 밀린다 (W2 독립 설계리뷰에서 발견된 잠복 결함).
-            if auto_num.num_type == "PAGE" || auto_num.num_type == "TOTAL_PAGE" {
+            // §19.16 J (review r1): a caption number the decoder turns into
+            // a `Control::AutoNumber` run counts too — by the decoder's own
+            // acceptance, so a format it refuses (no run) does not advance.
+            // 이것을 실패시키는 것: 이 전진을 지우기(F17 캡션 번호 뒤 슬롯이 밀려
+            // 보존 편집 실패 — `caption_text_after_its_number_is_patched`).
+            let caption_number =
+                matches!(crate::decoder::section::auto_number_control(auto_num), Ok(Some(_)));
+            if auto_num.num_type == "PAGE" || auto_num.num_type == "TOTAL_PAGE" || caption_number {
                 semantic_run_idx += 1;
             }
         }
@@ -1542,10 +1556,23 @@ fn collect_raw_footnote_slots(
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("note subList span missing for {prefix}"),
         })?;
+    // The decoder drops the number head the encoder injects
+    // ([`injected_head_range`](crate::decoder::section::injected_head_range)):
+    // its " " spacer is no run of Core's, so it is no slot either — the
+    // spacer's text is blanked for the walk (its element stays, so the run
+    // spans still line up).
+    // 이것을 실패시키는 것: 이 비우기를 지우기(각주가 있는 문서의 보존 슬롯 수
+    // 불일치 — `every_container_fill_visits_maps_to_its_own_paragraph`).
+    let mut sub_list = note.sub_list.clone();
+    if crate::decoder::section::injected_head_range(&sub_list).is_some() {
+        for text in &mut sub_list.paragraphs[0].runs[1].texts {
+            *text = crate::schema::section::HxText::new(String::new());
+        }
+    }
     collect_raw_sublist_slots(
         xml,
         sub_list_span,
-        &note.sub_list,
+        &sub_list,
         &format!("{prefix}.paragraphs"),
         sink,
         false,

@@ -7,7 +7,7 @@ use std::io::{Cursor, Read, Write};
 
 use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
 use hwpforge_foundation::NumberFormatType;
-use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder, HwpxEncoder};
+use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder, HwpxEncoder, HwpxPatcher};
 
 fn fixture(path: &str) -> Vec<u8> {
     let path = format!("{}/../../tests/fixtures/{path}", env!("CARGO_MANIFEST_DIR"));
@@ -172,4 +172,57 @@ fn unknown_format_or_kind_is_reported_lost() {
             .collect();
         assert_eq!(lost, [kind], "{to}");
     }
+}
+
+/// A text edit after a caption number goes through the preserving patch
+/// path (review r1): the run counter now advances over the number's run as
+/// the decoder makes it, so the slot after "그림 3" is found — before, the
+/// slots after a caption number were shifted and the edit failed. The
+/// numbers stay 3·4·7.
+///
+/// 이것을 실패시키는 것: patch 의 캡션 번호 전진을 지우기.
+#[test]
+fn caption_text_after_its_number_is_patched() {
+    use hwpforge_core::run::RunContent;
+    let base = fixture("images/f17-caption-numbering.hwpx");
+    let decoded = HwpxDecoder::decode(&base).expect("decode");
+    let original = decoded.document.sections()[0].clone();
+    let mut replacement = original.clone();
+    let mut edited = false;
+    'find: for para in &mut replacement.paragraphs {
+        for run in &mut para.runs {
+            if let RunContent::Image(img) = &mut run.content {
+                if let Some(caption) = img.caption.as_mut() {
+                    let runs = &mut caption.paragraphs[0].runs;
+                    let after = runs
+                        .iter()
+                        .position(|r| matches!(&r.content, RunContent::Control(c) if matches!(**c, Control::AutoNumber { .. })))
+                        .expect("number")
+                        + 1;
+                    let RunContent::Text(text) = &mut runs[after].content else {
+                        panic!("{:?}", runs[after])
+                    };
+                    *text = " 조직도".to_string();
+                    edited = true;
+                    break 'find;
+                }
+            }
+        }
+    }
+    assert!(edited);
+    let preservation =
+        HwpxPatcher::export_section_preservation(&base, 0, &original).expect("preservation");
+    let patched =
+        HwpxPatcher::patch_section_preserving(&base, 0, &replacement, None, Some(&preservation))
+            .expect("text edit after a caption number");
+    assert!(section_xml(&patched).contains("<hp:t> 조직도</hp:t>"));
+    let numbers: Vec<u32> = auto_numbers(&patched)
+        .0
+        .iter()
+        .map(|c| match c {
+            Control::AutoNumber { num, .. } => *num,
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(numbers, [3, 4, 7]);
 }

@@ -1409,23 +1409,38 @@ fn decode_picture_frame(hx: &HxPic, image: &mut Image, ctx: &mut DecodeCtx) {
 /// reported lost rather than written as the default. Page numbers are
 /// decoded by the caller; note numbers belong to the note head.
 fn decode_auto_number(an: &HxAutoNum, ctx: &mut DecodeCtx) -> Option<Control> {
+    match auto_number_control(an) {
+        Ok(control) => control,
+        Err((kind, reason)) => {
+            ctx.content_lost(kind, reason);
+            None
+        }
+    }
+}
+
+/// The Core control a caption number decodes to: `Ok(None)` for a kind
+/// decoded elsewhere (page and note numbers), `Err((kind, reason))` for one
+/// Core cannot hold. Shared with the patch path's run counting
+/// ([`crate::patch`]), which must advance exactly when a run is made.
+pub(crate) fn auto_number_control(
+    an: &HxAutoNum,
+) -> Result<Option<Control>, (&'static str, String)> {
     use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind};
     let kind = match an.num_type.as_str() {
         "PICTURE" => AutoNumberKind::Picture,
         "TABLE" => AutoNumberKind::Table,
         "EQUATION" => AutoNumberKind::Equation,
-        "FOOTNOTE" | "ENDNOTE" | "PAGE" | "TOTAL_PAGE" => return None,
+        "FOOTNOTE" | "ENDNOTE" | "PAGE" | "TOTAL_PAGE" => return Ok(None),
         other => {
-            ctx.content_lost("auto_number", format!("autoNum numType {other:?} is not carried"));
-            return None;
+            return Err(("auto_number", format!("autoNum numType {other:?} is not carried")));
         }
     };
     let Some(hx) = an.auto_num_format.as_ref() else {
-        return Some(Control::AutoNumber {
+        return Ok(Some(Control::AutoNumber {
             kind,
             num: an.num,
             format: AutoNumberFormat::default(),
-        });
+        }));
     };
     let mut lost = Vec::new();
     let number_type = if hx.format_type.is_empty() {
@@ -1458,11 +1473,10 @@ fn decode_auto_number(an: &HxAutoNum, ctx: &mut DecodeCtx) -> Option<Control> {
         }
     };
     if !lost.is_empty() {
-        ctx.content_lost(
+        return Err((
             "auto_number_format",
             format!("autoNum {} format not carried: {}", an.num_type, lost.join(", ")),
-        );
-        return None;
+        ));
     }
     let format = AutoNumberFormat {
         number_type: number_type.unwrap_or_default(),
@@ -1471,7 +1485,7 @@ fn decode_auto_number(an: &HxAutoNum, ctx: &mut DecodeCtx) -> Option<Control> {
         suffix,
         superscript,
     };
-    Some(Control::AutoNumber { kind, num: an.num, format })
+    Ok(Some(Control::AutoNumber { kind, num: an.num, format }))
 }
 
 /// What Hancom appends to the URL in an object's `href` (every picture link
@@ -1605,7 +1619,7 @@ fn decode_note_paragraphs(
 /// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
 /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
 /// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
-fn injected_head_range(sub_list: &HxSubList) -> Option<(usize, usize)> {
+pub(crate) fn injected_head_range(sub_list: &HxSubList) -> Option<(usize, usize)> {
     let first = sub_list.paragraphs.first()?;
     let [head, spacer, ..] = first.runs.as_slice() else { return None };
     (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some((0, 2))
