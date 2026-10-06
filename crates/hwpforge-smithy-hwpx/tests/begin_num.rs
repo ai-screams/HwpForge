@@ -98,7 +98,8 @@ fn ones() -> Vec<String> {
 /// them (the header used to get the section's values: 5, 6, 3, 7 or 0).
 ///
 /// 이것을 실패시키는 것: header 를 다시 첫 구역 `begin_num` 에서 만드는 것
-/// (f5c·F16a 는 page 0, F16b/c 는 5·6, F17 은 pic 3·tbl 7).
+/// (f5c·F16a 는 page 0, F16b/c 는 5·6, F17 은 pic 3·tbl 7), 문단 새 번호의
+/// 값이나 종류를 바꾸는 것.
 #[test]
 fn hancom_start_numbers_reencode_with_a_header_of_ones() {
     for name in [
@@ -115,8 +116,13 @@ fn hancom_start_numbers_reencode_with_a_header_of_ones() {
         assert_eq!(start_numbers(&out), start_numbers(&source), "{name}");
     }
     let f16a = fixture("master_pages/f16a-newnum-page5.hwpx");
-    let new_numbers =
-        |bytes: &[u8]| part(bytes, "Contents/section0.xml").matches("<hp:newNum ").count();
+    let new_numbers = |bytes: &[u8]| -> Vec<Vec<String>> {
+        let xml = part(bytes, "Contents/section0.xml");
+        xml.match_indices("<hp:newNum ")
+            .map(|(at, _)| attrs(&xml[at..], "hp:newNum", &["num", "numType"]))
+            .collect()
+    };
+    assert_eq!(new_numbers(&f16a), [vec!["5".to_string(), "PAGE".to_string()]], "F16a as made");
     assert_eq!(new_numbers(&reencode(&f16a)), new_numbers(&f16a), "F16a's paragraph restart");
 }
 
@@ -195,6 +201,24 @@ fn a_header_start_number_core_cannot_carry_is_lost() {
     assert!(lost[0].is_content_loss());
     assert!(repaired_axes(&doc.warnings).is_empty());
     assert_eq!(header_numbers(&reencode(&source)), ones());
+}
+
+/// A header with both a 0 (repaired) and valid values other than 1 (lost)
+/// reports both, each with its own axes.
+///
+/// 이것을 실패시키는 것: 고침 경고 뒤에 조기 반환하는 것(손실 경고가 빠진다),
+/// 손실 판정에서 tbl·equation 을 빼는 것.
+#[test]
+fn a_header_with_a_zero_and_a_lost_value_reports_both() {
+    let source = f5c_with_header(
+        r#"<hh:beginNum page="0" footnote="1" endnote="1" pic="1" tbl="2" equation="3"/>"#,
+    );
+    let doc = HwpxDecoder::decode(&source).expect("decode");
+    assert_eq!(repaired_axes(&doc.warnings), [vec!["page"]]);
+    let lost = lost_begin_num(&doc.warnings);
+    assert_eq!(lost.len(), 1, "{:?}", doc.warnings);
+    let DecodeWarning::ContentLost { reason, .. } = lost[0] else { unreachable!() };
+    assert_eq!(reason, "header beginNum tbl=2 equation=3 is not carried (a re-encode writes 1)");
 }
 
 /// G-T7: without a section `startNum` the first section continues (0) and
