@@ -3594,7 +3594,8 @@ mod tests {
     }
 
     /// D-T8: inside a field, the character after an object takes the shape
-    /// that starts after the object.
+    /// that starts after the object — in the decoded boundaries and in the
+    /// Core runs projection makes of the field's text.
     ///
     /// 이것을 실패시키는 것: 필드 begin 을 글자 1 칸으로 세는 것, 개체를 wire
     /// 1 칸으로 세는 것.
@@ -3606,6 +3607,16 @@ mod tests {
             run_texts(&result.paragraphs[0]),
             [(1, "가\u{FFFC}".to_string()), (2, "나".to_string())]
         );
+        let (document, _) = crate::projection::project_to_core(vec![result]).unwrap();
+        let text_runs: Vec<(String, usize)> = document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .filter_map(|run| {
+                run.content.as_text().map(|t| (t.to_string(), run.char_shape_id.get()))
+            })
+            .collect();
+        assert!(text_runs.contains(&("나".to_string(), 2)), "{text_runs:?}");
+        assert!(!text_runs.iter().any(|(t, id)| t.contains('나') && *id != 2), "{text_runs:?}");
     }
 
     /// D-T9: a surrogate pair is two UTF-16 units on both axes, so a silent

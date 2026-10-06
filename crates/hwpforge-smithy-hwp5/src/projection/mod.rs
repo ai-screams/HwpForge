@@ -4327,6 +4327,68 @@ mod tests {
         assert_eq!(runs[1].char_shape_id, CharShapeIndex::new(2));
     }
 
+    /// D-T7 on the structured path (the one that walks `text_segments`; a
+    /// bookmark point in the paragraph selects it): the object takes the
+    /// shape that starts at it, the character after it the next one.
+    ///
+    /// 이것을 실패시키는 것: 구조 경로의 개체 조회(`ControlRef` 갈래)를 앞 글자
+    /// 조회로 되돌리는 것.
+    #[test]
+    fn an_object_on_the_structured_path_takes_the_char_shape_that_starts_at_it() {
+        use crate::schema::section::TextSegment;
+        let image = Hwp5Control::Image(Hwp5ImageControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 3_000,
+                height: 2_000,
+            },
+            binary_data_id: 1,
+            instance_id: 0,
+            ctrl_properties: 0x1,
+            picture: Default::default(),
+            link: None,
+        });
+        let bookmark =
+            Hwp5Control::Unknown { ctrl_id: CTRL_ID_BOOKMARK_POINT, header_data: Vec::new() };
+        let paragraph = Hwp5Paragraph {
+            silent_wires: Vec::new(),
+            page_break: false,
+            column_break: false,
+            text: "A\u{fffc}B".to_string(),
+            text_segments: vec![
+                TextSegment::Text("A".to_string()),
+                TextSegment::ControlRef { extra: [0; 14] },
+                TextSegment::Text("B".to_string()),
+            ],
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![
+                Hwp5CharShapeRun { position: 0, char_shape_id: 1 },
+                Hwp5CharShapeRun { position: 1, char_shape_id: 2 },
+                Hwp5CharShapeRun { position: 2, char_shape_id: 3 },
+            ],
+            line_segments: Vec::new(),
+            controls: vec![bookmark, image],
+        };
+        assert!(paragraph_needs_structural_projection(&paragraph));
+        let image_assets =
+            image_plan([(1, "BIN0001.png", Hwp5SemanticImageFormat::Png, vec![0x89, 0x50])]);
+        let (document, _, _) = project_to_core_with_images(
+            vec![make_section(vec![paragraph], None)],
+            &image_assets,
+            DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+        )
+        .unwrap();
+        let runs: Vec<(bool, usize)> = document.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .map(|run| (run.content.is_image(), run.char_shape_id.get()))
+            .collect();
+        assert_eq!(runs, [(false, 1), (true, 2), (false, 3)]);
+    }
+
     #[test]
     fn project_to_core_with_images_projects_header_and_footer_subtrees() {
         let header_image = Hwp5Control::Image(Hwp5ImageControl {
