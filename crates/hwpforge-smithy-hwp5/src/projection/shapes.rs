@@ -7,7 +7,7 @@
 //! document-traversal state; the parent `projection` module dispatches each
 //! GSO control into the matching builder here.
 
-use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::Control;
 use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
@@ -61,17 +61,16 @@ pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     if x == 0 && y == 0 {
         return None;
     }
-    Some(ObjectPlacement {
-        text_wrap: ObjectTextWrap::InFrontOfText,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Paper,
-        horz_rel_to: ObjectRelativeTo::Paper,
-        vert_offset: HwpUnit::new(y).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(x).unwrap_or(HwpUnit::ZERO),
-    })
+    Some(
+        ObjectPlacement::new(
+            ObjectTextWrap::InFrontOfText,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Paper,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::new(y).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(x).unwrap_or(HwpUnit::ZERO)),
+    )
 }
 
 pub(super) fn project_line_run(

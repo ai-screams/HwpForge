@@ -266,9 +266,7 @@ fn main() {
     //    "음수 offset = doc 좌표 그대로(클립 없음)" 산술을 oracle-lock.
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -281,17 +279,16 @@ fn main() {
             HU::from_mm(15.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(-8.0).expect("voff"),
-            horz_offset: HU::from_mm(30.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(-8.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(30.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 Run::text(
@@ -436,9 +433,7 @@ fn main() {
     //    세로 범위를 지나 이어져 문단끝+1 빈 세그먼트도 안 생긴다 (§10h).
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -451,17 +446,16 @@ fn main() {
             HU::from_mm(12.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(2.0).expect("voff"),
-            horz_offset: HU::from_mm(120.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(2.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(120.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 Run::text(
@@ -500,9 +494,7 @@ fn main() {
     //    경고 — 반증 시 교체).
     {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::{
-            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-        };
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
         use hwpforge_foundation::HwpUnit as HU;
         let mut images = ImageStore::new();
         images.insert(
@@ -515,17 +507,16 @@ fn main() {
             HU::from_mm(12.0).expect("h"),
             ImageFormat::Png,
         );
-        img.placement = Some(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HU::from_mm(2.0).expect("voff"),
-            horz_offset: HU::from_mm(120.0).expect("hoff"),
-        });
+        img.placement = Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_allow_overlap(true)
+            .with_vert_offset(HU::from_mm(2.0).expect("voff"))
+            .with_horz_offset(HU::from_mm(120.0).expect("hoff")),
+        );
         let anchor_para = Paragraph::with_runs(
             vec![
                 // ⑪ 실측 첫 줄(55자) 그대로 — 트레일링 공백 포함.

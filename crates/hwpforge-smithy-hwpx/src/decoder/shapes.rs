@@ -37,33 +37,33 @@ fn decode_object_placement(
     text_flow: &str,
 ) -> Option<ObjectPlacement> {
     let pos = pos?;
-    let placement = ObjectPlacement {
-        text_wrap: if text_wrap.is_empty() {
+    let placement = ObjectPlacement::new(
+        if text_wrap.is_empty() {
             ObjectTextWrap::TopAndBottom
         } else {
             ObjectTextWrap::from_hwpx(text_wrap)
         },
-        text_flow: if text_flow.is_empty() {
-            ObjectTextFlow::BothSides
-        } else {
-            ObjectTextFlow::from_hwpx(text_flow)
-        },
-        treat_as_char: pos.treat_as_char != 0,
-        flow_with_text: pos.flow_with_text != 0,
-        allow_overlap: pos.allow_overlap != 0,
-        vert_rel_to: if pos.vert_rel_to.is_empty() {
+        if pos.vert_rel_to.is_empty() {
             ObjectRelativeTo::Para
         } else {
             ObjectRelativeTo::from_hwpx(&pos.vert_rel_to)
         },
-        horz_rel_to: if pos.horz_rel_to.is_empty() {
+        if pos.horz_rel_to.is_empty() {
             ObjectRelativeTo::Para
         } else {
             ObjectRelativeTo::from_hwpx(&pos.horz_rel_to)
         },
-        vert_offset: HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO),
-    };
+    )
+    .with_text_flow(if text_flow.is_empty() {
+        ObjectTextFlow::BothSides
+    } else {
+        ObjectTextFlow::from_hwpx(text_flow)
+    })
+    .with_treat_as_char(pos.treat_as_char != 0)
+    .with_flow_with_text(pos.flow_with_text != 0)
+    .with_allow_overlap(pos.allow_overlap != 0)
+    .with_vert_offset(HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO))
+    .with_horz_offset(HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO));
     if placement == ObjectPlacement::legacy_inline_defaults() {
         None
     } else {
@@ -740,11 +740,9 @@ pub(crate) fn decode_textart(
     // only the placement offsets back. A zero offset collapses to `None`.
     let (ox, oy) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
     let placement = {
-        let candidate = ObjectPlacement {
-            horz_offset: HwpUnit::new(ox).unwrap_or(HwpUnit::ZERO),
-            vert_offset: HwpUnit::new(oy).unwrap_or(HwpUnit::ZERO),
-            ..ObjectPlacement::legacy_inline_defaults()
-        };
+        let candidate = ObjectPlacement::legacy_inline_defaults()
+            .with_horz_offset(HwpUnit::new(ox).unwrap_or(HwpUnit::ZERO))
+            .with_vert_offset(HwpUnit::new(oy).unwrap_or(HwpUnit::ZERO));
         (candidate != ObjectPlacement::legacy_inline_defaults()).then_some(candidate)
     };
     let inst_id =
@@ -1064,17 +1062,16 @@ fn group_child_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     if x == 0 && y == 0 {
         return None;
     }
-    Some(ObjectPlacement {
-        text_wrap: ObjectTextWrap::InFrontOfText,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Paper,
-        horz_rel_to: ObjectRelativeTo::Paper,
-        vert_offset: HwpUnit::new(y).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(x).unwrap_or(HwpUnit::ZERO),
-    })
+    Some(
+        ObjectPlacement::new(
+            ObjectTextWrap::InFrontOfText,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Paper,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::new(y).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(x).unwrap_or(HwpUnit::ZERO)),
+    )
 }
 
 /// A child shape's wire map: its matrix chain, or `<hp:offset>` when the

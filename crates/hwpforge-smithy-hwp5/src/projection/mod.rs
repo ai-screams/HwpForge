@@ -1028,17 +1028,12 @@ fn object_placement_from_ctrl_properties(
         }
         _ => ObjectTextFlow::BothSides,
     };
-    ObjectPlacement {
-        text_wrap,
-        text_flow,
-        treat_as_char: false,
-        flow_with_text,
-        allow_overlap,
-        vert_rel_to,
-        horz_rel_to,
-        vert_offset: HwpUnit::new(offset_y).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(offset_x).unwrap_or(HwpUnit::ZERO),
-    }
+    ObjectPlacement::new(text_wrap, vert_rel_to, horz_rel_to)
+        .with_text_flow(text_flow)
+        .with_flow_with_text(flow_with_text)
+        .with_allow_overlap(allow_overlap)
+        .with_vert_offset(HwpUnit::new(offset_y).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(offset_x).unwrap_or(HwpUnit::ZERO))
 }
 
 /// 표 70 `vertRelTo`(bits 3-4)를 Core [`ObjectRelativeTo`] 로 매핑한다.

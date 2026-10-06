@@ -1250,33 +1250,35 @@ fn decode_object_hyperlink(href: &str, ctx: &mut DecodeCtx) -> Option<String> {
 fn decode_image_placement(hx: &HxPic) -> Option<ObjectPlacement> {
     let pos = hx.pos.as_ref()?;
 
-    Some(ObjectPlacement {
-        text_wrap: if hx.text_wrap.is_empty() {
-            ObjectTextWrap::TopAndBottom
-        } else {
-            ObjectTextWrap::from_hwpx(&hx.text_wrap)
-        },
-        text_flow: if hx.text_flow.is_empty() {
+    Some(
+        ObjectPlacement::new(
+            if hx.text_wrap.is_empty() {
+                ObjectTextWrap::TopAndBottom
+            } else {
+                ObjectTextWrap::from_hwpx(&hx.text_wrap)
+            },
+            if pos.vert_rel_to.is_empty() {
+                ObjectRelativeTo::Para
+            } else {
+                ObjectRelativeTo::from_hwpx(&pos.vert_rel_to)
+            },
+            if pos.horz_rel_to.is_empty() {
+                ObjectRelativeTo::Para
+            } else {
+                ObjectRelativeTo::from_hwpx(&pos.horz_rel_to)
+            },
+        )
+        .with_text_flow(if hx.text_flow.is_empty() {
             ObjectTextFlow::BothSides
         } else {
             ObjectTextFlow::from_hwpx(&hx.text_flow)
-        },
-        treat_as_char: pos.treat_as_char != 0,
-        flow_with_text: pos.flow_with_text != 0,
-        allow_overlap: pos.allow_overlap != 0,
-        vert_rel_to: if pos.vert_rel_to.is_empty() {
-            ObjectRelativeTo::Para
-        } else {
-            ObjectRelativeTo::from_hwpx(&pos.vert_rel_to)
-        },
-        horz_rel_to: if pos.horz_rel_to.is_empty() {
-            ObjectRelativeTo::Para
-        } else {
-            ObjectRelativeTo::from_hwpx(&pos.horz_rel_to)
-        },
-        vert_offset: HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO),
-    })
+        })
+        .with_treat_as_char(pos.treat_as_char != 0)
+        .with_flow_with_text(pos.flow_with_text != 0)
+        .with_allow_overlap(pos.allow_overlap != 0)
+        .with_vert_offset(HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO)),
+    )
 }
 
 // ── Footnote / Endnote / TextBox decoding ────────────────────────

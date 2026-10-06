@@ -2945,17 +2945,18 @@ mod tests {
             HwpUnit::new(5000).unwrap(),
             ImageFormat::Png,
         )
-        .with_placement(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::RightOnly,
-            treat_as_char: false,
-            flow_with_text: true,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Page,
-            vert_offset: HwpUnit::new(1200).unwrap(),
-            horz_offset: HwpUnit::new(3400).unwrap(),
-        });
+        .with_placement(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Page,
+            )
+            .with_text_flow(ObjectTextFlow::RightOnly)
+            .with_flow_with_text(true)
+            .with_allow_overlap(true)
+            .with_vert_offset(HwpUnit::new(1200).unwrap())
+            .with_horz_offset(HwpUnit::new(3400).unwrap()),
+        );
 
         let hx = build_picture(
             &img,
@@ -3117,17 +3118,18 @@ mod tests {
             HwpUnit::new(5000).unwrap(),
             ImageFormat::Png,
         )
-        .with_placement(ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::RightOnly,
-            treat_as_char: false,
-            flow_with_text: true,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Page,
-            vert_offset: HwpUnit::new(1200).unwrap(),
-            horz_offset: HwpUnit::new(3400).unwrap(),
-        });
+        .with_placement(
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Page,
+            )
+            .with_text_flow(ObjectTextFlow::RightOnly)
+            .with_flow_with_text(true)
+            .with_allow_overlap(true)
+            .with_vert_offset(HwpUnit::new(1200).unwrap())
+            .with_horz_offset(HwpUnit::new(3400).unwrap()),
+        );
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::image(img, CharShapeIndex::new(0))],

@@ -470,6 +470,17 @@
               "type": "null"
             }
           ]
+        },
+        "placement": {
+          "description": "Where the table sits and how text wraps it (HWPX `<hp:pos>` plus the\ntable's `textWrap`/`textFlow`).\n\n`None` is the placement encoders have always written for a table:\nnot treated as a character, flowing with the text, no overlap,\nanchored to the paragraph vertically and the column horizontally,\nzero offsets, aligned top/left, not affecting line spacing, anchor not\nheld, top-and-bottom wrap, both-sides flow. (A shape's `None`, by\ncontrast, means an inline object.) Decoders write `None` only when\nevery one of those matches.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectPlacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -783,124 +794,8 @@
         "default_flow_pos"
       ]
     },
-    "Image": {
-      "description": "An image reference within the document.\n\nContains the path to the image resource (relative to the document\npackage root), its display dimensions, and format hint.\n\n# No Binary Data\n\nCore deliberately holds no image bytes. The Smithy crate resolves\n`path` into actual binary data during encode/decode.\n\n# Examples\n\n```\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet img = Image::new(\n    \"BinData/logo.jpeg\",\n    HwpUnit::from_mm(80.0).unwrap(),\n    HwpUnit::from_mm(40.0).unwrap(),\n    ImageFormat::Jpeg,\n);\nassert_eq!(img.format, ImageFormat::Jpeg);\n```",
-      "type": "object",
-      "properties": {
-        "path": {
-          "description": "Relative path within the document package (e.g. `\"BinData/image1.png\"`).",
-          "type": "string"
-        },
-        "width": {
-          "description": "Display width.",
-          "$ref": "#/$defs/HwpUnit"
-        },
-        "height": {
-          "description": "Display height.",
-          "$ref": "#/$defs/HwpUnit"
-        },
-        "format": {
-          "description": "Image format hint.",
-          "$ref": "#/$defs/ImageFormat"
-        },
-        "caption": {
-          "description": "Optional image caption.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Caption"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "placement": {
-          "description": "Optional placement/presentation metadata.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ObjectPlacement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "inst_id": {
-          "description": "Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5\n변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX\nencoder 가 `<hp:pic id=\"...\">` attribute 로 emit. `None` 이면\nencoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ObjectId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "hyperlink": {
-          "description": "URL the picture links to: clicking the picture opens it (Hancom's\nobject hyperlink). `None` = the picture links nowhere.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "path",
-        "width",
-        "height",
-        "format"
-      ]
-    },
-    "ImageFormat": {
-      "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nphases without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
-      "oneOf": [
-        {
-          "description": "Portable Network Graphics.",
-          "type": "string",
-          "const": "Png"
-        },
-        {
-          "description": "JPEG.",
-          "type": "string",
-          "const": "Jpeg"
-        },
-        {
-          "description": "Graphics Interchange Format.",
-          "type": "string",
-          "const": "Gif"
-        },
-        {
-          "description": "Windows Bitmap.",
-          "type": "string",
-          "const": "Bmp"
-        },
-        {
-          "description": "Windows Metafile.",
-          "type": "string",
-          "const": "Wmf"
-        },
-        {
-          "description": "Enhanced Metafile.",
-          "type": "string",
-          "const": "Emf"
-        },
-        {
-          "description": "Unrecognized format with its extension or MIME type.",
-          "type": "object",
-          "properties": {
-            "Unknown": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "Unknown"
-          ],
-          "additionalProperties": false
-        }
-      ]
-    },
     "ObjectPlacement": {
-      "description": "Optional object-placement metadata for a floating drawing object.\n\nMirrors the HWPX `<hp:pos>` block (anchor references + offsets +\ntreat-as-char / overlap / flow flags) together with the owning shape's\n`textWrap`/`textFlow` attributes.\n\n[`ObjectPlacement::legacy_inline_defaults`] is the canonical \"plain inline\nobject\" value: an image or shape that behaves like a character with no\nfloating offset. Decoders collapse a placement equal to this default back\nto `None`, so the encoder's untouched legacy path emits the historical\ninline bytes (mirrors the `Option<ShapeStyle>` collapse pattern in the\nHWPX shape-style decoder).\n\nOffsets are signed: Hancom persists negative offsets in HWPX `hp:pos`\nas **u32 wrap-around decimal strings** (e.g. `horzOffset=\"4294965029\"`\n= −2267, dialog-authored fixture measurement), and in HWP5 as plain\nsigned `i32`. Codecs must round-trip both encodings losslessly.",
+      "description": "Optional object-placement metadata for a floating drawing object.\n\nMirrors the HWPX `<hp:pos>` block (anchor references + offsets +\ntreat-as-char / overlap / flow flags) together with the owning shape's\n`textWrap`/`textFlow` attributes.\n\n[`ObjectPlacement::legacy_inline_defaults`] is the canonical \"plain inline\nobject\" value: an image or shape that behaves like a character with no\nfloating offset. Decoders collapse a placement equal to this default back\nto `None`, so the encoder's untouched legacy path emits the historical\ninline bytes (mirrors the `Option<ShapeStyle>` collapse pattern in the\nHWPX shape-style decoder).\n\nOffsets are signed: Hancom persists negative offsets in HWPX `hp:pos`\nas **u32 wrap-around decimal strings** (e.g. `horzOffset=\"4294965029\"`\n= −2267, dialog-authored fixture measurement), and in HWP5 as plain\nsigned `i32`. Codecs must round-trip both encodings losslessly.\n\nThe struct is `#[non_exhaustive]`: build one with [`ObjectPlacement::new`]\n(or [`ObjectPlacement::legacy_inline_defaults`]) and the `with_*`\nbuilders; fields stay public for reading and in-place edits.",
       "type": "object",
       "properties": {
         "text_wrap": {
@@ -938,6 +833,26 @@
         "horz_offset": {
           "description": "Horizontal offset from `horz_rel_to`.",
           "$ref": "#/$defs/HwpUnit"
+        },
+        "vert_align": {
+          "description": "Vertical alignment against `vert_rel_to` (HWPX `<hp:pos vertAlign>`);\nthe offset is measured from the aligned edge.",
+          "$ref": "#/$defs/VertAlign",
+          "default": "TOP"
+        },
+        "horz_align": {
+          "description": "Horizontal alignment against `horz_rel_to` (HWPX `<hp:pos horzAlign>`).",
+          "$ref": "#/$defs/HorzAlign",
+          "default": "LEFT"
+        },
+        "affect_line_spacing": {
+          "description": "Whether the object affects the line spacing of the line it sits on\n(HWPX `<hp:pos affectLSpacing>`).",
+          "type": "boolean",
+          "default": false
+        },
+        "hold_anchor_and_so": {
+          "description": "Whether the object keeps its anchor when other objects overlap it\n(HWPX `<hp:pos holdAnchorAndSO>`).",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -1081,6 +996,182 @@
           },
           "required": [
             "Other"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "VertAlign": {
+      "description": "Vertical alignment of a placed object against its vertical anchor.\n\nSerialized as the HWPX attribute value (`\"TOP\"` …).",
+      "oneOf": [
+        {
+          "description": "Top edge (default).",
+          "type": "string",
+          "const": "TOP"
+        },
+        {
+          "description": "Centre.",
+          "type": "string",
+          "const": "CENTER"
+        },
+        {
+          "description": "Bottom edge.",
+          "type": "string",
+          "const": "BOTTOM"
+        },
+        {
+          "description": "Inside edge (towards the binding).",
+          "type": "string",
+          "const": "INSIDE"
+        },
+        {
+          "description": "Outside edge (away from the binding).",
+          "type": "string",
+          "const": "OUTSIDE"
+        }
+      ]
+    },
+    "HorzAlign": {
+      "description": "Horizontal alignment of a placed object against its horizontal anchor.\n\nSerialized as the HWPX attribute value (`\"LEFT\"` …).",
+      "oneOf": [
+        {
+          "description": "Left edge (default).",
+          "type": "string",
+          "const": "LEFT"
+        },
+        {
+          "description": "Centre.",
+          "type": "string",
+          "const": "CENTER"
+        },
+        {
+          "description": "Right edge.",
+          "type": "string",
+          "const": "RIGHT"
+        },
+        {
+          "description": "Inside edge (towards the binding).",
+          "type": "string",
+          "const": "INSIDE"
+        },
+        {
+          "description": "Outside edge (away from the binding).",
+          "type": "string",
+          "const": "OUTSIDE"
+        }
+      ]
+    },
+    "Image": {
+      "description": "An image reference within the document.\n\nContains the path to the image resource (relative to the document\npackage root), its display dimensions, and format hint.\n\n# No Binary Data\n\nCore deliberately holds no image bytes. The Smithy crate resolves\n`path` into actual binary data during encode/decode.\n\n# Examples\n\n```\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet img = Image::new(\n    \"BinData/logo.jpeg\",\n    HwpUnit::from_mm(80.0).unwrap(),\n    HwpUnit::from_mm(40.0).unwrap(),\n    ImageFormat::Jpeg,\n);\nassert_eq!(img.format, ImageFormat::Jpeg);\n```",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative path within the document package (e.g. `\"BinData/image1.png\"`).",
+          "type": "string"
+        },
+        "width": {
+          "description": "Display width.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "height": {
+          "description": "Display height.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "format": {
+          "description": "Image format hint.",
+          "$ref": "#/$defs/ImageFormat"
+        },
+        "caption": {
+          "description": "Optional image caption.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Caption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "description": "Optional placement/presentation metadata.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectPlacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inst_id": {
+          "description": "Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5\n변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX\nencoder 가 `<hp:pic id=\"...\">` attribute 로 emit. `None` 이면\nencoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hyperlink": {
+          "description": "URL the picture links to: clicking the picture opens it (Hancom's\nobject hyperlink). `None` = the picture links nowhere.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "width",
+        "height",
+        "format"
+      ]
+    },
+    "ImageFormat": {
+      "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nphases without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
+      "oneOf": [
+        {
+          "description": "Portable Network Graphics.",
+          "type": "string",
+          "const": "Png"
+        },
+        {
+          "description": "JPEG.",
+          "type": "string",
+          "const": "Jpeg"
+        },
+        {
+          "description": "Graphics Interchange Format.",
+          "type": "string",
+          "const": "Gif"
+        },
+        {
+          "description": "Windows Bitmap.",
+          "type": "string",
+          "const": "Bmp"
+        },
+        {
+          "description": "Windows Metafile.",
+          "type": "string",
+          "const": "Wmf"
+        },
+        {
+          "description": "Enhanced Metafile.",
+          "type": "string",
+          "const": "Emf"
+        },
+        {
+          "description": "Unrecognized format with its extension or MIME type.",
+          "type": "object",
+          "properties": {
+            "Unknown": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Unknown"
           ],
           "additionalProperties": false
         }

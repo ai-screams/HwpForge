@@ -1646,7 +1646,7 @@ mod tests {
     }
     use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
     use hwpforge_core::paragraph::Paragraph;
-    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
     use hwpforge_core::run::Run;
     use hwpforge_foundation::{
         ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
@@ -1661,17 +1661,14 @@ mod tests {
     /// Floating placement matching what the encoder historically derived from a
     /// non-zero shape offset: anchored to PAPER, IN_FRONT_OF_TEXT, overlap-allowed.
     fn floating_placement(horz: i32, vert: i32) -> ObjectPlacement {
-        ObjectPlacement {
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            vert_offset: HwpUnit::new(vert).unwrap(),
-            horz_offset: HwpUnit::new(horz).unwrap(),
-        }
+        ObjectPlacement::new(
+            ObjectTextWrap::InFrontOfText,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Paper,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::new(vert).unwrap())
+        .with_horz_offset(HwpUnit::new(horz).unwrap())
     }
 
     fn make_style(
@@ -1818,11 +1815,11 @@ mod tests {
         let child = |w, h, hx, vy| Control::Rect {
             width: hu(w),
             height: hu(h),
-            placement: Some(ObjectPlacement {
-                horz_offset: hu(hx),
-                vert_offset: hu(vy),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_horz_offset(hu(hx))
+                    .with_vert_offset(hu(vy)),
+            ),
             caption: None,
             style: None,
         };
@@ -1977,11 +1974,11 @@ mod tests {
             axis2: ShapePoint::new(5116, 6000),
             width: hu(10_232),
             height: hu(6000),
-            placement: Some(ObjectPlacement {
-                horz_offset: hu(1164),
-                vert_offset: hu(6512),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_horz_offset(hu(1164))
+                    .with_vert_offset(hu(6512)),
+            ),
             paragraphs: Vec::new(),
             caption: None,
             style: None,
@@ -2002,11 +1999,11 @@ mod tests {
             end: ShapePoint::new(20_000, 0),
             width: hu(20_000),
             height: hu(0),
-            placement: Some(ObjectPlacement {
-                horz_offset: hu(525),
-                vert_offset: hu(13_422),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_horz_offset(hu(525))
+                    .with_vert_offset(hu(13_422)),
+            ),
             caption: None,
             style: None,
         };
@@ -2338,11 +2335,11 @@ mod tests {
             char_spacing: 100,
             width: HwpUnit::new(7087).unwrap(),
             height: HwpUnit::new(3543).unwrap(),
-            placement: Some(ObjectPlacement {
-                horz_offset: HwpUnit::new(x).unwrap(),
-                vert_offset: HwpUnit::new(y).unwrap(),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_horz_offset(HwpUnit::new(x).unwrap())
+                    .with_vert_offset(HwpUnit::new(y).unwrap()),
+            ),
             fill_color: Some(Color::from_rgb(255, 0, 0)),
             inst_id: None,
         }
@@ -2392,11 +2389,11 @@ mod tests {
             children: vec![hwpforge_core::control::GroupChild::Shape(text_art_at(1200, 800))],
             width: HwpUnit::new(9000).unwrap(),
             height: HwpUnit::new(5000).unwrap(),
-            placement: Some(ObjectPlacement {
-                horz_offset: HwpUnit::new(500).unwrap(),
-                vert_offset: HwpUnit::new(300).unwrap(),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_horz_offset(HwpUnit::new(500).unwrap())
+                    .with_vert_offset(HwpUnit::new(300).unwrap()),
+            ),
             inst_id: None,
         };
         let (xml, _) = encode_group(&group_of(vec![inner]));
@@ -2721,12 +2718,12 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(7000).unwrap(),
             height: HwpUnit::new(4000).unwrap(),
-            placement: Some(ObjectPlacement {
-                treat_as_char: false,
-                horz_offset: HwpUnit::new(100).unwrap(),
-                vert_offset: HwpUnit::new(200).unwrap(),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::legacy_inline_defaults()
+                    .with_treat_as_char(false)
+                    .with_horz_offset(HwpUnit::new(100).unwrap())
+                    .with_vert_offset(HwpUnit::new(200).unwrap()),
+            ),
             caption: None,
             style: None,
         };

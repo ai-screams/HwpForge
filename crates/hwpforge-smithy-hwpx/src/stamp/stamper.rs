@@ -1500,19 +1500,16 @@ mod tests {
         // and child +2 alone each pass; together the rect is 4 off.
         let unit = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
         let grouped = |group_x: i32, child_x: i32| {
-            use hwpforge_core::placement::{
-                ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
-            };
-            let at = |x: i32| ObjectPlacement {
-                text_wrap: ObjectTextWrap::InFrontOfText,
-                text_flow: ObjectTextFlow::BothSides,
-                treat_as_char: false,
-                flow_with_text: false,
-                allow_overlap: true,
-                vert_rel_to: ObjectRelativeTo::Paper,
-                horz_rel_to: ObjectRelativeTo::Paper,
-                vert_offset: unit(100),
-                horz_offset: unit(x),
+            use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+            let at = |x: i32| {
+                ObjectPlacement::new(
+                    ObjectTextWrap::InFrontOfText,
+                    ObjectRelativeTo::Paper,
+                    ObjectRelativeTo::Paper,
+                )
+                .with_allow_overlap(true)
+                .with_vert_offset(unit(100))
+                .with_horz_offset(unit(x))
             };
             let mut rect = Control::rect(unit(1000), unit(500)).unwrap();
             if let Control::Rect { placement, .. } = &mut rect {
@@ -1597,10 +1594,12 @@ mod tests {
         let place = |doc: &mut HwpxDocument, x: Option<i32>| {
             let child = first_group_shapes_mut(doc).find(|c| c.is_rect()).unwrap();
             let Control::Rect { placement, .. } = child else { unreachable!() };
-            *placement = x.map(|x| hwpforge_core::placement::ObjectPlacement {
-                horz_offset: hwpforge_foundation::HwpUnit::new(x).unwrap(),
-                vert_offset: hwpforge_foundation::HwpUnit::new(0).unwrap(),
-                ..placement.clone().expect("a floating rect child")
+            *placement = x.map(|x| {
+                placement
+                    .clone()
+                    .expect("a floating rect child")
+                    .with_horz_offset(hwpforge_foundation::HwpUnit::new(x).unwrap())
+                    .with_vert_offset(hwpforge_foundation::HwpUnit::new(0).unwrap())
             });
         };
         place(&mut a, None);
@@ -1630,27 +1629,22 @@ mod tests {
     #[test]
     fn admission_keeps_inline_and_floating_apart() {
         use hwpforge_core::placement::ObjectPlacement;
-        let floating = ObjectPlacement {
-            treat_as_char: false,
-            horz_offset: hwpforge_foundation::HwpUnit::new(1).unwrap(),
-            ..ObjectPlacement::legacy_inline_defaults()
-        };
+        let floating = ObjectPlacement::legacy_inline_defaults()
+            .with_treat_as_char(false)
+            .with_horz_offset(hwpforge_foundation::HwpUnit::new(1).unwrap());
         assert!(admission_compare(&doc_with_rect(None), &doc_with_rect(Some(floating))).is_err());
 
         // Even in the form a group child's placement takes ("in front of
         // text", paper-relative), a top-level shape stays floating.
-        use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
-        let in_front = ObjectPlacement {
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            vert_offset: hwpforge_foundation::HwpUnit::new(0).unwrap(),
-            horz_offset: hwpforge_foundation::HwpUnit::new(1).unwrap(),
-        };
+        use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+        let in_front = ObjectPlacement::new(
+            ObjectTextWrap::InFrontOfText,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Paper,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(hwpforge_foundation::HwpUnit::new(0).unwrap())
+        .with_horz_offset(hwpforge_foundation::HwpUnit::new(1).unwrap());
         assert!(admission_compare(&doc_with_rect(None), &doc_with_rect(Some(in_front))).is_err());
     }
 

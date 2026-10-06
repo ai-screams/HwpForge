@@ -10,7 +10,7 @@ use hwpforge_core::control::Control;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::table::Table;
 use hwpforge_foundation::{
@@ -4265,17 +4265,12 @@ fn hwp5_native_anchored_image_placement_axes_are_byte_ground() {
 
     // 한컴 native hp:pos 실측: treatAsChar=0, flowWithText=1, allowOverlap=0,
     // vertRelTo=PARA, horzRelTo=PARA, off (0,0); pic textWrap=SQUARE.
-    let expected = ObjectPlacement {
-        text_wrap: ObjectTextWrap::Square,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: true,
-        allow_overlap: false,
-        vert_rel_to: ObjectRelativeTo::Para,
-        horz_rel_to: ObjectRelativeTo::Para,
-        vert_offset: HwpUnit::ZERO,
-        horz_offset: HwpUnit::ZERO,
-    };
+    let expected = ObjectPlacement::new(
+        ObjectTextWrap::Square,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Para,
+    )
+    .with_flow_with_text(true);
     assert_eq!(hwp_placement, expected, "hwp5 image placement must match measured hp:pos axes");
 
     // companion .hwpx 는 OWPML wire 를 직접 읽는 독립 진리원 — 두 디코드가
@@ -4322,17 +4317,14 @@ fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
     let hwp_placement =
         first_textbox_placement(&hwp_doc.document).expect("hwp5 decode should place the text box");
 
-    let expected = ObjectPlacement {
-        text_wrap: ObjectTextWrap::Square,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Para,
-        horz_rel_to: ObjectRelativeTo::Page,
-        vert_offset: HwpUnit::new(2_834).unwrap(),
-        horz_offset: HwpUnit::new(8_503).unwrap(),
-    };
+    let expected = ObjectPlacement::new(
+        ObjectTextWrap::Square,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Page,
+    )
+    .with_allow_overlap(true)
+    .with_vert_offset(HwpUnit::new(2_834).unwrap())
+    .with_horz_offset(HwpUnit::new(8_503).unwrap());
     assert_eq!(hwp_placement, expected, "hwp5 text box placement must match measured hp:pos axes");
 
     let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");

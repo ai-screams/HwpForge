@@ -490,16 +490,15 @@ fn append_flip_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 vertices: flip_vertices.clone(),
                 width: sizes.width_8k,
                 height: sizes.width_8k,
-                placement: Some(ObjectPlacement {
-                    treat_as_char: false,
-                    allow_overlap: true,
-                    text_wrap: ObjectTextWrap::InFrontOfText,
-                    vert_rel_to: ObjectRelativeTo::Paper,
-                    horz_rel_to: ObjectRelativeTo::Paper,
-                    horz_offset: HwpUnit::new(1).unwrap(),
-                    vert_offset: HwpUnit::ZERO,
-                    ..ObjectPlacement::legacy_inline_defaults()
-                }),
+                placement: Some(
+                    ObjectPlacement::new(
+                        ObjectTextWrap::InFrontOfText,
+                        ObjectRelativeTo::Paper,
+                        ObjectRelativeTo::Paper,
+                    )
+                    .with_allow_overlap(true)
+                    .with_horz_offset(HwpUnit::new(1).unwrap()),
+                ),
                 paragraphs: vec![empty()],
                 caption: None,
                 style: Some(ShapeStyle {
@@ -854,16 +853,16 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            placement: Some(ObjectPlacement {
-                treat_as_char: false,
-                allow_overlap: true,
-                text_wrap: ObjectTextWrap::InFrontOfText,
-                vert_rel_to: ObjectRelativeTo::Paper,
-                horz_rel_to: ObjectRelativeTo::Paper,
-                horz_offset: HwpUnit::new(100).unwrap(),
-                vert_offset: HwpUnit::new(100).unwrap(),
-                ..ObjectPlacement::legacy_inline_defaults()
-            }),
+            placement: Some(
+                ObjectPlacement::new(
+                    ObjectTextWrap::InFrontOfText,
+                    ObjectRelativeTo::Paper,
+                    ObjectRelativeTo::Paper,
+                )
+                .with_allow_overlap(true)
+                .with_horz_offset(HwpUnit::new(100).unwrap())
+                .with_vert_offset(HwpUnit::new(100).unwrap()),
+            ),
             paragraphs: vec![p("Pattern+Flip", CS_NORMAL, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {

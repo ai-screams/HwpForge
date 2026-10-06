@@ -47,7 +47,12 @@ use serde::{Deserialize, Serialize};
 /// as **u32 wrap-around decimal strings** (e.g. `horzOffset="4294965029"`
 /// = −2267, dialog-authored fixture measurement), and in HWP5 as plain
 /// signed `i32`. Codecs must round-trip both encodings losslessly.
+///
+/// The struct is `#[non_exhaustive]`: build one with [`ObjectPlacement::new`]
+/// (or [`ObjectPlacement::legacy_inline_defaults`]) and the `with_*`
+/// builders; fields stay public for reading and in-place edits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ObjectPlacement {
     /// Text wrapping mode around the object.
     pub text_wrap: ObjectTextWrap,
@@ -67,6 +72,21 @@ pub struct ObjectPlacement {
     pub vert_offset: HwpUnit,
     /// Horizontal offset from `horz_rel_to`.
     pub horz_offset: HwpUnit,
+    /// Vertical alignment against `vert_rel_to` (HWPX `<hp:pos vertAlign>`);
+    /// the offset is measured from the aligned edge.
+    #[serde(default)]
+    pub vert_align: VertAlign,
+    /// Horizontal alignment against `horz_rel_to` (HWPX `<hp:pos horzAlign>`).
+    #[serde(default)]
+    pub horz_align: HorzAlign,
+    /// Whether the object affects the line spacing of the line it sits on
+    /// (HWPX `<hp:pos affectLSpacing>`).
+    #[serde(default)]
+    pub affect_line_spacing: bool,
+    /// Whether the object keeps its anchor when other objects overlap it
+    /// (HWPX `<hp:pos holdAnchorAndSO>`).
+    #[serde(default)]
+    pub hold_anchor_and_so: bool,
 }
 
 impl ObjectPlacement {
@@ -101,6 +121,221 @@ impl ObjectPlacement {
             horz_rel_to: ObjectRelativeTo::Para,
             vert_offset: HwpUnit::ZERO,
             horz_offset: HwpUnit::ZERO,
+            vert_align: VertAlign::Top,
+            horz_align: HorzAlign::Left,
+            affect_line_spacing: false,
+            hold_anchor_and_so: false,
+        }
+    }
+
+    /// A placement with the given wrap mode and anchors. The other fields
+    /// start as: text flow [`ObjectTextFlow::BothSides`], not treated as a
+    /// character, no flow with text, no overlap, zero offsets, aligned
+    /// [`VertAlign::Top`]/[`HorzAlign::Left`], not affecting line spacing,
+    /// anchor not held. Change them with the `with_*` builders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::placement::{HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let p = ObjectPlacement::new(ObjectTextWrap::Square, ObjectRelativeTo::Para, ObjectRelativeTo::Column)
+    ///     .with_horz_align(HorzAlign::Right)
+    ///     .with_vert_offset(HwpUnit::new(1200).unwrap());
+    /// assert!(!p.treat_as_char);
+    /// assert_eq!(p.horz_align, HorzAlign::Right);
+    /// ```
+    #[must_use]
+    pub fn new(
+        text_wrap: ObjectTextWrap,
+        vert_rel_to: ObjectRelativeTo,
+        horz_rel_to: ObjectRelativeTo,
+    ) -> Self {
+        Self {
+            text_wrap,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: false,
+            vert_rel_to,
+            horz_rel_to,
+            vert_offset: HwpUnit::ZERO,
+            horz_offset: HwpUnit::ZERO,
+            vert_align: VertAlign::Top,
+            horz_align: HorzAlign::Left,
+            affect_line_spacing: false,
+            hold_anchor_and_so: false,
+        }
+    }
+
+    /// Sets the side flow policy.
+    #[must_use]
+    pub fn with_text_flow(mut self, text_flow: ObjectTextFlow) -> Self {
+        self.text_flow = text_flow;
+        self
+    }
+
+    /// Sets whether the object behaves like an inline character.
+    #[must_use]
+    pub fn with_treat_as_char(mut self, treat_as_char: bool) -> Self {
+        self.treat_as_char = treat_as_char;
+        self
+    }
+
+    /// Sets whether surrounding text flows with the object.
+    #[must_use]
+    pub fn with_flow_with_text(mut self, flow_with_text: bool) -> Self {
+        self.flow_with_text = flow_with_text;
+        self
+    }
+
+    /// Sets whether overlapping other objects is allowed.
+    #[must_use]
+    pub fn with_allow_overlap(mut self, allow_overlap: bool) -> Self {
+        self.allow_overlap = allow_overlap;
+        self
+    }
+
+    /// Sets the vertical offset from `vert_rel_to`.
+    #[must_use]
+    pub fn with_vert_offset(mut self, vert_offset: HwpUnit) -> Self {
+        self.vert_offset = vert_offset;
+        self
+    }
+
+    /// Sets the horizontal offset from `horz_rel_to`.
+    #[must_use]
+    pub fn with_horz_offset(mut self, horz_offset: HwpUnit) -> Self {
+        self.horz_offset = horz_offset;
+        self
+    }
+
+    /// Sets the vertical alignment.
+    #[must_use]
+    pub fn with_vert_align(mut self, vert_align: VertAlign) -> Self {
+        self.vert_align = vert_align;
+        self
+    }
+
+    /// Sets the horizontal alignment.
+    #[must_use]
+    pub fn with_horz_align(mut self, horz_align: HorzAlign) -> Self {
+        self.horz_align = horz_align;
+        self
+    }
+
+    /// Sets whether the object affects line spacing.
+    #[must_use]
+    pub fn with_affect_line_spacing(mut self, affect_line_spacing: bool) -> Self {
+        self.affect_line_spacing = affect_line_spacing;
+        self
+    }
+
+    /// Sets whether the object holds its anchor against overlapping objects.
+    #[must_use]
+    pub fn with_hold_anchor_and_so(mut self, hold_anchor_and_so: bool) -> Self {
+        self.hold_anchor_and_so = hold_anchor_and_so;
+        self
+    }
+}
+
+/// Vertical alignment of a placed object against its vertical anchor.
+///
+/// Serialized as the HWPX attribute value (`"TOP"` …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum VertAlign {
+    /// Top edge (default).
+    #[default]
+    #[serde(rename = "TOP")]
+    Top,
+    /// Centre.
+    #[serde(rename = "CENTER")]
+    Center,
+    /// Bottom edge.
+    #[serde(rename = "BOTTOM")]
+    Bottom,
+    /// Inside edge (towards the binding).
+    #[serde(rename = "INSIDE")]
+    Inside,
+    /// Outside edge (away from the binding).
+    #[serde(rename = "OUTSIDE")]
+    Outside,
+}
+
+impl VertAlign {
+    /// The value for an HWPX `vertAlign` string, or `None` for a string this
+    /// type does not model.
+    pub fn from_hwpx(value: &str) -> Option<Self> {
+        match value {
+            "TOP" => Some(Self::Top),
+            "CENTER" => Some(Self::Center),
+            "BOTTOM" => Some(Self::Bottom),
+            "INSIDE" => Some(Self::Inside),
+            "OUTSIDE" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    /// The HWPX `vertAlign` string.
+    pub fn as_hwpx_str(&self) -> &'static str {
+        match self {
+            Self::Top => "TOP",
+            Self::Center => "CENTER",
+            Self::Bottom => "BOTTOM",
+            Self::Inside => "INSIDE",
+            Self::Outside => "OUTSIDE",
+        }
+    }
+}
+
+/// Horizontal alignment of a placed object against its horizontal anchor.
+///
+/// Serialized as the HWPX attribute value (`"LEFT"` …).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum HorzAlign {
+    /// Left edge (default).
+    #[default]
+    #[serde(rename = "LEFT")]
+    Left,
+    /// Centre.
+    #[serde(rename = "CENTER")]
+    Center,
+    /// Right edge.
+    #[serde(rename = "RIGHT")]
+    Right,
+    /// Inside edge (towards the binding).
+    #[serde(rename = "INSIDE")]
+    Inside,
+    /// Outside edge (away from the binding).
+    #[serde(rename = "OUTSIDE")]
+    Outside,
+}
+
+impl HorzAlign {
+    /// The value for an HWPX `horzAlign` string, or `None` for a string this
+    /// type does not model.
+    pub fn from_hwpx(value: &str) -> Option<Self> {
+        match value {
+            "LEFT" => Some(Self::Left),
+            "CENTER" => Some(Self::Center),
+            "RIGHT" => Some(Self::Right),
+            "INSIDE" => Some(Self::Inside),
+            "OUTSIDE" => Some(Self::Outside),
+            _ => None,
+        }
+    }
+
+    /// The HWPX `horzAlign` string.
+    pub fn as_hwpx_str(&self) -> &'static str {
+        match self {
+            Self::Left => "LEFT",
+            Self::Center => "CENTER",
+            Self::Right => "RIGHT",
+            Self::Inside => "INSIDE",
+            Self::Outside => "OUTSIDE",
         }
     }
 }
@@ -261,20 +496,69 @@ mod tests {
 
     #[test]
     fn placement_serde_roundtrip() {
-        let p = ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::RightOnly,
-            treat_as_char: false,
-            flow_with_text: true,
-            allow_overlap: true,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Page,
-            vert_offset: HwpUnit::new(1200).unwrap(),
-            horz_offset: HwpUnit::new(3400).unwrap(),
-        };
+        let p = ObjectPlacement::new(
+            ObjectTextWrap::Square,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Page,
+        )
+        .with_text_flow(ObjectTextFlow::RightOnly)
+        .with_flow_with_text(true)
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::new(1200).unwrap())
+        .with_horz_offset(HwpUnit::new(3400).unwrap())
+        .with_vert_align(VertAlign::Bottom)
+        .with_horz_align(HorzAlign::Outside)
+        .with_affect_line_spacing(true)
+        .with_hold_anchor_and_so(true);
         let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains(r#""vert_align":"BOTTOM""#), "{json}");
+        assert!(json.contains(r#""horz_align":"OUTSIDE""#), "{json}");
         let back: ObjectPlacement = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);
+    }
+
+    // S1: 네 필드 없는 옛 JSON 은 Top·Left·false·false 로 읽힌다.
+    // 이것을 실패시키는 것: 네 필드 중 하나에서 `#[serde(default)]` 를 빼기.
+    #[test]
+    fn placement_old_json_reads_the_new_fields_as_defaults() {
+        let old = r#"{"text_wrap":"Square","text_flow":"BothSides","treat_as_char":false,
+            "flow_with_text":false,"allow_overlap":false,"vert_rel_to":"Para",
+            "horz_rel_to":"Column","vert_offset":0,"horz_offset":0}"#;
+        let p: ObjectPlacement = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            p,
+            ObjectPlacement::new(
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Column
+            )
+        );
+    }
+
+    #[test]
+    fn align_hwpx_roundtrip() {
+        for v in [
+            VertAlign::Top,
+            VertAlign::Center,
+            VertAlign::Bottom,
+            VertAlign::Inside,
+            VertAlign::Outside,
+        ] {
+            assert_eq!(VertAlign::from_hwpx(v.as_hwpx_str()), Some(v));
+            assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{}\"", v.as_hwpx_str()));
+        }
+        for v in [
+            HorzAlign::Left,
+            HorzAlign::Center,
+            HorzAlign::Right,
+            HorzAlign::Inside,
+            HorzAlign::Outside,
+        ] {
+            assert_eq!(HorzAlign::from_hwpx(v.as_hwpx_str()), Some(v));
+            assert_eq!(serde_json::to_string(&v).unwrap(), format!("\"{}\"", v.as_hwpx_str()));
+        }
+        assert_eq!(VertAlign::from_hwpx("MIDDLE"), None);
+        assert_eq!(HorzAlign::from_hwpx("left"), None);
     }
 
     #[test]

@@ -40,7 +40,7 @@
 use hwpforge_foundation::{Flip, HwpUnit};
 
 use super::{Control, Fill, ShapePoint, ShapeStyle};
-use crate::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+use crate::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 
 /// Largest distance, in HWPUNIT, between where the source puts a point and
 /// where the Core value puts it, still treated as exact. Hancom itself rounds
@@ -883,17 +883,16 @@ fn group_child_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     if x == 0 && y == 0 {
         return None;
     }
-    Some(ObjectPlacement {
-        text_wrap: ObjectTextWrap::InFrontOfText,
-        text_flow: ObjectTextFlow::BothSides,
-        treat_as_char: false,
-        flow_with_text: false,
-        allow_overlap: true,
-        vert_rel_to: ObjectRelativeTo::Paper,
-        horz_rel_to: ObjectRelativeTo::Paper,
-        vert_offset: HwpUnit::new(y).unwrap_or(HwpUnit::ZERO),
-        horz_offset: HwpUnit::new(x).unwrap_or(HwpUnit::ZERO),
-    })
+    Some(
+        ObjectPlacement::new(
+            ObjectTextWrap::InFrontOfText,
+            ObjectRelativeTo::Paper,
+            ObjectRelativeTo::Paper,
+        )
+        .with_allow_overlap(true)
+        .with_vert_offset(HwpUnit::new(y).unwrap_or(HwpUnit::ZERO))
+        .with_horz_offset(HwpUnit::new(x).unwrap_or(HwpUnit::ZERO)),
+    )
 }
 
 fn defining_points(control: &Control) -> Vec<ShapePoint> {

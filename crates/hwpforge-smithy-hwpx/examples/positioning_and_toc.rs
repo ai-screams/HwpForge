@@ -116,16 +116,16 @@ fn section_positioning() -> Section {
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::from_pt(140.0).unwrap(),
         height: HwpUnit::new(100).expect("valid"),
-        placement: Some(ObjectPlacement {
-            treat_as_char: false,
-            allow_overlap: true,
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            horz_offset: HwpUnit::new(5000).unwrap(),
-            vert_offset: HwpUnit::new(2000).unwrap(),
-            ..ObjectPlacement::legacy_inline_defaults()
-        }),
+        placement: Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::InFrontOfText,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Paper,
+            )
+            .with_allow_overlap(true)
+            .with_horz_offset(HwpUnit::new(5000).unwrap())
+            .with_vert_offset(HwpUnit::new(2000).unwrap()),
+        ),
         caption: None,
         style: Some(ShapeStyle {
             line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
@@ -160,16 +160,16 @@ fn section_positioning() -> Section {
         ],
         width: HwpUnit::new(10000).expect("valid"),
         height: HwpUnit::new(10000).expect("valid"),
-        placement: Some(ObjectPlacement {
-            treat_as_char: false,
-            allow_overlap: true,
-            text_wrap: ObjectTextWrap::InFrontOfText,
-            vert_rel_to: ObjectRelativeTo::Paper,
-            horz_rel_to: ObjectRelativeTo::Paper,
-            horz_offset: HwpUnit::new(8000).unwrap(),
-            vert_offset: HwpUnit::new(1000).unwrap(),
-            ..ObjectPlacement::legacy_inline_defaults()
-        }),
+        placement: Some(
+            ObjectPlacement::new(
+                ObjectTextWrap::InFrontOfText,
+                ObjectRelativeTo::Paper,
+                ObjectRelativeTo::Paper,
+            )
+            .with_allow_overlap(true)
+            .with_horz_offset(HwpUnit::new(8000).unwrap())
+            .with_vert_offset(HwpUnit::new(1000).unwrap()),
+        ),
         paragraphs: vec![],
         caption: None,
         style: Some(ShapeStyle {

@@ -179,6 +179,18 @@ pub struct Table {
     /// [`TableLayoutCache`]. Encoders must not emit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_cache: Option<TableLayoutCache>,
+    /// Where the table sits and how text wraps it (HWPX `<hp:pos>` plus the
+    /// table's `textWrap`/`textFlow`).
+    ///
+    /// `None` is the placement encoders have always written for a table:
+    /// not treated as a character, flowing with the text, no overlap,
+    /// anchored to the paragraph vertically and the column horizontally,
+    /// zero offsets, aligned top/left, not affecting line spacing, anchor not
+    /// held, top-and-bottom wrap, both-sides flow. (A shape's `None`, by
+    /// contrast, means an inline object.) Decoders write `None` only when
+    /// every one of those matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::placement::ObjectPlacement>,
 }
 
 impl Table {
@@ -206,6 +218,7 @@ impl Table {
             out_margin: None,
             in_margin: None,
             layout_cache: None,
+            placement: None,
         }
     }
 
@@ -239,6 +252,13 @@ impl Table {
         if let Some(caption) = &self.caption {
             caption.walk_paragraphs(f);
         }
+    }
+
+    /// Sets where the table sits (see [`Table::placement`]).
+    #[must_use]
+    pub fn with_placement(mut self, placement: crate::placement::ObjectPlacement) -> Self {
+        self.placement = Some(placement);
+        self
     }
 
     /// Sets an explicit table width.
