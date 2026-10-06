@@ -1154,6 +1154,7 @@ impl BodyTextParserState {
                         level,
                         extract_ctrl_header_instance_id(&record.data, ctrl_id),
                     );
+                    self.note_table_ctrl(&record.data);
                 } else if ctrl_id == CTRL_ID_GSO {
                     capture.gso = Some(InlineGsoContext::new(
                         level,
@@ -1591,6 +1592,7 @@ impl BodyTextParserState {
                             level,
                             extract_ctrl_header_instance_id(&record.data, ctrl_id),
                         );
+                        self.note_table_ctrl(&record.data);
                         return true;
                     }
                     if ctrl_id == CTRL_ID_GSO {
@@ -3652,6 +3654,110 @@ mod tests {
         let second = cell_controls(1);
         let [Hwp5Control::Footer(f2)] = &second[..] else { panic!("{second:?}") };
         assert_eq!(f2.paragraphs[0].text, "F2");
+    }
+
+    /// A table `CtrlHeader` with a placement word and a geometry
+    /// (`y`, `x`, width, height at bytes 8–24).
+    fn table_ctrl_data(properties: u32, x: i32, y: i32, width: u32, height: u32) -> Vec<u8> {
+        let mut data = CTRL_ID_TABLE.to_le_bytes().to_vec();
+        data.extend_from_slice(&properties.to_le_bytes());
+        data.extend_from_slice(&y.to_le_bytes());
+        data.extend_from_slice(&x.to_le_bytes());
+        data.extend_from_slice(&width.to_le_bytes());
+        data.extend_from_slice(&height.to_le_bytes());
+        data
+    }
+
+    /// A-T3/A-T4 from the wire (review r1): a body table's, a nested
+    /// table's and a header table's `CtrlHeader` placement word and height
+    /// reach `Hwp5Table::ctrl` — before, the tests built `ctrl` by hand and
+    /// dropping the decoder's note passed them.
+    ///
+    /// 이것을 실패시키는 것: 표를 여는 네 곳 중 하나에서 `note_table_ctrl` 을
+    /// 지우기(그 표의 `ctrl` 이 `None`).
+    #[test]
+    fn table_ctrl_is_read_from_the_wire_everywhere() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            0,
+            &table_ctrl_data(0x082a_4310, 13, 27_415, 50_737, 43_643),
+        ));
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 9000,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: Some(1),
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            2,
+            &table_ctrl_data(0x082a_2311, 0, 0, 8000, 1200),
+        ));
+        stream.extend(make_record(TagId::Table, 3, &basic_table_data(1, 1)));
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &ctrl_header_data(CTRL_ID_HEADER)));
+        stream.extend(make_record(TagId::ListHeader, 2, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            3,
+            &table_ctrl_data(0x082a_2311, 0, 0, 7000, 900),
+        ));
+        stream.extend(make_record(TagId::Table, 4, &basic_table_data(1, 1)));
+        // A table in a cell's footer.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &ctrl_header_data(CTRL_ID_FOOTER)));
+        stream.extend(make_record(TagId::ListHeader, 3, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, 3, &para_header_data(0, 0)));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            4,
+            &table_ctrl_data(0x082a_2311, 0, 0, 6000, 700),
+        ));
+        stream.extend(make_record(TagId::Table, 5, &basic_table_data(1, 1)));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let ctrl = |t: &Hwp5Table| t.ctrl.as_ref().map(|c| (c.properties, c.geometry.height));
+        let Hwp5Control::Table(body) = &result.paragraphs[0].controls[0] else { panic!() };
+        assert_eq!(ctrl(body), Some((0x082a_4310, 43_643)));
+        let Hwp5Control::Table(nested) = &body.cells[0].paragraphs[0].controls[0] else {
+            panic!("{:?}", body.cells[0].paragraphs[0].controls)
+        };
+        assert_eq!(ctrl(nested), Some((0x082a_2311, 1200)));
+        let Hwp5Control::Header(header) = &result.paragraphs[1].controls[0] else { panic!() };
+        let Hwp5Control::Table(in_header) = &header.paragraphs[0].controls[0] else { panic!() };
+        assert_eq!(ctrl(in_header), Some((0x082a_2311, 900)));
+        let Hwp5Control::Table(host) = &result.paragraphs[2].controls[0] else { panic!() };
+        let Hwp5Control::Footer(footer) = &host.cells[0].paragraphs[0].controls[0] else {
+            panic!("{:?}", host.cells[0].paragraphs[0].controls)
+        };
+        let Hwp5Control::Table(in_footer) = &footer.paragraphs[0].controls[0] else { panic!() };
+        assert_eq!(ctrl(in_footer), Some((0x082a_2311, 700)));
+        // The output height: each table's hint is its `CtrlHeader` height
+        // (body, then the header's — the layout-hint queue's order).
+        let hints = crate::layout_hint_patch::capture_layout_hints(std::slice::from_ref(&result));
+        let heights: Vec<_> = hints[0].tables.iter().map(|t| t.height).collect();
+        // Body tables (the body's, its nested one, the cell-footer host),
+        // then the header's, then the footer's.
+        assert_eq!(heights[..2], [Some(43_643), Some(1200)]);
+        assert_eq!(heights[3..], [Some(900), Some(700)]);
     }
 
     /// [`one_cell_table`] whose control header sits at `base`.
