@@ -132,6 +132,23 @@ fn table_placement_round_trips() {
     }
 }
 
+/// A table without `<hp:pos>` keeps its own `textWrap`/`textFlow` through a
+/// re-encode (review r1: the missing position used to drop them too), and
+/// one with the default wrap and flow still decodes to no placement.
+///
+/// 이것을 실패시키는 것: pos 없는 표에서 조기 반환으로 되돌리기(SQUARE·LEFT_ONLY
+/// 가 기본값으로) / 기본값과 같은 표를 `Some` 으로 남기기.
+#[test]
+fn table_without_pos_keeps_its_wrap() {
+    let source = table_with("", r#"textWrap="SQUARE" textFlow="LEFT_ONLY""#);
+    assert!(!section_xml(&source).contains(X4C_TABLE_POS));
+    let (start, _) = element_and_pos(&section_xml(&reencode(&source)), "hp:tbl");
+    assert_eq!(attr(&start, "textWrap"), "SQUARE");
+    assert_eq!(attr(&start, "textFlow"), "LEFT_ONLY");
+    let plain = table_with("", r#"textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES""#);
+    assert_eq!(decoded_table_placement(&plain), None);
+}
+
 fn api_table_doc(placement: Option<ObjectPlacement>) -> Vec<u8> {
     let cell = TableCell::new(
         vec![Paragraph::with_runs(

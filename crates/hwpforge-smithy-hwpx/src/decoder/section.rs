@@ -1083,8 +1083,21 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
 /// `Some` 으로) / 새 네 필드 중 하나를 접기 비교에서 빼기
 /// (`table_placement_folds_only_the_full_default`).
 fn decode_table_placement(hx: &HxTable, ctx: &mut DecodeCtx) -> Option<ObjectPlacement> {
-    let pos = hx.pos.as_ref()?;
     let default = crate::encoder::table_default_placement();
+    // Without `<hp:pos>` the position reads as the default, but the table's
+    // own `textWrap`/`textFlow` still count (review r1: they were dropped).
+    // 이것을 실패시키는 것: pos 없을 때 조기 반환으로 되돌리기
+    // (`table_without_pos_keeps_its_wrap`).
+    let Some(pos) = hx.pos.as_ref() else {
+        let mut placement = default.clone();
+        if !hx.text_wrap.is_empty() {
+            placement.text_wrap = ObjectTextWrap::from_hwpx(&hx.text_wrap);
+        }
+        if !hx.text_flow.is_empty() {
+            placement.text_flow = ObjectTextFlow::from_hwpx(&hx.text_flow);
+        }
+        return (placement != default).then_some(placement);
+    };
     let rel = |raw: &str, fallback: &ObjectRelativeTo| {
         if raw.is_empty() {
             fallback.clone()
