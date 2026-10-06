@@ -737,6 +737,29 @@ pub(crate) enum Hwp5ShapeFill {
     Unreadable,
 }
 
+/// A shape's outline as stored after its matrix chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5ShapeLine {
+    /// COLORREF (`0x00BBGGRR`).
+    pub color: u32,
+    /// Thickness in HWPUNIT.
+    pub thickness: i32,
+    /// Property word; bits 0–5 = line type (0 none, 1 solid, 2 dot, 3 dash —
+    /// confirmed against Hancom's HWPX twins).
+    pub properties: u32,
+}
+
+/// A single shape's outline and fill (§19.5 1b).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Hwp5ShapeLook {
+    /// The outline.
+    pub line: Hwp5ShapeLine,
+    /// Raw fill kind bits (0 none, 1 colour/hatch, 2 picture, 4 gradient).
+    pub fill_kind: u32,
+    /// The fill block, or why it could not be read.
+    pub fill: Result<super::border_fill::Hwp5RawBorderFillFill, String>,
+}
+
 /// The rendering block of a `ShapeComponent` (`0x4C`): the shape's initial
 /// size and its matrix chain — `trans`, then one `(sca, rot)` pair per group
 /// level, the first pair given by the outermost group and the last the
@@ -830,6 +853,57 @@ impl Hwp5ShapeRender {
             pairs.push((matrix()?, matrix()?));
         }
         Ok(Self { initial, trans, pairs, fill: Self::fill_after(&data[chain_end..]) })
+    }
+
+    /// The line information and fill after the matrix chain of a
+    /// `ShapeComponent` payload (§19.5 1b), or `None` when the chain cannot
+    /// be read or the line block is cut short. The fill block has the
+    /// `DocInfo` border fill layout and goes through the same parser
+    /// ([`parse_fill_payload`](super::border_fill::parse_fill_payload)); its
+    /// error is kept, not guessed past.
+    pub(crate) fn parse_look(data: &[u8], type_repeated: bool) -> Option<Hwp5ShapeLook> {
+        let data = if type_repeated { data.get(4..)? } else { data };
+        let chain_end = Self::chain_end(data).ok()?;
+        let tail = data.get(chain_end..)?;
+        if tail.len() < Self::LINE_INFO + 4 {
+            return None;
+        }
+        let mut cur = Cursor::new(tail);
+        let color = cur.read_u32::<LittleEndian>().ok()?;
+        let thickness = cur.read_i32::<LittleEndian>().ok()?;
+        let properties = cur.read_u32::<LittleEndian>().ok()?;
+        let _outline = cur.read_u8().ok()?;
+        let fill_kind = cur.read_u32::<LittleEndian>().ok()?;
+        let fill =
+            super::border_fill::parse_fill_payload(fill_kind, &mut cur).map_err(|e| e.to_string());
+        Some(Hwp5ShapeLook {
+            line: Hwp5ShapeLine { color, thickness, properties },
+            fill_kind,
+            fill,
+        })
+    }
+
+    /// End of the matrix chain in a rendering block whose type tag is not
+    /// repeated: the header, `trans`, and the `(sca, rot)` pairs.
+    fn chain_end(data: &[u8]) -> Hwp5Result<usize> {
+        let err = |detail: String| Hwp5Error::RecordParse { offset: 0, detail };
+        if data.len() < Self::HEADER {
+            return Err(err(format!("shape rendering block too short: {} bytes", data.len())));
+        }
+        let mut cur = Cursor::new(&data[12..Self::HEADER]);
+        let group_level = cur.read_u16::<LittleEndian>()?;
+        cur.set_position(34);
+        let pair_count = usize::from(cur.read_u16::<LittleEndian>()?);
+        if pair_count != usize::from(group_level) + 1 {
+            return Err(err(format!(
+                "matrix pair count {pair_count} does not match group level {group_level} + 1"
+            )));
+        }
+        let chain_end = Self::HEADER + Self::MATRIX * (1 + 2 * pair_count);
+        if data.len() < chain_end {
+            return Err(err(format!("matrix chain cut short: {} bytes", data.len())));
+        }
+        Ok(chain_end)
     }
 
     /// Reads the fill kind after the line information, the layout of the

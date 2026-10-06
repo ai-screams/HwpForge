@@ -940,6 +940,7 @@ mod tests {
 
     fn rect() -> Hwp5Control {
         Hwp5Control::Rect(Hwp5RectControl {
+            look: None,
             ctrl_id: 0,
             geometry: geo(0, 0, 0, 0),
             ctrl_properties: 0,
@@ -948,6 +949,7 @@ mod tests {
 
     fn polygon(points: &[(i32, i32)]) -> Hwp5Control {
         Hwp5Control::Polygon(Hwp5PolygonControl {
+            look: None,
             ctrl_id: 0,
             geometry: geo(0, 0, 0, 0),
             points: points.iter().map(|&(x, y)| Hwp5ShapePoint { x, y }).collect(),
@@ -1226,6 +1228,7 @@ mod tests {
             end2: pt(0, 0),
         };
         let ellipse = Hwp5Control::Ellipse(Hwp5EllipseControl {
+            look: None,
             ctrl_id: 0,
             geometry: geo(0, 0, 0, 0),
             ctrl_properties: 0,

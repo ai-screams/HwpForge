@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use crate::warning_utils::push_projection_fallback;
-use hwpforge_foundation::{Color, GradientType, PatternType};
+use hwpforge_foundation::{Color, GradientType};
 use hwpforge_smithy_hwp5::schema::border_fill::{
     Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5FillPatternKind,
     Hwp5GradationType, Hwp5RawBorderFill, Hwp5RawBorderFillFill,
@@ -299,16 +299,8 @@ fn unresolved_hwp5_border_fill_placeholder(id: u32) -> HwpxBorderFill {
 }
 
 fn hwp5_fill_pattern_to_hwpx(kind: Hwp5FillPatternKind) -> Option<String> {
-    match kind {
-        Hwp5FillPatternKind::None => None,
-        Hwp5FillPatternKind::Horizontal => Some(PatternType::Horizontal.to_string()),
-        Hwp5FillPatternKind::Vertical => Some(PatternType::Vertical.to_string()),
-        Hwp5FillPatternKind::BackSlash => Some(PatternType::BackSlash.to_string()),
-        Hwp5FillPatternKind::Slash => Some(PatternType::Slash.to_string()),
-        Hwp5FillPatternKind::Cross => Some(PatternType::Cross.to_string()),
-        Hwp5FillPatternKind::CrossDiagonal => Some(PatternType::CrossDiagonal.to_string()),
-        Hwp5FillPatternKind::Unknown(_) => None,
-    }
+    // Shared with HWP5 shape fills (`Hwp5FillPatternKind::pattern_type`).
+    kind.pattern_type().map(|pattern| pattern.to_string())
 }
 
 fn hwp5_gradation_type_to_hwpx(kind: Hwp5GradationType) -> GradientType {

@@ -676,6 +676,187 @@ impl<'a> ProjectionImageState<'a> {
         }
     }
 
+    /// A single shape's outline and fill as a Core [`ShapeStyle`] (§19.5
+    /// 1b). `fillable` = the shape has an interior (not a line).
+    ///
+    /// Line types 0 (none), 1 (solid), 2 (dot), 3 (dash) are confirmed
+    /// against Hancom's HWPX twins; another type is reported and drawn
+    /// solid. A fill Core cannot hold — a hatch kind, a gradient with more
+    /// than two colours (its layout is unverified), a combined kind, a
+    /// picture mode or adjustment Core has no value for, a picture whose
+    /// image is missing — is reported (`ProjectionFallback`); the parts Core
+    /// can hold are kept.
+    fn shape_style(
+        &mut self,
+        look: &crate::schema::section::Hwp5ShapeLook,
+        fillable: bool,
+    ) -> hwpforge_core::control::ShapeStyle {
+        use crate::schema::border_fill::{
+            Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5GradationType, Hwp5RawBorderFillFill,
+        };
+        use hwpforge_core::control::{Fill, LineStyle, ShapeStyle};
+        use hwpforge_foundation::{GradientType, ImageFillMode};
+        let colour = |raw: u32| hwpforge_foundation::Color::from_raw(raw & 0x00FF_FFFF);
+        let line_style = match look.line.properties & 0x3F {
+            0 => LineStyle::None,
+            1 => LineStyle::Solid,
+            2 => LineStyle::Dot,
+            3 => LineStyle::Dash,
+            other => {
+                push_projection_fallback(
+                    &mut self.warnings,
+                    "shape.line_type",
+                    format!("line type {other} is not confirmed against Hancom; drawn solid"),
+                );
+                LineStyle::Solid
+            }
+        };
+        let mut style = ShapeStyle {
+            line_color: Some(colour(look.line.color)),
+            line_width: u32::try_from(look.line.thickness).ok(),
+            line_style: Some(line_style),
+            ..ShapeStyle::default()
+        };
+        if !fillable {
+            return style;
+        }
+        let lost = |warnings: &mut Vec<Hwp5Warning>, reason: String| {
+            push_projection_fallback(warnings, "shape.fill", reason);
+        };
+        if look.fill_kind == 0 {
+            // 이것을 실패시키는 것: 채우기 없음을 흰 칠(기본값)로 두기.
+            style.fill = Some(Fill::None);
+            return style;
+        }
+        match &look.fill {
+            Ok(Hwp5RawBorderFillFill::None) => style.fill = Some(Fill::None),
+            Ok(Hwp5RawBorderFillFill::Color(c)) => {
+                let no_face = c.background_color == 0xFFFF_FFFF;
+                let pattern = c.pattern_kind.pattern_type();
+                match pattern {
+                    None if c.pattern_kind
+                        != crate::schema::border_fill::Hwp5FillPatternKind::None =>
+                    {
+                        lost(
+                            &mut self.warnings,
+                            format!("hatch kind {:?} not carried", c.pattern_kind),
+                        );
+                    }
+                    _ => {}
+                }
+                if no_face && pattern.is_none() {
+                    style.fill = Some(Fill::None);
+                } else {
+                    if !no_face {
+                        style.fill_color = Some(colour(c.background_color));
+                    }
+                    if let Some(pattern_type) = pattern {
+                        style.fill = Some(Fill::Pattern {
+                            pattern_type,
+                            fg_color: colour(c.pattern_color),
+                            bg_color: colour(if no_face {
+                                0x00FF_FFFF
+                            } else {
+                                c.background_color
+                            }),
+                        });
+                    }
+                }
+            }
+            Ok(Hwp5RawBorderFillFill::Gradation(g)) => {
+                if g.colors.len() > 2 {
+                    lost(
+                        &mut self.warnings,
+                        format!(
+                            "gradient with {} colours (layout unverified) not carried",
+                            g.colors.len()
+                        ),
+                    );
+                    return style;
+                }
+                let gradient_type = match g.gradation_type {
+                    Hwp5GradationType::Linear => GradientType::Linear,
+                    Hwp5GradationType::Conical => GradientType::Conical,
+                    other => {
+                        // 2·4 는 테두리 채우기 표와 같은 순서로 읽되 확인 전(§19.18).
+                        lost(&mut self.warnings, format!("gradient type {other:?} is unverified"));
+                        match other {
+                            Hwp5GradationType::Circular => GradientType::Radial,
+                            Hwp5GradationType::Rectangular => GradientType::Square,
+                            _ => GradientType::Linear,
+                        }
+                    }
+                };
+                style.fill = Some(Fill::Gradient {
+                    gradient_type,
+                    angle: i32::try_from(g.angle).unwrap_or(0),
+                    colors: g.colors.iter().map(|&c| (colour(c), 0)).collect(),
+                    center_x: Some(g.center_x),
+                    center_y: Some(g.center_y),
+                    step: Some(g.blur),
+                    step_center: g.blur_center.map(u32::from),
+                });
+            }
+            Ok(Hwp5RawBorderFillFill::Image(img)) => {
+                let Some(asset) = self.image_asset(img.bindata_id) else {
+                    let reason = self.missing_asset_reason(img.bindata_id);
+                    lost(&mut self.warnings, format!("picture fill: {reason}"));
+                    return style;
+                };
+                self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+                let mode = match img.mode {
+                    Hwp5FillImageMode::TileAll => ImageFillMode::Tile,
+                    Hwp5FillImageMode::Resize => ImageFillMode::Stretch,
+                    Hwp5FillImageMode::Center => ImageFillMode::Center,
+                    Hwp5FillImageMode::Zoom => ImageFillMode::FitAll,
+                    other => {
+                        lost(
+                            &mut self.warnings,
+                            format!("picture fill mode {other:?} not carried; tiled"),
+                        );
+                        ImageFillMode::Tile
+                    }
+                };
+                if img.brightness != 0
+                    || img.contrast != 0
+                    || img.effect != Hwp5FillImageEffect::RealPic
+                {
+                    lost(
+                        &mut self.warnings,
+                        format!(
+                            "picture fill brightness {} contrast {} effect {:?} not carried",
+                            img.brightness, img.contrast, img.effect
+                        ),
+                    );
+                }
+                style.fill =
+                    Some(Fill::Image { image_id: asset.payload.package_path.clone(), mode });
+            }
+            Ok(Hwp5RawBorderFillFill::Unknown { kind, .. }) => {
+                lost(&mut self.warnings, format!("fill kind {kind:#x} not carried"));
+            }
+            Err(e) => lost(&mut self.warnings, format!("fill block unreadable: {e}")),
+        }
+        style
+    }
+
+    /// `run`'s shape with the style of `look` (none when `look` is `None`).
+    fn styled(
+        &mut self,
+        run: Option<Run>,
+        look: Option<&crate::schema::section::Hwp5ShapeLook>,
+        fillable: bool,
+    ) -> Option<Run> {
+        let mut run = run?;
+        if let (Some(look), RunContent::Control(control)) = (look, &mut run.content) {
+            let shaped = self.shape_style(look, fillable);
+            if let Some(style) = shape_style_slot(control) {
+                *style = Some(shaped);
+            }
+        }
+        Some(run)
+    }
+
     /// The image asset of BinData `reference`, when the document has one.
     fn image_asset(&self, reference: u16) -> Option<&'a Hwp5JoinedImageAsset> {
         self.image_assets?.asset_for_reference(reference)
@@ -2891,21 +3072,36 @@ fn project_control_run(
         Hwp5Control::Image(image) => projection_images
             .build_image(image, image_context)
             .map(|core_image| Run::image(core_image, CharShapeIndex::new(0))),
-        Hwp5Control::Line(line) => project_line_run(line, &mut projection_images.warnings),
-        Hwp5Control::Rect(rect) => project_rect_run(rect, &mut projection_images.warnings),
+        Hwp5Control::Line(line) => {
+            let run = project_line_run(line, &mut projection_images.warnings);
+            projection_images.styled(run, line.look.as_ref(), false)
+        }
+        Hwp5Control::Rect(rect) => {
+            let run = project_rect_run(rect, &mut projection_images.warnings);
+            projection_images.styled(run, rect.look.as_ref(), true)
+        }
         Hwp5Control::Polygon(polygon) => {
-            project_polygon_run(polygon, &mut projection_images.warnings)
+            let run = project_polygon_run(polygon, &mut projection_images.warnings);
+            projection_images.styled(run, polygon.look.as_ref(), true)
         }
         Hwp5Control::Ellipse(ellipse) => {
-            project_ellipse_run(ellipse, &mut projection_images.warnings)
+            let run = project_ellipse_run(ellipse, &mut projection_images.warnings);
+            projection_images.styled(run, ellipse.look.as_ref(), true)
         }
-        Hwp5Control::Arc(arc) => project_arc_run(arc, &mut projection_images.warnings),
-        Hwp5Control::Curve(curve) => project_curve_run(curve, &mut projection_images.warnings),
+        Hwp5Control::Arc(arc) => {
+            let run = project_arc_run(arc, &mut projection_images.warnings);
+            projection_images.styled(run, arc.look.as_ref(), true)
+        }
+        Hwp5Control::Curve(curve) => {
+            let run = project_curve_run(curve, &mut projection_images.warnings);
+            projection_images.styled(run, curve.look.as_ref(), true)
+        }
         Hwp5Control::TextArt(text_art) => {
             Some(project_text_art_run(text_art, &mut projection_images.warnings))
         }
         Hwp5Control::ConnectLine(connect_line) => {
-            project_connectline_run(connect_line, &mut projection_images.warnings)
+            let run = project_connectline_run(connect_line, &mut projection_images.warnings);
+            projection_images.styled(run, connect_line.look.as_ref(), false)
         }
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
@@ -3252,10 +3448,28 @@ fn shape_vertical_align_from_list_header(list_header_properties: Option<u32>) ->
     }
 }
 
+/// The style slot of a shape control.
+fn shape_style_slot(
+    control: &mut Control,
+) -> Option<&mut Option<hwpforge_core::control::ShapeStyle>> {
+    match control {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Curve { style, .. }
+        | Control::Line { style, .. }
+        | Control::ConnectLine { style, .. } => Some(style),
+        _ => None,
+    }
+}
+
 fn project_textbox_run(
     textbox: &Hwp5TextBoxControl,
     projection_images: &mut ProjectionImageState<'_>,
 ) -> Run {
+    let style = textbox.look.as_ref().map(|look| projection_images.shape_style(look, true));
     let paragraphs = project_nested_paragraphs(
         &textbox.paragraphs,
         projection_images,
@@ -3272,7 +3486,7 @@ fn project_textbox_run(
                 &mut projection_images.warnings,
             ),
             caption: None,
-            style: None,
+            style,
             text_vertical_align: shape_vertical_align_from_list_header(
                 textbox.list_header_properties,
             ),
@@ -3805,6 +4019,7 @@ mod tests {
         // 한컴 stores the textbox 세로 정렬 in the ListHeader 속성 bits 5~6.
         // A CENTER (code 1) textbox must project to Core with Center align.
         let textbox = Hwp5TextBoxControl {
+            look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 x: 10,
@@ -3830,6 +4045,7 @@ mod tests {
     #[test]
     fn project_textbox_defaults_top_when_list_header_absent() {
         let textbox = Hwp5TextBoxControl {
+            look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 x: 0,
@@ -4546,6 +4762,7 @@ mod tests {
             link: None,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
+            look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 x: 50,
@@ -5847,6 +6064,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Line(Hwp5LineControl {
+                look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 9_884,
@@ -5890,6 +6108,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Polygon(Hwp5PolygonControl {
+                look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 17_804,
@@ -5941,6 +6160,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Rect(crate::decoder::section::Hwp5RectControl {
+                look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 13_200,
@@ -6433,6 +6653,7 @@ mod tests {
                 paragraphs: vec![chart_paragraph()],
             }),
             "textbox" => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 0,
@@ -6494,5 +6715,120 @@ mod tests {
             "chart binary_data_id=1",
         );
         assert_eq!(extract_calls(), 1, "no extraction may run after the budget is exhausted");
+    }
+}
+
+#[cfg(test)]
+mod shape_style_tests {
+    use super::*;
+    use crate::schema::border_fill::{
+        Hwp5FillPatternKind, Hwp5RawBorderFillFill, Hwp5RawColorFill,
+    };
+    use crate::schema::section::{Hwp5ShapeLine, Hwp5ShapeLook};
+    use hwpforge_core::control::{Fill, LineStyle};
+
+    fn look(line_type: u32, fill_kind: u32, fill: Hwp5RawBorderFillFill) -> Hwp5ShapeLook {
+        Hwp5ShapeLook {
+            line: Hwp5ShapeLine { color: 0x0017_9EDE, thickness: 283, properties: line_type },
+            fill_kind,
+            fill: Ok(fill),
+        }
+    }
+
+    fn colour_fill(background: u32, pattern: Hwp5FillPatternKind) -> Hwp5RawBorderFillFill {
+        Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
+            background_color: background,
+            pattern_color: 0,
+            pattern_kind: pattern,
+            alpha: 0,
+            extra_data: Vec::new(),
+        })
+    }
+
+    fn style(look: &Hwp5ShapeLook, fillable: bool) -> (hwpforge_core::control::ShapeStyle, usize) {
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        let s = images.shape_style(look, fillable);
+        (s, images.warnings.len())
+    }
+
+    /// 1b-T2 + r6 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도
+    /// 종류가 이긴다(굵기로 판정하지 않음); 색은 COLORREF(BGR) 그대로
+    /// (`0x00179EDE` → `#DE9E17`). 이것을 실패시키는 것: 종류 판정을 굵기로 /
+    /// `0 => None` 갈래를 실선으로 / BGR 변환 누락.
+    #[test]
+    fn line_type_zero_is_no_line_whatever_the_width() {
+        let (s, warnings) =
+            style(&look(0, 1, colour_fill(0x00EF_DECE, Hwp5FillPatternKind::None)), true);
+        assert_eq!(s.line_style, Some(LineStyle::None));
+        assert_eq!(s.line_width, Some(283));
+        assert_eq!(s.line_color.unwrap().to_hex_rgb(), "#DE9E17");
+        assert_eq!(s.fill_color.unwrap().to_hex_rgb(), "#CEDEEF");
+        assert_eq!(warnings, 0);
+        for (code, expected) in [(1, LineStyle::Solid), (2, LineStyle::Dot), (3, LineStyle::Dash)] {
+            let (s, w) = style(&look(code, 0, Hwp5RawBorderFillFill::None), false);
+            assert_eq!((s.line_style, w), (Some(expected), 0), "{code}");
+        }
+        let (s, w) = style(&look(8, 0, Hwp5RawBorderFillFill::None), false);
+        assert_eq!((s.line_style, w), (Some(LineStyle::Solid), 1), "unconfirmed type reported");
+    }
+
+    /// 1b-T6: 채우기 없음은 빈 상자(흰 칠과 구별), 선 도형에는 채우기가
+    /// 없다. 이것을 실패시키는 것: 종류 0 을 기본(흰 칠)으로 두기 / 선 도형에
+    /// 채우기를 쓰기.
+    #[test]
+    fn no_fill_is_an_empty_box() {
+        let (s, _) = style(&look(1, 0, Hwp5RawBorderFillFill::None), true);
+        assert_eq!(s.fill, Some(Fill::None));
+        // 종류 0 이면 뒤 블록을 못 읽어도 빈 상자다.
+        let mut unreadable = look(1, 0, Hwp5RawBorderFillFill::None);
+        unreadable.fill = Err("cut short".into());
+        let (s, w) = style(&unreadable, true);
+        assert_eq!((s.fill, w), (Some(Fill::None), 0));
+        let (s, _) = style(&look(1, 1, colour_fill(0x00FF_0000, Hwp5FillPatternKind::None)), false);
+        assert_eq!((s.fill, s.fill_color), (None, None));
+    }
+
+    /// A text box gets its outline and fill too (r6: the boxes around the
+    /// Ministry of Justice text). 이것을 실패시키는 것: 글상자 투영에서
+    /// 스타일을 빼기.
+    #[test]
+    fn text_box_takes_its_look() {
+        let textbox = Hwp5TextBoxControl {
+            look: Some(look(0, 1, colour_fill(0x00DC_AF86, Hwp5FillPatternKind::None))),
+            ctrl_id: 0,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 8_000,
+                height: 2_000,
+            },
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+            ctrl_properties: 0,
+        };
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        let run = project_textbox_run(&textbox, &mut images);
+        let Some(Control::TextBox { style: Some(s), .. }) = run.content.as_control() else {
+            panic!("{run:?}")
+        };
+        assert_eq!(s.line_style, Some(LineStyle::None));
+        assert_eq!(s.fill_color.unwrap().to_hex_rgb(), "#86AFDC");
+    }
+
+    /// 1b-T3 (x6 F1·F2): 무늬 −1 = 없음(단색만), 무늬 2 = Hancom `SLASH`.
+    /// 이것을 실패시키는 것: 무늬 −1 을 0(가로줄)으로 / 무늬 표 한 줄 교체.
+    #[test]
+    fn hatch_none_and_slash() {
+        let (s, _) = style(&look(1, 1, colour_fill(0x0000_00FF, Hwp5FillPatternKind::None)), true);
+        assert_eq!((s.fill_color.unwrap().to_hex_rgb(), s.fill), ("#FF0000".to_string(), None));
+        let (s, _) =
+            style(&look(1, 1, colour_fill(0x0000_FFFF, Hwp5FillPatternKind::BackSlash)), true);
+        let Some(Fill::Pattern { pattern_type, bg_color, .. }) = s.fill else { panic!("{s:?}") };
+        assert_eq!(
+            (pattern_type.to_string(), bg_color.to_hex_rgb()),
+            ("SLASH".into(), "#FFFF00".into())
+        );
     }
 }

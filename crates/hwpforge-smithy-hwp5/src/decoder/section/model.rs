@@ -218,6 +218,9 @@ pub(crate) struct Hwp5LineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed pure rectangle evidence from a `gso ` scope.
@@ -232,6 +235,9 @@ pub(crate) struct Hwp5RectControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed polygon evidence from a `gso ` scope.
@@ -248,6 +254,9 @@ pub(crate) struct Hwp5PolygonControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
@@ -268,6 +277,9 @@ pub(crate) struct Hwp5EllipseControl {
     pub ctrl_properties: u32,
     /// The stored centre and axis points, in the shape's local coordinates.
     pub shape: Hwp5ShapeComponentEllipse,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -310,6 +322,9 @@ pub(crate) struct Hwp5ArcControl {
     /// The stored centre, axis and arc end points, in the shape's local
     /// coordinates (used inside a group).
     pub shape: Hwp5ShapeComponentEllipse,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed connect-line evidence from a `gso ` scope.
@@ -333,6 +348,9 @@ pub(crate) struct Hwp5ConnectLineControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
@@ -394,6 +412,9 @@ pub(crate) struct Hwp5CurveControl {
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
@@ -415,6 +436,9 @@ pub(crate) struct Hwp5TextBoxControl {
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`. Distinct from
     /// `list_header_properties` (the textbox `HWPTAG_LIST_HEADER` 속성 word).
     pub ctrl_properties: u32,
+    /// The shape's outline and fill (§19.5 1b); `None` for a group child
+    /// (the group projection reports its fill) or when unreadable.
+    pub look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// Parsed OLE-backed object evidence from a `gso ` scope.

@@ -407,6 +407,8 @@ struct NestedSubtreeContext {
     /// carries the `"$con"` type tag. When `Some`, all subtree records are
     /// routed to the group instead of the flat single-shape slots above.
     group: Option<GsoGroupBuilder>,
+    /// Outline and fill from the scope's first `ShapeComponent` (§19.5 1b).
+    look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 impl NestedSubtreeContext {
@@ -439,6 +441,7 @@ impl NestedSubtreeContext {
             link: None,
             paragraphs: Vec::new(),
             group: None,
+            look: None,
         }
     }
 
@@ -459,6 +462,9 @@ impl NestedSubtreeContext {
 
     fn note_shape_component(&mut self, data: &[u8], level: u16) {
         self.saw_shape_component = true;
+        if self.comp_level.is_none() {
+            self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
+        }
         self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
             self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
@@ -562,6 +568,7 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::TextBox) if self.saw_list_header => match self.geometry {
                 Some(geometry) => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                    look: self.look,
                     ctrl_id: self.ctrl_id,
                     geometry,
                     paragraphs: self.paragraphs,
@@ -586,6 +593,7 @@ impl NestedSubtreeContext {
                 link: self.link,
                 instance_id: self.instance_id,
                 ctrl_properties: self.properties_raw,
+                look: self.look,
             }),
         }
     }
@@ -629,12 +637,14 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         let ctrl_id = input.ctrl_id;
         return match input.geometry {
             Some(geometry) if ellipse.is_arc() => Hwp5Control::Arc(Hwp5ArcControl {
+                look: input.look.clone(),
                 ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
                 shape: ellipse,
             }),
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
+                look: input.look.clone(),
                 ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
@@ -647,6 +657,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         let ctrl_id = input.ctrl_id;
         return match input.geometry {
             Some(geometry) => Hwp5Control::Curve(Hwp5CurveControl {
+                look: input.look.clone(),
                 ctrl_id,
                 geometry,
                 points: curve.points,
@@ -665,6 +676,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
     if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE) {
         if let (Some(geometry), Some(line)) = (input.geometry.as_ref(), input.line.as_ref()) {
             return Hwp5Control::ConnectLine(Hwp5ConnectLineControl {
+                look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry: geometry.clone(),
                 start: line.start,
@@ -696,12 +708,14 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }
         (Some(geometry), None, None, None, None) if input.saw_shape_rectangle => {
             Hwp5Control::Rect(Hwp5RectControl {
+                look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
             })
         }
         (Some(geometry), None, None, Some(line), None) => Hwp5Control::Line(Hwp5LineControl {
+            look: input.look.clone(),
             ctrl_id: input.ctrl_id,
             geometry,
             start: line.start,
@@ -710,6 +724,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }),
         (Some(geometry), None, None, None, Some(polygon)) if polygon.points.len() >= 3 => {
             Hwp5Control::Polygon(Hwp5PolygonControl {
+                look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry,
                 points: polygon.points,
@@ -5071,6 +5086,7 @@ mod tests {
             text_art: None,
             shape_component_kind,
             link: None,
+            look: None,
             instance_id: 0,
             ctrl_properties: 0,
         }

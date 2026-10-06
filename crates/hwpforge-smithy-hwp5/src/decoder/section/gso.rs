@@ -61,6 +61,8 @@ pub(super) struct InlineGsoContext {
     current_para: Option<super::ParaBuf>,
     /// A shape inside this shape's text, collected the same way.
     inner: Option<Box<InlineGsoContext>>,
+    /// Outline and fill from the scope's first `ShapeComponent`.
+    look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 pub(super) struct GsoClassificationInput {
@@ -86,6 +88,9 @@ pub(super) struct GsoClassificationInput {
     pub(super) ctrl_properties: u32,
     /// The shape's hyperlink (a picture keeps it).
     pub(super) link: Option<Result<String, String>>,
+    /// The shape's outline and fill (single shapes; `None` for group
+    /// children).
+    pub(super) look: Option<crate::schema::section::Hwp5ShapeLook>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -196,6 +201,7 @@ impl GsoChildBuilder {
             // treat_as_char 는 W5 에서 해석.
             ctrl_properties: 0,
             link: self.link,
+            look: None,
         });
         Hwp5GroupChild {
             control,
@@ -553,6 +559,7 @@ impl InlineGsoContext {
             paragraphs: Vec::new(),
             current_para: None,
             inner: None,
+            look: None,
         }
     }
 
@@ -776,6 +783,11 @@ impl InlineGsoContext {
 
     pub(super) fn note_shape_component(&mut self, data: &[u8], level: u16) {
         self.saw_shape_component = true;
+        if self.comp_level.is_none() {
+            // The component right under the control header writes its type
+            // tag twice.
+            self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
+        }
         self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
             self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
@@ -837,6 +849,7 @@ impl InlineGsoContext {
         if self.saw_list_header && self.saw_shape_rectangle {
             if let Some(geometry) = self.geometry {
                 return Hwp5Control::TextBox(super::Hwp5TextBoxControl {
+                    look: self.look,
                     ctrl_id: self.ctrl_id,
                     geometry,
                     paragraphs: self.paragraphs,
@@ -861,6 +874,7 @@ impl InlineGsoContext {
             text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
             link: self.link,
+            look: self.look,
         })
     }
 }

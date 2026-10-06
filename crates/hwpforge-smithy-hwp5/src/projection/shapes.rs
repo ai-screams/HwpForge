@@ -328,6 +328,7 @@ mod tests {
         // single point makes the scaled start/end coincide so
         // `Control::line` rejects it.
         let line = crate::decoder::section::Hwp5LineControl {
+            look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
             ctrl_properties: 0,
@@ -344,6 +345,7 @@ mod tests {
     fn project_line_run_returns_some_for_valid_line() {
         // Regression: a non-degenerate line still projects successfully.
         let line = crate::decoder::section::Hwp5LineControl {
+            look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
             ctrl_properties: 0,
@@ -362,6 +364,7 @@ mod tests {
         // rejects the shape, so the projection must return None rather than
         // panicking via .expect().
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
             ctrl_properties: 0,
@@ -377,6 +380,7 @@ mod tests {
     fn project_polygon_run_returns_some_for_valid_polygon() {
         // Regression: a valid 3-vertex polygon still projects successfully.
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
             ctrl_properties: 0,

@@ -209,6 +209,24 @@ pub enum Hwp5FillPatternKind {
 }
 
 impl Hwp5FillPatternKind {
+    /// The Core hatch for this kind; `None` for no hatch and an unknown kind.
+    /// Kind 2 is Hancom's `SLASH` (x6 F1) — [`PatternType`]'s display swaps
+    /// the two slashes the same way (WG#21).
+    ///
+    /// [`PatternType`]: hwpforge_foundation::PatternType
+    pub fn pattern_type(self) -> Option<hwpforge_foundation::PatternType> {
+        use hwpforge_foundation::PatternType;
+        match self {
+            Self::None | Self::Unknown(_) => None,
+            Self::Horizontal => Some(PatternType::Horizontal),
+            Self::Vertical => Some(PatternType::Vertical),
+            Self::BackSlash => Some(PatternType::BackSlash),
+            Self::Slash => Some(PatternType::Slash),
+            Self::Cross => Some(PatternType::Cross),
+            Self::CrossDiagonal => Some(PatternType::CrossDiagonal),
+        }
+    }
+
     fn from_raw(raw: i32) -> Self {
         match raw {
             -1 => Self::None,
@@ -415,7 +433,9 @@ impl Hwp5RawBorderFill {
     }
 }
 
-fn parse_fill_payload(
+/// Parses a fill block (kind word already read): `DocInfo` border fills and
+/// shape components (after their line information) share this layout.
+pub(crate) fn parse_fill_payload(
     fill_kind: u32,
     cur: &mut Cursor<&[u8]>,
 ) -> Hwp5Result<Hwp5RawBorderFillFill> {

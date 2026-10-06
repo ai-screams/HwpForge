@@ -396,6 +396,7 @@ mod tests {
         };
         let rect = || {
             Hwp5Control::Rect(Hwp5RectControl {
+                look: None,
                 ctrl_id: 0,
                 geometry: geo.clone(),
                 ctrl_properties: 0,
@@ -408,6 +409,7 @@ mod tests {
                 child(rect(), render.clone(), 1),
                 child(
                     Hwp5Control::Polygon(Hwp5PolygonControl {
+                        look: None,
                         ctrl_id: 0,
                         geometry: geo.clone(),
                         points: Vec::new(),
@@ -452,6 +454,7 @@ mod tests {
         };
         let rect = |sca, start| Hwp5GroupChild {
             control: Hwp5Control::Rect(Hwp5RectControl {
+                look: None,
                 ctrl_id: 0,
                 geometry: geo.clone(),
                 ctrl_properties: 0,
