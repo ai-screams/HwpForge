@@ -79,6 +79,53 @@ pub struct Image {
     /// object hyperlink). `None` = the picture links nowhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hyperlink: Option<String>,
+    /// The part of the image the picture shows, in the image's own
+    /// coordinates ([`Self::image_extent`]). `None` = the whole image.
+    ///
+    /// The cropped part fills the picture's original box
+    /// ([`Self::original_size`]), which is then scaled to the display size
+    /// (`width` × `height`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<ImageCrop>,
+    /// The size of the whole image in the coordinates [`Self::crop`] is
+    /// measured in (HWPX `<hp:imgDim>`, HWP 5.0 picture record bytes
+    /// 82–90). It cannot be derived from the image's pixels. `None` =
+    /// unknown, or the display size when there is no crop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_extent: Option<(HwpUnit, HwpUnit)>,
+    /// The picture's original (unscaled) box (HWPX `<hp:orgSz>`); the
+    /// display size is this box scaled. `None` = the display size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_size: Option<(HwpUnit, HwpUnit)>,
+}
+
+/// The part of an image a picture shows: a rectangle in the image's own
+/// coordinates (see [`Image::image_extent`]).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::image::ImageCrop;
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let crop = ImageCrop {
+///     left: HwpUnit::ZERO,
+///     top: HwpUnit::new(1113).unwrap(),
+///     right: HwpUnit::new(7260).unwrap(),
+///     bottom: HwpUnit::new(3851).unwrap(),
+/// };
+/// assert!(crop.right > crop.left);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ImageCrop {
+    /// Left edge.
+    pub left: HwpUnit,
+    /// Top edge.
+    pub top: HwpUnit,
+    /// Right edge.
+    pub right: HwpUnit,
+    /// Bottom edge.
+    pub bottom: HwpUnit,
 }
 
 impl Image {
@@ -114,6 +161,9 @@ impl Image {
             placement: None,
             inst_id: None,
             hyperlink: None,
+            crop: None,
+            image_extent: None,
+            original_size: None,
         }
     }
 
@@ -153,6 +203,9 @@ impl Image {
             placement: None,
             inst_id: None,
             hyperlink: None,
+            crop: None,
+            image_extent: None,
+            original_size: None,
         }
     }
 
@@ -919,5 +972,36 @@ mod tests {
         let json = serde_json::to_string(&linked).unwrap();
         assert!(json.contains(r#""hyperlink":"http://www.korea.kr""#), "{json}");
         assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), linked);
+    }
+
+    /// Crop, image extent and original size round-trip; a picture without
+    /// them writes no key, so JSON from before the fields reads and writes
+    /// unchanged.
+    /// 이것을 실패시키는 것: 세 필드 중 하나의 `skip_serializing_if` 삭제
+    /// (`null` 키가 생겨 옛 JSON 과 출력이 달라짐).
+    #[test]
+    fn crop_extent_and_original_size_round_trip_and_are_absent_when_none() {
+        let u = |v: i32| HwpUnit::new(v).unwrap();
+        let plain = Image::new("BinData/image1.png", u(100), u(50), ImageFormat::Png);
+        let json = serde_json::to_string(&plain).unwrap();
+        for key in ["crop", "image_extent", "original_size"] {
+            assert!(!json.contains(key), "{key}: {json}");
+        }
+        let old = r#"{"path":"BinData/image1.png","width":100,"height":50,"format":"Png","caption":null}"#;
+        assert_eq!(serde_json::from_str::<Image>(old).unwrap(), plain);
+
+        let mut cropped = plain.clone();
+        cropped.crop =
+            Some(ImageCrop { left: u(0), top: u(1113), right: u(7260), bottom: u(3851) });
+        cropped.image_extent = Some((u(7260), u(5040)));
+        cropped.original_size = Some((u(84180), u(59580)));
+        let json = serde_json::to_string(&cropped).unwrap();
+        assert!(
+            json.contains(r#""crop":{"left":0,"top":1113,"right":7260,"bottom":3851}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""image_extent":[7260,5040]"#), "{json}");
+        assert!(json.contains(r#""original_size":[84180,59580]"#), "{json}");
+        assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), cropped);
     }
 }

@@ -117,7 +117,7 @@ pub use control::{
 };
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
-pub use image::{Image, ImageFormat, ImageStore};
+pub use image::{Image, ImageCrop, ImageFormat, ImageStore};
 pub use inline::{InlineSegment, InlineTabAttr, InlineText};
 pub use metadata::Metadata;
 pub use numbering::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};

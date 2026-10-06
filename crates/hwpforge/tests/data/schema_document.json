@@ -1120,6 +1120,51 @@
             "string",
             "null"
           ]
+        },
+        "crop": {
+          "description": "The part of the image the picture shows, in the image's own\ncoordinates ([`Self::image_extent`]). `None` = the whole image.\n\nThe cropped part fills the picture's original box\n([`Self::original_size`]), which is then scaled to the display size\n(`width` × `height`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageCrop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image_extent": {
+          "description": "The size of the whole image in the coordinates [`Self::crop`] is\nmeasured in (HWPX `<hp:imgDim>`, HWP 5.0 picture record bytes\n82–90). It cannot be derived from the image's pixels. `None` =\nunknown, or the display size when there is no crop.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "$ref": "#/$defs/HwpUnit"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "original_size": {
+          "description": "The picture's original (unscaled) box (HWPX `<hp:orgSz>`); the\ndisplay size is this box scaled. `None` = the display size.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "$ref": "#/$defs/HwpUnit"
+            }
+          ],
+          "minItems": 2,
+          "maxItems": 2
         }
       },
       "required": [
@@ -1175,6 +1220,34 @@
           ],
           "additionalProperties": false
         }
+      ]
+    },
+    "ImageCrop": {
+      "description": "The part of an image a picture shows: a rectangle in the image's own\ncoordinates (see [`Image::image_extent`]).\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageCrop;\nuse hwpforge_foundation::HwpUnit;\n\nlet crop = ImageCrop {\n    left: HwpUnit::ZERO,\n    top: HwpUnit::new(1113).unwrap(),\n    right: HwpUnit::new(7260).unwrap(),\n    bottom: HwpUnit::new(3851).unwrap(),\n};\nassert!(crop.right > crop.left);\n```",
+      "type": "object",
+      "properties": {
+        "left": {
+          "description": "Left edge.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "top": {
+          "description": "Top edge.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "right": {
+          "description": "Right edge.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "bottom": {
+          "description": "Bottom edge.",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "left",
+        "top",
+        "right",
+        "bottom"
       ]
     },
     "Control": {
