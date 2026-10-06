@@ -619,6 +619,7 @@ impl HwpxDecoder {
         // Track how many masterpages have been assigned across sections
         let mut masterpage_cursor = 0usize;
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
+        warnings.extend(header_result.warnings);
 
         // BinData is read before the sections: a picture without an
         // `<hp:imgDim>` is judged whole against its image's own size.

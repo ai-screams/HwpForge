@@ -298,6 +298,35 @@ pub struct HwpxParaShape {
     pub tab_pr_id_ref: u32,
     /// Condense value for tight outline spacing.
     pub condense: u32,
+    /// Vertical alignment of a line's characters (`<hh:align vertical>`):
+    /// `BASELINE`, `TOP`, `CENTER` or `BOTTOM`, kept as written.
+    #[serde(default = "baseline", skip_serializing_if = "is_baseline")]
+    pub vertical_align: String,
+    /// Offsets of the paragraph border from the text (`<hh:border
+    /// offsetLeft/offsetRight/offsetTop/offsetBottom>`): left, right, top,
+    /// bottom.
+    #[serde(default, skip_serializing_if = "all_zero")]
+    pub border_offset: [HwpUnit; 4],
+    /// The border joins the next paragraph's of the same border
+    /// (`<hh:border connect>`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub border_connect: bool,
+    /// The border is drawn ignoring the paragraph margins
+    /// (`<hh:border ignoreMargin>`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub border_ignore_margin: bool,
+}
+
+fn baseline() -> String {
+    "BASELINE".to_string()
+}
+
+fn is_baseline(value: &str) -> bool {
+    value == "BASELINE"
+}
+
+fn all_zero(offsets: &[HwpUnit; 4]) -> bool {
+    offsets.iter().all(|v| *v == HwpUnit::ZERO)
 }
 
 impl Default for HwpxParaShape {
@@ -326,6 +355,10 @@ impl Default for HwpxParaShape {
             checked: false,
             tab_pr_id_ref: 0,
             condense: 0,
+            vertical_align: baseline(),
+            border_offset: [HwpUnit::ZERO; 4],
+            border_connect: false,
+            border_ignore_margin: false,
         }
     }
 }
@@ -844,6 +877,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         checked: false,
         tab_pr_id_ref: 0,
         condense: 0,
+        ..HwpxParaShape::default()
     };
 
     [
@@ -1475,6 +1509,7 @@ fn build_store_from_registry_with(
             checked: wire_parts.checked,
             tab_pr_id_ref: ps.tab_def_id,
             condense: 0,
+            ..HwpxParaShape::default()
         }));
     }
 

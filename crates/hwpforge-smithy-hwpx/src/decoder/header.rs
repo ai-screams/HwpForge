@@ -29,6 +29,8 @@ pub struct HeaderParseResult {
     pub style_store: HwpxStyleStore,
     /// Starting auto-numbering values from `<hh:beginNum>`, if present.
     pub begin_num: Option<BeginNum>,
+    /// What the style store could not hold (per-language character scalars).
+    pub warnings: Vec<super::DecodeWarning>,
 }
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`] and optional [`BeginNum`].
@@ -53,11 +55,52 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     let begin_num = parse_begin_num(&head);
 
     let mut store = HwpxStyleStore::new();
+    let mut warnings = Vec::new();
     if let Some(ref_list) = &head.ref_list {
         populate_store_from_ref_list(&mut store, ref_list);
+        warnings = per_language_scalar_losses(ref_list);
     }
 
-    Ok(HeaderParseResult { style_store: store, begin_num })
+    Ok(HeaderParseResult { style_store: store, begin_num, warnings })
+}
+
+/// A `charPr` whose ratio, spacing, relative size or offset differs between
+/// languages: the style store keeps one value per field (the hangul one),
+/// so a re-encode writes it for every language and the other scripts' glyph
+/// widths and positions change. Reported as lost, one warning per `charPr`.
+fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
+    let uniform = |v: &Option<crate::schema::header::HxLangValues>| {
+        v.as_ref().is_none_or(|v| {
+            [v.latin, v.hanja, v.japanese, v.other, v.symbol, v.user].iter().all(|x| *x == v.hangul)
+        })
+    };
+    char_props
+        .items
+        .iter()
+        .filter_map(|cp| {
+            let fields: Vec<&str> = [
+                ("ratio", &cp.ratio),
+                ("spacing", &cp.spacing),
+                ("relSz", &cp.rel_sz),
+                ("offset", &cp.offset),
+            ]
+            .into_iter()
+            .filter(|(_, v)| !uniform(v))
+            .map(|(name, _)| name)
+            .collect();
+            (!fields.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "char_shape_per_language".to_string(),
+                reason: format!(
+                    "charPr {} has per-language {} values; only the hangul value is kept",
+                    cp.id,
+                    fields.join(", ")
+                ),
+            })
+        })
+        .collect()
 }
 
 fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
@@ -539,6 +582,18 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
     let checked = pp.checked != 0;
     let tab_pr_id_ref = pp.tab_pr_id_ref;
     let condense = pp.condense;
+    let vertical_align = pp
+        .align
+        .as_ref()
+        .map(|a| a.vertical.trim())
+        .filter(|v| !v.is_empty())
+        .map_or(default_para_shape.vertical_align, str::to_string);
+    let offset = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
+    let border_offset = pp.border.as_ref().map_or(default_para_shape.border_offset, |b| {
+        [b.offset_left, b.offset_right, b.offset_top, b.offset_bottom].map(offset)
+    });
+    let border_connect = pp.border.as_ref().is_some_and(|b| b.connect != 0);
+    let border_ignore_margin = pp.border.as_ref().is_some_and(|b| b.ignore_margin != 0);
 
     HwpxParaShape {
         alignment,
@@ -564,6 +619,10 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         checked,
         tab_pr_id_ref,
         condense,
+        vertical_align,
+        border_offset,
+        border_connect,
+        border_ignore_margin,
     }
 }
 

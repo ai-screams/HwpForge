@@ -729,14 +729,16 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 /// breakSetting, autoSpacing, margin/lineSpacing (inside hp:switch),
 /// and an optional border block when the shared model references one.
 fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
+    let [offset_left, offset_right, offset_top, offset_bottom] =
+        ps.border_offset.map(|v| v.as_i32());
     let border = ps.border_fill_id.map(|border_fill_id| HxBorder {
         border_fill_id_ref: border_fill_id.get() as u32,
-        offset_left: 0,
-        offset_right: 0,
-        offset_top: 0,
-        offset_bottom: 0,
-        connect: 0,
-        ignore_margin: 0,
+        offset_left,
+        offset_right,
+        offset_top,
+        offset_bottom,
+        connect: u32::from(ps.border_connect),
+        ignore_margin: u32::from(ps.border_ignore_margin),
     });
 
     HxParaPr {
@@ -749,7 +751,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         checked: u32::from(ps.checked),
         align: Some(HxAlign {
             horizontal: alignment_to_hwpx(ps.alignment).into(),
-            vertical: "BASELINE".into(),
+            vertical: ps.vertical_align.clone(),
         }),
         heading: Some(wire_parts_to_heading(ps.heading_type, ps.heading_id_ref, ps.heading_level)),
         break_setting: Some(HxBreakSetting {
@@ -1899,5 +1901,91 @@ mod tests {
 
         assert!(xml.contains(r##"<hh:slash type="CENTER" Crooked="0" isCounter="0"/>"##));
         assert!(xml.contains(r##"<hh:backSlash type="ALL" Crooked="0" isCounter="0"/>"##));
+    }
+
+    /// A paragraph's vertical alignment, border offsets and border flags
+    /// survive a header round trip (§19.16 I, S11 — before, every paraPr
+    /// came back BASELINE with zero offsets: 2,875 + 686 Hancom documents);
+    /// a default paraPr writes what it did before.
+    ///
+    /// 이것을 실패시키는 것: 인코더가 `vertical` 을 BASELINE 으로 고정하는 것 /
+    /// 오프셋·connect·ignoreMargin 중 하나를 0 으로 쓰는 것 / 디코더가 그 값을 버리는 것.
+    #[test]
+    fn para_vertical_align_and_border_offsets_round_trip() {
+        let unit = |v: i32| HwpUnit::new(v).unwrap();
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        });
+        let mut shaped = HwpxParaShape {
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(2)),
+            ..HwpxParaShape::default()
+        };
+        shaped.vertical_align = "CENTER".to_string();
+        shaped.border_offset = [unit(100), unit(200), unit(300), unit(400)];
+        shaped.border_connect = true;
+        shaped.border_ignore_margin = true;
+        store.push_para_shape(shaped.clone());
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="BASELINE"/>"#), "{xml}");
+        assert!(xml.contains(r#"offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0""#), "{xml}");
+        assert!(xml.contains(r#"<hh:align horizontal="LEFT" vertical="CENTER"/>"#), "{xml}");
+        assert!(xml.contains(r#"offsetLeft="100" offsetRight="200" offsetTop="300" offsetBottom="400" connect="1" ignoreMargin="1""#), "{xml}");
+
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
+        let back: Vec<_> = decoded.iter_para_shapes().cloned().collect();
+        assert_eq!(back[1].vertical_align, "CENTER");
+        assert_eq!(back[1].border_offset, shaped.border_offset);
+        assert!(back[1].border_connect && back[1].border_ignore_margin);
+        assert_eq!(back[0].vertical_align, "BASELINE");
+    }
+
+    /// The new paraPr fields are left out of JSON when they hold the
+    /// default, so a style store exported before them reads and writes the
+    /// same.
+    ///
+    /// 이것을 실패시키는 것: 네 필드 중 하나의 `skip_serializing_if` 삭제 /
+    /// `vertical_align` 의 `default = "baseline"` 삭제(옛 JSON 이 빈 문자열이 된다).
+    #[test]
+    fn para_shape_json_omits_default_new_fields() {
+        let json = serde_json::to_value(HwpxParaShape::default()).unwrap();
+        for key in ["vertical_align", "border_offset", "border_connect", "border_ignore_margin"] {
+            assert!(json.get(key).is_none(), "{key}: {json}");
+        }
+        let mut old = json.clone();
+        old.as_object_mut().unwrap().retain(|k, _| k != "vertical_align");
+        let back: HwpxParaShape = serde_json::from_value(old).unwrap();
+        assert_eq!(back, HwpxParaShape::default());
+    }
+
+    /// A charPr whose ratio, spacing, relative size or offset differs
+    /// between languages is reported lost (the store keeps the hangul
+    /// value); a uniform one is not.
+    ///
+    /// 이것을 실패시키는 것: 언어별 비교를 지우는 것 / 네 필드 중 하나를 비교에서
+    /// 빼는 것(그 필드의 경고가 사라짐).
+    #[test]
+    fn per_language_char_scalars_are_reported_lost() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape::default());
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(crate::decoder::header::parse_header(&xml).unwrap().warnings.is_empty());
+        for (element, expect) in
+            [("ratio", "ratio"), ("spacing", "spacing"), ("relSz", "relSz"), ("offset", "offset")]
+        {
+            let at = xml.find(&format!("<hh:{element} hangul=")).unwrap();
+            let latin = at + xml[at..].find("latin=\"").unwrap() + "latin=\"".len();
+            let end = latin + xml[latin..].find('"').unwrap();
+            let changed = format!("{}77{}", &xml[..latin], &xml[end..]);
+            let warnings = crate::decoder::header::parse_header(&changed).unwrap().warnings;
+            assert_eq!(warnings.len(), 1, "{element}: {warnings:?}");
+            let crate::DecodeWarning::ContentLost { kind, reason, .. } = &warnings[0] else {
+                panic!("{warnings:?}")
+            };
+            assert_eq!(kind, "char_shape_per_language");
+            assert!(reason.contains(&format!("per-language {expect} values")), "{reason}");
+        }
     }
 }
