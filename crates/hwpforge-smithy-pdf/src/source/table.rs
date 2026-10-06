@@ -63,6 +63,29 @@ pub(crate) struct TableReplayOutcome {
     pub total_height: i32,
 }
 
+/// Whether the table sits in the one placement the replay supports: the
+/// default flow placement (§19.6 A — the HWPX encoder's `None`): not treated
+/// as a character, flowing with text, no overlap, paragraph/column anchors,
+/// zero offsets, top/left, no line-spacing effect, anchor not held,
+/// top-and-bottom wrap, both-sides flow. Read from Core's
+/// [`Table::placement`], not the decode-only cache, so a placement changed
+/// in JSON cannot pass on the cache's old verdict.
+///
+/// 이것을 실패시키는 것: 캐시 `default_flow_pos` 로 되돌리기
+/// (`table_admission_reads_the_core_placement`) / 비교에서 새 네 필드 중
+/// 하나를 빼기.
+fn placement_is_default_flow(table: &Table) -> bool {
+    use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+    table.placement.as_ref().is_none_or(|p| {
+        *p == ObjectPlacement::new(
+            ObjectTextWrap::TopAndBottom,
+            ObjectRelativeTo::Para,
+            ObjectRelativeTo::Column,
+        )
+        .with_flow_with_text(true)
+    })
+}
+
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
 #[allow(clippy::too_many_arguments)] // 배치 컨텍스트 전달 — 구조체화는 W3d 정리 후보
 pub(crate) fn replay_table(
@@ -87,7 +110,7 @@ pub(crate) fn replay_table(
     let Some(tlc) = table.layout_cache else {
         return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
     };
-    if !tlc.default_flow_pos {
+    if !placement_is_default_flow(table) {
         return reject("non-default table position");
     }
     if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {
@@ -525,7 +548,7 @@ fn place_table_flat(
     let Some(tlc) = table.layout_cache else {
         return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
     };
-    if !tlc.default_flow_pos {
+    if !placement_is_default_flow(table) {
         return reject("non-default table position");
     }
     if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {

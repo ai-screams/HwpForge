@@ -555,7 +555,15 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
     let Some(p) = img.placement.as_ref() else {
         return false;
     };
+    // §19.20 PDF-v3 (P16): 앵커 렌더러는 정렬을 계산하지 않는다 — 정렬이
+    // top/left 가 아니거나 두 플래그가 켜진 앵커 그림은 거부.
+    // 이것을 실패시키는 것: 이 네 조건을 지우기
+    // (`anchored_image_with_alignment_is_rejected`).
     !p.treat_as_char
+        && p.vert_align == hwpforge_core::placement::VertAlign::Top
+        && p.horz_align == hwpforge_core::placement::HorzAlign::Left
+        && !p.affect_line_spacing
+        && !p.hold_anchor_and_so
         && p.vert_rel_to == ObjectRelativeTo::Para
         && matches!(p.horz_rel_to, ObjectRelativeTo::Para | ObjectRelativeTo::Column)
         && matches!(
@@ -2264,6 +2272,43 @@ mod tests {
         let picks = band_selections(&starts, &kinds, 0, count, &mut comparisons);
         assert!(picks.iter().enumerate().all(|(page, m)| m == &[page]));
         assert!(comparisons <= 4 * (count + count), "{comparisons}");
+    }
+
+    /// P16 (PDF-v3): 정렬이 top/left 가 아니거나 두 플래그가 켜진 앵커 그림은
+    /// 거부, 기본이면 허용. 이것을 실패시키는 것: 앵커 admission 의 네 조건 중
+    /// 하나를 지우기(각각).
+    #[test]
+    fn anchored_image_with_alignment_is_rejected() {
+        use hwpforge_core::placement::{HorzAlign, VertAlign};
+        let doc_with = |edit: &dyn Fn(&mut hwpforge_core::placement::ObjectPlacement)| {
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                edit(img.placement.as_mut().unwrap());
+            }
+            let mut para = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            replay(&doc_of(vec![para]), &PdfOptions::default())
+        };
+        assert!(doc_with(&|_| {}).is_ok());
+        for edit in [
+            &(|p: &mut hwpforge_core::placement::ObjectPlacement| p.vert_align = VertAlign::Center)
+                as &dyn Fn(&mut hwpforge_core::placement::ObjectPlacement),
+            &|p| p.horz_align = HorzAlign::Right,
+            &|p| p.affect_line_spacing = true,
+            &|p| p.hold_anchor_and_so = true,
+        ] {
+            assert!(doc_with(edit).is_err());
+        }
     }
 
     fn a4_body_top_left() -> (i32, i32) {
@@ -4610,12 +4655,45 @@ mod tests {
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
     }
 
+    /// A-T6: 표 admission 은 Core `placement` 를 본다 — 캐시가 기본 flow 라도
+    /// placement 가 떠 있으면 거부, 기본 flow 를 `Some` 으로 가진 표(디코더가
+    /// 접지 않은 경우)는 허용. 이것을 실패시키는 것: 캐시 `default_flow_pos`
+    /// 로 되돌리기 / 기본값 비교를 `None` 만으로 좁히기.
+    #[test]
+    fn table_admission_reads_the_core_placement() {
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+        let default = ObjectPlacement::new(
+            ObjectTextWrap::TopAndBottom,
+            ObjectRelativeTo::Para,
+            ObjectRelativeTo::Column,
+        )
+        .with_flow_with_text(true);
+        let ok = one_cell_cached_table().with_placement(default.clone());
+        assert!(replay(&doc_of(vec![table_host(ok, 0)]), &PdfOptions::default()).is_ok());
+        let floating = one_cell_cached_table()
+            .with_placement(default.with_vert_offset(HwpUnit::new(500).unwrap()));
+        let err =
+            replay(&doc_of(vec![table_host(floating, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
+            "{err:?}"
+        );
+    }
+
     #[test]
     fn table_profile_violations_are_rejected() {
         use hwpforge_core::table::TableLayoutCache;
-        // 비기본 pos
+        // 비기본 pos (Core placement — 글자처럼 취급 표)
         let t = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
-            .with_layout_cache(TableLayoutCache::new(None, false));
+            .with_layout_cache(TableLayoutCache::new(None, true))
+            .with_placement(
+                hwpforge_core::placement::ObjectPlacement::new(
+                    hwpforge_core::placement::ObjectTextWrap::TopAndBottom,
+                    hwpforge_core::placement::ObjectRelativeTo::Para,
+                    hwpforge_core::placement::ObjectRelativeTo::Para,
+                )
+                .with_treat_as_char(true),
+            );
         let err = replay(&doc_of(vec![table_host(t, 0)]), &PdfOptions::default()).unwrap_err();
         assert!(
             matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
