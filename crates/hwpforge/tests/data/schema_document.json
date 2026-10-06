@@ -3909,7 +3909,7 @@
           "$ref": "#/$defs/HwpUnit"
         },
         "anchor_paragraph": {
-          "description": "The body paragraph this header/footer is anchored to: the index into\n[`Section::paragraphs`] of the **top-level** paragraph the control\nsits in. A header/footer written inside a table cell is anchored to\nthe top-level paragraph that holds the table.\n\nHancom applies a header/footer from the page that paragraph starts on,\nnot to earlier pages, and a later header/footer of the same page type\nreplaces an earlier one. `None` means the first paragraph (index 0),\nwhich is how every header/footer was written before this field\nexisted — decoders write `None` for paragraph 0 too.\n\nThe index goes stale when paragraphs are inserted or removed before\nit; [`Document::validate`](crate::Document::validate) rejects an index\nthat is out of range.",
+          "description": "The body paragraph this header/footer is anchored to: the index into\n[`Section::paragraphs`] of the **top-level** paragraph the control\nsits in. A header/footer written inside a table cell is anchored to\nthe top-level paragraph that holds the table.\n\nHancom applies a header/footer from the page that paragraph starts on,\nnot to earlier pages, and a later header/footer of the same page type\nreplaces an earlier one. `None` means the first paragraph (index 0),\nwhich is how every header/footer was written before this field\nexisted — decoders write `None` for paragraph 0 too.\n\nThe index goes stale when paragraphs are inserted or removed before\nit; [`Document::validate`](crate::Document::validate) rejects an index\nthat is out of range. `Some(0)` means the same as `None`.",
           "type": [
             "integer",
             "null"

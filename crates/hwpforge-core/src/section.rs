@@ -420,7 +420,7 @@ pub struct HeaderFooter {
     ///
     /// The index goes stale when paragraphs are inserted or removed before
     /// it; [`Document::validate`](crate::Document::validate) rejects an index
-    /// that is out of range.
+    /// that is out of range. `Some(0)` means the same as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_paragraph: Option<usize>,
 }
@@ -439,25 +439,6 @@ impl HeaderFooter {
             text_height: HwpUnit::ZERO,
             anchor_paragraph: None,
         }
-    }
-
-    /// Anchors this header/footer to the top-level body paragraph at `index`
-    /// (see [`HeaderFooter::anchor_paragraph`]). Index 0 is stored as `None`,
-    /// the same thing.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hwpforge_core::section::HeaderFooter;
-    ///
-    /// let hf = HeaderFooter::all_pages(vec![]).with_anchor_paragraph(3);
-    /// assert_eq!(hf.anchor_paragraph, Some(3));
-    /// assert_eq!(HeaderFooter::all_pages(vec![]).with_anchor_paragraph(0).anchor_paragraph, None);
-    /// ```
-    #[must_use]
-    pub fn with_anchor_paragraph(mut self, index: usize) -> Self {
-        self.anchor_paragraph = if index == 0 { None } else { Some(index) };
-        self
     }
 
     /// Creates a header/footer applied to **all** pages (both odd and even).
@@ -992,19 +973,19 @@ mod tests {
     // -----------------------------------------------------------------------
 
     // 이것을 실패시키는 것: `skip_serializing_if` 를 빼기(첫 문단 머리말 JSON 에
-    // `"anchor_paragraph":null` 이 생김), `with_anchor_paragraph` 가 0 을
-    // `Some(0)` 으로 두기. (옛 JSON 읽기는 serde 가 `Option` 결측을 `None` 으로
-    // 읽어 `#[serde(default)]` 없이도 통과한다 — 그 속성은 다른 필드와의 일관성.)
+    // `"anchor_paragraph":null` 이 생김). (옛 JSON 읽기는 serde 가 `Option`
+    // 결측을 `None` 으로 읽어 `#[serde(default)]` 없이도 통과한다 — 그 속성은
+    // 다른 필드와의 일관성.)
     #[test]
     fn header_footer_anchor_json_is_absent_for_the_first_paragraph() {
-        let hf = HeaderFooter::all_pages(vec![]).with_anchor_paragraph(0);
-        assert_eq!(hf.anchor_paragraph, None);
+        let hf = HeaderFooter::all_pages(vec![]);
         let json = serde_json::to_string(&hf).unwrap();
         assert!(!json.contains("anchor_paragraph"), "{json}");
         let old: HeaderFooter =
             serde_json::from_str(r#"{"paragraphs":[],"apply_page_type":"Both"}"#).unwrap();
         assert_eq!(old.anchor_paragraph, None);
-        let anchored = HeaderFooter::all_pages(vec![]).with_anchor_paragraph(14);
+        let mut anchored = HeaderFooter::all_pages(vec![]);
+        anchored.anchor_paragraph = Some(14);
         let json = serde_json::to_string(&anchored).unwrap();
         assert!(json.contains(r#""anchor_paragraph":14"#), "{json}");
         assert_eq!(serde_json::from_str::<HeaderFooter>(&json).unwrap(), anchored);

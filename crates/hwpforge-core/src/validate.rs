@@ -579,10 +579,9 @@ mod tests {
             PageSettings::a4(),
         );
         section.headers.push(crate::section::HeaderFooter::all_pages(vec![simple_paragraph()]));
-        section.footers.push(
-            crate::section::HeaderFooter::all_pages(vec![simple_paragraph()])
-                .with_anchor_paragraph(anchor),
-        );
+        let mut footer = crate::section::HeaderFooter::all_pages(vec![simple_paragraph()]);
+        footer.anchor_paragraph = Some(anchor);
+        section.footers.push(footer);
         section
     }
 

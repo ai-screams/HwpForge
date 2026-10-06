@@ -94,7 +94,9 @@ fn editable() -> Vec<u8> {
         vec![text_para("first"), text_para("소속: (   )"), host],
         PageSettings::a4(),
     );
-    section.footers.push(HeaderFooter::all_pages(vec![text_para("foot")]).with_anchor_paragraph(1));
+    let mut footer = HeaderFooter::all_pages(vec![text_para("foot")]);
+    footer.anchor_paragraph = Some(1);
+    section.footers.push(footer);
     let mut doc = Document::new();
     doc.add_section(section);
     let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");

@@ -2168,13 +2168,13 @@ fn lift_header_footers(
                     let header_result = convert_ctrl_header(ctrl, ctx);
                     ctx.leave();
                     if let Some(hf) = header_result? {
-                        headers.push(hf.with_anchor_paragraph(para_idx));
+                        headers.push(anchored(hf, para_idx));
                     }
                     ctx.enter(super::PathSeg::Footer(footers.len()));
                     let footer_result = convert_ctrl_footer(ctrl, ctx);
                     ctx.leave();
                     if let Some(hf) = footer_result? {
-                        footers.push(hf.with_anchor_paragraph(para_idx));
+                        footers.push(anchored(hf, para_idx));
                     }
                 }
                 // 이것을 실패시키는 것: 이 갈래를 지우기
@@ -2202,6 +2202,15 @@ fn lift_header_footers(
         }
     }
     Ok(())
+}
+
+/// `hf` anchored to top-level paragraph `index`; paragraph 0 is `None`, the
+/// same meaning, so first-paragraph headers keep their JSON and compare
+/// equal to API-built ones.
+fn anchored(mut hf: HeaderFooter, index: usize) -> HeaderFooter {
+    // 이것을 실패시키는 것: 0 을 `Some(0)` 으로(`build_section_preservation_lifts_nested_footer_controls`).
+    hf.anchor_paragraph = (index != 0).then_some(index);
+    hf
 }
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.

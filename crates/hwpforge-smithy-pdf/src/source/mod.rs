@@ -3458,6 +3458,11 @@ mod tests {
         assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
     }
 
+    fn anchored(mut hf: HeaderFooter, index: usize) -> HeaderFooter {
+        hf.anchor_paragraph = Some(index);
+        hf
+    }
+
     fn header_texts_per_page(layout: &ReplayLayout) -> Vec<Vec<String>> {
         layout
             .pages
@@ -3478,7 +3483,7 @@ mod tests {
     fn anchored_header_starts_on_its_paragraph_page() {
         let doc = doc_with_bands(
             body_pages(3),
-            vec![hf_item(ApplyPageType::Both, &["C"]).with_anchor_paragraph(1)],
+            vec![anchored(hf_item(ApplyPageType::Both, &["C"]), 1)],
             vec![],
         );
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
@@ -3494,7 +3499,7 @@ mod tests {
             body_pages(3),
             vec![
                 hf_item(ApplyPageType::Both, &["A"]),
-                hf_item(ApplyPageType::Both, &["B"]).with_anchor_paragraph(2),
+                anchored(hf_item(ApplyPageType::Both, &["B"]), 2),
             ],
             vec![],
         );
@@ -3521,11 +3526,8 @@ mod tests {
             vec![Run::text("무캐시", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         ));
-        let doc = doc_with_bands(
-            body,
-            vec![hf_item(ApplyPageType::Both, &["H"]).with_anchor_paragraph(2)],
-            vec![],
-        );
+        let doc =
+            doc_with_bands(body, vec![anchored(hf_item(ApplyPageType::Both, &["H"]), 2)], vec![]);
         let err = replay(&doc, &PdfOptions::default()).unwrap_err();
         assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{err:?}");
     }

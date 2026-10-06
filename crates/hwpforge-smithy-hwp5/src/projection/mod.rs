@@ -456,7 +456,7 @@ fn project_to_core_internal(
                     paragraphs,
                     hwp5_header_property_to_apply_page_type(properties_raw),
                 )
-                .with_anchor_paragraph(anchor),
+                .with_anchor(anchor),
             );
         }
         for ((paragraphs, properties_raw), anchor) in
@@ -467,7 +467,7 @@ fn project_to_core_internal(
                     paragraphs,
                     hwp5_header_property_to_apply_page_type(properties_raw),
                 )
-                .with_anchor_paragraph(anchor),
+                .with_anchor(anchor),
             );
         }
 
@@ -2432,6 +2432,21 @@ fn collect_footer_subtrees(
         Hwp5Control::Footer(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
         _ => None,
     })
+}
+
+/// Anchors a header/footer to Core paragraph `index` (§19.17 F2); paragraph
+/// 0 is `None`, the same meaning, so a converted document's first-paragraph
+/// headers keep their JSON and compare equal to API-built ones.
+trait WithAnchor {
+    fn with_anchor(self, index: usize) -> Self;
+}
+
+impl WithAnchor for HeaderFooter {
+    fn with_anchor(mut self, index: usize) -> Self {
+        // 이것을 실패시키는 것: 0 을 `Some(0)` 으로(첫 문단 머리말 JSON 이 바뀜).
+        self.anchor_paragraph = (index != 0).then_some(index);
+        self
+    }
 }
 
 /// Decode the `applyPageType` semantic from a HWP5 head/foot ctrl's
@@ -4505,6 +4520,9 @@ mod tests {
         assert_eq!(header.paragraphs[0].runs.len(), 1);
         assert!(header.paragraphs[0].runs[0].content.is_image());
         assert_eq!(footer.paragraphs[0].text_content(), "꼬리말 테스트");
+        // 첫 문단의 머리말/꼬리말은 앵커 `None`(= 문단 0, API 문서와 같은 값).
+        // 이것을 실패시키는 것: 0 을 `Some(0)` 으로 두기.
+        assert_eq!((header.anchor_paragraph, footer.anchor_paragraph), (None, None));
     }
 
     #[test]
