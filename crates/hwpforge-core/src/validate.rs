@@ -82,6 +82,30 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
+        // §19.5 1c (review r1): the 0–50 corner ratio is checked wherever
+        // the encoder writes a shape — body, cells, text boxes, notes,
+        // captions, group children, headers/footers, master pages.
+        // 이것을 실패시키는 것: 중첩 순회를 지우기(칸·글상자·머리말·바탕쪽의 51
+        // 이 통과 — `corner_ratio_is_checked_in_nested_places`) / `> 50` 을
+        // `>= 50` 으로(`corner_ratio_50_accepted`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    if let Some(ratio) = run_corner_ratio_over_50(run) {
+                        return Err(ValidationError::InvalidCornerRatio {
+                            section_index: si,
+                            paragraph_index: pi,
+                            run_index: ri,
+                            ratio,
+                        });
+                    }
+                }
+            }
+        }
+
         // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `Both` 비교를 빼고
         // `special` 만 보기 (`master_page_special_scope_*` 두 테스트).
         for (mi, master) in section.master_pages.iter().flatten().enumerate() {
@@ -95,6 +119,35 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
     }
 
     Ok(())
+}
+
+/// The first corner ratio above 50 in `run`: its own rectangle or text
+/// box, a group's shapes, and every paragraph nested in it.
+fn run_corner_ratio_over_50(run: &crate::run::Run) -> Option<u8> {
+    fn control_ratio(control: &Control) -> Option<u8> {
+        match control {
+            Control::Rect { style: Some(style), .. }
+            | Control::TextBox { style: Some(style), .. } => style.corner_ratio.filter(|&r| r > 50),
+            Control::Group { children, .. } => children.iter().find_map(|child| match child {
+                crate::control::GroupChild::Shape(shape) => control_ratio(shape),
+                _ => None,
+            }),
+            _ => None,
+        }
+    }
+    let mut found = match &run.content {
+        RunContent::Control(control) => control_ratio(control),
+        _ => None,
+    };
+    run.walk_paragraphs(&mut |nested| {
+        if found.is_none() {
+            found = nested.runs.iter().find_map(|r| match &r.content {
+                RunContent::Control(control) => control_ratio(control),
+                _ => None,
+            });
+        }
+    });
+    found
 }
 
 /// Validates a single run's content recursively.
@@ -222,20 +275,6 @@ fn validate_control_run(
     control: &Control,
     ctx: RunValidationContext,
 ) -> Result<(), ValidationError> {
-    // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `> 50` 을 `>= 50` 으로
-    // (`corner_ratio_above_50_rejected`·`corner_ratio_50_accepted`).
-    if let Control::Rect { style: Some(style), .. } | Control::TextBox { style: Some(style), .. } =
-        control
-    {
-        if let Some(ratio) = style.corner_ratio.filter(|&r| r > 50) {
-            return Err(ValidationError::InvalidCornerRatio {
-                section_index: ctx.section_index,
-                paragraph_index: ctx.paragraph_index,
-                run_index: ctx.run_index,
-                ratio,
-            });
-        }
-    }
     match control {
         Control::TextBox { paragraphs, .. } => validate_control_paragraphs(
             paragraphs.is_empty(),
@@ -656,7 +695,101 @@ mod tests {
                 ratio: 51
             }
         );
-        assert_eq!(err.code() as u32, 2023);
+        assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidShapeDimension);
+    }
+
+    /// A ratio above 50 is refused wherever the shape sits — a table cell,
+    /// a text box's text, a group, a header, a footer, a master page — and
+    /// 50 passes there too (review r1: only top-level runs were checked, so
+    /// a nested 51 reached the HWPX writer).
+    #[test]
+    fn corner_ratio_is_checked_in_nested_places() {
+        use crate::control::GroupChild;
+        use crate::section::{HeaderFooter, MasterPage};
+        use crate::table::{Table, TableCell, TableRow};
+        let rect_run = |ratio: u8| section_with_rect_ratio(ratio).paragraphs[0].runs[0].clone();
+        let para = |run: Run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let plain = || para(Run::text("x", CharShapeIndex::new(0)));
+        let unit = HwpUnit::new(1000).unwrap();
+        let places: Vec<(&str, Box<dyn Fn(u8) -> Section>)> = vec![
+            (
+                "cell",
+                Box::new(move |r| {
+                    let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![para(rect_run(r))],
+                        unit,
+                    )])]);
+                    Section::with_paragraphs(
+                        vec![para(Run::table(table, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "text box",
+                Box::new(move |r| {
+                    let tb = Control::text_box(vec![para(rect_run(r))], unit, unit);
+                    Section::with_paragraphs(
+                        vec![para(Run::control(tb, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "group",
+                Box::new(move |r| {
+                    let RunContent::Control(rect) = rect_run(r).content else { unreachable!() };
+                    let group = Control::Group {
+                        children: vec![GroupChild::Shape(*rect)],
+                        width: unit,
+                        height: unit,
+                        placement: None,
+                        inst_id: None,
+                    };
+                    Section::with_paragraphs(
+                        vec![para(Run::control(group, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "header",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.headers.push(HeaderFooter::all_pages(vec![para(rect_run(r))]));
+                    s
+                }),
+            ),
+            (
+                "footer",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.footers.push(HeaderFooter::all_pages(vec![para(rect_run(r))]));
+                    s
+                }),
+            ),
+            (
+                "master page",
+                Box::new(move |r| {
+                    let mut s = Section::with_paragraphs(vec![plain()], PageSettings::a4());
+                    s.master_pages = Some(vec![MasterPage::new(
+                        hwpforge_foundation::ApplyPageType::Both,
+                        vec![para(rect_run(r))],
+                    )]);
+                    s
+                }),
+            ),
+        ];
+        for (name, build) in &places {
+            assert!(
+                matches!(
+                    validate_sections(&[build(51)]),
+                    Err(ValidationError::InvalidCornerRatio { ratio: 51, .. })
+                ),
+                "{name}"
+            );
+            assert_eq!(validate_sections(&[build(50)]), Ok(()), "{name}");
+        }
     }
 
     #[test]

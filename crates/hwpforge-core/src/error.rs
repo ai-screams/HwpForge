@@ -319,14 +319,19 @@ pub enum ValidationError {
     },
 
     /// A rectangle or text box has a corner ratio above 50
-    /// ([`ShapeStyle::corner_ratio`](crate::control::ShapeStyle::corner_ratio)).
+    /// ([`ShapeStyle::corner_ratio`](crate::control::ShapeStyle::corner_ratio)),
+    /// anywhere in the section — a table cell, a text box, a header/footer
+    /// or a master page included. Its code is
+    /// [`CoreErrorCode::InvalidShapeDimension`].
     #[error("Corner ratio {ratio} above 50 (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
     InvalidCornerRatio {
         /// Zero-based section index.
         section_index: usize,
-        /// Zero-based paragraph index.
+        /// Zero-based index of the paragraph holding the shape: the
+        /// top-level body paragraph, or for a header, footer or master page
+        /// the paragraph within it.
         paragraph_index: usize,
-        /// Zero-based run index.
+        /// Zero-based index of that paragraph's run holding the shape.
         run_index: usize,
         /// The ratio given.
         ratio: u8,
@@ -412,8 +417,6 @@ pub enum CoreErrorCode {
     InvalidMasterPageScope = 2021,
     /// A header or footer is anchored past the section's last paragraph.
     HeaderFooterAnchorOutOfRange = 2022,
-    /// A rectangle or text box corner ratio above 50.
-    InvalidCornerRatio = 2023,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -448,7 +451,10 @@ impl ValidationError {
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
-            Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidCornerRatio,
+            // A shape geometry value out of range: the existing shape code
+            // (review r1 — a new `CoreErrorCode` variant is a breaking
+            // change outside the approved API).
+            Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
             Self::HeaderFooterAnchorOutOfRange { .. } => {
                 CoreErrorCode::HeaderFooterAnchorOutOfRange
             }
