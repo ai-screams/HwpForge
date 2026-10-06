@@ -266,3 +266,61 @@ fn picture_alignment_and_flags_round_trip() {
     let (_, ours) = element_and_pos(&section_xml(&reencode(&edited)), "hp:pic");
     assert_eq!(pos_values(&ours), pos_values(&aligned));
 }
+
+/// 1c-T1 (S4): a rectangle's corner ratio survives a re-encode, a ratio above
+/// 50 is reported and written as 50. 이것을 실패시키는 것: 인코더 `ratio: 0`
+/// 복귀 / 디코더 비율 읽기 삭제 / 범위 밖 경고 삭제.
+#[test]
+fn corner_ratio_round_trips() {
+    let source = fixture("shapes/x6-fill.hwpx");
+    let xml = section_xml(&source);
+    let first_rect = xml.find("<hp:rect ").unwrap();
+    let ratio_at = first_rect + xml[first_rect..].find(r#"ratio="0""#).unwrap();
+    for (wire, want) in [("20", "20"), ("73", "50")] {
+        let edited = format!(
+            "{}ratio=\"{wire}\"{}",
+            &xml[..ratio_at],
+            &xml[ratio_at + r#"ratio="0""#.len()..]
+        );
+        let bytes = with_section(&source, &edited);
+        let (start, _) = element_and_pos(&section_xml(&reencode(&bytes)), "hp:rect");
+        assert_eq!(attr(&start, "ratio"), want, "{wire}");
+        let doc = HwpxDecoder::decode(&bytes).expect("decode");
+        let warned = doc.warnings.iter().any(|w| {
+            matches!(w, DecodeWarning::UnknownEnumValue { attribute: "hp:rect@ratio", .. })
+        });
+        assert_eq!(warned, wire == "73", "{wire}");
+    }
+}
+
+/// A text box (a rectangle with text) writes its corner ratio too.
+/// 이것을 실패시키는 것: 글상자 인코더의 `ratio: 0` 복귀.
+#[test]
+fn text_box_corner_ratio_is_written() {
+    use hwpforge_core::control::{Control, ShapeStyle};
+    let para = |t: &str| {
+        Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+    };
+    let mut tb = Control::text_box(
+        vec![para("box")],
+        HwpUnit::new(8000).unwrap(),
+        HwpUnit::new(3000).unwrap(),
+    );
+    if let Control::TextBox { style, .. } = &mut tb {
+        *style = Some(ShapeStyle { corner_ratio: Some(20), ..Default::default() });
+    }
+    let host = Paragraph::with_runs(
+        vec![Run::control(tb, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+    let mut styles = HwpxStyleStore::new();
+    styles.push_char_shape(HwpxCharShape::default());
+    styles.push_para_shape(HwpxParaShape::default());
+    let bytes =
+        HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
+            .expect("encode");
+    let (start, _) = element_and_pos(&section_xml(&bytes), "hp:rect");
+    assert_eq!(attr(&start, "ratio"), "20");
+}

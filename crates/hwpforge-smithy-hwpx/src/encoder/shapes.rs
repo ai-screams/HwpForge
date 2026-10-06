@@ -452,7 +452,7 @@ pub(crate) fn encode_textbox_to_rect(
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
-        ratio: 0,
+        ratio: style.as_ref().and_then(|s| s.corner_ratio).unwrap_or(0),
 
         offset: Some(sc.offset),
         org_sz: Some(sc.org_sz),
@@ -535,7 +535,7 @@ pub(crate) fn encode_rect_to_hx(
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
-        ratio: 0,
+        ratio: style.as_ref().and_then(|s| s.corner_ratio).unwrap_or(0),
 
         offset: Some(sc.offset),
         org_sz: Some(sc.org_sz),

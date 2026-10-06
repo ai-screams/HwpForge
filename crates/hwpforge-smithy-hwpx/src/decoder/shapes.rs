@@ -125,6 +125,9 @@ fn decode_shape_vert_align(token: &str) -> VerticalAlign {
     token.parse().unwrap_or(VerticalAlign::Top)
 }
 
+/// Largest corner ratio Core holds (Hancom's semicircular end).
+const MAX_CORNER_RATIO: u8 = 50;
+
 /// Decodes an `HxRect` into a Core `Run`.
 ///
 /// Rects with `<hp:drawText>` become [`Control::TextBox`] (textbox with embedded
@@ -162,6 +165,25 @@ pub(crate) fn decode_textbox(
         &rect.dropcap_style,
         ctx,
     );
+    // S4 (§19.5 1c): 모서리 곡률. 0 = 각진 모서리(`None`), 51 이상은 Core
+    // 범위 밖이라 보고하고 50 으로 자른다.
+    // 이것을 실패시키는 것: 이 읽기를 지우기(`corner_ratio_round_trips`) /
+    // 범위 밖 경고 삭제.
+    let style = match rect.ratio {
+        0 => style,
+        ratio => {
+            let mut style = style.unwrap_or_default();
+            if ratio > MAX_CORNER_RATIO {
+                ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                    attribute: "hp:rect@ratio",
+                    raw: ratio.to_string(),
+                    fallback: "50",
+                });
+            }
+            style.corner_ratio = Some(ratio.min(MAX_CORNER_RATIO));
+            Some(style)
+        }
+    };
 
     let control = match &rect.draw_text {
         Some(draw_text) => {
