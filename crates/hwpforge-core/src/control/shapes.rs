@@ -159,6 +159,26 @@ pub enum Fill {
         angle: i32,
         /// Color stops: (color, position 0-100).
         colors: Vec<(Color, u32)>,
+        /// Horizontal centre in percent of the shape (HWPX `centerX`).
+        ///
+        /// `None` = the value encoders wrote before this field existed: 0 for
+        /// [`GradientType::Linear`], 50 for the other kinds. Decoders store
+        /// the wire value as `Some` even when it equals that default, so a
+        /// decoded gradient round-trips exactly.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center_x: Option<i32>,
+        /// Vertical centre in percent of the shape (HWPX `centerY`). `None`
+        /// as for [`Fill::Gradient::center_x`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center_y: Option<i32>,
+        /// Number of colour steps (HWPX `step`, Hancom writes 1–255). `None`
+        /// = 255.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<u32>,
+        /// Where the middle step sits, in percent (HWPX `stepCenter`). `None`
+        /// = 50.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step_center: Option<u32>,
     },
     /// Hatch pattern fill.
     Pattern {
@@ -232,4 +252,23 @@ pub struct ShapeStyle {
     /// Controls whether the shape participates in a drop-cap layout.
     #[serde(default)]
     pub drop_cap_style: DropCapStyle,
+}
+
+#[cfg(test)]
+mod gradient_json_tests {
+    use super::*;
+
+    // S13: 필드 없는 옛 JSON 은 `None` 으로 읽고, `None` 은 쓰지 않는다.
+    // 이것을 실패시키는 것: `skip_serializing_if` 를 빼기(옛 그러데이션 JSON 에
+    // `null` 넷이 생김).
+    #[test]
+    fn gradient_without_center_fields_round_trips_as_old_json() {
+        let old = r#"{"Gradient":{"gradient_type":"Radial","angle":0,"colors":[]}}"#;
+        let fill: Fill = serde_json::from_str(old).unwrap();
+        let Fill::Gradient { center_x, center_y, step, step_center, .. } = &fill else {
+            panic!("{fill:?}")
+        };
+        assert_eq!((center_x, center_y, step, step_center), (&None, &None, &None, &None));
+        assert_eq!(serde_json::to_string(&fill).unwrap(), old);
+    }
 }

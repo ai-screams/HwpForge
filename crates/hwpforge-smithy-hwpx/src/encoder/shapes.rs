@@ -228,12 +228,24 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
                         wb.face_color = color.to_hex_rgb();
                     }
                 }
-                Fill::Gradient { gradient_type, angle, colors } => {
+                Fill::Gradient {
+                    gradient_type,
+                    angle,
+                    colors,
+                    center_x,
+                    center_y,
+                    step,
+                    step_center,
+                } => {
                     // xs:choice: fillBrush has exactly ONE child (winBrush|gradation|imgBrush).
                     // When using gradation, winBrush must be absent (hwpxlib reference confirms).
                     fill_brush.win_brush = None;
+                    // Absent values (S13 `None`) keep what this encoder always
+                    // wrote, so old JSON and API gradients encode unchanged:
                     // LINEAR: center=0,0 for one-directional gradient.
                     // RADIAL/SQUARE/CONICAL: center=50,50 for center-outward gradient.
+                    // 이것을 실패시키는 것: `None` 을 0 으로 쓰기(옛 RADIAL 이 0,0 으로,
+                    // `gradient_without_center_keeps_the_per_kind_default`).
                     let (cx, cy) = match gradient_type {
                         GradientType::Linear => (0, 0),
                         _ => (50, 50),
@@ -241,11 +253,12 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
                     fill_brush.gradation = Some(super::super::schema::shapes::HxGradation {
                         gradation_type: gradient_type.to_string(),
                         angle: *angle,
-                        center_x: cx,
-                        center_y: cy,
-                        step: 255,
+                        center_x: center_x.unwrap_or(cx),
+                        center_y: center_y.unwrap_or(cy),
+                        step: step.map_or(255, |s| i32::try_from(s).unwrap_or(i32::MAX)),
                         color_num: colors.len() as i32,
-                        step_center: 50,
+                        step_center: step_center
+                            .map_or(50, |s| i32::try_from(s).unwrap_or(i32::MAX)),
                         alpha: 0,
                         colors: colors
                             .iter()

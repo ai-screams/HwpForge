@@ -378,6 +378,14 @@ pub(crate) fn decode_shape_style_full(
                         (color, 0)
                     })
                     .collect(),
+                // S13: wire 값을 그대로 `Some` — 인코더 기본값과 같아도 접지
+                // 않는다(다시 읽은 Core 가 같아야 왕복이 정확하다).
+                // 이것을 실패시키는 것: 기본값과 같으면 `None` 으로 접기
+                // (`gradient_center_and_steps_round_trip`).
+                center_x: Some(g.center_x),
+                center_y: Some(g.center_y),
+                step: u32::try_from(g.step).ok(),
+                step_center: u32::try_from(g.step_center).ok(),
             });
         }
         // Pattern fill: winBrush with hatchStyle present

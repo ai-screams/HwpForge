@@ -2950,6 +2950,40 @@
                     "minItems": 2,
                     "maxItems": 2
                   }
+                },
+                "center_x": {
+                  "description": "Horizontal centre in percent of the shape (HWPX `centerX`).\n\n`None` = the value encoders wrote before this field existed: 0 for\n[`GradientType::Linear`], 50 for the other kinds. Decoders store\nthe wire value as `Some` even when it equals that default, so a\ndecoded gradient round-trips exactly.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "center_y": {
+                  "description": "Vertical centre in percent of the shape (HWPX `centerY`). `None`\nas for [`Fill::Gradient::center_x`].",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "step": {
+                  "description": "Number of colour steps (HWPX `step`, Hancom writes 1–255). `None`\n= 255.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "step_center": {
+                  "description": "Where the middle step sits, in percent (HWPX `stepCenter`). `None`\n= 50.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint32",
+                  "minimum": 0
                 }
               },
               "required": [
