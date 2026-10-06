@@ -4724,6 +4724,59 @@ mod tests {
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
 
+    /// P16 (review r1): each of the four placement fields P16 added —
+    /// vertical and horizontal alignment, `affect_line_spacing`,
+    /// `hold_anchor_and_so` — set alone on an otherwise default table is
+    /// refused, on a body table and on a table nested in a cell.
+    ///
+    /// 이것을 실패시키는 것: 표 admission 비교에서 네 필드 중 하나를 빼기(그
+    /// 필드만 켠 표가 그려진다).
+    #[test]
+    fn each_new_table_placement_field_is_refused_alone() {
+        use hwpforge_core::placement::{
+            HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextWrap, VertAlign,
+        };
+        use hwpforge_core::table::TableLayoutCache;
+        let default = || {
+            ObjectPlacement::new(
+                ObjectTextWrap::TopAndBottom,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Column,
+            )
+            .with_flow_with_text(true)
+        };
+        let edits: [fn(ObjectPlacement) -> ObjectPlacement; 4] = [
+            |p| p.with_vert_align(VertAlign::Center),
+            |p| p.with_horz_align(HorzAlign::Right),
+            |p| p.with_affect_line_spacing(true),
+            |p| p.with_hold_anchor_and_so(true),
+        ];
+        let refused = |doc: &Document<hwpforge_core::document::Validated>| {
+            matches!(
+                replay(doc, &PdfOptions::default()),
+                Err(PdfError::UnsupportedContent { kind: "non-default table position", .. })
+            )
+        };
+        for (n, edit) in edits.into_iter().enumerate() {
+            let body = one_cell_cached_table().with_placement(edit(default()));
+            assert!(refused(&doc_of(vec![table_host(body, 0)])), "body {n}");
+
+            let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
+            inner_host.add_run(Run::table(
+                one_cell_cached_table().with_placement(edit(default())),
+                CharShapeIndex::new(0),
+            ));
+            let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![inner_host],
+                HwpUnit::from_pt(100.0).unwrap(),
+            )])])
+            .with_layout_cache(TableLayoutCache::new(None, true));
+            assert!(refused(&doc_of(vec![table_host(outer, 0)])), "nested {n}");
+        }
+        let plain = one_cell_cached_table().with_placement(default());
+        assert!(replay(&doc_of(vec![table_host(plain, 0)]), &PdfOptions::default()).is_ok());
+    }
+
     #[test]
     fn merged_cell_deficit_goes_to_last_spanned_row() {
         use hwpforge_core::table::TableLayoutCache;
