@@ -17,25 +17,17 @@ use crate::schema::section::Hwp5ParaLineSeg;
 
 /// Per-section captured layout hints (paragraph line segments + table heights).
 ///
-/// Table hints are kept per scope — body, headers, footers — each in the
-/// order the HWPX encoder emits that scope's tables, so a consumer replays
-/// the queue of the scope it is streaming through. The encoder writes a
-/// header/footer into the paragraph it is anchored to, so where its tables
-/// land among the body's depends on the anchor; per-scope queues keep the
-/// replay independent of that placement.
-///
-/// `paragraphs` holds every scope (body, then headers, then footers); a
-/// consumer that only counts paragraphs may read it as one queue.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Both queues hold the body's hints, then the headers', then the footers'
+/// (each scope in the order the HWPX encoder emits it). The encoder writes
+/// a header/footer into the paragraph it is anchored to, so in the XML its
+/// elements interleave with the body's; a consumer splits each queue by the
+/// number of elements of each scope it finds.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionLayoutHints {
     /// Paragraph layout hints (body, then headers, then footers).
     pub paragraphs: VecDeque<ParagraphLayoutHint>,
-    /// Body table layout hints in HWPX emission order.
+    /// Table layout hints (body, then headers, then footers).
     pub tables: VecDeque<TableLayoutHint>,
-    /// Header table layout hints, headers in section order.
-    pub header_tables: VecDeque<TableLayoutHint>,
-    /// Footer table layout hints, footers in section order.
-    pub footer_tables: VecDeque<TableLayoutHint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -71,10 +63,7 @@ pub(crate) fn capture_layout_hints(sections: &[SectionResult]) -> Vec<SectionLay
 impl SectionLayoutHints {
     /// Whether this section carries any actionable layout hint.
     pub fn has_payload(&self) -> bool {
-        self.paragraphs.iter().any(|hint| !hint.line_segments.is_empty())
-            || !self.tables.is_empty()
-            || !self.header_tables.is_empty()
-            || !self.footer_tables.is_empty()
+        self.paragraphs.iter().any(|hint| !hint.line_segments.is_empty()) || !self.tables.is_empty()
     }
 }
 
@@ -87,15 +76,9 @@ fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
         collect_flow_paragraph_layout_hints(paragraph, &mut body, &mut header, &mut footer);
     }
 
-    let mut paragraphs = body.paragraphs;
-    paragraphs.append(&mut header.paragraphs);
-    paragraphs.append(&mut footer.paragraphs);
-    SectionLayoutHints {
-        paragraphs,
-        tables: body.tables,
-        header_tables: header.tables,
-        footer_tables: footer.tables,
-    }
+    body.append(&mut header);
+    body.append(&mut footer);
+    SectionLayoutHints { paragraphs: body.paragraphs, tables: body.tables }
 }
 
 impl ScopeLayoutHints {
@@ -106,6 +89,11 @@ impl ScopeLayoutHints {
 
     fn push_table(&mut self, table: &Hwp5Table) {
         self.tables.push_back(TableLayoutHint { height: derive_table_height(table) });
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.paragraphs.append(&mut other.paragraphs);
+        self.tables.append(&mut other.tables);
     }
 }
 
