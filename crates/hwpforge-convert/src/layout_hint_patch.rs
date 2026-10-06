@@ -243,6 +243,8 @@ impl SectionXmlPatchState {
     fn finish(self) -> LayoutPatchResult<()> {
         if !self.hints.paragraphs.is_empty()
             || !self.hints.tables.is_empty()
+            || !self.hints.header_tables.is_empty()
+            || !self.hints.footer_tables.is_empty()
             || !self.paragraph_stack.is_empty()
         {
             return Err(LayoutPatchError::Package {
@@ -289,8 +291,26 @@ impl SectionXmlPatchState {
         Ok(())
     }
 
+    /// Takes the next table hint of the scope being streamed: the innermost
+    /// enclosing `<hp:header>`/`<hp:footer>`, else the body. The encoder
+    /// writes a header/footer into its anchor paragraph, so header and body
+    /// tables interleave in the XML; each scope's own order is fixed.
+    ///
+    /// 이것을 실패시키는 것: 모든 표를 본문 큐에서 꺼내기
+    /// (`patch_section_xml_takes_header_tables_from_the_header_queue`).
     fn push_table_hint(&mut self) -> LayoutPatchResult<()> {
-        let hint = self.hints.tables.pop_front().ok_or_else(|| LayoutPatchError::Package {
+        let scope = self
+            .element_stack
+            .iter()
+            .rev()
+            .find(|name| matches!(name.as_str(), "header" | "footer"))
+            .map(String::as_str);
+        let queue = match scope {
+            Some("header") => &mut self.hints.header_tables,
+            Some(_) => &mut self.hints.footer_tables,
+            None => &mut self.hints.tables,
+        };
+        let hint = queue.pop_front().ok_or_else(|| LayoutPatchError::Package {
             detail: "table layout hint count underflow".into(),
         })?;
         self.table_stack.push(hint);
@@ -480,6 +500,35 @@ mod tests {
         assert_eq!(pkg.read_text_entry("Contents/section0.xml").unwrap(), "<sec/>");
     }
 
+    /// A header anchored to paragraph 0 comes before the body table in the
+    /// XML; its table takes the header queue's hint and the body table the
+    /// body's. 이것을 실패시키는 것: 모든 표를 본문 큐에서 꺼내기(높이가
+    /// 뒤바뀌거나 underflow).
+    #[test]
+    fn patch_section_xml_takes_header_tables_from_the_header_queue() {
+        let table = |id: u32| {
+            format!(
+                r#"<hp:tbl id="{id}" rowCnt="1" colCnt="1"><hp:sz width="1000" height="0"/><hp:tr><hp:tc><hp:subList><hp:p id="9"><hp:run charPrIDRef="0"><hp:t>c</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl>"#
+            )
+        };
+        let xml = format!(
+            r#"<hs:sec xmlns:hp="p" xmlns:hs="s"><hp:p id="0"><hp:run charPrIDRef="0"><hp:ctrl><hp:header><hp:subList><hp:p id="1"><hp:run charPrIDRef="0">{}</hp:run></hp:p></hp:subList></hp:header></hp:ctrl></hp:run><hp:run charPrIDRef="0">{}</hp:run></hp:p></hs:sec>"#,
+            table(1),
+            table(2)
+        );
+        let hint = || ParagraphLayoutHint { line_segments: Vec::new() };
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![hint(), hint(), hint(), hint()]),
+            tables: VecDeque::from(vec![TableLayoutHint { height: Some(111) }]),
+            header_tables: VecDeque::from(vec![TableLayoutHint { height: Some(222) }]),
+            ..SectionLayoutHints::default()
+        };
+        let patched = patch_section_xml(&xml, hints).expect("patch");
+        let header_h = patched.find(r#"height="222""#).expect("header table height");
+        let body_h = patched.find(r#"height="111""#).expect("body table height");
+        assert!(header_h < body_h, "{patched}");
+    }
+
     #[test]
     fn patch_section_xml_patches_table_height_without_linesegarray() {
         let xml = concat!(
@@ -503,6 +552,7 @@ mod tests {
                 },
             ]),
             tables: VecDeque::from(vec![TableLayoutHint { height: Some(4482) }]),
+            ..SectionLayoutHints::default()
         };
 
         let patched = patch_section_xml(xml, hints).expect("section xml should patch");
@@ -531,6 +581,7 @@ mod tests {
                 ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
             ]),
             tables: VecDeque::from(vec![TableLayoutHint { height: None }]),
+            ..SectionLayoutHints::default()
         };
 
         let patched = patch_section_xml(xml, hints).expect("section xml should patch");
@@ -548,7 +599,11 @@ mod tests {
         let zip = make_zip(&[("Contents/section0.xml", b"<sec/>")]);
 
         let sections = vec![
-            SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() }, // no payload → skip
+            SectionLayoutHints {
+                paragraphs: VecDeque::new(),
+                tables: VecDeque::new(),
+                ..SectionLayoutHints::default()
+            }, // no payload → skip
         ];
 
         // Must not error even though there is no "Contents/section0.xml" to
@@ -600,6 +655,7 @@ mod tests {
                 line_segments: vec![line_segment(0, 0, 1000)],
             }]),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         };
 
         let patched = patch_section_xml(xml, hints).expect("must patch");
@@ -625,6 +681,7 @@ mod tests {
                 ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] }, // surplus
             ]),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         };
 
         let err = patch_section_xml(xml, hints).unwrap_err();
@@ -646,7 +703,11 @@ mod tests {
             r#"</hs:sec>"#
         );
 
-        let hints = SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::new(),
+            tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
+        };
 
         let err = patch_section_xml(xml, hints).unwrap_err();
         assert!(
@@ -678,6 +739,7 @@ mod tests {
                 ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
             ]),
             tables: VecDeque::new(), // no table hints → underflow
+            ..SectionLayoutHints::default()
         };
 
         let err = patch_section_xml(xml, hints).unwrap_err();
@@ -694,6 +756,7 @@ mod tests {
         let mut state = SectionXmlPatchState::new(SectionLayoutHints {
             paragraphs: VecDeque::new(),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         });
         let err = state.pop_element("run").unwrap_err();
         assert!(
@@ -710,6 +773,7 @@ mod tests {
         let mut state = SectionXmlPatchState::new(SectionLayoutHints {
             paragraphs: VecDeque::new(),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         });
         state.element_stack.push("p".to_string());
         let err = state.pop_element("run").unwrap_err();
@@ -752,6 +816,7 @@ mod tests {
         let hints = SectionLayoutHints {
             paragraphs: VecDeque::from(vec![ParagraphLayoutHint { line_segments: vec![] }]),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         };
 
         let patched = patch_section_xml(xml, hints).expect("must patch");
@@ -788,6 +853,7 @@ mod tests {
                 ],
             }]),
             tables: VecDeque::new(),
+            ..SectionLayoutHints::default()
         };
 
         let patched = patch_section_xml(xml, hints).expect("must patch");

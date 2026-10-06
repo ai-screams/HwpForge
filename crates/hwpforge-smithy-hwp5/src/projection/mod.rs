@@ -417,10 +417,19 @@ fn project_to_core_internal(
         section.page_number =
             find_section_page_number(&section_result.paragraphs, &mut projection_images.warnings);
 
-        // Project each paragraph.
+        // Project each paragraph. A header/footer is anchored to the Core
+        // index of the paragraph it sits in (or whose table holds it) — the
+        // index it gets in `section.paragraphs`, taken before it is added.
+        let mut header_anchors: Vec<usize> = Vec::new();
+        let mut footer_anchors: Vec<usize> = Vec::new();
         for hwp_para in section_result.paragraphs {
-            header_subtrees.extend(collect_header_subtrees(&hwp_para, &mut projection_images));
-            footer_subtrees.extend(collect_footer_subtrees(&hwp_para, &mut projection_images));
+            let anchor = section.paragraphs.len();
+            let headers = collect_header_subtrees(&hwp_para, &mut projection_images);
+            header_anchors.extend(std::iter::repeat_n(anchor, headers.len()));
+            header_subtrees.extend(headers);
+            let footers = collect_footer_subtrees(&hwp_para, &mut projection_images);
+            footer_anchors.extend(std::iter::repeat_n(anchor, footers.len()));
+            footer_subtrees.extend(footers);
 
             let projected = project_paragraph_with_images(
                 &hwp_para,
@@ -439,17 +448,27 @@ fn project_to_core_internal(
         // preserved this as `Hwp5NestedSubtree.properties_raw`; here
         // each subtree becomes its own `HeaderFooter` entry so HWPX
         // emits matching `<hp:header applyPageType="..."/>` × N.
-        for (paragraphs, properties_raw) in header_subtrees {
-            section.headers.push(HeaderFooter::new(
-                paragraphs,
-                hwp5_header_property_to_apply_page_type(properties_raw),
-            ));
+        for ((paragraphs, properties_raw), anchor) in
+            header_subtrees.into_iter().zip(header_anchors)
+        {
+            section.headers.push(
+                HeaderFooter::new(
+                    paragraphs,
+                    hwp5_header_property_to_apply_page_type(properties_raw),
+                )
+                .with_anchor_paragraph(anchor),
+            );
         }
-        for (paragraphs, properties_raw) in footer_subtrees {
-            section.footers.push(HeaderFooter::new(
-                paragraphs,
-                hwp5_header_property_to_apply_page_type(properties_raw),
-            ));
+        for ((paragraphs, properties_raw), anchor) in
+            footer_subtrees.into_iter().zip(footer_anchors)
+        {
+            section.footers.push(
+                HeaderFooter::new(
+                    paragraphs,
+                    hwp5_header_property_to_apply_page_type(properties_raw),
+                )
+                .with_anchor_paragraph(anchor),
+            );
         }
 
         // Ensure every section has at least one paragraph (validation requirement).
@@ -2542,6 +2561,22 @@ where
     F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
 {
     let mut units: Vec<(Vec<Paragraph>, X)> = Vec::new();
+    collect_subtree_units_into(paragraph, projection_images, &unit_for_control, &mut units);
+    units
+}
+
+/// [`collect_subtree_units`] body: the paragraph's own controls in order,
+/// and the controls in its table cells (recursively) where they stand —
+/// a header/footer in a cell belongs to the section like a top-level one
+/// (§19.7 F; Hancom applies it from the paragraph holding the table, X4).
+fn collect_subtree_units_into<F, X>(
+    paragraph: &Hwp5Paragraph,
+    projection_images: &mut ProjectionImageState<'_>,
+    unit_for_control: &F,
+    units: &mut Vec<(Vec<Paragraph>, X)>,
+) where
+    F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
+{
     for control in &paragraph.controls {
         if let Some((nested_paragraphs, extra)) = unit_for_control(control) {
             let projected = project_nested_paragraphs(
@@ -2550,9 +2585,16 @@ where
                 ImageProjectionContext::Flow,
             );
             units.push((projected, extra));
+        } else if let Hwp5Control::Table(table) = control {
+            // 이것을 실패시키는 것: 이 갈래를 지우기(칸 안 꼬리말 소실,
+            // convert `cell_footer_converts_with_and_without_the_layout_cache`).
+            for cell in &table.cells {
+                for nested in &cell.paragraphs {
+                    collect_subtree_units_into(nested, projection_images, unit_for_control, units);
+                }
+            }
         }
     }
-    units
 }
 
 fn project_nested_paragraphs(

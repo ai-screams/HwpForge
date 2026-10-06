@@ -194,6 +194,11 @@ struct TableContext {
     current_cell: Option<ActiveTableCell>,
     current_cell_para: Option<ParaBuf>,
     inline_cell_gso_ctx: Option<InlineGsoContext>,
+    /// A `head`/`foot` control opened in the current cell paragraph whose
+    /// own paragraphs are being collected (§19.7 F). Without it those
+    /// paragraphs were read as more cell paragraphs and the control itself
+    /// was dropped as unknown.
+    cell_header_footer: Option<CellHeaderFooter>,
     /// True when this table was opened past [`MAX_TABLE_NESTING`]. The context
     /// is still tracked (to keep the level-driven pop/cell machinery balanced
     /// with the surrounding records) but its finalized control is dropped
@@ -229,6 +234,7 @@ impl TableContext {
             current_cell: None,
             current_cell_para: None,
             inline_cell_gso_ctx: None,
+            cell_header_footer: None,
             over_cap,
         }
     }
@@ -239,6 +245,21 @@ impl TableContext {
             self.inline_cell_gso_ctx.take(),
             warnings,
         );
+    }
+
+    /// Closes the open cell header/footer and attaches it to the cell
+    /// paragraph that holds it.
+    fn close_cell_header_footer(&mut self, warnings: &mut Vec<Hwp5Warning>) {
+        let Some(mut capture) = self.cell_header_footer.take() else {
+            return;
+        };
+        if let Some(buf) = capture.current_para.take() {
+            capture.ctx.paragraphs.push(buf.finish(warnings));
+        }
+        let control = capture.ctx.into_control(warnings);
+        if let Some(buf) = self.current_cell_para.as_mut() {
+            buf.controls.push(control);
+        }
     }
 
     fn flush_current_cell_paragraph(&mut self, warnings: &mut Vec<Hwp5Warning>) {
@@ -262,11 +283,19 @@ impl TableContext {
     }
 
     fn finalize(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        self.close_cell_header_footer(warnings);
         self.flush_inline_gso(warnings);
         self.flush_current_cell_paragraph(warnings);
         self.finish_active_cell_if_ready();
         Hwp5Control::Table(self.table)
     }
+}
+
+/// A header/footer control inside a table cell and the paragraphs read so
+/// far (§19.7 F). Records deeper than the control belong to it.
+struct CellHeaderFooter {
+    ctx: NestedSubtreeContext,
+    current_para: Option<ParaBuf>,
 }
 
 /// Cell currently receiving nested paragraph records.
@@ -969,9 +998,92 @@ impl BodyTextParserState {
         }
     }
 
+    /// Routes a record into the open cell header/footer
+    /// ([`TableContext::cell_header_footer`]). A record at or above the
+    /// control's level closes it first and is handled as usual (`false`).
+    ///
+    /// Inside, the records are read the way a top-level header's are
+    /// ([`Self::handle_active_subtree_record`]): its list header, its
+    /// paragraphs, and inline controls (page numbers etc.; others are kept
+    /// as unknown).
+    fn route_cell_header_footer_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        let Some(table) = self.table_stack.last_mut() else {
+            return false;
+        };
+        let Some(capture) = table.cell_header_footer.as_mut() else {
+            return false;
+        };
+        if level <= capture.ctx.ctrl_depth {
+            table.close_cell_header_footer(&mut self.warnings);
+            return false;
+        }
+        match tag {
+            TagId::ListHeader => capture.ctx.note_list_header(&record.data),
+            TagId::ParaHeader => {
+                if let Some(buf) = capture.current_para.take() {
+                    capture.ctx.paragraphs.push(buf.finish(&mut self.warnings));
+                }
+                capture.current_para = Self::parse_para_header_buf(
+                    record.header.tag_id,
+                    &record.data,
+                    &mut self.warnings,
+                );
+            }
+            TagId::ParaText => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(text) = Self::parse_para_text_value(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.text = Some(text);
+                    }
+                }
+            }
+            TagId::ParaCharShape => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(runs) = Self::parse_para_char_shape_runs(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.char_shape_runs = runs;
+                    }
+                }
+            }
+            TagId::ParaLineSeg => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+            }
+            TagId::CtrlHeader => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    let ctrl_id = parse_ctrl_id(&record.data);
+                    buf.controls.push(
+                        Self::typed_inline_family_control(ctrl_id, &record.data).unwrap_or_else(
+                            || Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() },
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     fn handle_active_table_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.table_stack.last().is_none_or(|ctx| level <= ctx.ctrl_depth) {
             return false;
+        }
+
+        if self.route_cell_header_footer_record(record, tag, level) {
+            return true;
         }
 
         if Self::handle_inline_gso_record(
@@ -1082,7 +1194,23 @@ impl BodyTextParserState {
                         extract_ctrl_header_instance_id(&record.data, ctrl_id),
                     );
                 } else if let Some(ctx) = self.table_stack.last_mut() {
-                    if ctrl_id == CTRL_ID_GSO {
+                    // 이것을 실패시키는 것: 이 갈래를 지우기 — 칸 안 꼬리말
+                    // 문단이 칸 문단으로 새고 제어는 unknown 으로 버려진다
+                    // (convert `cell_footer_converts_with_and_without_the_layout_cache`).
+                    if matches!(ctrl_id, CTRL_ID_HEADER | CTRL_ID_FOOTER)
+                        && ctx.current_cell_para.is_some()
+                    {
+                        ctx.cell_header_footer = Some(CellHeaderFooter {
+                            ctx: NestedSubtreeContext::new(
+                                level,
+                                ctrl_id,
+                                ctrl_header_properties_raw(&record.data),
+                                extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                                None,
+                            ),
+                            current_para: None,
+                        });
+                    } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
@@ -3266,6 +3394,76 @@ mod tests {
         assert_eq!(result.paragraphs[0].controls.len(), 1);
         assert_eq!(result.paragraphs[1].controls.len(), 0);
         assert_eq!(result.paragraphs[1].text, "hello");
+    }
+
+    fn one_cell_table(stream: &mut Vec<u8>, paragraphs: u32) {
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: paragraphs,
+                legacy_u16_count: false,
+                properties: 0,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 9000,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: Some(1),
+            }),
+        ));
+    }
+
+    /// A footer in a cell paragraph: its paragraph becomes the footer's, not
+    /// the cell's; a control after it at the footer's own level is the cell
+    /// paragraph's again; a footer that ends the table is still attached.
+    ///
+    /// 이것을 실패시키는 것: 닫는 조건을 `level < depth` 로(같은 수준의 다음
+    /// 제어가 꼬리말 문단으로 들어감) / `finalize` 의 닫기 삭제(표 끝 꼬리말
+    /// 소실) / 칸 머리말·꼬리말 갈래 삭제(꼬리말 문단이 칸 문단으로).
+    #[test]
+    fn cell_footer_paragraphs_belong_to_the_footer() {
+        let footer = |stream: &mut Vec<u8>, text: &str| {
+            stream.extend(make_record(TagId::CtrlHeader, 2, &ctrl_header_data(CTRL_ID_FOOTER)));
+            stream.extend(make_record(TagId::ListHeader, 3, &[1, 0, 0, 0, 0, 0]));
+            stream.extend(make_record(TagId::ParaHeader, 3, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 4, &para_text_data(text)));
+        };
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("cell")));
+        footer(&mut stream, "F1");
+        let mut nwno = ctrl_header_data(CTRL_ID_NEW_NUMBER);
+        nwno.extend_from_slice(&[0, 0, 0, 0, 1, 0]);
+        stream.extend(make_record(TagId::CtrlHeader, 2, &nwno));
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        footer(&mut stream, "F2");
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let cell_controls = |para: usize| {
+            let Hwp5Control::Table(table) = &result.paragraphs[para].controls[0] else {
+                panic!("table expected");
+            };
+            assert_eq!(table.cells[0].paragraphs.len(), 1, "footer text leaked into the cell");
+            table.cells[0].paragraphs[0].controls.clone()
+        };
+        let first = cell_controls(0);
+        let [Hwp5Control::Footer(f1), Hwp5Control::NewNumber(_)] = &first[..] else {
+            panic!("{first:?}");
+        };
+        assert_eq!(f1.paragraphs.len(), 1);
+        assert_eq!(f1.paragraphs[0].text, "F1");
+        let second = cell_controls(1);
+        let [Hwp5Control::Footer(f2)] = &second[..] else { panic!("{second:?}") };
+        assert_eq!(f2.paragraphs[0].text, "F2");
     }
 
     /// A `ShapeComponent` payload with the rendering block: `repeated` writes

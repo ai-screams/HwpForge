@@ -17,16 +17,25 @@ use crate::schema::section::Hwp5ParaLineSeg;
 
 /// Per-section captured layout hints (paragraph line segments + table heights).
 ///
-/// The ordering of `paragraphs` and `tables` mirrors the document order the
-/// HWPX encoder emits elements in, so a consumer can replay them as a queue
-/// while streaming the generated `section{N}.xml`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Table hints are kept per scope — body, headers, footers — each in the
+/// order the HWPX encoder emits that scope's tables, so a consumer replays
+/// the queue of the scope it is streaming through. The encoder writes a
+/// header/footer into the paragraph it is anchored to, so where its tables
+/// land among the body's depends on the anchor; per-scope queues keep the
+/// replay independent of that placement.
+///
+/// `paragraphs` holds every scope (body, then headers, then footers); a
+/// consumer that only counts paragraphs may read it as one queue.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SectionLayoutHints {
-    /// Paragraph layout hints in HWPX emission order (body, then headers,
-    /// then footers).
+    /// Paragraph layout hints (body, then headers, then footers).
     pub paragraphs: VecDeque<ParagraphLayoutHint>,
-    /// Table layout hints in HWPX emission order.
+    /// Body table layout hints in HWPX emission order.
     pub tables: VecDeque<TableLayoutHint>,
+    /// Header table layout hints, headers in section order.
+    pub header_tables: VecDeque<TableLayoutHint>,
+    /// Footer table layout hints, footers in section order.
+    pub footer_tables: VecDeque<TableLayoutHint>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -62,7 +71,10 @@ pub(crate) fn capture_layout_hints(sections: &[SectionResult]) -> Vec<SectionLay
 impl SectionLayoutHints {
     /// Whether this section carries any actionable layout hint.
     pub fn has_payload(&self) -> bool {
-        self.paragraphs.iter().any(|hint| !hint.line_segments.is_empty()) || !self.tables.is_empty()
+        self.paragraphs.iter().any(|hint| !hint.line_segments.is_empty())
+            || !self.tables.is_empty()
+            || !self.header_tables.is_empty()
+            || !self.footer_tables.is_empty()
     }
 }
 
@@ -75,10 +87,15 @@ fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
         collect_flow_paragraph_layout_hints(paragraph, &mut body, &mut header, &mut footer);
     }
 
-    body.append(&mut header);
-    body.append(&mut footer);
-
-    SectionLayoutHints { paragraphs: body.paragraphs, tables: body.tables }
+    let mut paragraphs = body.paragraphs;
+    paragraphs.append(&mut header.paragraphs);
+    paragraphs.append(&mut footer.paragraphs);
+    SectionLayoutHints {
+        paragraphs,
+        tables: body.tables,
+        header_tables: header.tables,
+        footer_tables: footer.tables,
+    }
 }
 
 impl ScopeLayoutHints {
@@ -89,11 +106,6 @@ impl ScopeLayoutHints {
 
     fn push_table(&mut self, table: &Hwp5Table) {
         self.tables.push_back(TableLayoutHint { height: derive_table_height(table) });
-    }
-
-    fn append(&mut self, other: &mut Self) {
-        self.paragraphs.append(&mut other.paragraphs);
-        self.tables.append(&mut other.tables);
     }
 }
 
@@ -107,7 +119,9 @@ fn collect_flow_paragraph_layout_hints(
 
     for control in &paragraph.controls {
         match control {
-            Hwp5Control::Table(table) => collect_table_layout_hints(table, body),
+            Hwp5Control::Table(table) => {
+                collect_flow_table_layout_hints(table, body, header, footer)
+            }
             Hwp5Control::Header(subtree) => collect_scope_paragraphs(&subtree.paragraphs, header),
             Hwp5Control::Footer(subtree) => collect_scope_paragraphs(&subtree.paragraphs, footer),
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
@@ -145,6 +159,27 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
+        }
+    }
+}
+
+/// A body table: its cells are flow paragraphs too, so a header/footer in a
+/// cell (lifted into the section by projection, §19.7 F) leaves its hints
+/// in the header/footer scope rather than the body.
+///
+/// 이것을 실패시키는 것: 칸 문단을 `collect_scope_paragraphs(.., body)` 로
+/// 되돌리기 — 칸 안 꼬리말 문단의 hint 가 사라져 문단 hint 수가 모자란다
+/// (`cell_footer_converts_with_and_without_the_layout_cache`).
+fn collect_flow_table_layout_hints(
+    table: &Hwp5Table,
+    body: &mut ScopeLayoutHints,
+    header: &mut ScopeLayoutHints,
+    footer: &mut ScopeLayoutHints,
+) {
+    body.push_table(table);
+    for cell in &table.cells {
+        for paragraph in &cell.paragraphs {
+            collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
         }
     }
 }
