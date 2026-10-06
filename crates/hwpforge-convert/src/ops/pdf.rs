@@ -243,6 +243,12 @@ pub fn to_pdf(data: &[u8], opts: &ToPdfOptions) -> Result<ToPdfOutput, ConvertOp
 
     let decoded = HwpxDecoder::decode(hwpx_bytes).map_err(ConvertOpsError::Decode)?;
     warnings.extend(decoded.warnings.iter().cloned().map(ConvertOpsWarning::Decode));
+    if let Some(location) = unreadable_crop(&warnings) {
+        return Err(ConvertOpsError::Pdf(hwpforge_smithy_pdf::PdfError::UnsupportedContent {
+            kind: "picture whose crop could not be read",
+            location,
+        }));
+    }
 
     let validated = decoded.document.validate().map_err(ConvertOpsError::Core)?;
 
@@ -259,9 +265,47 @@ pub fn to_pdf(data: &[u8], opts: &ToPdfOptions) -> Result<ToPdfOutput, ConvertOp
     Ok(ToPdfOutput { bytes: rendered.bytes, pages: rendered.pages, warnings })
 }
 
+/// Where a picture's crop was lost on the way in, if anywhere: the decoder
+/// leaves such a picture whole (`crop = None`), so drawing it would show the
+/// whole image where the document shows a part (§19.21 H-v4, review r1) —
+/// an HWPX `picture_crop_order`/`picture_crop` loss, or an HWP5 crop that
+/// could not be carried (`picture.crop_lost`).
+///
+/// 이것을 실패시키는 것: 이 검사를 지우기(자르기를 모르는 그림이 통째로 그려짐 —
+/// `crop_order_loss_is_refused`).
+fn unreadable_crop(warnings: &[ConvertOpsWarning]) -> Option<String> {
+    use hwpforge_smithy_hwp5::Hwp5Warning;
+    use hwpforge_smithy_hwpx::DecodeWarning;
+    warnings.iter().find_map(|w| match w {
+        ConvertOpsWarning::Decode(DecodeWarning::ContentLost { kind, part, path, .. })
+            if kind == "picture_crop_order" || kind == "picture_crop" =>
+        {
+            Some(format!("{part}:{path}"))
+        }
+        ConvertOpsWarning::Convert(crate::ConvertWarning::Hwp5(
+            Hwp5Warning::ProjectionFallback { subject: "picture.crop_lost", reason },
+        )) => Some(reason.clone()),
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An HWP5 crop that could not be carried is refused like an HWPX one;
+    /// a crop kept without its extent is left to the renderer.
+    #[test]
+    fn hwp5_lost_crop_is_an_unreadable_crop() {
+        use hwpforge_smithy_hwp5::Hwp5Warning;
+        let warning = |subject: &'static str| {
+            ConvertOpsWarning::Convert(crate::ConvertWarning::Hwp5(
+                Hwp5Warning::ProjectionFallback { subject, reason: "crop (10, 0, 10, 100)".into() },
+            ))
+        };
+        assert!(unreadable_crop(&[warning("picture.crop_lost")]).is_some());
+        assert!(unreadable_crop(&[warning("picture.crop")]).is_none());
+    }
 
     #[test]
     fn format_is_detected_by_content_not_extension() {

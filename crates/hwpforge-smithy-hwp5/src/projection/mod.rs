@@ -684,7 +684,11 @@ impl<'a> ProjectionImageState<'a> {
         core_image.crop = frame.crop;
         core_image.image_extent = frame.extent;
         if let Some(reason) = frame.note {
-            push_projection_fallback(&mut self.warnings, "picture.crop", reason);
+            // A crop that could not be carried at all leaves the whole image
+            // (`picture.crop_lost` — a renderer must refuse it); one kept
+            // without its extent is `picture.crop`.
+            let subject = if frame.crop.is_none() { "picture.crop_lost" } else { "picture.crop" };
+            push_projection_fallback(&mut self.warnings, subject, reason);
         }
     }
 
@@ -7341,6 +7345,46 @@ mod shape_style_tests {
             (pattern_type.to_string(), bg_color.to_hex_rgb()),
             ("SLASH".into(), "#FFFF00".into())
         );
+    }
+
+    /// A crop that cannot be carried at all (the picture is left whole) is
+    /// `picture.crop_lost`, which a renderer refuses; one kept without its
+    /// image size is `picture.crop`.
+    /// 이것을 실패시키는 것: 주제 구분을 지우기(PDF 가 통째 그림을 그림).
+    #[test]
+    fn a_lost_crop_is_told_apart_from_a_crop_without_extent() {
+        use crate::schema::section::Hwp5ShapePicture;
+        let subject = |crop: [i32; 4]| {
+            let image = Hwp5ImageControl {
+                ctrl_id: 0,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 3_000,
+                    height: 2_000,
+                },
+                binary_data_id: 1,
+                original_size: None,
+                instance_id: 0,
+                ctrl_properties: 0,
+                picture: Hwp5ShapePicture { crop, ..Default::default() },
+                link: None,
+            };
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
+            let mut core =
+                Image::new("BinData/a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+            images.carry_picture_frame(&mut core, &image, (3_000, 2_000), &[]);
+            match images.warnings.as_slice() {
+                [Hwp5Warning::ProjectionFallback { subject, .. }] => *subject,
+                other => panic!("{other:?}"),
+            }
+        };
+        assert_eq!(subject([10, 0, 10, 100]), "picture.crop_lost");
+        assert_eq!(subject([0, 0, 7_474, 15_000]), "picture.crop");
     }
 
     /// A picture record's crop and image size → Core crop and extent,
