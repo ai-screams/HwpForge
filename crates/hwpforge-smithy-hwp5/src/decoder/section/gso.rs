@@ -713,7 +713,7 @@ impl InlineGsoContext {
         match tag {
             TagId::ShapeComponent => self.note_shape_component(&record.data, level),
             TagId::CtrlData => self.note_ctrl_data(&record.data, level),
-            TagId::ShapeComponentRect => self.note_shape_rectangle(),
+            TagId::ShapeComponentRect => self.note_shape_rectangle(&record.data),
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => self.note_shape_line(line),
                 Err(_) => unsupported(warnings),
@@ -802,8 +802,11 @@ impl InlineGsoContext {
         }
     }
 
-    pub(super) fn note_shape_rectangle(&mut self) {
+    pub(super) fn note_shape_rectangle(&mut self, data: &[u8]) {
         self.saw_shape_rectangle = true;
+        if let (Some(look), Some(&ratio)) = (self.look.as_mut(), data.first()) {
+            look.corner_ratio = ratio;
+        }
     }
 
     /// A `CtrlData` record: the shape's hyperlink when it sits one level

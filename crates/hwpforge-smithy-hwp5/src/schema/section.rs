@@ -758,6 +758,9 @@ pub(crate) struct Hwp5ShapeLook {
     pub fill_kind: u32,
     /// The fill block, or why it could not be read.
     pub fill: Result<super::border_fill::Hwp5RawBorderFillFill, String>,
+    /// Corner ratio of a rectangle (byte 0 of its `ShapeComponentRect`
+    /// record, §19.5 1c); 0 for other shapes.
+    pub corner_ratio: u8,
 }
 
 /// The rendering block of a `ShapeComponent` (`0x4C`): the shape's initial
@@ -909,6 +912,7 @@ impl Hwp5ShapeRender {
                     .ok_or(e)
             });
         Some(Hwp5ShapeLook {
+            corner_ratio: 0,
             line: Hwp5ShapeLine { color, thickness, properties },
             fill_kind,
             fill,

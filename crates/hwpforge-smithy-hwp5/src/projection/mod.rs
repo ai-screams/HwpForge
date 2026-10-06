@@ -713,7 +713,23 @@ impl<'a> ProjectionImageState<'a> {
                 LineStyle::Solid
             }
         };
+        // §19.5 1c: 모서리 곡률(0 = 각진 모서리 = `None`), 51 이상은 Core 범위
+        // 밖이라 보고하고 50 으로 자른다. 이것을 실패시키는 것: 비율 투영을
+        // 지우기 / 자르기 경고 삭제.
+        let corner_ratio = match look.corner_ratio {
+            0 => None,
+            r if r > 50 => {
+                push_projection_fallback(
+                    &mut self.warnings,
+                    "shape.corner_ratio",
+                    format!("corner ratio {r} above 50; written as 50"),
+                );
+                Some(50)
+            }
+            r => Some(r),
+        };
         let mut style = ShapeStyle {
+            corner_ratio,
             line_color: Some(colour(look.line.color)),
             line_width: u32::try_from(look.line.thickness).ok(),
             line_style: Some(line_style),
@@ -7053,6 +7069,7 @@ mod shape_style_tests {
 
     fn look(line_type: u32, fill_kind: u32, fill: Hwp5RawBorderFillFill) -> Hwp5ShapeLook {
         Hwp5ShapeLook {
+            corner_ratio: 0,
             line: Hwp5ShapeLine { color: 0x0017_9EDE, thickness: 283, properties: line_type },
             fill_kind,
             fill: Ok(fill),
@@ -7135,6 +7152,17 @@ mod shape_style_tests {
         assert_eq!((s.fill, w), (Some(Fill::None), 0));
         let (s, _) = style(&look(1, 1, colour_fill(0x00FF_0000, Hwp5FillPatternKind::None)), false);
         assert_eq!((s.fill, s.fill_color), (None, None));
+    }
+
+    /// 1c: ratio 20 → `Some(20)`, 0 → `None`, 60 → 50 + 경고.
+    #[test]
+    fn corner_ratio_is_projected_and_capped() {
+        for (ratio, want, warned) in [(20u8, Some(20u8), 0usize), (0, None, 0), (60, Some(50), 1)] {
+            let mut l = look(1, 0, Hwp5RawBorderFillFill::None);
+            l.corner_ratio = ratio;
+            let (s, w) = style(&l, true);
+            assert_eq!((s.corner_ratio, w), (want, warned), "{ratio}");
+        }
     }
 
     /// A text box gets its outline and fill too (r6: the boxes around the

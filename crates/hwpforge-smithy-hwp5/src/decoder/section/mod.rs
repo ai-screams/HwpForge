@@ -460,8 +460,14 @@ impl NestedSubtreeContext {
         }
     }
 
-    fn note_shape_rectangle(&mut self) {
+    /// A rectangle record: its byte 0 is the corner ratio (§19.5 1c).
+    ///
+    /// 이것을 실패시키는 것: 비율 읽기를 지우기(`rect_corner_ratio_is_read`).
+    fn note_shape_rectangle(&mut self, data: &[u8]) {
         self.saw_shape_rectangle = true;
+        if let (Some(look), Some(&ratio)) = (self.look.as_mut(), data.first()) {
+            look.corner_ratio = ratio;
+        }
     }
 
     fn note_shape_component(&mut self, data: &[u8], level: u16) {
@@ -1474,7 +1480,7 @@ impl BodyTextParserState {
             },
             TagId::ShapeComponentRect => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_shape_rectangle();
+                    ctx.note_shape_rectangle(&record.data);
                 }
             }
             TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
@@ -3606,6 +3612,45 @@ mod tests {
         let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else { panic!() };
         let cell = &table.cells[0].paragraphs[0].controls;
         assert!(matches!(cell[..], [Hwp5Control::Ellipse(_)]), "{cell:?}");
+    }
+
+    /// A rectangle record's byte 0 is its corner ratio, kept on the shape's
+    /// look — for a body shape and for one in a table cell.
+    /// 이것을 실패시키는 것: 두 문맥의 비율 읽기 중 하나를 지우기.
+    #[test]
+    fn rect_corner_ratio_is_read() {
+        let rect = |stream: &mut Vec<u8>, level: u16| {
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                level,
+                &gso_ctrl_header_data(0, 0, 3000, 1000),
+            ));
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                level + 1,
+                &shape_component_render_data(b"cer$", true, 0, (3000, 1000), 0.0),
+            ));
+            let mut body = vec![20u8];
+            body.extend([0u8; 32]);
+            stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &body));
+        };
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        rect(&mut stream, 0);
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        rect(&mut stream, 2);
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let ratio = |c: &Hwp5Control| match c {
+            Hwp5Control::Rect(r) => r.look.as_ref().map(|l| l.corner_ratio),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(ratio(&result.paragraphs[0].controls[0]), Some(20));
+        let Hwp5Control::Table(table) = &result.paragraphs[1].controls[0] else { panic!() };
+        assert_eq!(ratio(&table.cells[0].paragraphs[0].controls[0]), Some(20));
     }
 
     /// A footer in a cell paragraph: its paragraph becomes the footer's, not
