@@ -297,6 +297,10 @@ pub(crate) struct DecodeCtx {
     part: String,
     /// 묶음 자식 안으로 들어간 깊이 (0 = 묶음 밖).
     group_child_depth: usize,
+    /// 들어간 묶음 자식마다 그때의 경로 길이 — 경로가 그 길이 그대로면
+    /// 지금 디코드하는 개체가 묶음의 직접 자식이다
+    /// ([`Self::is_direct_group_child`]).
+    group_child_path_lens: Vec<usize>,
     /// 패키지 그림의 픽셀 크기 (`binaryItemIDRef` → (너비, 높이)) — `imgDim`
     /// 없는 묶음 그림의 자르기 판정용.
     pub(crate) image_pixels: HashMap<String, (u32, u32)>,
@@ -317,6 +321,7 @@ impl DecodeCtx {
             path: vec![super::PathSeg::Section(section_index)],
             part: format!("Contents/section{section_index}.xml"),
             group_child_depth: 0,
+            group_child_path_lens: Vec::new(),
             image_pixels: HashMap::new(),
             in_master_page: false,
             lifted_header_footers: std::collections::HashSet::new(),
@@ -331,25 +336,30 @@ impl DecodeCtx {
             path: vec![super::PathSeg::Section(section_index), super::PathSeg::MasterPage(global)],
             part: format!("Contents/masterpage{global}.xml"),
             group_child_depth: 0,
+            group_child_path_lens: Vec::new(),
             image_pixels: HashMap::new(),
             in_master_page: true,
             lifted_header_footers: std::collections::HashSet::new(),
         }
     }
 
-    /// 묶음 자식을 디코드하는 중인지.
-    pub(crate) fn in_group_child(&self) -> bool {
-        self.group_child_depth > 0
-    }
-
     /// 묶음 자식 하나의 디코드에 들어간다 ([`Self::leave_group_child`] 와 짝).
     pub(crate) fn enter_group_child(&mut self) {
         self.group_child_depth += 1;
+        self.group_child_path_lens.push(self.path.len());
+    }
+
+    /// 지금 디코드하는 개체가 묶음의 직접 자식인지 — 묶음 경로가 그 자식의
+    /// 채우기를 따로 판정한다. 자식 글상자의 문단·캡션 안 개체는 직접
+    /// 자식이 아니다.
+    pub(crate) fn is_direct_group_child(&self) -> bool {
+        self.group_child_path_lens.last() == Some(&self.path.len())
     }
 
     /// 묶음 자식 하나의 디코드에서 나온다.
     pub(crate) fn leave_group_child(&mut self) {
         self.group_child_depth -= 1;
+        self.group_child_path_lens.pop();
     }
 
     /// 묶음 자식 안의 run 에서 디코더가 담지 못하는 요소(`switch` 의 차트·

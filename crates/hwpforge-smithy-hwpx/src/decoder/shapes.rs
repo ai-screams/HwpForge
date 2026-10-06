@@ -339,7 +339,8 @@ pub(crate) fn decode_polygon(
 /// [`decode_shape_style_full`] for a shape the decoder places in Core, plus
 /// the picture-fill loss report: a picture fill Core cannot carry exactly is
 /// [`ContentLost`](super::DecodeWarning::ContentLost) (`shape_image_fill`).
-/// Group children are reported by the group path (`group_child_fill`).
+/// Direct group children are reported by the group path (`group_child_fill`);
+/// a shape in a group child's text is checked here like any other.
 fn decode_shape_style(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
@@ -349,7 +350,10 @@ fn decode_shape_style(
     dropcap_style: &str,
     ctx: &mut DecodeCtx,
 ) -> Option<ShapeStyle> {
-    if !ctx.in_group_child() {
+    // 이것을 실패시키는 것: 직접 자식 판정을 `in_group_child` 로 되돌리기
+    // (묶음 글상자 안 도형의 그림 채우기 손실이 무음 —
+    // `image_fill_inside_a_group_text_box_is_reported`).
+    if !ctx.is_direct_group_child() {
         if let Some(reason) = fill_brush.as_ref().and_then(image_fill_loss) {
             ctx.content_lost("shape_image_fill", reason);
         }
@@ -3478,6 +3482,28 @@ mod group_tests {
                 .collect(),
             other => panic!("not a group: {other:?}"),
         }
+    }
+
+    /// A shape with a picture fill Core cannot hold (brightness 10) in the
+    /// text of a group's text box is reported like one anywhere else; only
+    /// the group's direct children are left to the group path.
+    ///
+    /// 이것을 실패시키는 것: 직접 자식 판정을 "묶음 안 어디든" 으로 되돌리기
+    /// (글상자 안 도형의 손실이 무음).
+    #[test]
+    fn image_fill_inside_a_group_text_box_is_reported() {
+        let brush = r#"<hc:fillBrush><hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="image1" bright="10" contrast="0" effect="REAL_PIC" alpha="0"/></hc:imgBrush></hc:fillBrush>"#;
+        let inner = format!(
+            r#"<hp:rect id="5" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="55"><hp:offset x="0" y="0"/><hp:orgSz width="500" height="500"/><hp:curSz width="500" height="500"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{}{brush}<hp:sz width="500" widthRelTo="ABSOLUTE" height="500" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/></hp:rect>"#,
+            ri(ID, &[(ID, ID)])
+        );
+        let text_box = format!(
+            r#"{}<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{inner}<hp:t>x</hp:t></hp:run></hp:p></hp:subList></hp:drawText></hp:rect>"#,
+            shape_head("rect", (4000, 3000), &ri(ID, &[(ID, ID)]))
+        );
+        let (group, warnings) = decode(&container((4000, 3000), &text_box));
+        assert!(group.is_some(), "{warnings:?}");
+        assert!(lost_kinds(&warnings).contains(&"shape_image_fill".to_string()), "{warnings:?}");
     }
 
     fn lost_kinds(warnings: &[crate::DecodeWarning]) -> Vec<String> {
