@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 160,
-  "fixtures_decoded": 160,
+  "fixtures_scanned": 166,
+  "fixtures_decoded": 166,
   "fixtures_failed": 0,
-  "total_warnings": 9,
+  "total_warnings": 20,
   "categories": {
     "ContentLost:group_child_picture": {
       "count": 3,
@@ -25,10 +25,12 @@
         "tests/fixtures/shapes/group-f2-textbox-table.hwp": 2
       }
     },
-    "DroppedControl:unknown_control": {
-      "count": 1,
+    "DroppedControl:caption": {
+      "count": 12,
       "fixtures": {
-        "tests/fixtures/tables/table_20_real_world_ministry_stress.hwp": 1
+        "tests/fixtures/hwp5/crossref/sample-figure-caption-4-refs.hwp": 2,
+        "tests/fixtures/images/f17-caption-numbering.hwp": 4,
+        "tests/fixtures/mixed/full_report.hwp": 6
       }
     },
     "HwpxEncode:ContentLost": {

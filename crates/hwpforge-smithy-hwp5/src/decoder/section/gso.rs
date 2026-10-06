@@ -91,6 +91,12 @@ pub(super) struct GsoClassificationInput {
     /// The shape's outline and fill (single shapes; `None` for group
     /// children).
     pub(super) look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text paragraphs and its `LIST_HEADER` word (single
+    /// shapes; empty for group children, whose text the group projection
+    /// decides). An ellipse or polygon keeps them; a rectangle with text is
+    /// a text box before classification.
+    pub(super) paragraphs: Vec<super::Hwp5Paragraph>,
+    pub(super) list_header_properties: Option<u32>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -202,6 +208,8 @@ impl GsoChildBuilder {
             ctrl_properties: 0,
             link: self.link,
             look: None,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
         });
         Hwp5GroupChild {
             control,
@@ -843,8 +851,8 @@ impl InlineGsoContext {
             self.paragraphs.push(buf.finish(warnings));
         }
         // A rectangle with a text list is a text box, as in the body
-        // (`NestedSubtreeContext::kind`). Other shapes' text is not carried
-        // there either.
+        // (`NestedSubtreeContext::kind`); an ellipse or polygon keeps its
+        // text through classification (review r1 of §19.5 1a).
         // 이것을 실패시키는 것: 이 갈래를 지우기(칸 안 글상자가 글 없는 사각형으로).
         if self.saw_list_header && self.saw_shape_rectangle {
             if let Some(geometry) = self.geometry {
@@ -875,6 +883,8 @@ impl InlineGsoContext {
             shape_component_kind: self.shape_component_kind,
             link: self.link,
             look: self.look,
+            paragraphs: self.paragraphs,
+            list_header_properties: self.list_header_properties,
         })
     }
 }

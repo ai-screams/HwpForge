@@ -951,6 +951,8 @@ mod tests {
         Hwp5Control::Polygon(Hwp5PolygonControl {
             look: None,
             ctrl_id: 0,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
             geometry: geo(0, 0, 0, 0),
             points: points.iter().map(|&(x, y)| Hwp5ShapePoint { x, y }).collect(),
             ctrl_properties: 0,
@@ -1230,6 +1232,8 @@ mod tests {
         let ellipse = Hwp5Control::Ellipse(Hwp5EllipseControl {
             look: None,
             ctrl_id: 0,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
             geometry: geo(0, 0, 0, 0),
             ctrl_properties: 0,
             shape,

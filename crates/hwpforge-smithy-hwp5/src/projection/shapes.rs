@@ -366,6 +366,8 @@ mod tests {
         let polygon = crate::decoder::section::Hwp5PolygonControl {
             look: None,
             ctrl_id: 0,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
             geometry: zero_geometry(),
             ctrl_properties: 0,
             points: vec![shape_point(0, 0), shape_point(100, 0)],
@@ -382,6 +384,8 @@ mod tests {
         let polygon = crate::decoder::section::Hwp5PolygonControl {
             look: None,
             ctrl_id: 0,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
             geometry: zero_geometry(),
             ctrl_properties: 0,
             points: vec![shape_point(0, 0), shape_point(100, 0), shape_point(50, 100)],

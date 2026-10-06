@@ -409,6 +409,8 @@ struct NestedSubtreeContext {
     group: Option<GsoGroupBuilder>,
     /// Outline and fill from the scope's first `ShapeComponent` (§19.5 1b).
     look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Caption paragraphs read before the shape's component (not carried).
+    caption_paragraphs: usize,
 }
 
 impl NestedSubtreeContext {
@@ -442,6 +444,7 @@ impl NestedSubtreeContext {
             paragraphs: Vec::new(),
             group: None,
             look: None,
+            caption_paragraphs: 0,
         }
     }
 
@@ -464,6 +467,17 @@ impl NestedSubtreeContext {
         self.saw_shape_component = true;
         if self.comp_level.is_none() {
             self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
+            // A shape's caption is a list one level below its control
+            // header, before the component; its text list comes after. The
+            // caption is not carried — its paragraphs must not become the
+            // shape's text (review r1 of §19.5 1a: a polygon showed its
+            // "[그림 3]" caption as its own text).
+            // 이것을 실패시키는 것: 이 분리를 지우기
+            // (`ellipse_and_polygon_keep_their_text`).
+            self.caption_paragraphs += self.paragraphs.len();
+            self.paragraphs.clear();
+            self.saw_list_header = false;
+            self.list_header_properties = None;
         }
         self.comp_level.get_or_insert(level);
         if let Some(code) = data.get(..4) {
@@ -533,6 +547,15 @@ impl NestedSubtreeContext {
         if let Some(group) = self.group {
             return group.into_control(warnings);
         }
+        if self.caption_paragraphs > 0 {
+            warnings.push(Hwp5Warning::DroppedControl {
+                control: "caption",
+                reason: format!(
+                    "shape caption ({} paragraphs) is not carried",
+                    self.caption_paragraphs
+                ),
+            });
+        }
         match self.kind() {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
@@ -594,6 +617,8 @@ impl NestedSubtreeContext {
                 instance_id: self.instance_id,
                 ctrl_properties: self.properties_raw,
                 look: self.look,
+                paragraphs: self.paragraphs,
+                list_header_properties: self.list_header_properties,
             }),
         }
     }
@@ -644,6 +669,8 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 shape: ellipse,
             }),
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
+                paragraphs: input.paragraphs.clone(),
+                list_header_properties: input.list_header_properties,
                 look: input.look.clone(),
                 ctrl_id,
                 geometry,
@@ -724,6 +751,8 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }),
         (Some(geometry), None, None, None, Some(polygon)) if polygon.points.len() >= 3 => {
             Hwp5Control::Polygon(Hwp5PolygonControl {
+                paragraphs: input.paragraphs.clone(),
+                list_header_properties: input.list_header_properties,
                 look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry,
@@ -1409,6 +1438,13 @@ impl BodyTextParserState {
                 }
             }
             TagId::ShapeComponent => {
+                if self.subtree_ctx.as_ref().is_some_and(|ctx| ctx.comp_level.is_none()) {
+                    flush_subtree_paragraph(
+                        &mut self.current_subtree_para,
+                        self.subtree_ctx.as_mut(),
+                        &mut self.warnings,
+                    );
+                }
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
                     ctx.note_shape_component(&record.data, level);
                 }
@@ -5087,6 +5123,8 @@ mod tests {
             shape_component_kind,
             link: None,
             look: None,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
             instance_id: 0,
             ctrl_properties: 0,
         }

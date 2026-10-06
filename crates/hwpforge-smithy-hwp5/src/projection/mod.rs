@@ -731,6 +731,12 @@ impl<'a> ProjectionImageState<'a> {
         match &look.fill {
             Ok(Hwp5RawBorderFillFill::None) => style.fill = Some(Fill::None),
             Ok(Hwp5RawBorderFillFill::Color(c)) => {
+                // Core's colour and pattern fills are opaque (review r1).
+                // 이것을 실패시키는 것: 이 보고를 지우기
+                // (`colour_fill_transparency_is_reported`).
+                if c.alpha != 0 {
+                    lost(&mut self.warnings, format!("fill transparency {} not carried", c.alpha));
+                }
                 let no_face = c.background_color == 0xFFFF_FFFF;
                 let pattern = c.pattern_kind.pattern_type();
                 match pattern {
@@ -3083,11 +3089,23 @@ fn project_control_run(
             projection_images.styled(run, rect.look.as_ref(), true)
         }
         Hwp5Control::Polygon(polygon) => {
-            let run = project_polygon_run(polygon, &mut projection_images.warnings);
+            let mut run = project_polygon_run(polygon, &mut projection_images.warnings);
+            attach_shape_text(
+                run.as_mut(),
+                &polygon.paragraphs,
+                polygon.list_header_properties,
+                projection_images,
+            );
             projection_images.styled(run, polygon.look.as_ref(), true)
         }
         Hwp5Control::Ellipse(ellipse) => {
-            let run = project_ellipse_run(ellipse, &mut projection_images.warnings);
+            let mut run = project_ellipse_run(ellipse, &mut projection_images.warnings);
+            attach_shape_text(
+                run.as_mut(),
+                &ellipse.paragraphs,
+                ellipse.list_header_properties,
+                projection_images,
+            );
             projection_images.styled(run, ellipse.look.as_ref(), true)
         }
         Hwp5Control::Arc(arc) => {
@@ -3495,6 +3513,45 @@ fn project_textbox_run(
         },
         CharShapeIndex::new(0),
     )
+}
+
+/// The text paragraphs an ellipse or polygon is written with — none when
+/// the shape itself is not projected ([`attach_shape_text`] only fills a
+/// projected shape). The layout-hint collector counts exactly these.
+pub(crate) fn written_shape_text(control: &Hwp5Control) -> &[Hwp5Paragraph] {
+    let mut scratch = Vec::new();
+    match control {
+        Hwp5Control::Ellipse(e) if project_ellipse_run(e, &mut scratch).is_some() => &e.paragraphs,
+        Hwp5Control::Polygon(p) if project_polygon_run(p, &mut scratch).is_some() => &p.paragraphs,
+        _ => &[],
+    }
+}
+
+/// An ellipse's or polygon's text (§19.5 1a, review r1): its paragraphs and
+/// text vertical alignment, projected like a text box's. Before, the shape
+/// was written without its text.
+///
+/// 이것을 실패시키는 것: 이 호출을 지우기(`ellipse_and_polygon_keep_their_text`).
+fn attach_shape_text(
+    run: Option<&mut Run>,
+    paragraphs: &[Hwp5Paragraph],
+    list_header_properties: Option<u32>,
+    projection_images: &mut ProjectionImageState<'_>,
+) {
+    let Some(run) = run else { return };
+    if paragraphs.is_empty() {
+        return;
+    }
+    let projected =
+        project_nested_paragraphs(paragraphs, projection_images, ImageProjectionContext::TextBox);
+    if let RunContent::Control(control) = &mut run.content {
+        if let Control::Ellipse { paragraphs, text_vertical_align, .. }
+        | Control::Polygon { paragraphs, text_vertical_align, .. } = control.as_mut()
+        {
+            *paragraphs = projected;
+            *text_vertical_align = shape_vertical_align_from_list_header(list_header_properties);
+        }
+    }
 }
 
 /// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.
@@ -6112,6 +6169,8 @@ mod tests {
             controls: vec![Hwp5Control::Polygon(Hwp5PolygonControl {
                 look: None,
                 ctrl_id: 0x6773_6F20,
+                paragraphs: Vec::new(),
+                list_header_properties: None,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 17_804,
                     y: 13_900,
@@ -6752,6 +6811,30 @@ mod shape_style_tests {
             ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
         let s = images.shape_style(look, fillable);
         (s, images.warnings.len())
+    }
+
+    /// A colour fill with transparency is reported (Core's fills are
+    /// opaque); an opaque one is not.
+    #[test]
+    fn colour_fill_transparency_is_reported() {
+        let mut fill = colour_fill(0x00EF_DECE, Hwp5FillPatternKind::None);
+        if let Hwp5RawBorderFillFill::Color(c) = &mut fill {
+            c.alpha = 128;
+        }
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        images.shape_style(&look(1, 1, fill), true);
+        assert!(
+            matches!(
+                images.warnings.as_slice(),
+                [Hwp5Warning::ProjectionFallback { subject: "shape.fill", .. }]
+            ),
+            "{:?}",
+            images.warnings
+        );
+        let (_, opaque) =
+            style(&look(1, 1, colour_fill(0x00EF_DECE, Hwp5FillPatternKind::None)), true);
+        assert_eq!(opaque, 0);
     }
 
     /// 1b-T2 + r6 안쪽 제목 상자: 종류 0 = 선 없음 — 색·굵기는 있어도

@@ -116,6 +116,11 @@ fn collect_flow_paragraph_layout_hints(
                 collect_scope_paragraphs(&subtree.paragraphs, body);
             }
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
+            // 이것을 실패시키는 것: 이 갈래를 지우기(타원 글 hint 가 빠져 캐시 켠
+            // 변환이 hint 부족으로 실패 — `ellipse_and_polygon_keep_their_text`).
+            Hwp5Control::Ellipse(_) | Hwp5Control::Polygon(_) => {
+                collect_scope_paragraphs(crate::projection::written_shape_text(control), body);
+            }
             // Memo body paragraphs are emitted as `<hp:subList>` children of
             // the body paragraph in HWPX, so the patcher consumes layout
             // hints for them from the body scope — same pattern as
@@ -127,8 +132,6 @@ fn collect_flow_paragraph_layout_hints(
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
-            | Hwp5Control::Polygon(_)
-            | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
             | Hwp5Control::TextArt(_)
@@ -201,6 +204,9 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
         match control {
             Hwp5Control::Table(table) => collect_table_layout_hints(table, scope),
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, scope),
+            Hwp5Control::Ellipse(_) | Hwp5Control::Polygon(_) => {
+                collect_scope_paragraphs(crate::projection::written_shape_text(control), scope);
+            }
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
                 collect_scope_paragraphs(&subtree.paragraphs, scope);
             }
@@ -211,8 +217,6 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
-            | Hwp5Control::Polygon(_)
-            | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
             | Hwp5Control::TextArt(_)
@@ -411,6 +415,8 @@ mod tests {
                     Hwp5Control::Polygon(Hwp5PolygonControl {
                         look: None,
                         ctrl_id: 0,
+                        paragraphs: Vec::new(),
+                        list_header_properties: None,
                         geometry: geo.clone(),
                         points: Vec::new(),
                         ctrl_properties: 0,

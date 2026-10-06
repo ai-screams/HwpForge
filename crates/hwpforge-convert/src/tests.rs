@@ -2557,7 +2557,14 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
 
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        assert!(warnings.is_empty(), "{relative} should convert without warnings: {warnings:?}");
+        // A caption fixture's picture/table caption is reported, not carried
+        // (HWP5 shape captions are not projected) — the only warning these
+        // fixtures give.
+        let unexpected: Vec<_> = warnings
+            .iter()
+            .filter(|w| !format!("{w:?}").contains("DroppedControl { control: \"caption\""))
+            .collect();
+        assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
         assert_valid_hwpx(&out);
 
@@ -2640,7 +2647,14 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
         let out = unique_temp_path(&format!("crossref-link-{stem}.hwpx"));
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        assert!(warnings.is_empty(), "{relative} should convert without warnings: {warnings:?}");
+        // A caption fixture's picture/table caption is reported, not carried
+        // (HWP5 shape captions are not projected) — the only warning these
+        // fixtures give.
+        let unexpected: Vec<_> = warnings
+            .iter()
+            .filter(|w| !format!("{w:?}").contains("DroppedControl { control: \"caption\""))
+            .collect();
+        assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
         let section_xml = read_section_xml(&out, 0);
 

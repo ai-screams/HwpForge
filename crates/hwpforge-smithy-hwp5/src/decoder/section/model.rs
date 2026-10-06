@@ -257,6 +257,12 @@ pub(crate) struct Hwp5PolygonControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text (`LIST_HEADER` one level below its component and
+    /// the paragraphs after it); empty for a group child (the group
+    /// projection decides its text) or a shape without text.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
+    pub list_header_properties: Option<u32>,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
@@ -280,6 +286,12 @@ pub(crate) struct Hwp5EllipseControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// The shape's text (`LIST_HEADER` one level below its component and
+    /// the paragraphs after it); empty for a group child (the group
+    /// projection decides its text) or a shape without text.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
+    pub list_header_properties: Option<u32>,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
