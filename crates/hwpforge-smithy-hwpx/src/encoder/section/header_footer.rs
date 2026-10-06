@@ -140,30 +140,31 @@ pub(super) fn build_masterpage_entries(
 /// - `<hp:ctrl><hp:header><hp:p>...</hp:p></hp:header></hp:ctrl>`
 /// - `<hp:ctrl><hp:footer><hp:p>...</hp:p></hp:footer></hp:ctrl>`
 /// - `<hp:ctrl><hp:autoNum numType="PAGE" ...></hp:ctrl>`
+///
+/// Headers/footers anchored to a later body paragraph
+/// ([`HeaderFooter::anchor_paragraph`](hwpforge_core::section::HeaderFooter::anchor_paragraph))
+/// go into that paragraph instead: `build_section` put a placeholder run in
+/// front of it ([`super::AnchorRun`]) and this registers the run's
+/// replacement — a run holding the `<hp:ctrl>` blocks, headers before
+/// footers, each in list order.
 pub(super) fn inject_header_footer_pagenum(
     xml: &mut String,
     section: &Section,
+    anchor_runs: &[super::AnchorRun],
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<()> {
-    // Find insertion point: after the last </hp:ctrl> that contains colPr
-    // (or after </hp:secPr> if no colPr).
-    // We inject after the colPr ctrl block.
-    let insert_pos = find_ctrl_injection_point(xml);
-    if insert_pos == 0 {
-        return Ok(()); // no suitable injection point found
-    }
-
-    let mut injection = String::new();
-
     // Header — emit each `<hp:header>` element preserving the HWPX
-    // multi-cardinality wire shape (ADR-002).
+    // multi-cardinality wire shape (ADR-002) — into the paragraph it is
+    // anchored to (§19.17 F2).
+    let mut by_paragraph: std::collections::BTreeMap<usize, String> =
+        std::collections::BTreeMap::new();
     for (i, header) in section.headers.iter().enumerate() {
         sink.enter(crate::decoder::PathSeg::Header(i));
         let xml_result = build_header_xml(header, "header", hyperlink_entries, options, sink);
         sink.leave();
-        injection.push_str(&xml_result?);
+        by_paragraph.entry(super::header_footer_anchor(header)).or_default().push_str(&xml_result?);
     }
 
     // Footer — same cardinality model.
@@ -171,7 +172,30 @@ pub(super) fn inject_header_footer_pagenum(
         sink.enter(crate::decoder::PathSeg::Footer(i));
         let xml_result = build_header_xml(footer, "footer", hyperlink_entries, options, sink);
         sink.leave();
-        injection.push_str(&xml_result?);
+        by_paragraph.entry(super::header_footer_anchor(footer)).or_default().push_str(&xml_result?);
+    }
+
+    for anchor in anchor_runs {
+        let ctrls = by_paragraph.remove(&anchor.paragraph).unwrap_or_default();
+        hyperlink_entries.push((
+            anchor.key.clone(),
+            format!(r#"<hp:run charPrIDRef="{}">{ctrls}</hp:run>"#, anchor.char_pr_id_ref),
+        ));
+    }
+    let mut injection = by_paragraph.remove(&0).unwrap_or_default();
+    if let Some((&paragraph, _)) = by_paragraph.iter().next() {
+        // build_section 이 같은 앵커 표로 자리표시 run 을 만들었으므로 도달 불가.
+        return Err(HwpxError::InvalidStructure {
+            detail: format!("encoder bug: no placeholder run for headers/footers anchored to paragraph {paragraph}"),
+        });
+    }
+
+    // Find insertion point: after the last </hp:ctrl> that contains colPr
+    // (or after </hp:secPr> if no colPr).
+    // We inject after the colPr ctrl block.
+    let insert_pos = find_ctrl_injection_point(xml);
+    if insert_pos == 0 {
+        return Ok(()); // no suitable injection point found
     }
 
     // Page number

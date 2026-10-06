@@ -413,6 +413,7 @@ pub(crate) fn encode_section_with_note_counters(
             }
         }
     }
+    let mut anchor_runs: Vec<AnchorRun> = Vec::new();
     let mut hx_section = build_section(
         section,
         &mut chart_entries,
@@ -421,6 +422,7 @@ pub(crate) fn encode_section_with_note_counters(
         chart_offset,
         embedded_ole_offset,
         options,
+        &mut anchor_runs,
         &mut sink,
     )?;
     renumber_note_autonums(&mut hx_section, numbering, &mut sink)?;
@@ -442,6 +444,7 @@ pub(crate) fn encode_section_with_note_counters(
     inject_header_footer_pagenum(
         &mut enriched,
         section,
+        &anchor_runs,
         &mut run_xml_replacements,
         options,
         &mut sink,
@@ -635,6 +638,22 @@ fn strip_root_element(xml: &str) -> &str {
     &xml[start..end]
 }
 
+/// A placeholder run put in front of body paragraph `paragraph` for the
+/// headers/footers anchored there (`HeaderFooter::anchor_paragraph` > 0).
+/// `key` is the serialized placeholder run; `inject_header_footer_pagenum`
+/// registers its replacement with the `<hp:ctrl>` blocks.
+#[derive(Debug)]
+pub(crate) struct AnchorRun {
+    pub(crate) paragraph: usize,
+    pub(crate) char_pr_id_ref: u32,
+    pub(crate) key: String,
+}
+
+/// The body paragraph a header/footer is written into (`None` = 0).
+pub(crate) fn header_footer_anchor(hf: &hwpforge_core::section::HeaderFooter) -> usize {
+    hf.anchor_paragraph.unwrap_or(0)
+}
+
 /// Builds an `HxSection` from a Core `Section`.
 #[allow(clippy::too_many_arguments)]
 fn build_section(
@@ -645,20 +664,40 @@ fn build_section(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
+    anchor_runs: &mut Vec<AnchorRun>,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxSection> {
+    // 문단마다 그 문단에 앵커된 머리말/꼬리말 수 (§19.17 F2).
+    let mut anchored = vec![0usize; section.paragraphs.len()];
+    for hf in section.headers.iter().chain(section.footers.iter()) {
+        if let Some(slot) = anchored.get_mut(header_footer_anchor(hf)) {
+            *slot += 1;
+        } else {
+            // validate() 가 막는 범위 밖 앵커 — 검증 안 된 입력에서 무음으로
+            // 첫 문단에 쓰지 않는다.
+            return Err(HwpxError::InvalidStructure {
+                detail: format!(
+                    "header/footer anchored to paragraph {} but the section has {} paragraph(s)",
+                    header_footer_anchor(hf),
+                    section.paragraphs.len()
+                ),
+            });
+        }
+    }
     // W1b: 첫 문단에 직렬화 후 문자열 주입되는 선행 ctrl 수 — colPr(1,
-    // enrich 가 항상 추가) + 머리말/꼬리말/쪽번호 (각 1,
+    // enrich 가 항상 추가) + 첫 문단에 앵커된 머리말/꼬리말 + 쪽번호 (각 1,
     // inject_header_footer_pagenum). secPr 는 typed 트리에 있어 ledger 가
-    // 직접 본다. 전부 영-core (8,0) 이라 상호 순서는 map 에 무관.
-    let injected_leading_ctrls: usize = 1
-        + section.headers.len()
-        + section.footers.len()
-        + usize::from(section.page_number.is_some());
+    // 직접 본다. 전부 영-core (8,0) 이라 상호 순서는 map 에 무관. 뒤 문단에
+    // 앵커된 것은 그 문단의 선행 run 으로 들어가 그 문단의 선행 ctrl 이다.
+    let injected_leading_ctrls: usize =
+        1 + anchored.first().copied().unwrap_or(0) + usize::from(section.page_number.is_some());
     let mut paragraphs = Vec::with_capacity(section.paragraphs.len());
     for (idx, para) in section.paragraphs.iter().enumerate() {
         let inject_sec_pr = idx == 0;
         let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
+        // 이것을 실패시키는 것: 뒤 문단에 0 을 넘기기
+        // (`anchored_footer_keeps_both_layout_caches`).
+        let leading = if inject_sec_pr { injected_leading_ctrls } else { anchored[idx] };
         sink.enter(crate::decoder::PathSeg::BodyParagraph(idx));
         let built = build_paragraph(
             para,
@@ -673,11 +712,29 @@ fn build_section(
             chart_offset,
             embedded_ole_offset,
             options,
-            if inject_sec_pr { injected_leading_ctrls } else { 0 },
+            leading,
             sink,
         );
         sink.leave();
-        paragraphs.push(built?);
+        let mut built = built?;
+        if idx > 0 && anchored[idx] > 0 {
+            // titleMark 처리(build_paragraph 안) 뒤에 넣는다 — 앞에 있으면
+            // titleMark 가 이 자리표시 run 에 붙어 치환 키가 깨진다.
+            let char_pr_id_ref = built.runs.first().map_or(0, |r| r.char_pr_id_ref);
+            let marker = next_marker("HWPHF", idx);
+            let mut run = note_head_run(char_pr_id_ref, HxCtrl::default());
+            run.ctrls.clear();
+            run.texts = vec![HxText::new(marker.clone())];
+            built.runs.insert(0, run);
+            anchor_runs.push(AnchorRun {
+                paragraph: idx,
+                char_pr_id_ref,
+                key: format!(
+                    r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#
+                ),
+            });
+        }
+        paragraphs.push(built);
     }
 
     Ok(HxSection { paragraphs })

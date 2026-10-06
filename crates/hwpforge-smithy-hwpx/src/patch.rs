@@ -381,17 +381,45 @@ pub(crate) struct SemanticTextSlot {
 #[derive(Debug, Default)]
 struct RawSectionSlots {
     body: Vec<PreservedTextSlot>,
-    header: Vec<PreservedTextSlot>,
-    footer: Vec<PreservedTextSlot>,
+    /// One entry per `<hp:header>`, in wire order.
+    header: Vec<Vec<PreservedTextSlot>>,
+    /// One entry per `<hp:footer>`, in wire order.
+    footer: Vec<Vec<PreservedTextSlot>>,
 }
 
 impl RawSectionSlots {
     fn into_slots(self) -> Vec<PreservedTextSlot> {
         let mut slots = self.body;
-        slots.extend(self.header);
-        slots.extend(self.footer);
+        slots.extend(numbered_header_footer_slots(self.header, "header", "headers"));
+        slots.extend(numbered_header_footer_slots(self.footer, "footer", "footers"));
         slots
     }
+}
+
+/// Names header/footer slots the way the semantic side does
+/// (`collect_semantic_text_slots`): `header.…` when the section has one,
+/// `headers[i].…` when it has several.
+///
+/// 이것을 실패시키는 것: 여럿일 때도 `header.…` 로 두기
+/// (`preservation_slots_number_multiple_footers`).
+fn numbered_header_footer_slots(
+    groups: Vec<Vec<PreservedTextSlot>>,
+    single: &str,
+    plural: &str,
+) -> Vec<PreservedTextSlot> {
+    let several = groups.len() > 1;
+    let mut out = Vec::new();
+    for (i, group) in groups.into_iter().enumerate() {
+        for mut slot in group {
+            if several {
+                if let Some(rest) = slot.path.strip_prefix(single) {
+                    slot.path = format!("{plural}[{i}]{rest}");
+                }
+            }
+            out.push(slot);
+        }
+    }
+    out
 }
 
 struct RawSlotSink<'a> {
@@ -948,6 +976,7 @@ fn collect_raw_run_slots(
                     &run.tables[idx],
                     &table_prefix,
                     sink,
+                    allow_section_header_footer,
                 )?;
                 semantic_run_idx += 1;
             }
@@ -989,6 +1018,7 @@ fn collect_raw_run_slots(
                         &run.rects[idx],
                         &rect_prefix,
                         sink,
+                        allow_section_header_footer,
                     )?;
                     semantic_run_idx += 1;
                 }
@@ -1192,6 +1222,7 @@ fn collect_raw_table_slots(
     table: &HxTable,
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
+    lift_header_footer: bool,
 ) -> HwpxResult<()> {
     if let Some(caption) = &table.caption {
         let caption_span =
@@ -1214,7 +1245,14 @@ fn collect_raw_table_slots(
         });
     }
     for (row_idx, (row, row_span)) in table.rows.iter().zip(row_spans.into_iter()).enumerate() {
-        collect_raw_row_slots(xml, row_span, row, &format!("{prefix}.rows[{row_idx}]"), sink)?;
+        collect_raw_row_slots(
+            xml,
+            row_span,
+            row,
+            &format!("{prefix}.rows[{row_idx}]"),
+            sink,
+            lift_header_footer,
+        )?;
     }
     Ok(())
 }
@@ -1225,6 +1263,7 @@ fn collect_raw_row_slots(
     row: &HxTableRow,
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
+    lift_header_footer: bool,
 ) -> HwpxResult<()> {
     let cell_spans = collect_direct_child_outer_spans(xml, row_span, "hp:tc")?;
     if cell_spans.len() != row.cells.len() {
@@ -1237,7 +1276,14 @@ fn collect_raw_row_slots(
         });
     }
     for (cell_idx, (cell, cell_span)) in row.cells.iter().zip(cell_spans.into_iter()).enumerate() {
-        collect_raw_cell_slots(xml, cell_span, cell, &format!("{prefix}.cells[{cell_idx}]"), sink)?;
+        collect_raw_cell_slots(
+            xml,
+            cell_span,
+            cell,
+            &format!("{prefix}.cells[{cell_idx}]"),
+            sink,
+            lift_header_footer,
+        )?;
     }
     Ok(())
 }
@@ -1248,6 +1294,7 @@ fn collect_raw_cell_slots(
     cell: &HxTableCell,
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
+    lift_header_footer: bool,
 ) -> HwpxResult<()> {
     let Some(sub_list) = &cell.sub_list else {
         return Ok(());
@@ -1256,13 +1303,15 @@ fn collect_raw_cell_slots(
         .ok_or_else(|| HwpxError::InvalidStructure {
             detail: format!("cell subList span missing for {prefix}"),
         })?;
+    // 디코더(`lift_header_footers`)가 표 칸 안 머리말/꼬리말을 구역 목록으로
+    // 올리므로 같은 자리에서 슬롯도 센다.
     collect_raw_sublist_slots(
         xml,
         sub_list_span,
         sub_list,
         &format!("{prefix}.paragraphs"),
         sink,
-        false,
+        lift_header_footer,
     )
 }
 
@@ -1289,6 +1338,7 @@ fn collect_raw_rect_slots(
     rect: &HxRect,
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
+    lift_header_footer: bool,
 ) -> HwpxResult<()> {
     if let Some(draw_text) = &rect.draw_text {
         let draw_text_span =
@@ -1297,7 +1347,14 @@ fn collect_raw_rect_slots(
                     detail: format!("textbox drawText span missing for {prefix}"),
                 },
             )?;
-        collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink)?;
+        collect_raw_draw_text_slots(
+            xml,
+            draw_text_span,
+            draw_text,
+            prefix,
+            sink,
+            lift_header_footer,
+        )?;
     }
     if let Some(caption) = &rect.caption {
         let caption_span = single_optional_direct_outer_span(xml, rect_span, "hp:caption")?
@@ -1341,7 +1398,7 @@ fn collect_raw_ellipse_slots(
                     .ok_or_else(|| HwpxError::InvalidStructure {
                         detail: format!("ellipse drawText span missing for {prefix}"),
                     })?;
-            collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink)?;
+            collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink, false)?;
         }
     }
     if let Some(caption) = &ellipse.caption {
@@ -1367,7 +1424,7 @@ fn collect_raw_polygon_slots(
                 .ok_or_else(|| HwpxError::InvalidStructure {
                     detail: format!("polygon drawText span missing for {prefix}"),
                 })?;
-        collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink)?;
+        collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink, false)?;
     }
     if let Some(caption) = &polygon.caption {
         let caption_span = single_optional_direct_outer_span(xml, polygon_span, "hp:caption")?
@@ -1419,6 +1476,7 @@ fn collect_raw_draw_text_slots(
     draw_text: &crate::schema::shapes::HxDrawText,
     prefix: &str,
     sink: &mut RawSlotSink<'_>,
+    lift_header_footer: bool,
 ) -> HwpxResult<()> {
     let sub_list_span = single_optional_direct_outer_span(xml, draw_text_span, "hp:subList")?
         .ok_or_else(|| HwpxError::InvalidStructure {
@@ -1430,7 +1488,7 @@ fn collect_raw_draw_text_slots(
         &draw_text.sub_list,
         &format!("{prefix}.paragraphs"),
         sink,
-        false,
+        lift_header_footer,
     )
 }
 
@@ -1439,8 +1497,10 @@ fn collect_raw_header_footer_slots(
     ctrl_span: Range<usize>,
     value: &HxHeaderFooter,
     prefix: &str,
-    slots: &mut Vec<PreservedTextSlot>,
+    groups: &mut Vec<Vec<PreservedTextSlot>>,
 ) -> HwpxResult<()> {
+    groups.push(Vec::new());
+    let slots = groups.last_mut().expect("just pushed");
     let tag = if prefix == "header" { "hp:header" } else { "hp:footer" };
     let header_footer_span =
         single_optional_direct_outer_span(xml, ctrl_span, tag)?.ok_or_else(|| {
@@ -2319,43 +2379,8 @@ mod tests {
         assert_eq!(preservation.text_slots[0].original_text, "cell");
     }
 
-    #[test]
-    fn build_section_preservation_ignores_nested_footer_controls() {
-        let xml = r#"
-        <hs:sec>
-          <hp:p id="0" paraPrIDRef="0">
-            <hp:run charPrIDRef="0">
-              <hp:tbl rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="1">
-                <hp:tr>
-                  <hp:tc borderFillIDRef="1">
-                    <hp:subList vertAlign="TOP">
-                      <hp:p id="1" paraPrIDRef="0">
-                        <hp:run charPrIDRef="0">
-                          <hp:ctrl>
-                            <hp:footer id="" applyPageType="BOTH">
-                              <hp:subList vertAlign="BOTTOM">
-                                <hp:p id="2" paraPrIDRef="0">
-                                  <hp:run charPrIDRef="0"/>
-                                </hp:p>
-                              </hp:subList>
-                            </hp:footer>
-                          </hp:ctrl>
-                        </hp:run>
-                        <hp:run charPrIDRef="0"><hp:t>body</hp:t></hp:run>
-                      </hp:p>
-                    </hp:subList>
-                  </hp:tc>
-                </hp:tr>
-              </hp:tbl>
-            </hp:run>
-          </hp:p>
-        </hs:sec>
-        "#;
-
-        let parsed = parse_section(xml, 0, &HashMap::new()).unwrap();
-        assert!(parsed.footers.is_empty(), "nested footer must not become section footer");
-
-        let section = Section {
+    fn section_from_parsed(parsed: crate::decoder::section::SectionParseResult) -> Section {
+        Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
             headers: parsed.headers,
@@ -2368,17 +2393,107 @@ mod tests {
             master_pages: None,
             begin_num: parsed.begin_num,
             text_direction: parsed.text_direction,
-        };
+        }
+    }
+
+    const NESTED_FOOTER_TABLE: &str = r#"
+              <hp:tbl rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="1">
+                <hp:tr>
+                  <hp:tc borderFillIDRef="1">
+                    <hp:subList vertAlign="TOP">
+                      <hp:p id="1" paraPrIDRef="0">
+                        <hp:run charPrIDRef="0">
+                          <hp:ctrl>
+                            <hp:footer id="" applyPageType="BOTH">
+                              <hp:subList vertAlign="BOTTOM">
+                                <hp:p id="2" paraPrIDRef="0">
+                                  <hp:run charPrIDRef="0"><hp:t>nested foot</hp:t></hp:run>
+                                </hp:p>
+                              </hp:subList>
+                            </hp:footer>
+                          </hp:ctrl>
+                        </hp:run>
+                        <hp:run charPrIDRef="0"><hp:t>body</hp:t></hp:run>
+                      </hp:p>
+                    </hp:subList>
+                  </hp:tc>
+                </hp:tr>
+              </hp:tbl>"#;
+
+    // §19.7 F1 계약 변경: 칸 안 꼬리말은 구역 꼬리말로 올라가고(옛 계약
+    // "구역 꼬리말이 아니다" 를 뒤집음), raw 슬롯도 같은 자리에서 센다.
+    // 이것을 실패시키는 것: raw 표 칸 슬롯에 `false` 를 넘기기(슬롯 수 불일치).
+    #[test]
+    fn build_section_preservation_lifts_nested_footer_controls() {
+        let xml = format!(
+            r#"<hs:sec><hp:p id="0" paraPrIDRef="0"><hp:run charPrIDRef="0">{NESTED_FOOTER_TABLE}</hp:run></hp:p></hs:sec>"#
+        );
+        let parsed = parse_section(&xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(parsed.footers.len(), 1, "nested footer becomes a section footer");
+        assert_eq!(parsed.footers[0].anchor_paragraph, None);
+        let section = section_from_parsed(parsed);
 
         let preservation =
-            build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
-        assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
-        assert_eq!(preservation.text_slots.len(), 1);
+            build_section_preservation(&xml, "Contents/section0.xml", &section).unwrap();
+        let paths: Vec<&str> = preservation.text_slots.iter().map(|s| s.path.as_str()).collect();
         assert_eq!(
-            preservation.text_slots[0].path,
-            "paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[0].runs[0].text"
+            paths,
+            [
+                "paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[0].runs[0].text",
+                "footer.paragraphs[0].runs[0].text",
+            ]
         );
-        assert!(!preservation.text_slots.iter().any(|slot| slot.path.starts_with("footer.")));
+        assert_eq!(preservation.text_slots[1].original_text, "nested foot");
+    }
+
+    // 글상자 안 머리말도 디코더처럼 슬롯을 센다. 이것을 실패시키는 것:
+    // rect 의 drawText 슬롯에 `false` 를 넘기기(슬롯 수 불일치).
+    #[test]
+    fn build_section_preservation_lifts_header_in_text_box() {
+        let xml = r#"<hs:sec><hp:p id="0" paraPrIDRef="0"><hp:run charPrIDRef="0">
+            <hp:rect id="1"><hp:sz width="1000" height="1000"/><hp:pos treatAsChar="1"/>
+              <hp:drawText><hp:subList><hp:p id="1" paraPrIDRef="0"><hp:run charPrIDRef="0">
+                <hp:ctrl><hp:header id="" applyPageType="BOTH"><hp:subList vertAlign="TOP">
+                  <hp:p id="2" paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>boxed head</hp:t></hp:run></hp:p>
+                </hp:subList></hp:header></hp:ctrl><hp:t>box</hp:t></hp:run></hp:p></hp:subList></hp:drawText>
+            </hp:rect></hp:run></hp:p></hs:sec>"#;
+        let parsed = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(parsed.headers.len(), 1);
+        let section = section_from_parsed(parsed);
+        let preservation =
+            build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
+        assert!(
+            preservation.text_slots.iter().any(|s| s.path == "header.paragraphs[0].runs[0].text"),
+            "{:?}",
+            preservation.text_slots.iter().map(|s| &s.path).collect::<Vec<_>>()
+        );
+    }
+
+    // F-T6: 최상위 꼬리말 + 뒤 문단 칸 안 꼬리말 = 둘 → semantic 쪽 `footers[i]`
+    // 와 같은 이름. 이것을 실패시키는 것: `numbered_header_footer_slots` 가
+    // 여럿일 때도 `footer.` 로 두기(경로 불일치 오류).
+    #[test]
+    fn preservation_slots_number_multiple_footers() {
+        let xml = format!(
+            r#"<hs:sec>
+          <hp:p id="0" paraPrIDRef="0"><hp:run charPrIDRef="0">
+            <hp:ctrl><hp:footer id="" applyPageType="BOTH"><hp:subList vertAlign="BOTTOM">
+              <hp:p id="3" paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>top foot</hp:t></hp:run></hp:p>
+            </hp:subList></hp:footer></hp:ctrl>
+            <hp:t>first</hp:t></hp:run></hp:p>
+          <hp:p id="4" paraPrIDRef="0"><hp:run charPrIDRef="0">{NESTED_FOOTER_TABLE}</hp:run></hp:p>
+        </hs:sec>"#
+        );
+        let parsed = parse_section(&xml, 0, &HashMap::new()).unwrap();
+        let anchors: Vec<Option<usize>> =
+            parsed.footers.iter().map(|f| f.anchor_paragraph).collect();
+        assert_eq!(anchors, [None, Some(1)]);
+        let section = section_from_parsed(parsed);
+        let preservation =
+            build_section_preservation(&xml, "Contents/section0.xml", &section).unwrap();
+        let paths: Vec<&str> = preservation.text_slots.iter().map(|s| s.path.as_str()).collect();
+        assert!(paths.contains(&"footers[0].paragraphs[0].runs[0].text"), "{paths:?}");
+        assert!(paths.contains(&"footers[1].paragraphs[0].runs[0].text"), "{paths:?}");
     }
 
     #[test]

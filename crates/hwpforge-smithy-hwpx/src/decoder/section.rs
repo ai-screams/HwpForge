@@ -209,27 +209,20 @@ pub(crate) fn parse_section_with_images(
                 }
             }
 
-            // Extract header/footer/pagenum/column_settings from ctrl elements in runs
+            // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
+            // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실). 표 칸·글상자
+            // 안의 것도 구역 목록으로 올리고, 앵커는 이 최상위 문단이다
+            // (§19.17 X4: 한컴은 칸 안 머리말·꼬리말을 표를 품은 문단에
+            // 놓인 것처럼 적용한다).
+            lift_header_footers(&hx_para.runs, para_idx, &mut headers, &mut footers, &mut ctx)?;
+
+            // Extract pagenum/column_settings from ctrl elements in runs
             for hx_run in &hx_para.runs {
                 for ctrl in &hx_run.ctrls {
                     if column_settings.is_none() {
                         if let Some(cs) = convert_ctrl_column_settings(ctrl) {
                             column_settings = Some(cs);
                         }
-                    }
-                    // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
-                    // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실).
-                    ctx.enter(super::PathSeg::Header(headers.len()));
-                    let header_result = convert_ctrl_header(ctrl, &mut ctx);
-                    ctx.leave();
-                    if let Some(hf) = header_result? {
-                        headers.push(hf);
-                    }
-                    ctx.enter(super::PathSeg::Footer(footers.len()));
-                    let footer_result = convert_ctrl_footer(ctrl, &mut ctx);
-                    ctx.leave();
-                    if let Some(hf) = footer_result? {
-                        footers.push(hf);
                     }
                     if page_number.is_none() {
                         if let Some(pn) = convert_ctrl_page_number(ctrl, &mut ctx.warnings) {
@@ -2139,6 +2132,78 @@ fn parse_mm_width(s: &str) -> HwpUnit {
     num.parse::<f64>().ok().and_then(|mm| HwpUnit::from_mm(mm).ok()).unwrap_or(HwpUnit::ZERO)
 }
 
+/// Collects the headers and footers of one top-level body paragraph in wire
+/// order, including the ones written inside its table cells and text boxes
+/// (recursively), and anchors each to that paragraph (`para_idx`).
+///
+/// Only table cells and text boxes (`<hp:rect>` with `<hp:drawText>`) are
+/// searched: those are where Hancom documents put them (§19.7 — 84 nested
+/// ones in the corpus, all in table cells). Header/footer controls in other
+/// nested places (footnotes, captions, group children) are still dropped by
+/// run conversion. The patch preservation walker (`patch.rs`) must search
+/// exactly the same places, or its text slots stop lining up.
+///
+/// # Errors
+///
+/// Propagates paragraph conversion failures inside a header/footer.
+fn lift_header_footers(
+    runs: &[HxRun],
+    para_idx: usize,
+    headers: &mut Vec<HeaderFooter>,
+    footers: &mut Vec<HeaderFooter>,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<()> {
+    use crate::schema::section::HxRunChildKind as K;
+    for hx_run in runs {
+        let order = if hx_run.child_order.is_empty() {
+            crate::schema::section::legacy_child_order(hx_run)
+        } else {
+            hx_run.child_order.clone()
+        };
+        for (kind, idx) in order {
+            match kind {
+                K::Ctrl => {
+                    let ctrl = &hx_run.ctrls[idx];
+                    ctx.enter(super::PathSeg::Header(headers.len()));
+                    let header_result = convert_ctrl_header(ctrl, ctx);
+                    ctx.leave();
+                    if let Some(hf) = header_result? {
+                        headers.push(hf.with_anchor_paragraph(para_idx));
+                    }
+                    ctx.enter(super::PathSeg::Footer(footers.len()));
+                    let footer_result = convert_ctrl_footer(ctrl, ctx);
+                    ctx.leave();
+                    if let Some(hf) = footer_result? {
+                        footers.push(hf.with_anchor_paragraph(para_idx));
+                    }
+                }
+                // 이것을 실패시키는 것: 이 갈래를 지우기
+                // (`nested_footer_in_table_cell_is_lifted_with_its_anchor`).
+                K::Table => {
+                    for cell in hx_run.tables[idx].rows.iter().flat_map(|row| &row.cells) {
+                        if let Some(sub_list) = &cell.sub_list {
+                            for para in &sub_list.paragraphs {
+                                lift_header_footers(&para.runs, para_idx, headers, footers, ctx)?;
+                            }
+                        }
+                    }
+                }
+                // 이것을 실패시키는 것: 이 갈래를 지우기
+                // (`nested_header_in_text_box_is_lifted`).
+                K::Rect => {
+                    if let Some(draw_text) = &hx_run.rects[idx].draw_text {
+                        for para in &draw_text.sub_list.paragraphs {
+                            lift_header_footers(&para.runs, para_idx, headers, footers, ctx)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.
 ///
 /// # Errors
@@ -3130,6 +3195,58 @@ mod tests {
         };
         assert_eq!(img.hyperlink.as_deref(), Some("http://www.korea.kr"));
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    fn hf_ctrl(tag: &str, page: &str, text: &str) -> String {
+        format!(
+            r#"<ctrl><{tag} id="" applyPageType="{page}"><subList vertAlign="TOP"><p paraPrIDRef="0"><run charPrIDRef="0"><t>{text}</t></run></p></subList></{tag}></ctrl>"#
+        )
+    }
+
+    fn cell_with(inner: &str) -> String {
+        format!(
+            r#"<tbl rowCnt="1" colCnt="1"><tr><tc><subList><p paraPrIDRef="0"><run charPrIDRef="0">{inner}<t>cell</t></run></p></subList></tc></tr></tbl>"#
+        )
+    }
+
+    fn hf_summary(list: &[HeaderFooter]) -> Vec<(String, Option<usize>)> {
+        list.iter()
+            .map(|h| {
+                (h.paragraphs.iter().map(Paragraph::text_content).collect(), h.anchor_paragraph)
+            })
+            .collect()
+    }
+
+    /// F-T2: 칸 안 header → 최상위 header → (다음 문단) 칸 안 footer 가 교차해도
+    /// Core 순서 = wire 순서, 앵커 = 최상위 문단.
+    /// 이것을 실패시키는 것: 칸 안 것을 최상위 것 뒤에 붙이기(첫 두 순서가
+    /// 바뀜) / 표 갈래 삭제(칸 안 둘 소실) / 앵커를 0 으로 고정.
+    #[test]
+    fn nested_footer_in_table_cell_is_lifted_with_its_anchor() {
+        let xml = format!(
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0">{}</run><run charPrIDRef="0">{}<t>top</t></run></p><p paraPrIDRef="0"><run charPrIDRef="0">{}</run></p></sec>"#,
+            cell_with(&hf_ctrl("header", "EVEN", "in-cell")),
+            hf_ctrl("header", "EVEN", "top-level"),
+            cell_with(&hf_ctrl("footer", "BOTH", "foot")),
+        );
+        let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(
+            hf_summary(&result.headers),
+            [("in-cell".to_string(), None), ("top-level".to_string(), None)]
+        );
+        assert_eq!(hf_summary(&result.footers), [("foot".to_string(), Some(1))]);
+    }
+
+    /// 글상자(`<rect>` + `<drawText>`) 안 머리말도 올린다.
+    /// 이것을 실패시키는 것: rect 갈래 삭제.
+    #[test]
+    fn nested_header_in_text_box_is_lifted() {
+        let xml = format!(
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>a</t></run></p><p paraPrIDRef="0"><run charPrIDRef="0"><rect id="1"><sz width="1000" height="1000"/><pos treatAsChar="1"/><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">{}<t>box</t></run></p></subList></drawText></rect></run></p></sec>"#,
+            hf_ctrl("header", "BOTH", "boxed"),
+        );
+        let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(hf_summary(&result.headers), [("boxed".to_string(), Some(1))]);
     }
 
     /// An `href` in any other form is reported, not guessed at; an empty
