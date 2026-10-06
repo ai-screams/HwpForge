@@ -1067,7 +1067,52 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
         saved_sz_height,
         table_pos_is_default_flow(hx.pos.as_ref()),
     ));
+    if let Some(placement) = decode_table_placement(hx, ctx) {
+        table = table.with_placement(placement);
+    }
     Ok(table)
+}
+
+/// The table's `<hp:pos>` and `textWrap`/`textFlow` as a Core placement
+/// (§19.6 A), `None` when every field is the placement the encoder writes
+/// for `None` ([`crate::encoder::table_default_placement`]) — so a table this
+/// codec wrote decodes back to `None`. Missing attributes read as that
+/// default.
+///
+/// 이것을 실패시키는 것: 접기 조건을 `legacy_inline_defaults` 로(우리 API 표가
+/// `Some` 으로) / 새 네 필드 중 하나를 접기 비교에서 빼기
+/// (`table_placement_folds_only_the_full_default`).
+fn decode_table_placement(hx: &HxTable, ctx: &mut DecodeCtx) -> Option<ObjectPlacement> {
+    let pos = hx.pos.as_ref()?;
+    let default = crate::encoder::table_default_placement();
+    let rel = |raw: &str, fallback: &ObjectRelativeTo| {
+        if raw.is_empty() {
+            fallback.clone()
+        } else {
+            ObjectRelativeTo::from_hwpx(raw)
+        }
+    };
+    let placement = ObjectPlacement::new(
+        if hx.text_wrap.is_empty() {
+            default.text_wrap.clone()
+        } else {
+            ObjectTextWrap::from_hwpx(&hx.text_wrap)
+        },
+        rel(&pos.vert_rel_to, &default.vert_rel_to),
+        rel(&pos.horz_rel_to, &default.horz_rel_to),
+    )
+    .with_text_flow(if hx.text_flow.is_empty() {
+        default.text_flow.clone()
+    } else {
+        ObjectTextFlow::from_hwpx(&hx.text_flow)
+    })
+    .with_treat_as_char(pos.treat_as_char != 0)
+    .with_flow_with_text(pos.flow_with_text != 0)
+    .with_allow_overlap(pos.allow_overlap != 0)
+    .with_vert_offset(HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO))
+    .with_horz_offset(HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO));
+    let placement = super::shapes::with_pos_alignment(placement, pos, ctx);
+    (placement != default).then_some(placement)
 }
 
 /// wire `<hp:pos>` 가 기본 inline-flow 조합인지 (pos 없음 = 기본).
@@ -1212,7 +1257,7 @@ pub(crate) fn convert_picture(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
-    let placement = decode_image_placement(hx);
+    let placement = decode_image_placement(hx, ctx);
 
     let mut image: Image = Image::new(path, width, height, format);
     if let Some(value) = caption {
@@ -1247,10 +1292,10 @@ fn decode_object_hyperlink(href: &str, ctx: &mut DecodeCtx) -> Option<String> {
     }
 }
 
-fn decode_image_placement(hx: &HxPic) -> Option<ObjectPlacement> {
+fn decode_image_placement(hx: &HxPic, ctx: &mut DecodeCtx) -> Option<ObjectPlacement> {
     let pos = hx.pos.as_ref()?;
 
-    Some(
+    Some(super::shapes::with_pos_alignment(
         ObjectPlacement::new(
             if hx.text_wrap.is_empty() {
                 ObjectTextWrap::TopAndBottom
@@ -1278,7 +1323,9 @@ fn decode_image_placement(hx: &HxPic) -> Option<ObjectPlacement> {
         .with_allow_overlap(pos.allow_overlap != 0)
         .with_vert_offset(HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO))
         .with_horz_offset(HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO)),
-    )
+        pos,
+        ctx,
+    ))
 }
 
 // ── Footnote / Endnote / TextBox decoding ────────────────────────

@@ -100,6 +100,7 @@ pub(crate) use self::picture::build_picture;
 use self::section_pr::show_mode_to_hwpx;
 use self::section_pr::{build_sec_pr, enrich_sec_pr};
 use self::table::build_table;
+pub(crate) use self::table::table_default_placement;
 use self::typography::{encode_compose_to_hx, encode_dutmal_to_hx};
 use super::chart::generate_chart_xml;
 use super::escape_xml;

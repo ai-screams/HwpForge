@@ -35,6 +35,7 @@ fn decode_object_placement(
     pos: Option<&HxTablePos>,
     text_wrap: &str,
     text_flow: &str,
+    ctx: &mut DecodeCtx,
 ) -> Option<ObjectPlacement> {
     let pos = pos?;
     let placement = ObjectPlacement::new(
@@ -64,11 +65,55 @@ fn decode_object_placement(
     .with_allow_overlap(pos.allow_overlap != 0)
     .with_vert_offset(HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO))
     .with_horz_offset(HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO));
+    let placement = with_pos_alignment(placement, pos, ctx);
     if placement == ObjectPlacement::legacy_inline_defaults() {
         None
     } else {
         Some(placement)
     }
+}
+
+/// `placement` with the `<hp:pos>` alignment and the two flags Core carries
+/// since S1 (`vertAlign`, `horzAlign`, `affectLSpacing`, `holdAnchorAndSO`).
+/// An alignment this codec does not know is reported
+/// ([`UnknownEnumValue`](super::DecodeWarning::UnknownEnumValue)) and read as
+/// top/left; an empty attribute is the default without a report.
+///
+/// 이것을 실패시키는 것: 이 호출을 지우기(정렬이 재인코드에서 TOP/LEFT 로,
+/// `object_alignment_and_flags_round_trip`) / 미지값 경고 삭제.
+pub(crate) fn with_pos_alignment(
+    placement: ObjectPlacement,
+    pos: &HxTablePos,
+    ctx: &mut DecodeCtx,
+) -> ObjectPlacement {
+    use hwpforge_core::placement::{HorzAlign, VertAlign};
+    let vert_align = match pos.vert_align.as_str() {
+        "" => VertAlign::Top,
+        raw => VertAlign::from_hwpx(raw).unwrap_or_else(|| {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:pos@vertAlign",
+                raw: raw.to_string(),
+                fallback: "TOP",
+            });
+            VertAlign::Top
+        }),
+    };
+    let horz_align = match pos.horz_align.as_str() {
+        "" => HorzAlign::Left,
+        raw => HorzAlign::from_hwpx(raw).unwrap_or_else(|| {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:pos@horzAlign",
+                raw: raw.to_string(),
+                fallback: "LEFT",
+            });
+            HorzAlign::Left
+        }),
+    };
+    placement
+        .with_vert_align(vert_align)
+        .with_horz_align(horz_align)
+        .with_affect_line_spacing(pos.affect_l_spacing != 0)
+        .with_hold_anchor_and_so(pos.hold_anchor_and_so != 0)
 }
 
 /// Parses an `<hp:subList vertAlign="...">` token into a Core [`VerticalAlign`].
@@ -103,7 +148,8 @@ pub(crate) fn decode_textbox(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement = decode_object_placement(rect.pos.as_ref(), &rect.text_wrap, &rect.text_flow);
+    let placement =
+        decode_object_placement(rect.pos.as_ref(), &rect.text_wrap, &rect.text_flow, ctx);
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
@@ -173,7 +219,8 @@ pub(crate) fn decode_line(
 
     let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let placement = decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow);
+    let placement =
+        decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow, ctx);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
@@ -247,7 +294,7 @@ pub(crate) fn decode_ellipse(
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let placement =
-        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow);
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
@@ -311,7 +358,7 @@ pub(crate) fn decode_polygon(
         polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let placement =
-        decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow);
+        decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow, ctx);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
@@ -617,7 +664,7 @@ pub(crate) fn decode_arc(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let placement =
-        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow);
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx);
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
 
@@ -690,7 +737,8 @@ pub(crate) fn decode_curve(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement = decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow);
+    let placement =
+        decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow, ctx);
     let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -890,7 +938,7 @@ pub(crate) fn decode_connect_line(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement = decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow);
+    let placement = decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow, ctx);
     let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -1016,8 +1064,12 @@ pub(crate) fn decode_container(
         return Ok(None);
     };
 
-    let placement =
-        decode_object_placement(container.pos.as_ref(), &container.text_wrap, &container.text_flow);
+    let placement = decode_object_placement(
+        container.pos.as_ref(),
+        &container.text_wrap,
+        &container.text_flow,
+        ctx,
+    );
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Group {
             children,
@@ -2839,11 +2891,35 @@ mod tests {
         // so it is set explicitly here.)
         let mut inline = make_pos(0, 0);
         inline.treat_as_char = 1;
-        assert!(decode_object_placement(Some(&inline), "TOP_AND_BOTTOM", "BOTH_SIDES").is_none());
-        assert!(decode_object_placement(Some(&inline), "", "").is_none());
-        assert!(decode_object_placement(None, "SQUARE", "LEFT_ONLY").is_none());
+        assert!(decode_object_placement(
+            Some(&inline),
+            "TOP_AND_BOTTOM",
+            "BOTH_SIDES",
+            &mut crate::decoder::section::DecodeCtx::new(0)
+        )
+        .is_none());
+        assert!(decode_object_placement(
+            Some(&inline),
+            "",
+            "",
+            &mut crate::decoder::section::DecodeCtx::new(0)
+        )
+        .is_none());
+        assert!(decode_object_placement(
+            None,
+            "SQUARE",
+            "LEFT_ONLY",
+            &mut crate::decoder::section::DecodeCtx::new(0)
+        )
+        .is_none());
         // treatAsChar=0 at the origin is anchored, not inline → carries placement.
-        assert!(decode_object_placement(Some(&make_pos(0, 0)), "", "").is_some());
+        assert!(decode_object_placement(
+            Some(&make_pos(0, 0)),
+            "",
+            "",
+            &mut crate::decoder::section::DecodeCtx::new(0)
+        )
+        .is_some());
     }
 
     #[test]
@@ -2854,8 +2930,13 @@ mod tests {
         pos.allow_overlap = 1;
         pos.vert_rel_to = "PAPER".to_string();
         pos.horz_rel_to = "PAGE".to_string();
-        let placement =
-            decode_object_placement(Some(&pos), "SQUARE", "RIGHT_ONLY").expect("floating");
+        let placement = decode_object_placement(
+            Some(&pos),
+            "SQUARE",
+            "RIGHT_ONLY",
+            &mut crate::decoder::section::DecodeCtx::new(0),
+        )
+        .expect("floating");
         assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
         assert_eq!(placement.text_flow, ObjectTextFlow::RightOnly);
         assert!(!placement.treat_as_char);

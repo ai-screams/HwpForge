@@ -107,21 +107,19 @@ fn shape_text_flow(placement: Option<&ObjectPlacement>) -> String {
 /// The `None` branch reproduces the historical zero-offset inline output
 /// byte-for-byte (treat-as-char, paragraph-anchored, zero offset); the `Some`
 /// branch mirrors `build_picture_position`, sourcing every carried field from
-/// the [`ObjectPlacement`] while keeping the fields it does not model
-/// (`affectLSpacing`/`holdAnchorAndSO`/`vertAlign`/`horzAlign`) at the native
-/// defaults.
+/// the [`ObjectPlacement`].
 fn shape_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
     match placement {
         Some(p) => HxTablePos {
             treat_as_char: u32::from(p.treat_as_char),
-            affect_l_spacing: 0,
+            affect_l_spacing: u32::from(p.affect_line_spacing),
             flow_with_text: u32::from(p.flow_with_text),
             allow_overlap: u32::from(p.allow_overlap),
-            hold_anchor_and_so: 0,
+            hold_anchor_and_so: u32::from(p.hold_anchor_and_so),
             vert_rel_to: p.vert_rel_to.as_hwpx_str().into_owned(),
             horz_rel_to: p.horz_rel_to.as_hwpx_str().into_owned(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
+            vert_align: p.vert_align.as_hwpx_str().to_string(),
+            horz_align: p.horz_align.as_hwpx_str().to_string(),
             vert_offset: p.vert_offset.as_i32(),
             horz_offset: p.horz_offset.as_i32(),
         },

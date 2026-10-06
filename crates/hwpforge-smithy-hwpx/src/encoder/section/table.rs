@@ -71,6 +71,9 @@ pub(super) fn build_table(
             .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
 
+    // §19.6 A: `None` = the placement this encoder has always written.
+    // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
+    let placement = table.placement.clone().unwrap_or_else(table_default_placement);
     Ok(HxTable {
         // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
         // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
@@ -78,8 +81,8 @@ pub(super) fn build_table(
         id: table.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
         z_order: 0,
         numbering_type: "TABLE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
+        text_wrap: placement.text_wrap.as_hwpx_str().into_owned(),
+        text_flow: placement.text_flow.as_hwpx_str().into_owned(),
         lock: 0,
         dropcap_style: DropCapStyle::None.to_string(),
         page_break: encode_table_page_break(table.page_break).to_string(),
@@ -104,17 +107,17 @@ pub(super) fn build_table(
             protect: 0,
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 0,
-            affect_l_spacing: 0,
-            flow_with_text: 1,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "COLUMN".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            treat_as_char: u32::from(placement.treat_as_char),
+            affect_l_spacing: u32::from(placement.affect_line_spacing),
+            flow_with_text: u32::from(placement.flow_with_text),
+            allow_overlap: u32::from(placement.allow_overlap),
+            hold_anchor_and_so: u32::from(placement.hold_anchor_and_so),
+            vert_rel_to: placement.vert_rel_to.as_hwpx_str().into_owned(),
+            horz_rel_to: placement.horz_rel_to.as_hwpx_str().into_owned(),
+            vert_align: placement.vert_align.as_hwpx_str().to_string(),
+            horz_align: placement.horz_align.as_hwpx_str().to_string(),
+            vert_offset: placement.vert_offset.as_i32(),
+            horz_offset: placement.horz_offset.as_i32(),
         }),
         // Core 승격값 우선 (W3a-2 의도된 delta) — None(우리 API 저작)은 기존
         // 기본값 유지로 바이트 불변.
@@ -127,6 +130,21 @@ pub(super) fn build_table(
         in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
         rows,
     })
+}
+
+/// The placement written for a table whose [`Table::placement`] is `None`:
+/// not treated as a character, flowing with the text, no overlap, anchored
+/// to the paragraph vertically and the column horizontally, zero offsets,
+/// top/left, top-and-bottom wrap, both-sides flow. The decoder folds a wire
+/// placement equal to this back to `None`.
+pub(crate) fn table_default_placement() -> ObjectPlacement {
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+    ObjectPlacement::new(
+        ObjectTextWrap::TopAndBottom,
+        ObjectRelativeTo::Para,
+        ObjectRelativeTo::Column,
+    )
+    .with_flow_with_text(true)
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.

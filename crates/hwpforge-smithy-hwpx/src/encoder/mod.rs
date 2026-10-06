@@ -15,6 +15,7 @@ pub(crate) mod header_tabs;
 pub(crate) mod package;
 mod references;
 pub(crate) mod section;
+pub(crate) use section::table_default_placement;
 pub(crate) mod shapes;
 
 /// Escapes XML special characters for text content and double-quoted

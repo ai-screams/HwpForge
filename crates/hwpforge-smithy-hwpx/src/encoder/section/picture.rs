@@ -137,14 +137,14 @@ pub(super) fn build_picture_position(placement: Option<&ObjectPlacement>) -> HxT
     match placement {
         Some(value) => HxTablePos {
             treat_as_char: u32::from(value.treat_as_char),
-            affect_l_spacing: 0,
+            affect_l_spacing: u32::from(value.affect_line_spacing),
             flow_with_text: u32::from(value.flow_with_text),
             allow_overlap: u32::from(value.allow_overlap),
-            hold_anchor_and_so: 0,
+            hold_anchor_and_so: u32::from(value.hold_anchor_and_so),
             vert_rel_to: value.vert_rel_to.as_hwpx_str().into_owned(),
             horz_rel_to: value.horz_rel_to.as_hwpx_str().into_owned(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
+            vert_align: value.vert_align.as_hwpx_str().to_string(),
+            horz_align: value.horz_align.as_hwpx_str().to_string(),
             vert_offset: value.vert_offset.as_i32(),
             horz_offset: value.horz_offset.as_i32(),
         },
