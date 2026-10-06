@@ -6,9 +6,8 @@
   "total_warnings": 20,
   "categories": {
     "ContentLost:group_child_picture": {
-      "count": 3,
+      "count": 2,
       "fixtures": {
-        "tests/fixtures/shapes/group-f3c-cropped.hwp": 1,
         "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 1,
         "tests/fixtures/shapes/group-f3e-gray.hwp": 1
       }
@@ -43,6 +42,12 @@
       "count": 1,
       "fixtures": {
         "tests/fixtures/hwp5/sample-field-docsummary.hwp": 1
+      }
+    },
+    "ProjectionFallback:control.auto_number": {
+      "count": 1,
+      "fixtures": {
+        "tests/fixtures/hwp5/crossref/sample-eq-caption-4-refs.hwp": 1
       }
     }
   },

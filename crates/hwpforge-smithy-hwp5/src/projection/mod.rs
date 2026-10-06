@@ -3434,6 +3434,20 @@ fn project_control_run(
                 0x06 => InlinePageKind::TotalPages,
                 _ => InlinePageKind::Unknown,
             };
+            // §19.16 J (P19): bits 0–3 = 3·4·5 are a picture, table or
+            // equation number (HWPX `numType` PICTURE·TABLE·EQUATION). The
+            // corpus has none (`scan_atno.py`), so the record layout of its
+            // format is unmeasured: reported, not guessed. 이것을 실패시키는
+            // 것: 이 경고를 지우기 (`atno_caption_number_is_reported`).
+            if matches!(atno.raw_flag & 0xF, 3..=5) {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "control.auto_number",
+                    reason: format!(
+                        "atno kind {} (picture/table/equation number) is not carried",
+                        atno.raw_flag & 0xF
+                    ),
+                });
+            }
             Some(Run::control(Control::InlinePageNumber { kind }, CharShapeIndex::new(0)))
         }
         Hwp5Control::NewNumber(nwno) => {
@@ -6779,6 +6793,44 @@ mod tests {
     // were removed from the core IR. These tests lock that the *derivation*
     // (DateCodeField.is_time_mode, InlinePageNumber.kind) survives that
     // removal by re-running the exact projection logic.
+
+    /// An `atno` whose kind is a picture, table or equation number (3–5) is
+    /// reported; a page number is not.
+    ///
+    /// 이것을 실패시키는 것: 그 경고를 지우는 것 / 범위를 3..=4 로 줄이는 것.
+    #[test]
+    fn atno_caption_number_is_reported() {
+        use crate::schema::section::Hwp5InlinePageNumberControl;
+        let warnings = |raw_flag: u32| {
+            let ctrl = Hwp5Control::InlinePageNumber(Hwp5InlinePageNumberControl {
+                ctrl_id: 0x6174_6E6F,
+                raw_flag,
+            });
+            let mut images = ProjectionImageState::new(
+                None,
+                None,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            );
+            project_control_run(
+                &ctrl,
+                &mut images,
+                ImageProjectionContext::Flow,
+                CharShapeIndex::new(0),
+            );
+            images
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        Hwp5Warning::ProjectionFallback { subject: "control.auto_number", .. }
+                    )
+                })
+                .count()
+        };
+        assert_eq!([3, 4, 5].map(warnings), [1, 1, 1]);
+        assert_eq!([0, 1, 6].map(warnings), [0, 0, 0]);
+    }
 
     /// `project_control_run` maps an `atno` wire flag to the right
     /// `InlinePageKind` without carrying the raw flag into the core IR.

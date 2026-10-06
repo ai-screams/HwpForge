@@ -2558,11 +2558,18 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
         // A caption fixture's picture/table caption is reported, not carried
-        // (HWP5 shape captions are not projected) — the only warning these
-        // fixtures give.
+        // (HWP5 shape captions are not projected), and an equation caption's
+        // number (`atno` kind 5) is reported (§19.16 J, P19) — the only
+        // warnings these fixtures give.
         let unexpected: Vec<_> = warnings
             .iter()
-            .filter(|w| !format!("{w:?}").contains("DroppedControl { control: \"caption\""))
+            .filter(|w| {
+                let text = format!("{w:?}");
+                let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains("control.auto_number"));
+                !expected
+            })
             .collect();
         assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
@@ -2648,11 +2655,18 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
         // A caption fixture's picture/table caption is reported, not carried
-        // (HWP5 shape captions are not projected) — the only warning these
-        // fixtures give.
+        // (HWP5 shape captions are not projected), and an equation caption's
+        // number (`atno` kind 5) is reported (§19.16 J, P19) — the only
+        // warnings these fixtures give.
         let unexpected: Vec<_> = warnings
             .iter()
-            .filter(|w| !format!("{w:?}").contains("DroppedControl { control: \"caption\""))
+            .filter(|w| {
+                let text = format!("{w:?}");
+                let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains("control.auto_number"));
+                !expected
+            })
             .collect();
         assert!(unexpected.is_empty(), "{relative} should convert without warnings: {warnings:?}");
 
