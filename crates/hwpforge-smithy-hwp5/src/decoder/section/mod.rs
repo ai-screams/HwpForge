@@ -753,9 +753,12 @@ fn char_shape_runs_to_text_positions(
         return runs.to_vec();
     };
 
+    // Boundaries come in ascending order, so one cursor walks the spans once
+    // for all of them (`O(boundaries + spans)`).
+    let mut cursor = map.cursor();
     let mut out: Vec<Hwp5CharShapeRun> = Vec::with_capacity(runs.len());
     for run in runs {
-        let position = match map.to_core(run.position) {
+        let position = match cursor.core_at(run.position) {
             Ok(position) => position,
             Err(crate::wire_text_map::CacheMapError::InsideContraction { wire }) => {
                 warnings.push(Hwp5Warning::ProjectionFallback {
@@ -766,7 +769,9 @@ fn char_shape_runs_to_text_positions(
                         run.char_shape_id
                     ),
                 });
-                (wire..).find_map(|after| map.to_core(after).ok()).unwrap_or_else(|| map.core_end())
+                (wire..)
+                    .find_map(|after| cursor.core_at(after).ok())
+                    .unwrap_or_else(|| map.core_end())
             }
             Err(_) => map.core_end(),
         };
@@ -3618,6 +3623,46 @@ mod tests {
             [(1, "𝒳\t".to_string()), (2, "가나".to_string())]
         );
         assert_eq!(boundary_warnings(&result), 0, "{:?}", result.warnings);
+    }
+
+    /// A paragraph of 50,000 tab-separated characters with a boundary at
+    /// every character converts within half a second: one cursor walks the
+    /// spans once for all boundaries. Rescanning the spans for each boundary
+    /// makes this over a billion span checks.
+    ///
+    /// 이것을 실패시키는 것: 경계마다 `WireTextMap::to_core` 로 처음부터 다시
+    /// 훑는 것(시간 한도를 넘는다).
+    #[test]
+    fn char_shape_conversion_is_linear_in_boundaries_and_spans() {
+        let count = 50_000u32;
+        let mut units = Vec::new();
+        let mut runs = Vec::new();
+        for i in 0..count {
+            runs.push((i * 9, i % 7));
+            units.extend(utf16("가"));
+            units.extend(ctrl(0x09));
+        }
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &units_data(&units)));
+        stream.extend(make_record(TagId::ParaCharShape, 1, &char_shape_runs_data(&runs)));
+        let paragraph = {
+            let result = parse_body_text(&stream, &version()).unwrap();
+            result.paragraphs.into_iter().next().unwrap()
+        };
+        let segments = paragraph.text_segments.clone();
+        let wire_runs: Vec<Hwp5CharShapeRun> = runs
+            .iter()
+            .map(|&(position, char_shape_id)| Hwp5CharShapeRun { position, char_shape_id })
+            .collect();
+        let started = std::time::Instant::now();
+        let converted =
+            char_shape_runs_to_text_positions(&segments, &[], &wire_runs, &mut Vec::new());
+        let elapsed = started.elapsed();
+        assert_eq!(converted.len(), wire_runs.len());
+        assert_eq!(converted.last().map(|run| run.position), Some((count - 1) * 2));
+        assert_eq!(paragraph.char_shape_runs, converted);
+        assert!(elapsed < std::time::Duration::from_millis(500), "took {elapsed:?}");
     }
 
     /// A boundary past the paragraph's wire end (it covers no character)

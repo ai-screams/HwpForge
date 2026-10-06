@@ -125,6 +125,51 @@ impl WireTextMap {
         }
         Ok(core_cursor + (wire - wire_cursor))
     }
+
+    /// 오름차순 질의용 커서 — [`Self::to_core`] 와 같은 값을 내되, 앞 질의가
+    /// 지나간 span 을 다시 훑지 않는다. 질의가 오름차순이면 질의 R 개·span S
+    /// 개에 `O(R + S)`. 뒤로 가는 질의는 처음부터 다시 훑는다(정확성 유지).
+    pub(crate) fn cursor(&self) -> WireToCoreCursor<'_> {
+        WireToCoreCursor { map: self, next_span: 0, wire_cursor: 0, core_cursor: 0 }
+    }
+}
+
+/// [`WireTextMap::cursor`] 가 만드는 오름차순 wire → Core 변환기.
+#[derive(Debug)]
+pub(crate) struct WireToCoreCursor<'a> {
+    map: &'a WireTextMap,
+    /// 아직 지나지 않은 첫 span.
+    next_span: usize,
+    /// `next_span` 앞까지 소비한 wire·Core 길이.
+    wire_cursor: u32,
+    core_cursor: u32,
+}
+
+impl WireToCoreCursor<'_> {
+    /// wire 좌표 → Core 좌표 ([`WireTextMap::to_core`] 와 같은 결과).
+    pub(crate) fn core_at(&mut self, wire: u32) -> Result<u32, CacheMapError> {
+        if wire > self.map.wire_end {
+            return Err(CacheMapError::OutOfRange { pos: wire, end: self.map.wire_end });
+        }
+        if wire < self.wire_cursor {
+            self.next_span = 0;
+            self.wire_cursor = 0;
+            self.core_cursor = 0;
+        }
+        while let Some(span) = self.map.spans.get(self.next_span) {
+            if wire <= span.wire_start {
+                return Ok(self.core_cursor + (wire - self.wire_cursor));
+            }
+            let span_end = span.wire_start + span.wire_len;
+            if wire < span_end {
+                return Err(CacheMapError::InsideContraction { wire });
+            }
+            self.core_cursor += (span.wire_start - self.wire_cursor) + span.core_len;
+            self.wire_cursor = span_end;
+            self.next_span += 1;
+        }
+        Ok(self.core_cursor + (wire - self.wire_cursor))
+    }
 }
 
 /// [`WireTextMap`] 증분 구성기.
@@ -241,6 +286,28 @@ mod tests {
         b.push_span(8, 0);
         b.advance_identity(148 - 33);
         b.finish().expect("valid map")
+    }
+
+    /// The cursor gives `to_core`'s answer at every wire position, walked
+    /// forward and then backward (a backward query starts over).
+    ///
+    /// 이것을 실패시키는 것: 뒤로 가는 질의에서 커서를 되감지 않는 것, span 을
+    /// 지날 때 Core 누적을 빼먹는 것.
+    #[test]
+    fn cursor_matches_to_core_forward_and_backward() {
+        let mut b = WireMapBuilder::new();
+        b.advance_identity(3);
+        b.push_span(8, 1);
+        b.advance_identity(2);
+        b.push_span(8, 0);
+        b.push_span(1, 0);
+        b.advance_identity(4);
+        let map = b.finish().expect("valid map");
+        let all: Vec<u32> = (0..=map.wire_end + 1).collect();
+        let mut cursor = map.cursor();
+        for &wire in all.iter().chain(all.iter().rev()) {
+            assert_eq!(cursor.core_at(wire), map.to_core(wire), "wire {wire}");
+        }
     }
 
     #[test]
