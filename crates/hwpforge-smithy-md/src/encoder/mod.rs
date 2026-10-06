@@ -102,3 +102,18 @@ impl MdEncoder {
         styled::encode_styled(document, styles)
     }
 }
+
+/// A caption number as text (§19.16 J, P19): the number Hancom cached,
+/// between its prefix and suffix characters. Markdown writes the number in
+/// digits whatever its number shape (a lossy view; only DIGIT occurs in the
+/// corpus).
+pub(crate) fn auto_number_text(
+    num: u32,
+    format: &hwpforge_core::control::AutoNumberFormat,
+) -> String {
+    let mut out = String::new();
+    out.extend(format.prefix);
+    out.push_str(&num.to_string());
+    out.extend(format.suffix);
+    out
+}

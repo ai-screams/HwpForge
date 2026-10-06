@@ -261,6 +261,9 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
                     // no-op (W2·W3).
                 }
+                Control::AutoNumber { num, format, .. } => {
+                    output.push_str(&super::auto_number_text(*num, format));
+                }
                 _ => {}
             },
             RunContent::Table(table) => {

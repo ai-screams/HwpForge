@@ -544,6 +544,9 @@ fn encode_control_styled(
             // 없다 — 명시적 no-op (W2·W3, IndexMark 와 동일 정책).
             String::new()
         }
+        // Plain text, escaped by the caller like other text-bearing
+        // controls (superscript is not drawn).
+        Control::AutoNumber { num, format, .. } => super::auto_number_text(*num, format),
         Control::Arc { .. } | Control::Curve { .. } | Control::ConnectLine { .. } => {
             // These shapes rarely contain text; render nothing.
             String::new()
