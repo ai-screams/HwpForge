@@ -910,38 +910,14 @@ fn overlay_headers_footers(
             .enumerate()
             .map(|(i, hf)| start_page(kind, i, hf))
             .collect::<PdfResult<_>>()?;
-        for (offset, page) in pages[first_page..].iter_mut().enumerate() {
+        let kinds: Vec<ApplyPageType> = list.iter().map(|hf| hf.apply_page_type).collect();
+        let mut comparisons = 0usize;
+        let selections =
+            band_selections(&starts, &kinds, first_page, pages.len(), &mut comparisons);
+        for (offset, (page, matched)) in pages[first_page..].iter_mut().zip(selections).enumerate()
+        {
             let page_idx = first_page + offset;
             let physical = page_idx + 1;
-            let odd = physical % 2 == 1;
-            // 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말).
-            let started: Vec<usize> = list
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| starts[i] <= page_idx)
-                .filter(|(_, h)| match h.apply_page_type {
-                    ApplyPageType::Both => true,
-                    ApplyPageType::Odd => odd,
-                    ApplyPageType::Even => !odd,
-                    // non_exhaustive 미래 variant — 디코더가 미지값을 BOTH 로
-                    // 경고 폴백하므로 여기 도달 불가. 도달하면 미매치 처리.
-                    _ => false,
-                })
-                .map(|(i, _)| i)
-                .collect();
-            // 같은 종류(apply_page_type)는 더 뒤 쪽에서 시작한 것이 이긴다
-            // (x4a: 3쪽부터 B). 시작 쪽이 같으면 우선순위 미실측 — 둘 다 남겨
-            // 아래에서 모호성으로 거부한다.
-            // 이것을 실패시키는 것: 이 대체를 지우기(x4a 3쪽 = 모호성 거부).
-            let matched: Vec<usize> = started
-                .iter()
-                .copied()
-                .filter(|&i| {
-                    !started.iter().any(|&j| {
-                        list[j].apply_page_type == list[i].apply_page_type && starts[j] > starts[i]
-                    })
-                })
-                .collect();
             if matched.len() > 1 {
                 let kinds: Vec<ApplyPageType> =
                     matched.iter().map(|&i| list[i].apply_page_type).collect();
@@ -979,6 +955,66 @@ fn overlay_headers_footers(
         }
     }
     Ok(())
+}
+
+/// 쪽마다 적용되는 머리말/꼬리말 후보 (쪽 `first_page..page_count` 순서).
+///
+/// 후보 = 그 쪽까지 시작했고(`starts[i] <= 쪽`) 쪽 종류(`kinds[i]`: 양쪽·홀·짝)가
+/// 맞는 항목 중, 같은 종류에서 가장 늦게 시작한 것(x4a: 3쪽부터 B). 시작 쪽이
+/// 같은 같은 종류 항목은 둘 다 남는다 — 호출부가 모호성으로 거부한다. 홀수
+/// 쪽 번호는 물리 쪽(1부터) 기준.
+///
+/// 시작 쪽 순으로 한 번 훑으며 종류별 "가장 늦은 시작" 집합을 갱신하므로
+/// 비교는 O(쪽 + 항목) 이다(리뷰 r1: 쪽마다 전 후보를 다시 뒤지면 O(P·H²)).
+/// `comparisons` 는 그 비교 횟수 — 테스트가 시간 대신 센다.
+/// 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말) / 늦은 시작
+/// 대체를 지우기(x4a 3쪽 = 모호성 거부).
+fn band_selections(
+    starts: &[usize],
+    kinds: &[ApplyPageType],
+    first_page: usize,
+    page_count: usize,
+    comparisons: &mut usize,
+) -> Vec<Vec<usize>> {
+    let mut order: Vec<usize> = (0..starts.len()).collect();
+    order.sort_by_key(|&i| starts[i]);
+    // 종류별 (가장 늦은 시작 쪽, 그 항목들): 0 = 양쪽, 1 = 홀, 2 = 짝.
+    let mut latest: [Option<(usize, Vec<usize>)>; 3] = [None, None, None];
+    let slot = |kind: ApplyPageType| match kind {
+        ApplyPageType::Both => Some(0),
+        ApplyPageType::Odd => Some(1),
+        ApplyPageType::Even => Some(2),
+        // non_exhaustive 미래 variant — 디코더가 미지값을 BOTH 로 경고
+        // 폴백하므로 도달 불가. 도달하면 미매치.
+        _ => None,
+    };
+    let mut next = 0;
+    let mut out = Vec::with_capacity(page_count.saturating_sub(first_page));
+    for page_idx in first_page..page_count {
+        while next < order.len() && starts[order[next]] <= page_idx {
+            let i = order[next];
+            next += 1;
+            *comparisons += 1;
+            let Some(k) = slot(kinds[i]) else { continue };
+            match &mut latest[k] {
+                Some((start, items)) if *start == starts[i] => items.push(i),
+                entry => *entry = Some((starts[i], vec![i])),
+            }
+        }
+        let odd = (page_idx + 1) % 2 == 1;
+        let mut matched: Vec<usize> = Vec::new();
+        for (k, applies) in [(0, true), (1, odd), (2, !odd)] {
+            *comparisons += 1;
+            if applies {
+                if let Some((_, items)) = &latest[k] {
+                    matched.extend(items);
+                }
+            }
+        }
+        matched.sort_unstable();
+        out.push(matched);
+    }
+    out
 }
 
 /// 밴드 재생 기하 (인자 다발 — [`replay_band_item`] 전용).
@@ -2163,6 +2199,39 @@ mod tests {
         placement.horz_offset = HwpUnit::new(horz_offset).unwrap();
         image.placement = Some(placement);
         Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    /// The page-by-page header choice: the latest start of each page kind
+    /// wins (x4a), nothing before the first start (x4b), odd/even pages take
+    /// their own kind, an equal start is kept twice (for the ambiguity
+    /// refusal). Every page starting a new header — P = H = 300 — costs a
+    /// number of comparisons linear in pages + headers (review r1: the old
+    /// per-page rescan was O(P·H²)).
+    ///
+    /// 이것을 실패시키는 것: 시작 쪽 조건 삭제 / 늦은 시작 대체 삭제 / 홀짝
+    /// 판정을 뒤집기 / 쪽마다 전 후보를 다시 훑기(비교 횟수 상한 초과).
+    #[test]
+    fn band_selections_pick_the_latest_start_in_one_pass() {
+        use hwpforge_foundation::ApplyPageType::{Both, Even, Odd};
+        let mut n = 0;
+        assert_eq!(
+            band_selections(&[0, 2], &[Both, Both], 0, 4, &mut n),
+            [vec![0], vec![0], vec![1], vec![1]]
+        );
+        assert_eq!(band_selections(&[1], &[Both], 0, 3, &mut n), [vec![], vec![0], vec![0]]);
+        assert_eq!(
+            band_selections(&[0, 0], &[Odd, Even], 0, 3, &mut n),
+            [vec![0], vec![1], vec![0]]
+        );
+        assert_eq!(band_selections(&[1, 1], &[Both, Both], 1, 3, &mut n), [vec![0, 1], vec![0, 1]]);
+
+        let count = 300;
+        let starts: Vec<usize> = (0..count).collect();
+        let kinds = vec![Both; count];
+        let mut comparisons = 0;
+        let picks = band_selections(&starts, &kinds, 0, count, &mut comparisons);
+        assert!(picks.iter().enumerate().all(|(page, m)| m == &[page]));
+        assert!(comparisons <= 4 * (count + count), "{comparisons}");
     }
 
     fn a4_body_top_left() -> (i32, i32) {
