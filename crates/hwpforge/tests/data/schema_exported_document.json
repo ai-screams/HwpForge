@@ -2790,6 +2790,40 @@
           "additionalProperties": false
         },
         {
+          "description": "A caption's automatic number — \"그림 3\", \"표 7\" (HWPX `<hp:autoNum\nnumType=\"PICTURE|TABLE|EQUATION\">`). Hancom keeps the number it\ncounted in the file; `num` is that cached value.",
+          "type": "object",
+          "properties": {
+            "AutoNumber": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "Which counter.",
+                  "$ref": "#/$defs/AutoNumberKind"
+                },
+                "num": {
+                  "description": "The number Hancom last counted (`num`).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "format": {
+                  "description": "How the number is written.",
+                  "$ref": "#/$defs/AutoNumberFormat"
+                }
+              },
+              "required": [
+                "kind",
+                "num",
+                "format"
+              ]
+            }
+          },
+          "required": [
+            "AutoNumber"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "A `nwno` **새 번호 지정** control — restarts a numbering counter\nfrom this position (HWPX `<hp:newNum num numType>`).\n\nHWP5 wire (native fixture 실측 2026-08-12): 10 bytes —\n`ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the\nparagraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로\n시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies\nfrom the **physical page containing the control** (PDF 실측:\n1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).",
           "type": "object",
           "properties": {
@@ -3906,6 +3940,74 @@
         }
       ]
     },
+    "AutoNumberKind": {
+      "description": "Which counter a [`Control::AutoNumber`] shows (HWPX `<hp:autoNum\nnumType>`): a caption's picture, table or equation number.\n\n[`Control::AutoNumber`]: crate::control::Control::AutoNumber",
+      "oneOf": [
+        {
+          "description": "Picture number (`numType=\"PICTURE\"`).",
+          "type": "string",
+          "const": "Picture"
+        },
+        {
+          "description": "Table number (`numType=\"TABLE\"`).",
+          "type": "string",
+          "const": "Table"
+        },
+        {
+          "description": "Equation number (`numType=\"EQUATION\"`).",
+          "type": "string",
+          "const": "Equation"
+        }
+      ]
+    },
+    "AutoNumberFormat": {
+      "description": "How a [`Control::AutoNumber`] writes its number (HWPX\n`<hp:autoNumFormat>`). The default is a plain digit: `DIGIT`, no user\ncharacter, no prefix or suffix, not superscript.\n\n[`Control::AutoNumber`]: crate::control::Control::AutoNumber\n\n# Examples\n\n```\nuse hwpforge_core::control::AutoNumberFormat;\nuse hwpforge_foundation::NumberFormatType;\n\nlet format = AutoNumberFormat::default();\nassert_eq!(format.number_type, NumberFormatType::Digit);\nassert_eq!(format.prefix, None);\n```",
+      "type": "object",
+      "properties": {
+        "number_type": {
+          "description": "Number shape (`type`).",
+          "$ref": "#/$defs/NumberFormatType"
+        },
+        "user_char": {
+          "description": "User character (`userChar`); `None` = empty.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1
+        },
+        "prefix": {
+          "description": "Character before the number (`prefixChar`); `None` = empty.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1
+        },
+        "suffix": {
+          "description": "Character after the number (`suffixChar`); `None` = empty.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1
+        },
+        "superscript": {
+          "description": "The number is superscript (`supscript`).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "number_type",
+        "superscript"
+      ]
+    },
+    "NumberFormatType": {
+      "type": "string"
+    },
     "NewNumberKind": {
       "description": "Which counter a [`Control::NewNumber`] restarts.\n\n[`Control::NewNumber`]: crate::control::Control::NewNumber\n\nMaps 1:1 to HWPX `<hp:newNum numType>` and HWP5 `nwno` property\nbits 0-3 (native fixture 실측 2026-08-12: 쪽 번호 = `0`, corpus 613회 중\n607회가 `Page`). Unmapped wire values are surfaced as [`Self::Unknown`]\n— encoders must skip them instead of fabricating a type.",
       "oneOf": [
@@ -4171,9 +4273,6 @@
       ]
     },
     "PageNumberPosition": {
-      "type": "string"
-    },
-    "NumberFormatType": {
       "type": "string"
     },
     "ColumnSettings": {

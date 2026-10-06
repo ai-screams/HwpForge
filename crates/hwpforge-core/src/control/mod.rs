@@ -734,6 +734,18 @@ pub enum Control {
         kind: InlinePageKind,
     },
 
+    /// A caption's automatic number — "그림 3", "표 7" (HWPX `<hp:autoNum
+    /// numType="PICTURE|TABLE|EQUATION">`). Hancom keeps the number it
+    /// counted in the file; `num` is that cached value.
+    AutoNumber {
+        /// Which counter.
+        kind: AutoNumberKind,
+        /// The number Hancom last counted (`num`).
+        num: u32,
+        /// How the number is written.
+        format: AutoNumberFormat,
+    },
+
     /// A `nwno` **새 번호 지정** control — restarts a numbering counter
     /// from this position (HWPX `<hp:newNum num numType>`).
     ///
@@ -870,6 +882,7 @@ impl Control {
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
             | Self::InlinePageNumber { .. }
+            | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
             | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
@@ -942,6 +955,7 @@ impl Control {
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
             | Self::InlinePageNumber { .. }
+            | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
             | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
@@ -983,6 +997,7 @@ impl Control {
             Self::DateCodeField { .. } => "date_code_field",
             Self::PathField { .. } => "path_field",
             Self::InlinePageNumber { .. } => "inline_page_number",
+            Self::AutoNumber { .. } => "auto_number",
             Self::NewNumber { .. } => "new_number",
             Self::PageHiding { .. } => "page_hiding",
             Self::Unknown { .. } => "unknown",
@@ -1983,6 +1998,7 @@ impl std::fmt::Display for Control {
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
                 InlinePageKind::Unknown => write!(f, "InlinePageNumber(unknown)"),
             },
+            Self::AutoNumber { kind, num, .. } => write!(f, "AutoNumber({kind:?}, {num})"),
             Self::NewNumber { kind, number } => {
                 write!(f, "NewNumber({kind:?}, {number})")
             }
@@ -2174,6 +2190,31 @@ mod tests {
             inst_id: None,
         };
         assert_eq!(ta.to_string(), r#"TextArt("위\r\n\r\n\"아래\"", WAVE2)"#);
+    }
+
+    /// A caption number round-trips through JSON with its format, and
+    /// names itself. 이것을 실패시키는 것: `kind_name`·`Display` 갈래를 다른
+    /// variant 로 합치는 것 / 형식 필드 하나를 serde 에서 빼는 것.
+    #[test]
+    fn auto_number_round_trips_and_names_itself() {
+        use hwpforge_foundation::NumberFormatType;
+        let control = Control::AutoNumber {
+            kind: AutoNumberKind::Table,
+            num: 7,
+            format: AutoNumberFormat {
+                number_type: NumberFormatType::RomanCapital,
+                user_char: None,
+                prefix: Some('('),
+                suffix: Some(')'),
+                superscript: true,
+            },
+        };
+        assert_eq!(control.to_string(), "AutoNumber(Table, 7)");
+        assert_eq!(control.kind_name(), "auto_number");
+        let json = serde_json::to_string(&control).unwrap();
+        assert_eq!(serde_json::from_str::<Control>(&json).unwrap(), control);
+        assert_eq!(AutoNumberFormat::default().number_type, NumberFormatType::Digit);
+        assert!(!AutoNumberFormat::default().superscript);
     }
 
     #[test]

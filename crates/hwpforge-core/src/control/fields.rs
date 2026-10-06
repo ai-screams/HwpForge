@@ -4,6 +4,7 @@
 //! Houses [`PathFieldCommand`], [`RefTarget`], and [`InlinePageKind`] — the
 //! typed payloads carried by the field variants of [`Control`](super::Control).
 
+use hwpforge_foundation::NumberFormatType;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +112,51 @@ pub enum InlinePageKind {
     /// Any other flag value, surfaced when the HWP5 wire flag is neither
     /// `0x00` nor `0x06`.
     Unknown,
+}
+
+/// Which counter a [`Control::AutoNumber`] shows (HWPX `<hp:autoNum
+/// numType>`): a caption's picture, table or equation number.
+///
+/// [`Control::AutoNumber`]: crate::control::Control::AutoNumber
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum AutoNumberKind {
+    /// Picture number (`numType="PICTURE"`).
+    Picture,
+    /// Table number (`numType="TABLE"`).
+    Table,
+    /// Equation number (`numType="EQUATION"`).
+    Equation,
+}
+
+/// How a [`Control::AutoNumber`] writes its number (HWPX
+/// `<hp:autoNumFormat>`). The default is a plain digit: `DIGIT`, no user
+/// character, no prefix or suffix, not superscript.
+///
+/// [`Control::AutoNumber`]: crate::control::Control::AutoNumber
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::AutoNumberFormat;
+/// use hwpforge_foundation::NumberFormatType;
+///
+/// let format = AutoNumberFormat::default();
+/// assert_eq!(format.number_type, NumberFormatType::Digit);
+/// assert_eq!(format.prefix, None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
+pub struct AutoNumberFormat {
+    /// Number shape (`type`).
+    pub number_type: NumberFormatType,
+    /// User character (`userChar`); `None` = empty.
+    pub user_char: Option<char>,
+    /// Character before the number (`prefixChar`); `None` = empty.
+    pub prefix: Option<char>,
+    /// Character after the number (`suffixChar`); `None` = empty.
+    pub suffix: Option<char>,
+    /// The number is superscript (`supscript`).
+    pub superscript: bool,
 }
 
 /// Which counter a [`Control::NewNumber`] restarts.
