@@ -148,3 +148,71 @@ fn gradient_without_center_keeps_the_per_kind_default() {
     let linear = attrs(gradient_doc(GradientType::Linear));
     assert!(linear.contains(r#"centerX="0" centerY="0""#), "{linear}");
 }
+
+/// `bytes` with entry `name` replaced by `xml`.
+fn with_part(bytes: &[u8], name: &str, xml: &str) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).expect("entry");
+        let entry_name = entry.name().to_string();
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(entry.compression());
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).expect("read");
+        out.start_file(entry_name.as_str(), options).expect("start");
+        out.write_all(if entry_name == name { xml.as_bytes() } else { &data }).expect("write");
+    }
+    out.finish().expect("finish").into_inner()
+}
+
+/// x6 F5: a picture fill decodes to `Fill::Image` naming the package image
+/// and re-encodes as Hancom wrote it (mode `TOTAL`, the same image), and the
+/// image stays in the package. 이것을 실패시키는 것: 인코더의 그림 채우기
+/// 갈래를 빈 갈래로(흰 채우기) / 디코더가 그림 채우기를 읽지 않기.
+#[test]
+fn picture_fill_round_trips() {
+    use hwpforge_foundation::ImageFillMode;
+    let source = fixture("shapes/x6-fill.hwpx");
+    let doc = HwpxDecoder::decode(&source).expect("decode");
+    let images: Vec<_> = shape_fills(&doc.document)
+        .into_iter()
+        .filter_map(|f| match f {
+            Some(Fill::Image { image_id, mode }) => Some((image_id, mode)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, [("BinData/image1".to_string(), ImageFillMode::Stretch)]);
+    assert!(!doc.warnings.iter().any(|w| format!("{w:?}").contains("shape_image_fill")));
+
+    let out = reencode(&source);
+    let brush = |bytes: &[u8]| {
+        let all = fill_brushes(&section_xml(bytes));
+        all.into_iter().find(|b| b.contains("imgBrush")).expect("picture fill")
+    };
+    assert_eq!(brush(&out), brush(&source));
+    let mut zip = zip::ZipArchive::new(Cursor::new(&out)).expect("zip");
+    assert!(zip.by_name("BinData/image1.png").is_ok(), "the fill's image is packaged");
+}
+
+/// A picture fill Core cannot hold exactly — a mode without a Core value, a
+/// brightness — is reported (edits refuse it), not silently normalised.
+/// 이것을 실패시키는 것: 모드 조건을 지우기 / 밝기 조건을 지우기.
+#[test]
+fn picture_fill_core_cannot_carry_is_reported() {
+    let source = fixture("shapes/x6-fill.hwpx");
+    let xml = section_xml(&source);
+    for (from, to) in
+        [(r#"mode="TOTAL""#, r#"mode="CENTER_TOP""#), (r#"bright="0""#, r#"bright="10""#)]
+    {
+        assert!(xml.contains(from));
+        let edited = with_part(&source, "Contents/section0.xml", &xml.replacen(from, to, 1));
+        let doc = HwpxDecoder::decode(&edited).expect("decode");
+        assert!(
+            doc.warnings.iter().any(|w| format!("{w:?}").contains("shape_image_fill")),
+            "{to}: {:?}",
+            doc.warnings
+        );
+    }
+}

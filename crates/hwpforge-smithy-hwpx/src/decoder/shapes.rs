@@ -107,13 +107,14 @@ pub(crate) fn decode_textbox(
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let style = decode_shape_style_full(
+    let style = decode_shape_style(
         &rect.line_shape,
         &rect.fill_brush,
         true,
         rect.rotation_info.as_ref(),
         rect.flip.as_ref(),
         &rect.dropcap_style,
+        ctx,
     );
 
     let control = match &rect.draw_text {
@@ -182,13 +183,14 @@ pub(crate) fn decode_line(
             height,
             placement,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &line.line_shape,
                 &line.fill_brush,
                 false,
                 line.rotation_info.as_ref(),
                 line.flip.as_ref(),
                 &line.dropcap_style,
+                ctx,
             ),
         })),
         char_shape_id,
@@ -257,13 +259,14 @@ pub(crate) fn decode_ellipse(
             placement,
             paragraphs,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
                 true,
                 ellipse.rotation_info.as_ref(),
                 ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
+                ctx,
             ),
             text_vertical_align,
         })),
@@ -318,18 +321,82 @@ pub(crate) fn decode_polygon(
             placement,
             paragraphs,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &polygon.line_shape,
                 &polygon.fill_brush,
                 true,
                 polygon.rotation_info.as_ref(),
                 polygon.flip.as_ref(),
                 &polygon.dropcap_style,
+                ctx,
             ),
             text_vertical_align,
         })),
         char_shape_id,
     })
+}
+
+/// [`decode_shape_style_full`] for a shape the decoder places in Core, plus
+/// the picture-fill loss report: a picture fill Core cannot carry exactly is
+/// [`ContentLost`](super::DecodeWarning::ContentLost) (`shape_image_fill`).
+/// Group children are reported by the group path (`group_child_fill`).
+fn decode_shape_style(
+    line_shape: &Option<HxLineShape>,
+    fill_brush: &Option<HxFillBrush>,
+    fillable: bool,
+    rotation_info: Option<&crate::schema::section::HxRotationInfo>,
+    flip_info: Option<&crate::schema::section::HxFlip>,
+    dropcap_style: &str,
+    ctx: &mut DecodeCtx,
+) -> Option<ShapeStyle> {
+    if !ctx.in_group_child() {
+        if let Some(reason) = fill_brush.as_ref().and_then(image_fill_loss) {
+            ctx.content_lost("shape_image_fill", reason);
+        }
+    }
+    decode_shape_style_full(
+        line_shape,
+        fill_brush,
+        fillable,
+        rotation_info,
+        flip_info,
+        dropcap_style,
+    )
+}
+
+/// The HWPX `imgBrush@mode` values Core's [`ImageFillMode`] carries, and
+/// back. The other twelve modes (`TILE_HORZ_TOP` …) have no Core value.
+pub(crate) const IMAGE_FILL_MODES: [(&str, hwpforge_foundation::ImageFillMode); 4] = [
+    ("TILE", hwpforge_foundation::ImageFillMode::Tile),
+    ("CENTER", hwpforge_foundation::ImageFillMode::Center),
+    ("TOTAL", hwpforge_foundation::ImageFillMode::Stretch),
+    ("ZOOM", hwpforge_foundation::ImageFillMode::FitAll),
+];
+
+/// Why a shape's picture fill cannot be carried exactly, if it cannot: a
+/// missing image reference, a mode Core has no value for, or brightness,
+/// contrast, transparency or an effect other than `REAL_PIC`, which Core
+/// `Fill::Image` has no fields for.
+///
+/// 이것을 실패시키는 것: 조건 하나를 지우기(`picture_fill_core_cannot_carry_is_reported`).
+fn image_fill_loss(fill: &HxFillBrush) -> Option<String> {
+    let brush = fill.img_brush.as_ref()?;
+    if fill.gradation.is_some() {
+        return None;
+    }
+    let Some(img) = brush.img.as_ref().filter(|i| !i.binary_item_id_ref.is_empty()) else {
+        return Some("picture fill without an image reference".into());
+    };
+    if !IMAGE_FILL_MODES.iter().any(|(wire, _)| *wire == brush.mode) {
+        return Some(format!("picture fill mode {} not carried by Core", brush.mode));
+    }
+    if img.bright != 0 || img.contrast != 0 || img.alpha != 0 || img.effect != "REAL_PIC" {
+        return Some(format!(
+            "picture fill bright={} contrast={} alpha={} effect={} not carried by Core",
+            img.bright, img.contrast, img.alpha, img.effect
+        ));
+    }
+    None
 }
 
 /// Extracts a [`ShapeStyle`] from HWPX shape common elements including rotation, flip, arrow,
@@ -386,6 +453,25 @@ pub(crate) fn decode_shape_style_full(
                 center_y: Some(g.center_y),
                 step: u32::try_from(g.step).ok(),
                 step_center: u32::try_from(g.step_center).ok(),
+            });
+        }
+        // Picture fill: the image a Core `Fill::Image` names the way a
+        // picture names its image (`BinData/{binaryItemIDRef}`). What Core
+        // cannot hold is reported by `decode_shape_style`.
+        if let Some(img) = fb
+            .img_brush
+            .as_ref()
+            .and_then(|b| b.img.as_ref().map(|img| (b, img)))
+            .filter(|(_, img)| !img.binary_item_id_ref.is_empty())
+        {
+            let (brush, img) = img;
+            let mode = IMAGE_FILL_MODES
+                .iter()
+                .find(|(wire, _)| *wire == brush.mode)
+                .map_or(hwpforge_foundation::ImageFillMode::Tile, |(_, mode)| *mode);
+            return Some(Fill::Image {
+                image_id: format!("BinData/{}", img.binary_item_id_ref),
+                mode,
             });
         }
         // Pattern fill: winBrush with hatchStyle present
@@ -545,13 +631,14 @@ pub(crate) fn decode_arc(
             height,
             placement,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
                 true,
                 ellipse.rotation_info.as_ref(),
                 ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
+                ctx,
             ),
         })),
         char_shape_id,
@@ -610,13 +697,14 @@ pub(crate) fn decode_curve(
             height,
             placement,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &curve.line_shape,
                 &curve.fill_brush,
                 true,
                 curve.rotation_info.as_ref(),
                 curve.flip.as_ref(),
                 &curve.dropcap_style,
+                ctx,
             ),
         })),
         char_shape_id,
@@ -813,13 +901,14 @@ pub(crate) fn decode_connect_line(
             height,
             placement,
             caption,
-            style: decode_shape_style_full(
+            style: decode_shape_style(
                 &cl.line_shape,
                 &cl.fill_brush,
                 false,
                 cl.rotation_info.as_ref(),
                 cl.flip.as_ref(),
                 &cl.dropcap_style,
+                ctx,
             ),
         })),
         char_shape_id,
@@ -1556,10 +1645,18 @@ fn normalize_group_child(
         ctx.content_lost("group_child_transform", "unparseable transform matrix");
         return None;
     };
+    let mut control = control;
     if picture_fill {
         // The picture is not carried; the shape still is, and a picture
         // fill turns with it, so it takes the box rule.
         ctx.content_lost("group_child_fill", "picture fill not carried by Core");
+        // Group children keep their old output (the encoder's default fill)
+        // until group picture fills are carried; see `decode_shape_style`.
+        if let Some(style) = control_style_mut(&mut control) {
+            if matches!(style.fill, Some(hwpforge_core::control::Fill::Image { .. })) {
+                style.fill = None;
+            }
+        }
     }
     let input = FoldInput::new(m.to_transform(), org, origin)
         .with_geometry_facts(GeometryFacts::new(picture_fill));
@@ -1576,6 +1673,21 @@ fn normalize_group_child(
         ctx.content_lost(kind, loss.detail().to_string());
     }
     kept
+}
+
+/// The style of a shape control, when it has one.
+fn control_style_mut(control: &mut Control) -> Option<&mut ShapeStyle> {
+    match control {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Curve { style, .. }
+        | Control::Line { style, .. }
+        | Control::ConnectLine { style, .. } => style.as_mut(),
+        _ => None,
+    }
 }
 
 /// Whether every value is a valid [`HwpUnit`] (which a Core size or offset
@@ -4191,7 +4303,19 @@ mod group_tests {
         );
         let (g, w) = decode(&container((3000, 3000), &child));
         assert_eq!(lost_kinds(&w), ["group_child_fill"]);
-        assert_eq!(rotation(children(&g.unwrap())[0]), (Some(30.0), None));
+        let g = g.unwrap();
+        assert_eq!(rotation(children(&g)[0]), (Some(30.0), None));
+        // 묶음 자식은 그림 채우기를 아직 나르지 않는다 — 옛 출력(인코더 기본
+        // 채우기)대로. 이것을 실패시키는 것: 묶음 경로의 `Fill::Image` 제거를
+        // 지우기(손실 경고와 함께 그림 채우기가 방출됨).
+        let Control::Polygon { style, .. } = children(&g)[0] else { panic!("polygon") };
+        assert!(
+            !matches!(
+                style.as_ref().and_then(|s| s.fill.as_ref()),
+                Some(hwpforge_core::control::Fill::Image { .. })
+            ),
+            "{style:?}"
+        );
     }
 
     /// Sizes and offsets outside the HWPUNIT range cannot be stored (they

@@ -139,11 +139,14 @@ pub struct HxFillBrush {
         skip_serializing_if = "Option::is_none"
     )]
     pub gradation: Option<HxGradation>,
-    /// Picture fill (`<hc:imgBrush>`). Its content is not read — Core has no
-    /// shape picture fill yet — but its presence is, so a decoder can report
-    /// the fill as lost instead of dropping it silently. Never serialized.
-    #[serde(rename(deserialize = "imgBrush"), default, skip_serializing)]
-    pub img_brush: Option<serde::de::IgnoredAny>,
+    /// Picture fill (`<hc:imgBrush>`, absent when solid or gradient fill is
+    /// used).
+    #[serde(
+        rename(serialize = "hc:imgBrush", deserialize = "imgBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_brush: Option<super::header::HxImgBrush>,
 }
 
 impl HxFillBrush {

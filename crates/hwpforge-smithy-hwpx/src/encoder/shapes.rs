@@ -275,8 +275,32 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
                         wb.hatch_style = Some(pattern_type.to_string());
                     }
                 }
-                Fill::Image { .. } => {
-                    // Image fill requires imgBrush — not yet supported in shapes
+                Fill::Image { image_id, mode } => {
+                    // The image is named as a picture names its own
+                    // (`BinData/image1.png` → `image1`); a name the package
+                    // does not carry is reported by the reference check
+                    // (`ImageReferenceUnresolved`), not dropped here.
+                    // 이것을 실패시키는 것: 이 갈래를 빈 갈래로 되돌리기(그림
+                    // 채우기가 흰 칠로, `picture_fill_round_trips`).
+                    let without_prefix = image_id.strip_prefix("BinData/").unwrap_or(image_id);
+                    let binary_ref = without_prefix
+                        .rfind('.')
+                        .map_or(without_prefix, |dot| &without_prefix[..dot]);
+                    let wire_mode = crate::decoder::shapes::IMAGE_FILL_MODES
+                        .iter()
+                        .find(|(_, m)| m == mode)
+                        .map_or("TILE", |(wire, _)| wire);
+                    fill_brush.win_brush = None;
+                    fill_brush.img_brush = Some(crate::schema::header::HxImgBrush {
+                        mode: wire_mode.to_string(),
+                        img: Some(crate::schema::header::HxImg {
+                            binary_item_id_ref: binary_ref.to_string(),
+                            bright: 0,
+                            contrast: 0,
+                            effect: "REAL_PIC".to_string(),
+                            alpha: 0,
+                        }),
+                    });
                 }
                 Fill::None => no_fill = true,
                 _ => {} // future Fill variants

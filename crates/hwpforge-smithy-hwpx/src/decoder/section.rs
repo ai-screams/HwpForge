@@ -337,6 +337,11 @@ impl DecodeCtx {
         }
     }
 
+    /// 묶음 자식을 디코드하는 중인지.
+    pub(crate) fn in_group_child(&self) -> bool {
+        self.group_child_depth > 0
+    }
+
     /// 묶음 자식 하나의 디코드에 들어간다 ([`Self::leave_group_child`] 와 짝).
     pub(crate) fn enter_group_child(&mut self) {
         self.group_child_depth += 1;
