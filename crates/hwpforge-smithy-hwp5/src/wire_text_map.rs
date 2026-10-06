@@ -185,6 +185,24 @@ impl WireToCoreCursor<'_> {
         }
         Ok(self.core_cursor + (wire - self.wire_cursor))
     }
+
+    /// Like [`Self::core_at`], but a position inside a contraction gives the
+    /// Core position at the contraction's end, with `true`. The cursor stays
+    /// at that span, so a later query inside the same span or after it does
+    /// not rescan from the start (a cursor moved past the span would reset
+    /// on the next, smaller query).
+    pub(crate) fn core_at_or_after(&mut self, wire: u32) -> Result<(u32, bool), CacheMapError> {
+        match self.core_at(wire) {
+            Ok(core) => Ok((core, false)),
+            Err(CacheMapError::InsideContraction { .. }) => {
+                // `core_at` stopped on the span holding `wire` without
+                // moving past it.
+                let span = &self.map.spans[self.next_span];
+                Ok((self.core_cursor + (span.wire_start - self.wire_cursor) + span.core_len, true))
+            }
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// [`WireTextMap`] 증분 구성기.

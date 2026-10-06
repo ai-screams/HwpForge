@@ -758,20 +758,21 @@ fn char_shape_runs_to_text_positions(
     let mut cursor = map.cursor();
     let mut out: Vec<Hwp5CharShapeRun> = Vec::with_capacity(runs.len());
     for run in runs {
-        let position = match cursor.core_at(run.position) {
-            Ok(position) => position,
-            Err(crate::wire_text_map::CacheMapError::InsideContraction { wire }) => {
+        // 이것을 실패시키는 것: 개체 안쪽 경계를 커서로 개체 끝까지 전진시켜
+        // 찾기(같은 개체 안의 다음 경계가 커서를 되감아 `O(S²)`,
+        // `char_shape_boundaries_inside_controls_stay_linear`).
+        let position = match cursor.core_at_or_after(run.position) {
+            Ok((position, false)) => position,
+            Ok((position, true)) => {
                 warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "char_shape.boundary_inside_control",
                     reason: format!(
-                        "char shape {} starts at wire {wire}, inside a control; moved to \
+                        "char shape {} starts at wire {}, inside a control; moved to \
                          the control's end",
-                        run.char_shape_id
+                        run.char_shape_id, run.position
                     ),
                 });
-                (wire..)
-                    .find_map(|after| cursor.core_at(after).ok())
-                    .unwrap_or_else(|| map.core_end())
+                position
             }
             Err(_) => map.core_end(),
         };
@@ -3677,6 +3678,54 @@ mod tests {
         // 50,000 tab spans and 50,000 boundaries.
         let bound = 2 * (u64::from(count) + u64::from(count));
         assert!(visits <= bound, "{visits} span checks for {count} boundaries and spans");
+    }
+
+    /// Boundaries inside controls, ascending (`가`+tab repeated, boundaries
+    /// 9i+2 and 9i+3 both inside the i-th tab): each is moved to its tab's
+    /// end without the cursor passing the next boundary, so the spans checked
+    /// stay linear. Advancing the cursor to the tab's end made the next
+    /// boundary (smaller than the cursor) rescan from the start — quadratic.
+    ///
+    /// 이것을 실패시키는 것: 안쪽 경계를 `(wire..).find_map(core_at)` 처럼 커서를
+    /// 개체 끝까지 전진시켜 찾기.
+    #[test]
+    fn char_shape_boundaries_inside_controls_stay_linear() {
+        let count = 20_000u32;
+        let mut units = Vec::new();
+        let mut runs = Vec::new();
+        for i in 0..count {
+            runs.push((i * 9 + 2, 1));
+            runs.push((i * 9 + 3, 2));
+            units.extend(utf16("가"));
+            units.extend(ctrl(0x09));
+        }
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &units_data(&units)));
+        let paragraph = {
+            let result = parse_body_text(&stream, &version()).unwrap();
+            result.paragraphs.into_iter().next().unwrap()
+        };
+        let wire_runs: Vec<Hwp5CharShapeRun> = runs
+            .iter()
+            .map(|&(position, char_shape_id)| Hwp5CharShapeRun { position, char_shape_id })
+            .collect();
+        crate::wire_text_map::SPAN_VISITS.with(|visits| visits.set(0));
+        let mut warnings = Vec::new();
+        let converted = char_shape_runs_to_text_positions(
+            &paragraph.text_segments,
+            &[],
+            &wire_runs,
+            &mut warnings,
+        );
+        let visits = crate::wire_text_map::SPAN_VISITS.with(std::cell::Cell::get);
+        // Both boundaries of tab i land at its end (Core 2i+2) and the later
+        // one wins.
+        assert_eq!(converted.len(), count as usize);
+        assert_eq!(converted[0], Hwp5CharShapeRun { position: 2, char_shape_id: 2 });
+        assert_eq!(warnings.len(), 2 * count as usize);
+        let bound = 2 * (u64::from(2 * count) + u64::from(count));
+        assert!(visits <= bound, "{visits} span checks for {} boundaries", 2 * count);
     }
 
     /// A boundary past the paragraph's wire end (it covers no character)
