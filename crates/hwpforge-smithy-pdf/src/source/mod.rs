@@ -2448,6 +2448,30 @@ mod tests {
         assert_eq!(layout.pages[0].anchored_images[0].crop, Some([0.25, 0.0, 0.75, 0.5]));
     }
 
+    /// P19: a caption number (`Control::AutoNumber`) is not drawn yet — the
+    /// paragraph that holds it is refused, not rendered without the number.
+    ///
+    /// 이것을 실패시키는 것: `AutoNumber` 를 재생 소비 marker 로 허용하는 것(번호
+    /// 없이 그려짐).
+    #[test]
+    fn caption_number_paragraph_is_refused() {
+        use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
+        let number = Control::AutoNumber {
+            kind: AutoNumberKind::Picture,
+            num: 3,
+            format: AutoNumberFormat::default(),
+        };
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::text("그림 ", CharShapeIndex::new(0)),
+                Run::control(number, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        assert!(replay(&doc_of(vec![p]), &PdfOptions::default()).is_err());
+    }
+
     fn a4_body_top_left() -> (i32, i32) {
         let ps = PageSettings::a4();
         (ps.margin_top.as_i32() + ps.header_margin.as_i32(), ps.margin_left.as_i32())
