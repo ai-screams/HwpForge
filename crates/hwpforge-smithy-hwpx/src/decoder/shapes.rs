@@ -1359,8 +1359,9 @@ fn decode_group_child(
 /// ([`fold_box`](hwpforge_core::control::geometry::fold_box)), kept as an
 /// unturned [`GroupChild::Picture`]. What a Core picture cannot show is
 /// reported as `group_child_picture`: a turn or mirror (the picture is kept
-/// unturned around the same centre), a crop, an image effect, a border.
-/// `None` = dropped (its loss already reported).
+/// unturned around the same centre), an image effect, a border. Its crop is
+/// carried like a body picture's. `None` = dropped (its loss already
+/// reported).
 fn decode_group_picture(
     pic: &crate::schema::section::HxPic,
     origin: (f64, f64),
@@ -1399,7 +1400,7 @@ fn decode_group_picture(
              same centre",
         );
     }
-    for reason in group_picture_losses(pic, &ctx.image_pixels) {
+    for reason in group_picture_losses(pic) {
         ctx.content_lost("group_child_picture", reason);
     }
     image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
@@ -1408,52 +1409,13 @@ fn decode_group_picture(
     Ok(Some(GroupChild::Picture(image)))
 }
 
-/// HWPUNIT per image pixel (96 dpi): the unit of `<hp:imgDim>`.
-const HWPUNIT_PER_PIXEL: i64 = 75;
-
-/// What a group picture shows that a Core picture cannot: a crop, an image
-/// effect (`<hc:img>` effect, brightness, contrast, alpha, or anything under
-/// `<hp:effects>`), a visible border (`<hp:lineShape>`).
-///
-/// A picture is cropped when its `<hp:imgClip>` is more than one pixel off
-/// the whole image: `<hp:imgDim>`, or, when that is missing or zero, the
-/// image's own pixel size × 75 (`image_pixels`). Without either the crop
-/// cannot be ruled out and is reported.
-fn group_picture_losses(
-    pic: &crate::schema::section::HxPic,
-    image_pixels: &std::collections::HashMap<String, (u32, u32)>,
-) -> Vec<String> {
+/// What a group picture shows that a Core picture cannot: an image effect
+/// (`<hc:img>` effect, brightness, contrast, alpha, or anything under
+/// `<hp:effects>`), a visible border (`<hp:lineShape>`). A crop is carried
+/// ([`Image::crop`](hwpforge_core::image::Image::crop), decoded with the
+/// picture by `convert_picture`).
+fn group_picture_losses(pic: &crate::schema::section::HxPic) -> Vec<String> {
     let mut out = Vec::new();
-    let reference = pic.img.as_ref().map_or("", |i| i.binary_item_id_ref.as_str());
-    if let Some(clip) = pic.img_clip.as_ref() {
-        // In i64: the wire values are any i32, and `right − width` of two
-        // i32 overflows.
-        let whole = match pic.img_dim.as_ref() {
-            Some(d) if d.dim_width > 0 && d.dim_height > 0 => {
-                Some((i64::from(d.dim_width), i64::from(d.dim_height)))
-            }
-            _ => image_pixels.get(reference).map(|&(w, h)| {
-                (i64::from(w) * HWPUNIT_PER_PIXEL, i64::from(h) * HWPUNIT_PER_PIXEL)
-            }),
-        };
-        match whole {
-            Some((w, h)) => {
-                let [left, top, right, bottom] =
-                    [clip.left, clip.top, clip.right, clip.bottom].map(i64::from);
-                let off =
-                    [left, top, right - w, bottom - h].iter().map(|v| v.abs()).max().unwrap_or(0);
-                if off > HWPUNIT_PER_PIXEL {
-                    out.push(format!(
-                        "crop: imgClip ({}, {}, {}, {}) of a {w}x{h} image",
-                        clip.left, clip.top, clip.right, clip.bottom
-                    ));
-                }
-            }
-            None => out.push(
-                "crop: the image's size is unknown, so a crop cannot be ruled out".to_string(),
-            ),
-        }
-    }
     if let Some(img) = pic.img.as_ref() {
         let plain_effect = img.effect.is_empty() || img.effect == "REAL_PIC";
         let opaque = img.alpha.is_empty() || img.alpha == "0";
@@ -5159,16 +5121,15 @@ mod group_tests {
         );
     }
 
-    /// Hancom's F3c (a picture cropped before grouping), F3d (one turned
-    /// 30°) and F3e (one in greyscale): each reports what a Core picture
-    /// cannot show, once, and keeps the picture.
+    /// Hancom's F3d (a picture turned 30°) and F3e (one in greyscale):
+    /// each reports what a Core picture cannot show, once, and keeps the
+    /// picture.
     ///
-    /// 이것을 실패시키는 것: 판정 표의 자르기·회전·효과 행을 각각 지우는 것(그 파일만
+    /// 이것을 실패시키는 것: 판정 표의 회전·효과 행을 각각 지우는 것(그 파일만
     /// 경고가 사라진다).
     #[test]
-    fn hancom_picture_crop_turn_and_effect_are_reported() {
+    fn hancom_picture_turn_and_effect_are_reported() {
         for (name, reason) in [
-            ("group-f3c-cropped.hwpx", "crop:"),
             ("group-f3d-rotated-pic.hwpx", "rotation/flip:"),
             ("group-f3e-gray.hwpx", "effect: GRAY_SCALE"),
         ] {
@@ -5218,38 +5179,113 @@ mod group_tests {
         }
     }
 
-    fn reasons(pic: &crate::schema::section::HxPic, pixels: &[(&str, (u32, u32))]) -> Vec<String> {
-        let map: std::collections::HashMap<String, (u32, u32)> =
-            pixels.iter().map(|(k, v)| (k.to_string(), *v)).collect();
-        super::group_picture_losses(pic, &map)
+    fn reasons(pic: &crate::schema::section::HxPic) -> Vec<String> {
+        super::group_picture_losses(pic)
             .into_iter()
             .map(|r| r.split(':').next().unwrap().to_string())
             .collect()
     }
 
-    /// The crop rule (W0, §8.1): more than one pixel (75 HWPUNIT) off the
-    /// whole image is a crop. The whole image is `imgDim`; without it the
-    /// image's pixel size × 75; without both the crop cannot be ruled out.
-    /// The cases are corpus values: 7050 of 7080 (`imgDim` one pixel off the
-    /// image), a 94 x 33 logo with no `imgDim` (clip 7080 x 2460 = uncropped,
-    /// clip with right 0 and the size in top/bottom = reported), and no size
-    /// at all.
+    /// The crop a picture decodes to (`[left, top, right, bottom]`), its
+    /// extent, and the kinds of the warnings it raised (`UnknownEnumValue`
+    /// as its attribute).
+    fn crop_of(
+        pic: &crate::schema::section::HxPic,
+        pixels: &[(&str, (u32, u32))],
+    ) -> (Option<[i32; 4]>, Option<(i32, i32)>, Vec<String>) {
+        let mut ctx = crate::decoder::section::DecodeCtx::new(0);
+        ctx.image_pixels = pixels.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let image = crate::decoder::section::convert_picture(pic, 0, &mut ctx).unwrap().unwrap();
+        let crop = image.crop.map(|c| [c.left, c.top, c.right, c.bottom].map(|v| v.as_i32()));
+        let extent = image.image_extent.map(|(w, h)| (w.as_i32(), h.as_i32()));
+        let kinds = ctx
+            .warnings
+            .iter()
+            .map(|w| match w {
+                crate::DecodeWarning::ContentLost { kind, .. } => kind.clone(),
+                crate::DecodeWarning::UnknownEnumValue { attribute, .. } => attribute.to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        (crop, extent, kinds)
+    }
+
+    /// The crop of a picture with `<hp:imgDim>`: the clip read by name;
+    /// the whole extent is no crop, anything else — one pixel off included —
+    /// is carried exactly with its extent. Hancom's F3c (cropped before
+    /// grouping) keeps its crop (0, 0, 7474, 15000) of 22500 x 15000 with
+    /// no loss.
     ///
-    /// 이것을 실패시키는 것: 허용 폭 `>` 를 `>=` 로(75 가 손실이 된다) / 픽셀 크기
-    /// 대체를 지우는 것 / 크기 없음 갈래 방출 삭제 / `left`·`top` 을 비교에서 빼는 것.
+    /// 이것을 실패시키는 것: `imgDim` 이 있을 때 전체 비교를 지우는 것(전체 그림이
+    /// 자르기로) / 자르기가 있을 때 범위를 버리는 것 / 묶음 그림 자르기를 다시
+    /// 손실로 보고하는 것.
     #[test]
-    fn group_picture_crop_rule() {
-        assert!(reasons(&bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000))), &[]).is_empty());
-        assert!(reasons(&bare_pic((0, 7050, 0, 2460), Some((7080, 2460))), &[]).is_empty());
-        assert!(reasons(&bare_pic((0, 7005, 0, 2460), Some((7080, 2460))), &[]).is_empty());
-        assert_eq!(reasons(&bare_pic((0, 7004, 0, 2460), Some((7080, 2460))), &[]), ["crop"]);
-        assert_eq!(reasons(&bare_pic((76, 7080, 0, 2460), Some((7080, 2460))), &[]), ["crop"]);
+    fn picture_crop_with_image_dim() {
+        let whole = bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000)));
+        assert_eq!(crop_of(&whole, &[]), (None, Some((22_500, 15_000)), vec![]));
+        let off = bare_pic((0, 7050, 0, 2460), Some((7080, 2460)));
+        assert_eq!(crop_of(&off, &[]), (Some([0, 0, 7050, 2460]), Some((7080, 2460)), vec![]));
+        let left = bare_pic((76, 7080, 0, 2460), Some((7080, 2460)));
+        assert_eq!(crop_of(&left, &[]).0, Some([76, 0, 7080, 2460]));
+
+        let doc = HwpxDecoder::decode(&fixture("group-f3c-cropped.hwpx")).unwrap();
+        assert!(lost(&doc.warnings).is_empty(), "{:?}", lost(&doc.warnings));
+        let group = first_group(&doc);
+        let crops: Vec<_> = match &group {
+            Control::Group { children, .. } => children
+                .iter()
+                .filter_map(|c| match c {
+                    GroupChild::Picture(img) => Some(
+                        img.crop.map(|c| [c.left, c.top, c.right, c.bottom].map(|v| v.as_i32())),
+                    ),
+                    _ => None,
+                })
+                .collect(),
+            _ => unreachable!(),
+        };
+        assert_eq!(crops.iter().flatten().collect::<Vec<_>>(), [&[0, 0, 7474, 15_000]]);
+    }
+
+    /// The crop of a picture without `<hp:imgDim>` (§19.21 H-v4): Hancom
+    /// wrote two orders, named and `right`/`top` exchanged. The one valid
+    /// reading is taken (exchanged → a warning, the value is exact); both
+    /// valid and different → `picture_crop_order` lost; both empty →
+    /// `picture_crop` lost. A reading within one pixel of the image's pixel
+    /// size × 75 is the whole image; without the pixel size the reading is
+    /// kept as a crop with no extent. Corpus values: the 94 x 33 logo
+    /// (clip 7080 x 2460 = whole), the crop (0, 1113, 7260, 3851) written
+    /// `right=1113 top=7260`, and the two-way (0, 7260, 5618, 9036).
+    ///
+    /// 이것을 실패시키는 것: 판정 규칙을 "항상 이름대로" 로(맞바뀐 자르기가 깨짐) /
+    /// 둘 다 유효할 때 이름대로 고르기(`picture_crop_order` 사라짐) / 둘 다 무효
+    /// 갈래 삭제 / 픽셀 전체 판정의 허용 폭을 0 으로 / 픽셀 크기를 범위로 쓰기.
+    #[test]
+    fn picture_crop_without_image_dim() {
         let logo = [("image2", (94, 33))];
-        assert!(reasons(&bare_pic((0, 7080, 0, 2460), None), &logo).is_empty());
-        assert!(reasons(&bare_pic((0, 7080, 0, 2460), Some((0, 0))), &logo).is_empty());
-        assert_eq!(reasons(&bare_pic((0, 0, 7080, 2460), None), &logo), ["crop"]);
-        assert_eq!(reasons(&bare_pic((0, 7080, 0, 2460), None), &[]), ["crop"]);
-        assert_eq!(reasons(&bare_pic((0, 7080, 0, 2460), Some((0, 0))), &[]), ["crop"]);
+        assert_eq!(crop_of(&bare_pic((0, 7080, 0, 2460), None), &logo), (None, None, vec![]));
+        assert_eq!(crop_of(&bare_pic((0, 0, 7080, 2460), None), &logo), (None, None, vec![]));
+        assert_eq!(crop_of(&bare_pic((0, 7080, 0, 2460), Some((0, 0))), &logo).0, None);
+        assert_eq!(
+            crop_of(&bare_pic((0, 7080, 0, 2460), None), &[]),
+            (Some([0, 0, 7080, 2460]), None, vec![])
+        );
+        let photo = [("image2", (2000, 2000))];
+        assert_eq!(
+            crop_of(&bare_pic((0, 1113, 7260, 3851), None), &photo),
+            (Some([0, 1113, 7260, 3851]), None, vec!["hp:imgClip@right/top".to_string()])
+        );
+        assert_eq!(
+            crop_of(&bare_pic((0, 7260, 1113, 3851), None), &photo),
+            (Some([0, 1113, 7260, 3851]), None, vec![])
+        );
+        assert_eq!(
+            crop_of(&bare_pic((0, 5618, 7260, 9036), None), &photo),
+            (None, None, vec!["picture_crop_order".to_string()])
+        );
+        assert_eq!(
+            crop_of(&bare_pic((0, 0, 0, 0), None), &photo),
+            (None, None, vec!["picture_crop".to_string()])
+        );
     }
 
     /// Image effects and a visible border are reported; `lineShape` NONE and
@@ -5263,31 +5299,31 @@ mod group_tests {
         let base = || bare_pic((0, 22_500, 0, 15_000), Some((22_500, 15_000)));
         let mut p = base();
         p.img.as_mut().unwrap().effect = "GRAY_SCALE".to_string();
-        assert_eq!(reasons(&p, &[]), ["effect"]);
+        assert_eq!(reasons(&p), ["effect"]);
         let mut p = base();
         p.img.as_mut().unwrap().bright = -10;
-        assert_eq!(reasons(&p, &[]), ["effect"]);
+        assert_eq!(reasons(&p), ["effect"]);
         let mut p = base();
         p.img.as_mut().unwrap().contrast = 5;
-        assert_eq!(reasons(&p, &[]), ["effect"]);
+        assert_eq!(reasons(&p), ["effect"]);
         let mut p = base();
         p.img.as_mut().unwrap().alpha = "50".to_string();
-        assert_eq!(reasons(&p, &[]), ["effect"]);
+        assert_eq!(reasons(&p), ["effect"]);
         let mut p = base();
         p.effects = Some(HxPicEffects { items: vec![HxAnyElement::Element] });
-        assert_eq!(reasons(&p, &[]), ["effect"]);
+        assert_eq!(reasons(&p), ["effect"]);
         p.effects = Some(HxPicEffects::default());
-        assert!(reasons(&p, &[]).is_empty());
+        assert!(reasons(&p).is_empty());
         let mut p = base();
         p.line_shape = Some(HxLineShape {
             style: "DOT".to_string(),
             width: 75,
             ..HxLineShape::default_solid()
         });
-        assert_eq!(reasons(&p, &[]), ["border"]);
+        assert_eq!(reasons(&p), ["border"]);
         p.line_shape =
             Some(HxLineShape { style: "NONE".to_string(), ..HxLineShape::default_solid() });
-        assert!(reasons(&p, &[]).is_empty());
+        assert!(reasons(&p).is_empty());
     }
 
     /// A Hancom `<hp:effects>` with a shadow inside is read as having a
@@ -5530,21 +5566,23 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["group_hyperlink"]);
     }
 
-    /// `imgClip` and `imgDim` are any i32 on the wire: the crop test does not
-    /// overflow at the extremes of either axis, and still reports the crop.
+    /// `imgClip` and `imgDim` are any i32 on the wire: the whole-image test
+    /// does not overflow at the extremes, and a value outside HWPUNIT's range
+    /// is reported lost rather than clamped.
     ///
-    /// 이것을 실패시키는 것: 뺄셈을 i32 로 되돌리는 것(debug 패닉 / release 에서 차이가
-    /// 1 로 감겨 crop 이 사라짐).
+    /// 이것을 실패시키는 것: 픽셀 비교 뺄셈을 i32 로 되돌리는 것(debug 패닉) / 범위
+    /// 밖 값을 0 으로 접는 것(손실 경고 없이 자르기가 바뀜).
     #[test]
     fn crop_rule_survives_extreme_values() {
         let (min, max) = (i32::MIN, i32::MAX);
-        assert_eq!(reasons(&bare_pic((0, min, 0, 15_000), Some((max, 15_000))), &[]), ["crop"]);
-        assert_eq!(reasons(&bare_pic((0, 22_500, 0, min), Some((22_500, max))), &[]), ["crop"]);
+        let lost = |pic| crop_of(&pic, &[("image2", (u32::MAX, u32::MAX))]).2;
+        assert_eq!(lost(bare_pic((0, min, 0, 15_000), Some((max, 15_000)))), ["picture_crop"]);
         assert_eq!(
-            reasons(&bare_pic((min, 22_500, min, 15_000), Some((22_500, 15_000))), &[]),
-            ["crop"]
+            lost(bare_pic((min, 22_500, min, 15_000), Some((22_500, 15_000)))),
+            ["picture_crop"]
         );
-        assert!(reasons(&bare_pic((0, max, 0, max), Some((max, max))), &[]).is_empty());
+        assert_eq!(lost(bare_pic((0, max, 0, max), None)), ["picture_crop"]);
+        assert_eq!(lost(bare_pic((min, max, min, max), None)), ["picture_crop"]);
     }
 
     /// A picture whose `binaryItemIDRef` keeps the extension

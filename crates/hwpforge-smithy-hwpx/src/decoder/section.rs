@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnLine, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
-use hwpforge_core::image::{Image, ImageFormat};
+use hwpforge_core::image::{Image, ImageCrop, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
@@ -146,9 +146,9 @@ pub fn parse_section(
 }
 
 /// [`parse_section`] with the pixel sizes of the package's images, keyed by
-/// `binaryItemIDRef` (the BinData name without extension). A group picture
-/// with no `<hp:imgDim>` is judged for cropping against its image's size;
-/// without it, such a picture is reported as possibly cropped.
+/// `binaryItemIDRef` (the BinData name without extension). A picture with no
+/// `<hp:imgDim>` whose clip is within one pixel of its image's size is the
+/// whole image; without the size its clip is kept as a crop.
 pub(crate) fn parse_section_with_images(
     xml: &str,
     section_index: usize,
@@ -1280,7 +1280,124 @@ pub(crate) fn convert_picture(
         image = image.with_placement(value);
     }
     image.hyperlink = decode_object_hyperlink(&hx.href, ctx);
+    decode_picture_frame(hx, &mut image, ctx);
     Ok(Some(image))
+}
+
+/// HWPUNIT per image pixel (96 dpi) — the one-pixel tolerance of the
+/// whole-image test for a picture without `<hp:imgDim>`.
+const HWPUNIT_PER_PIXEL: i64 = 75;
+
+/// A picture's crop (`imgClip`), the extent it is measured in (`imgDim`)
+/// and its original box (`orgSz`) → [`Image::crop`], [`Image::image_extent`],
+/// [`Image::original_size`]. A value equal to what the encoder writes when
+/// the field is `None` is folded to `None`, so a re-encode writes the same
+/// bytes.
+///
+/// With `imgDim` the clip attributes are read by name. Without it Hancom
+/// has written two orders (named, and `right`/`top` exchanged — §19.21
+/// H-v4): the one valid reading (`right > left`, `bottom > top`) is taken;
+/// when both are valid and differ the order cannot be told and the crop is
+/// reported lost; a reading within one pixel of the image's pixel size × 75
+/// is the whole image. The pixel size never stands in for the extent.
+fn decode_picture_frame(hx: &HxPic, image: &mut Image, ctx: &mut DecodeCtx) {
+    let display = (image.width.as_i32(), image.height.as_i32());
+    let units = |(a, b): (i32, i32)| Some((HwpUnit::new(a).ok()?, HwpUnit::new(b).ok()?));
+
+    if let Some(org) = hx.org_sz.as_ref().map(|s| (s.width, s.height)) {
+        if org.0 > 0 && org.1 > 0 && org != display {
+            match units(org) {
+                Some(value) => image.original_size = Some(value),
+                None => ctx.content_lost(
+                    "picture_original_size",
+                    format!("orgSz {}x{} is out of range", org.0, org.1),
+                ),
+            }
+        }
+    }
+
+    let dim =
+        hx.img_dim.as_ref().map(|d| (d.dim_width, d.dim_height)).filter(|&(w, h)| w > 0 && h > 0);
+    let Some(clip) = hx.img_clip.as_ref() else {
+        image.image_extent = dim.filter(|&d| d != display).and_then(units);
+        return;
+    };
+    let (l, r, t, b) = (clip.left, clip.right, clip.top, clip.bottom);
+    let named = [l, t, r, b];
+    let crop = match dim {
+        Some((w, h)) => (named != [0, 0, w, h]).then_some(named),
+        None => {
+            let swapped = [l, r, t, b];
+            let valid = |c: [i32; 4]| c[2] > c[0] && c[3] > c[1];
+            let chosen = match (valid(named), valid(swapped)) {
+                (true, false) => named,
+                (false, true) => swapped,
+                (true, true) if named == swapped => named,
+                (true, true) => {
+                    ctx.content_lost(
+                        "picture_crop_order",
+                        format!(
+                            "imgClip left={l} right={r} top={t} bottom={b} without imgDim reads \
+                             validly in both orders"
+                        ),
+                    );
+                    return;
+                }
+                (false, false) => {
+                    ctx.content_lost(
+                        "picture_crop",
+                        format!(
+                            "imgClip left={l} right={r} top={t} bottom={b} is empty in both orders"
+                        ),
+                    );
+                    return;
+                }
+            };
+            let reference = hx.img.as_ref().map_or("", |i| i.binary_item_id_ref.as_str());
+            let whole = ctx.image_pixels.get(reference).is_some_and(|&(pw, ph)| {
+                let [cl, ct, cr, cb] = chosen.map(i64::from);
+                let (pw, ph) =
+                    (i64::from(pw) * HWPUNIT_PER_PIXEL, i64::from(ph) * HWPUNIT_PER_PIXEL);
+                [cl, ct, cr - pw, cb - ph].iter().all(|v| v.abs() <= HWPUNIT_PER_PIXEL)
+            });
+            if whole {
+                None
+            } else {
+                if chosen != named {
+                    ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                        attribute: "hp:imgClip@right/top",
+                        raw: format!("left={l} right={r} top={t} bottom={b}"),
+                        fallback: "right/top exchanged",
+                    });
+                }
+                Some(chosen)
+            }
+        }
+    };
+    let Some([cl, ct, cr, cb]) = crop else {
+        image.image_extent = dim.filter(|&d| d != display).and_then(units);
+        return;
+    };
+    let edge = |v: i32| HwpUnit::new(v).ok();
+    let (Some(left), Some(top), Some(right), Some(bottom)) =
+        (edge(cl), edge(ct), edge(cr), edge(cb))
+    else {
+        ctx.content_lost(
+            "picture_crop",
+            format!("imgClip left={l} right={r} top={t} bottom={b} is out of range"),
+        );
+        return;
+    };
+    let extent = dim.map(units);
+    if extent == Some(None) {
+        ctx.content_lost(
+            "picture_crop",
+            format!("imgDim {:?} is out of range", dim.unwrap_or_default()),
+        );
+        return;
+    }
+    image.crop = Some(ImageCrop { left, top, right, bottom });
+    image.image_extent = extent.flatten();
 }
 
 /// What Hancom appends to the URL in an object's `href` (every picture link
@@ -2397,8 +2514,8 @@ fn convert_header_footer(
 /// The `<hp:subList>` goes through the common paragraph decoder, so the
 /// master page carries every run kind the body does. Warnings name the real
 /// part and a `section[s].masterpage[global]…` path. `image_pixels` are the
-/// package's image sizes, so a group picture without `imgDim` is judged for
-/// a crop as in the body.
+/// package's image sizes, so a picture without `imgDim` is judged whole as
+/// in the body.
 ///
 /// # Errors
 ///
@@ -3315,7 +3432,10 @@ mod tests {
     #[test]
     fn picture_hyperlink_is_decoded_from_hancom_href() {
         let xml = r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:pic id="1866836098" zOrder="2" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="http://www.korea.kr;1;0;0;" groupLevel="0" instid="793094275" reverse="0"><hp:offset x="4294966986" y="0"/><hp:orgSz width="9480" height="3300"/><hp:curSz width="6860" height="2388"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="-310" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="0.723629" e2="0" e3="310" e4="0" e5="0.723636" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="9480" y="0"/><hc:pt2 x="9480" y="3300"/><hc:pt3 x="0" y="3300"/></hp:imgRect><hp:imgClip left="0" right="0" top="7080" bottom="2460"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hc:img binaryItemIDRef="image2" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:effects/><hp:parameterset cnt="1" name="539"><hp:listParam cnt="1" name="623"><hp:stringParam name="613">http\://www.korea.kr;1;0;0;</hp:stringParam></hp:listParam></hp:parameterset><hp:sz width="6860" widthRelTo="ABSOLUTE" height="2388" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="4294964867" horzOffset="17644"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>그림입니다.</hp:shapeComment></hp:pic></hp:run></hp:p></hs:sec>"#;
-        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        // The logo is 94 x 33 pixels: its `imgClip` (no `imgDim`) is the
+        // whole image.
+        let pixels = HashMap::from([("image2".to_string(), (94, 33))]);
+        let result = parse_section_with_images(xml, 0, &HashMap::new(), &pixels).unwrap();
         let RunContent::Image(img) = &result.paragraphs[0].runs[0].content else {
             panic!("expected Image: {:?}", result.paragraphs[0].runs)
         };

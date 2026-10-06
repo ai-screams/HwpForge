@@ -620,8 +620,8 @@ impl HwpxDecoder {
         let mut masterpage_cursor = 0usize;
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
 
-        // BinData is read before the sections: a group picture without an
-        // `<hp:imgDim>` is judged for cropping against its image's own size.
+        // BinData is read before the sections: a picture without an
+        // `<hp:imgDim>` is judged whole against its image's own size.
         let image_store = pkg.read_all_bindata()?;
         let image_pixels = image_size::pixel_sizes_by_reference(&image_store);
 
