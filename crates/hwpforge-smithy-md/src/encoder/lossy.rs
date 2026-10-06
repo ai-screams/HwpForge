@@ -103,9 +103,13 @@ fn encode_paragraph(
 ) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
-            RunContent::Table(table) => return table_to_markdown(table, warnings),
+            RunContent::Table(table) => {
+                return table_to_markdown(table, warnings)
+                    + &lossy_caption(table.caption.as_ref(), warnings);
+            }
             RunContent::Image(image) => {
-                return format!("![{}]({})", image_alt_text(&image.path), image.path);
+                return format!("![{}]({})", image_alt_text(&image.path), image.path)
+                    + &lossy_caption(image.caption.as_ref(), warnings);
             }
             _ => {}
         }
@@ -205,6 +209,7 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                     output.push(' ');
                 }
                 output.push_str(&format!("![{}]({})", image_alt_text(&image.path), image.path));
+                output.push_str(&lossy_caption(image.caption.as_ref(), warnings));
             }
             RunContent::Control(control) => match control.as_ref() {
                 Control::Hyperlink { text, url } => {
@@ -271,12 +276,35 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                     output.push('\n');
                 }
                 output.push_str(&table_to_markdown(table, warnings));
+                output.push_str(&lossy_caption(table.caption.as_ref(), warnings));
             }
             _ => {}
         }
     }
 
     output
+}
+
+/// A picture's or table's caption as a paragraph after it, empty without
+/// one — the caption numbers ("그림 3") live there (§19.16 J, review r1).
+/// 이것을 실패시키는 것: 캡션 출력을 지우기
+/// (`f17_caption_numbers_reach_the_readable_views`).
+fn lossy_caption(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    warnings: &mut Vec<super::MdWarning>,
+) -> String {
+    let Some(caption) = caption else { return String::new() };
+    let text: Vec<String> = caption
+        .paragraphs
+        .iter()
+        .map(|p| paragraph_text_markdown(p, warnings))
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", text.join("\n\n"))
+    }
 }
 
 fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>) -> String {

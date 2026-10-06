@@ -6,6 +6,17 @@ use crate::error::{MdError, MdResult};
 use crate::frontmatter::{from_metadata, render_frontmatter};
 
 pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
+    // §19.16 J (review r1): the grammar has no place for a caption number,
+    // and captions are written as plain text (tables) or not at all
+    // (pictures) — so a number anywhere, captions included, is refused
+    // here rather than dropped. 이것을 실패시키는 것: 이 검사를 지우기
+    // (`caption_number_is_written_or_refused` — F17 의 캡션 번호가 사라진 채 성공).
+    if holds_auto_number(document) {
+        return Err(MdError::UnsupportedStructure {
+            detail: "caption number (auto number) is not carried by the lossless encoder"
+                .to_string(),
+        });
+    }
     let mut frontmatter = from_metadata(document.metadata(), None);
     if frontmatter.template.is_none()
         && frontmatter.title.is_none()
@@ -303,6 +314,36 @@ fn escape_html(input: &str) -> String {
         }
     }
     escaped
+}
+
+/// Whether any paragraph — picture captions included, which the Core
+/// paragraph walk does not visit — holds a [`Control::AutoNumber`].
+pub(crate) fn holds_auto_number(document: &Document<Validated>) -> bool {
+    fn paragraph_has(p: &Paragraph) -> bool {
+        p.runs.iter().any(|run| match &run.content {
+            RunContent::Control(c) => matches!(**c, Control::AutoNumber { .. }),
+            RunContent::Image(image) => image.caption.as_ref().is_some_and(|caption| {
+                caption.paragraphs.iter().any(|cp| {
+                    let mut found = false;
+                    cp.for_each_paragraph(|q| found |= paragraph_has(q));
+                    found
+                })
+            }),
+            _ => false,
+        })
+    }
+    let mut found = false;
+    for section in document.sections() {
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for p in paragraphs {
+                p.for_each_paragraph(|q| found |= paragraph_has(q));
+            }
+        }
+    }
+    found
 }
 
 #[cfg(test)]

@@ -3,9 +3,13 @@
 //! lossless grammar has no place for it and refuses the document rather
 //! than dropping the number.
 
+use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
+use hwpforge_core::image::{Image, ImageFormat};
+use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section, StyleLookup, Validated};
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
 use hwpforge_smithy_md::{MdEncoder, MdError};
 
 struct PlainStyles;
@@ -48,4 +52,127 @@ fn caption_number_is_written_or_refused() {
         MdEncoder::encode_lossless(&plain),
         Err(MdError::UnsupportedStructure { .. })
     ));
+}
+
+/// F17's numbers all sit in captions: both readable views write the
+/// captions after their picture or table, so "그림 3", "그림 4" and "표 7"
+/// reach the Markdown; the lossless encoder refuses the document (review
+/// r1: the captions were not written at all, and lossless dropped the
+/// numbers without a word).
+///
+/// 이것을 실패시키는 것: 두 보기의 캡션 출력을 지우기 / lossless 의 캡션 검사를
+/// 지우기(그림 캡션은 Core 문단 순회에 없다).
+#[test]
+fn f17_caption_numbers_reach_the_readable_views() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/images/f17-caption-numbering.hwpx"
+    );
+    let decoded = HwpxDecoder::decode(&std::fs::read(path).expect("F17")).expect("decode");
+    let doc = decoded.document.validate().expect("validate");
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let lossy = MdEncoder::encode_lossy(&doc).expect("lossy");
+    let styled = MdEncoder::encode_styled(&doc, &lookup).markdown;
+    for view in [&lossy, &styled] {
+        for number in ["그림 3", "그림 4", "표 7"] {
+            assert!(view.contains(number), "{number}: {view}");
+        }
+    }
+    assert!(matches!(MdEncoder::encode_lossless(&doc), Err(MdError::UnsupportedStructure { .. })));
+}
+
+/// A `*` prefix and suffix stay characters in the styled view, not an
+/// emphasis around the number.
+///
+/// 이것을 실패시키는 것: styled 의 캡션 번호 이스케이프를 지우기(`*3*`).
+#[test]
+fn caption_number_prefix_is_escaped() {
+    let starred = caption(AutoNumberFormat {
+        prefix: Some('*'),
+        suffix: Some('*'),
+        ..AutoNumberFormat::default()
+    });
+    let md = MdEncoder::encode_styled(&starred, &PlainStyles).markdown;
+    assert!(md.contains(r"\*3\*"), "{md}");
+}
+
+fn numbered_caption(label: &str, kind: AutoNumberKind, num: u32) -> Caption {
+    let number = Control::AutoNumber { kind, num, format: AutoNumberFormat::default() };
+    Caption::new(
+        vec![Paragraph::with_runs(
+            vec![
+                Run::text(label, CharShapeIndex::new(0)),
+                Run::control(number, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        )],
+        CaptionSide::Bottom,
+    )
+}
+
+fn picture(caption: Option<Caption>) -> Image {
+    let size = HwpUnit::new(1000).unwrap();
+    let image = Image::new("BinData/a.png", size, size, ImageFormat::Png);
+    match caption {
+        Some(caption) => image.with_caption(caption),
+        None => image,
+    }
+}
+
+fn doc_of(paragraphs: Vec<Paragraph>) -> Document<Validated> {
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
+    doc.validate().expect("validate")
+}
+
+/// A picture alone in its paragraph and a table after text — the two
+/// placements F17 does not have — write their caption numbers in both
+/// readable views; a picture caption's number alone makes lossless refuse,
+/// and the same picture without a caption does not.
+///
+/// 이것을 실패시키는 것: 단독 그림의 캡션 출력을 지우기 / 글 뒤 표의 캡션
+/// 출력을 지우기(두 보기 각각) / lossless 의 그림 캡션 검사를 지우기.
+#[test]
+fn lone_picture_and_inline_table_captions_are_written() {
+    let lone = Paragraph::with_runs(
+        vec![Run::image(
+            picture(Some(numbered_caption("그림 ", AutoNumberKind::Picture, 1))),
+            CharShapeIndex::new(0),
+        )],
+        ParaShapeIndex::new(0),
+    );
+    let cell = TableCell::new(
+        vec![Paragraph::with_runs(
+            vec![Run::text("칸", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::new(1000).unwrap(),
+    );
+    let table = Table::new(vec![TableRow::new(vec![cell])]).with_caption(numbered_caption(
+        "표 ",
+        AutoNumberKind::Table,
+        2,
+    ));
+    let after_text = Paragraph::with_runs(
+        vec![Run::text("앞", CharShapeIndex::new(0)), Run::table(table, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let doc = doc_of(vec![lone.clone(), after_text]);
+    let lossy = MdEncoder::encode_lossy(&doc).expect("lossy");
+    let styled = MdEncoder::encode_styled(&doc, &PlainStyles).markdown;
+    for view in [&lossy, &styled] {
+        for number in ["그림 1", "표 2"] {
+            assert!(view.contains(number), "{number}: {view}");
+        }
+    }
+
+    assert!(matches!(
+        MdEncoder::encode_lossless(&doc_of(vec![lone])),
+        Err(MdError::UnsupportedStructure { .. })
+    ));
+    let plain = Paragraph::with_runs(
+        vec![Run::image(picture(None), CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    MdEncoder::encode_lossless(&doc_of(vec![plain])).expect("uncaptioned picture");
 }

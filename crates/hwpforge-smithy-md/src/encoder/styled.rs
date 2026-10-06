@@ -267,17 +267,20 @@ fn encode_paragraph_styled(
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                let (md, tbl_images) = table_to_styled_markdown(table, styles, false, footnotes);
+                let (mut md, tbl_images) =
+                    table_to_styled_markdown(table, styles, false, footnotes);
                 images.extend(tbl_images);
+                md.push_str(&styled_caption(table.caption.as_ref(), styles, footnotes));
                 return (md, images);
             }
             RunContent::Image(image) => {
                 let alt = image_alt_text(&image.path);
                 let rel_path = image_rel_path(&image.path, styles);
-                let md = format!("![{alt}]({rel_path})");
+                let mut md = format!("![{alt}]({rel_path})");
                 if let Some(data) = styles.image_data(&image.path) {
                     images.insert(rel_path, data.to_vec());
                 }
+                md.push_str(&styled_caption(image.caption.as_ref(), styles, footnotes));
                 return (md, images);
             }
             _ => {}
@@ -392,6 +395,7 @@ fn paragraph_text_styled(
                 if let Some(data) = styles.image_data(&image.path) {
                     images.insert(rel_path, data.to_vec());
                 }
+                output.push_str(&styled_caption(image.caption.as_ref(), styles, footnotes));
             }
             RunContent::Table(table) => {
                 // Flush text group.
@@ -407,6 +411,7 @@ fn paragraph_text_styled(
                     table_to_styled_markdown(table, styles, false, footnotes);
                 output.push_str(&tbl_md);
                 images.extend(tbl_images);
+                output.push_str(&styled_caption(table.caption.as_ref(), styles, footnotes));
             }
             RunContent::Control(control) => {
                 // Flush text group.
@@ -415,7 +420,16 @@ fn paragraph_text_styled(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
-                output.push_str(&encode_control_styled(control, styles, &mut images, footnotes));
+                let text = encode_control_styled(control, styles, &mut images, footnotes);
+                // A caption number's prefix/suffix characters are text, not
+                // Markdown (review r1: a `*` prefix and suffix turned "3"
+                // into emphasis). 이것을 실패시키는 것: 이 이스케이프를 지우기
+                // (`caption_number_prefix_is_escaped`).
+                if matches!(**control, Control::AutoNumber { .. }) {
+                    output.push_str(&escape_markdown(&text));
+                } else {
+                    output.push_str(&text);
+                }
             }
             _ => {}
         }
@@ -544,8 +558,8 @@ fn encode_control_styled(
             // 없다 — 명시적 no-op (W2·W3, IndexMark 와 동일 정책).
             String::new()
         }
-        // Plain text, escaped by the caller like other text-bearing
-        // controls (superscript is not drawn).
+        // Plain text: the Markdown caller escapes it as Markdown, the HTML
+        // table caller as HTML (superscript is not drawn).
         Control::AutoNumber { num, format, .. } => super::auto_number_text(*num, format),
         Control::Arc { .. } | Control::Curve { .. } | Control::ConnectLine { .. } => {
             // These shapes rarely contain text; render nothing.
@@ -979,6 +993,30 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
 ///
 /// Applied to text extracted from HWPX (which is always plain text), BEFORE
 /// wrapping with inline format markers like `**bold**` or `<em>`.
+/// A picture's or table's caption as a paragraph after it (`\n\n` + its
+/// text), empty without one. The caption's numbers ("그림 3") live here
+/// (§19.16 J, review r1: captions were not written at all).
+/// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
+/// `f17_caption_numbers_reach_the_readable_views`).
+fn styled_caption(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    styles: &dyn StyleLookup,
+    footnotes: &mut FootnoteCollector,
+) -> String {
+    let Some(caption) = caption else { return String::new() };
+    let text: Vec<String> = caption
+        .paragraphs
+        .iter()
+        .map(|p| paragraph_text_styled(p, styles, footnotes).0)
+        .filter(|t| !t.trim().is_empty())
+        .collect();
+    if text.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", text.join("\n\n"))
+    }
+}
+
 fn escape_markdown(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + input.len() / 8);
     for ch in input.chars() {
