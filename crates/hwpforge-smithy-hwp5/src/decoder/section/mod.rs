@@ -253,6 +253,7 @@ impl TableContext {
         let Some(mut capture) = self.cell_header_footer.take() else {
             return;
         };
+        attach_inline_gso_control(&mut capture.current_para, capture.gso.take(), warnings);
         if let Some(buf) = capture.current_para.take() {
             capture.ctx.paragraphs.push(buf.finish(warnings));
         }
@@ -296,6 +297,8 @@ impl TableContext {
 struct CellHeaderFooter {
     ctx: NestedSubtreeContext,
     current_para: Option<ParaBuf>,
+    /// A shape (`gso`) opened in the current header/footer paragraph.
+    gso: Option<InlineGsoContext>,
 }
 
 /// Cell currently receiving nested paragraph records.
@@ -974,12 +977,14 @@ impl BodyTextParserState {
             // already emitted at push time) so they cannot corrupt the parent
             // table or leak unbounded nesting into projection (E1 #3).
             if !over_cap {
-                attach_finished_table(
-                    &mut self.current,
-                    &mut self.table_stack,
-                    finished,
-                    &mut self.warnings,
-                );
+                // An outermost table opened inside a header/footer/note
+                // belongs to that subtree's paragraph.
+                let host = if self.table_stack.is_empty() && self.subtree_ctx.is_some() {
+                    &mut self.current_subtree_para
+                } else {
+                    &mut self.current
+                };
+                attach_finished_table(host, &mut self.table_stack, finished, &mut self.warnings);
             }
         }
 
@@ -1016,6 +1021,24 @@ impl BodyTextParserState {
         if level <= capture.ctx.ctrl_depth {
             table.close_cell_header_footer(&mut self.warnings);
             return false;
+        }
+        // A shape in the header/footer paragraph owns the records below it;
+        // a record back at its level closes it into that paragraph.
+        if capture.gso.as_ref().is_some_and(|g| level <= g.ctrl_depth) {
+            attach_inline_gso_control(
+                &mut capture.current_para,
+                capture.gso.take(),
+                &mut self.warnings,
+            );
+        }
+        if Self::handle_inline_gso_record(
+            record,
+            tag,
+            level,
+            &mut self.warnings,
+            capture.gso.as_mut(),
+        ) {
+            return true;
         }
         match tag {
             TagId::ListHeader => capture.ctx.note_list_header(&record.data),
@@ -1063,8 +1086,31 @@ impl BodyTextParserState {
                 }
             }
             TagId::CtrlHeader => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    let ctrl_id = parse_ctrl_id(&record.data);
+                let ctrl_id = parse_ctrl_id(&record.data);
+                if capture.current_para.is_none() {
+                    return true;
+                }
+                // §19.7 F (review r1): a table or shape in a cell's
+                // header/footer is decoded like one in a top-level paragraph
+                // — the table on the table stack (it attaches back into this
+                // paragraph, [`attach_finished_table`]), the shape in its own
+                // context — not flattened into the header's text.
+                // 이것을 실패시키는 것: 이 두 갈래를 지우기
+                // (`cell_footer_keeps_its_table_and_picture`).
+                if ctrl_id == CTRL_ID_TABLE {
+                    self.push_table_context(
+                        level,
+                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                    );
+                } else if ctrl_id == CTRL_ID_GSO {
+                    capture.gso = Some(InlineGsoContext::new(
+                        level,
+                        ctrl_id,
+                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                        ctrl_header_properties_raw(&record.data),
+                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
+                    ));
+                } else if let Some(buf) = capture.current_para.as_mut() {
                     buf.controls.push(
                         Self::typed_inline_family_control(ctrl_id, &record.data).unwrap_or_else(
                             || Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() },
@@ -1209,6 +1255,7 @@ impl BodyTextParserState {
                                 None,
                             ),
                             current_para: None,
+                            gso: None,
                         });
                     } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
@@ -1473,6 +1520,19 @@ impl BodyTextParserState {
             TagId::CtrlHeader => {
                 if let Some(buf) = self.current_subtree_para.as_mut() {
                     let ctrl_id = parse_ctrl_id(&record.data);
+                    // §19.7 F (review r1): a table in a header/footer/note is
+                    // read on the table stack and attaches back into this
+                    // paragraph ([`attach_finished_table`]) instead of its
+                    // cells being flattened into the subtree's text.
+                    // 이것을 실패시키는 것: 이 갈래를 지우기
+                    // (`header_keeps_its_table`).
+                    if ctrl_id == CTRL_ID_TABLE {
+                        self.push_table_context(
+                            level,
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                        );
+                        return true;
+                    }
                     if ctrl_id == CTRL_ID_GSO {
                         self.inline_subtree_gso_ctx = Some(InlineGsoContext::new(
                             level,
@@ -2226,12 +2286,14 @@ impl BodyTextParserState {
             // See `prepare_for_record`: over-cap tables are dropped, not
             // attached (E1 #3).
             if !over_cap {
-                attach_finished_table(
-                    &mut self.current,
-                    &mut self.table_stack,
-                    finished,
-                    &mut self.warnings,
-                );
+                // An outermost table opened inside a header/footer/note
+                // belongs to that subtree's paragraph.
+                let host = if self.table_stack.is_empty() && self.subtree_ctx.is_some() {
+                    &mut self.current_subtree_para
+                } else {
+                    &mut self.current
+                };
+                attach_finished_table(host, &mut self.table_stack, finished, &mut self.warnings);
             }
         }
         attach_inline_gso_control(
@@ -2629,6 +2691,15 @@ fn attach_finished_table(
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     if let Some(parent) = table_stack.last_mut() {
+        // A table read inside a cell's header/footer belongs to that
+        // header/footer's paragraph (the capture is still open: it closes
+        // only on a record at or above its own level, after this pop).
+        if let Some(buf) =
+            parent.cell_header_footer.as_mut().and_then(|capture| capture.current_para.as_mut())
+        {
+            buf.controls.push(control);
+            return;
+        }
         if let Some(buf) = parent.current_cell_para.as_mut() {
             buf.controls.push(control);
             return;
@@ -3464,6 +3535,106 @@ mod tests {
         let second = cell_controls(1);
         let [Hwp5Control::Footer(f2)] = &second[..] else { panic!("{second:?}") };
         assert_eq!(f2.paragraphs[0].text, "F2");
+    }
+
+    /// [`one_cell_table`] whose control header sits at `base`.
+    fn one_cell_table_at(stream: &mut Vec<u8>, base: u16, text: &str) {
+        stream.extend(make_record(TagId::CtrlHeader, base, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, base + 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            base + 1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 9000,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: Some(1),
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, base + 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, base + 2, &para_text_data(text)));
+    }
+
+    /// A table and a picture in a cell's footer stay objects of the footer
+    /// paragraph (review r1 of §19.7 F): before, the table's cell paragraph
+    /// was read as one more footer paragraph and the picture was dropped as
+    /// an unknown control.
+    ///
+    /// 이것을 실패시키는 것: 칸 머리말·꼬리말 갈래의 `tbl`·`gso` 처리를 지우기 /
+    /// 끝난 표를 꼬리말 문단 대신 칸 문단에 붙이기.
+    #[test]
+    fn cell_footer_keeps_its_table_and_picture() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("cell")));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &ctrl_header_data(CTRL_ID_FOOTER)));
+        stream.extend(make_record(TagId::ListHeader, 3, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, 3, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 4, &para_text_data("F")));
+        one_cell_table_at(&mut stream, 4, "inner");
+        stream.extend(make_record(TagId::CtrlHeader, 4, &gso_ctrl_header_data(0, 0, 6400, 3200)));
+        stream.extend(make_record(TagId::ShapeComponent, 5, &[0u8; 4]));
+        stream.extend(make_record(TagId::ShapePicture, 5, &shape_picture_data(7)));
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_data("after")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(result.paragraphs.len(), 2);
+        let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else {
+            panic!("{:?}", result.paragraphs[0].controls);
+        };
+        assert_eq!(table.cells[0].paragraphs.len(), 1, "footer text leaked into the cell");
+        let [Hwp5Control::Footer(footer)] = &table.cells[0].paragraphs[0].controls[..] else {
+            panic!("{:?}", table.cells[0].paragraphs[0].controls);
+        };
+        assert_eq!(footer.paragraphs.len(), 1, "inner cell text leaked into the footer");
+        assert_eq!(footer.paragraphs[0].text, "F");
+        let [Hwp5Control::Table(inner), Hwp5Control::Image(_)] = &footer.paragraphs[0].controls[..]
+        else {
+            panic!("{:?}", footer.paragraphs[0].controls);
+        };
+        assert_eq!(inner.cells[0].paragraphs[0].text, "inner");
+        assert_eq!(result.paragraphs[1].text, "after");
+    }
+
+    /// A table in a top-level header stays an object of the header
+    /// paragraph, not flattened into the header's text (review r1 of §19.7
+    /// F, the same path as a cell's header).
+    ///
+    /// 이것을 실패시키는 것: subtree 갈래의 `tbl` 처리를 지우기 / 끝난 표를 본문
+    /// 문단에 붙이기.
+    #[test]
+    fn header_keeps_its_table() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_data("body")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &ctrl_header_data(CTRL_ID_HEADER)));
+        stream.extend(make_record(TagId::ListHeader, 2, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 3, &para_text_data("H")));
+        one_cell_table_at(&mut stream, 3, "inner");
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_data("after")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(result.paragraphs.len(), 2);
+        let [Hwp5Control::Header(header)] = &result.paragraphs[0].controls[..] else {
+            panic!("{:?}", result.paragraphs[0].controls);
+        };
+        assert_eq!(header.paragraphs.len(), 1, "inner cell text leaked into the header");
+        let [Hwp5Control::Table(inner)] = &header.paragraphs[0].controls[..] else {
+            panic!("{:?}", header.paragraphs[0].controls);
+        };
+        assert_eq!(inner.cells[0].paragraphs[0].text, "inner");
     }
 
     /// A `ShapeComponent` payload with the rendering block: `repeated` writes
