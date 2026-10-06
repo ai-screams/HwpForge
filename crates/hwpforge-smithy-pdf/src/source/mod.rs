@@ -313,6 +313,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
         let first_page = pages.len();
         let mut events: Vec<PageNumberEvent> = Vec::new();
         let mut hides: Vec<PageHideEvent> = Vec::new();
+        let mut para_pages: Vec<Option<usize>> = vec![None; section.paragraphs.len()];
         replay_section(
             input,
             options,
@@ -321,6 +322,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut pages,
             &mut events,
             &mut hides,
+            &mut para_pages,
             &mut warnings,
         )?;
         overlay_headers_footers(
@@ -330,6 +332,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             section_idx,
             first_page,
             &hides,
+            &para_pages,
             &mut pages,
             &mut warnings,
         )?;
@@ -836,12 +839,30 @@ fn overlay_headers_footers(
     section_idx: usize,
     first_page: usize,
     hides: &[PageHideEvent],
+    para_pages: &[Option<usize>],
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     if section.headers.is_empty() && section.footers.is_empty() {
         return Ok(());
     }
+    // §19.17 F2 (X4): 머리말/꼬리말은 앵커 문단이 놓인 쪽부터 적용된다 —
+    // 앞 쪽에는 없다(x4b). 앵커 문단의 쪽을 재생이 정하지 못했으면(캐시 없는
+    // 문단) 근사하지 않고 거부한다.
+    let start_page = |kind: &'static str,
+                      i: usize,
+                      hf: &hwpforge_core::section::HeaderFooter|
+     -> PdfResult<usize> {
+        match hf.anchor_paragraph.unwrap_or(0) {
+            0 => Ok(first_page),
+            anchor => para_pages.get(anchor).copied().flatten().ok_or_else(|| {
+                PdfError::UnsupportedContent {
+                    kind: "header/footer anchored to a paragraph with no replayed page",
+                    location: format!("s{section_idx}/{kind}{i} -> p{anchor}"),
+                }
+            }),
+        }
+    };
     let ps = &section.page_settings;
     let page_height = ps.height.as_i32();
     let body_left = ps.margin_left.as_i32();
@@ -884,12 +905,20 @@ fn overlay_headers_footers(
         // 같은 항목이 매 쪽 반복되므로 초과/정렬 경고는 항목당 1회.
         let mut warned_overflow = vec![false; list.len()];
         let mut warned_valign = vec![false; list.len()];
+        let starts: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .map(|(i, hf)| start_page(kind, i, hf))
+            .collect::<PdfResult<_>>()?;
         for (offset, page) in pages[first_page..].iter_mut().enumerate() {
-            let physical = first_page + offset + 1;
+            let page_idx = first_page + offset;
+            let physical = page_idx + 1;
             let odd = physical % 2 == 1;
-            let matched: Vec<usize> = list
+            // 이것을 실패시키는 것: 시작 쪽 조건 삭제(x4b 1쪽에 머리말).
+            let started: Vec<usize> = list
                 .iter()
                 .enumerate()
+                .filter(|&(i, _)| starts[i] <= page_idx)
                 .filter(|(_, h)| match h.apply_page_type {
                     ApplyPageType::Both => true,
                     ApplyPageType::Odd => odd,
@@ -899,6 +928,19 @@ fn overlay_headers_footers(
                     _ => false,
                 })
                 .map(|(i, _)| i)
+                .collect();
+            // 같은 종류(apply_page_type)는 더 뒤 쪽에서 시작한 것이 이긴다
+            // (x4a: 3쪽부터 B). 시작 쪽이 같으면 우선순위 미실측 — 둘 다 남겨
+            // 아래에서 모호성으로 거부한다.
+            // 이것을 실패시키는 것: 이 대체를 지우기(x4a 3쪽 = 모호성 거부).
+            let matched: Vec<usize> = started
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    !started.iter().any(|&j| {
+                        list[j].apply_page_type == list[i].apply_page_type && starts[j] > starts[i]
+                    })
+                })
                 .collect();
             if matched.len() > 1 {
                 let kinds: Vec<ApplyPageType> =
@@ -1029,6 +1071,7 @@ fn replay_section(
     pages: &mut Vec<PageLayout>,
     events: &mut Vec<PageNumberEvent>,
     hides: &mut Vec<PageHideEvent>,
+    para_pages: &mut [Option<usize>],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     let ps = &section.page_settings;
@@ -1133,6 +1176,7 @@ fn replay_section(
             // 독립 리뷰 High #4: `[marker, Table]` host 문단의 재시작/감춤은
             // host lineseg 가 귀속된 쪽(표 재생 전 현재 쪽)에 앵커한다.
             let host_page = pages.len() - 1;
+            para_pages[para_idx] = Some(host_page);
             for &(_, number) in &restarts {
                 events.push(PageNumberEvent { page: host_page, number });
             }
@@ -1341,6 +1385,9 @@ fn replay_section(
                 }
             }
             prev_v = Some(v);
+            if line_idx == 0 {
+                para_pages[para_idx] = Some(pages.len() - 1);
+            }
 
             // W5 w1b + §10i: 앵커 이미지는 **마커 소속 줄**이 안착한 쪽에
             // 배경으로 붙인다 (y 는 collect_anchored_images 가 그 줄의
@@ -3409,6 +3456,78 @@ mod tests {
         );
         let err = replay(&doc, &PdfOptions::default()).unwrap_err();
         assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
+    }
+
+    fn header_texts_per_page(layout: &ReplayLayout) -> Vec<Vec<String>> {
+        layout
+            .pages
+            .iter()
+            .map(|p| {
+                p.lines
+                    .iter()
+                    .filter(|l| l.location.contains("/h"))
+                    .map(|l| l.text_runs().next().unwrap().text.clone())
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// X4 x4b: a header anchored to a later paragraph starts on that
+    /// paragraph's page. 이것을 실패시키는 것: 시작 쪽 조건 삭제(1쪽에도 머리말).
+    #[test]
+    fn anchored_header_starts_on_its_paragraph_page() {
+        let doc = doc_with_bands(
+            body_pages(3),
+            vec![hf_item(ApplyPageType::Both, &["C"]).with_anchor_paragraph(1)],
+            vec![],
+        );
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(header_texts_per_page(&layout), [vec![], vec!["C"], vec!["C"]]);
+    }
+
+    /// X4 x4a: a later header of the same page type replaces the earlier
+    /// one from its page on. 이것을 실패시키는 것: 대체 규칙 삭제(3쪽 모호성
+    /// 거부) / 시작 쪽 비교를 `>=` 로(같은 쪽 시작도 대체).
+    #[test]
+    fn later_anchored_header_replaces_the_earlier_one() {
+        let doc = doc_with_bands(
+            body_pages(3),
+            vec![
+                hf_item(ApplyPageType::Both, &["A"]),
+                hf_item(ApplyPageType::Both, &["B"]).with_anchor_paragraph(2),
+            ],
+            vec![],
+        );
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(header_texts_per_page(&layout), [vec!["A"], vec!["A"], vec!["B"]]);
+
+        // 시작 쪽이 같으면 우선순위 미실측 — 지금처럼 거부.
+        let same = doc_with_bands(
+            body_pages(1),
+            vec![hf_item(ApplyPageType::Both, &["A"]), hf_item(ApplyPageType::Both, &["B"])],
+            vec![],
+        );
+        let err = replay(&same, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
+    }
+
+    /// An anchor whose paragraph got no page (no layout cache) is refused,
+    /// not placed on a guessed page. 이것을 실패시키는 것: 쪽이 없는 앵커를
+    /// 구역 첫 쪽으로 대체하기.
+    #[test]
+    fn header_anchored_to_an_unplaced_paragraph_is_refused() {
+        let mut body = body_pages(2);
+        body.push(Paragraph::with_runs(
+            vec![Run::text("무캐시", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ));
+        let doc = doc_with_bands(
+            body,
+            vec![hf_item(ApplyPageType::Both, &["H"]).with_anchor_paragraph(2)],
+            vec![],
+        );
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{err:?}");
     }
 
     #[test]
