@@ -1911,6 +1911,19 @@ fn build_line_text_box(
     // 확장 시 interior == extent 라 vertAlign 시프트는 단일 공식에서 0 이
     // 자동으로 나온다 (§11b F1 — CENTER/BOTTOM 별도 분기 불요).
     let extent = textbox_content_extent(&inner_lines, location)?;
+    // §19.21 H2: 무늬·그러데이션·그림 채우기는 증류가 버린다(원색만 그림) —
+    // 단색으로 그리면 가짜 지원이므로 거부한다(렌더는 후속).
+    // 이것을 실패시키는 것: 이 거부를 지우기(무늬 상자가 단색으로 그려짐,
+    // `text_box_with_a_fill_paint_cannot_draw_is_refused`).
+    if let Some(fill) = style.as_ref().and_then(|s| s.fill.as_ref()) {
+        use hwpforge_core::control::Fill;
+        if matches!(fill, Fill::Pattern { .. } | Fill::Gradient { .. } | Fill::Image { .. }) {
+            return Err(PdfError::UnsupportedContent {
+                kind: "text box with a pattern, gradient or picture fill",
+                location: location.to_string(),
+            });
+        }
+    }
     Ok(LineTextBox {
         width: width.as_i32(),
         height: textbox_expected_host_height(height.as_i32(), extent)?,
@@ -1929,8 +1942,12 @@ fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxS
     // 이것을 실패시키는 것: 이 판정을 지우고 `fill_color` 를 그대로 쓰기
     // (`distill_drops_fill_color_when_fill_is_none`).
     let no_fill = matches!(style.fill, Some(hwpforge_core::control::Fill::None));
+    // 선 종류 "없음"은 테두리가 없다(색·굵기가 있어도 — HWP5 r6 안쪽 상자).
+    // 이것을 실패시키는 것: 이 판정을 지우기(없는 테두리를 그림,
+    // `distill_drops_the_border_when_the_line_is_none`).
+    let no_line = matches!(style.line_style, Some(hwpforge_core::control::LineStyle::None));
     TextBoxStyle {
-        line_color: style.line_color,
+        line_color: if no_line { None } else { style.line_color },
         fill_color: if no_fill { None } else { style.fill_color },
         line_width: style.line_width.map_or(0, |w| w.min(i32::MAX as u32) as i32),
     }
@@ -2033,6 +2050,21 @@ mod tests {
         let plain =
             ShapeStyle { fill_color: Some(Color::from_rgb(255, 0, 0)), ..Default::default() };
         assert_eq!(distill_textbox_style(&plain).fill_color, Some(Color::from_rgb(255, 0, 0)));
+    }
+
+    // 이것을 실패시키는 것: `no_line` 판정을 지우기.
+    #[test]
+    fn distill_drops_the_border_when_the_line_is_none() {
+        use hwpforge_core::control::{LineStyle, ShapeStyle};
+        let none = ShapeStyle {
+            line_color: Some(Color::from_rgb(222, 158, 23)),
+            line_width: Some(283),
+            line_style: Some(LineStyle::None),
+            ..Default::default()
+        };
+        assert_eq!(distill_textbox_style(&none).line_color, None);
+        let solid = ShapeStyle { line_style: Some(LineStyle::Solid), ..none };
+        assert_eq!(distill_textbox_style(&solid).line_color, Some(Color::from_rgb(222, 158, 23)));
     }
 
     #[test]
@@ -2623,6 +2655,48 @@ mod tests {
             })),
             char_shape_id: CharShapeIndex::new(0),
         }
+    }
+
+    /// §19.21 H2 (x6 F1·F3·F5): 무늬·그러데이션·그림 채우기 글상자는 거부,
+    /// 단색(F2)은 그린다. 이것을 실패시키는 것: 거부를 지우기(무늬가 단색으로).
+    #[test]
+    fn text_box_with_a_fill_paint_cannot_draw_is_refused() {
+        use hwpforge_core::control::{Control, Fill, ShapeStyle};
+        use hwpforge_foundation::{GradientType, ImageFillMode, PatternType, VerticalAlign};
+        let red = Color::from_rgb(255, 0, 0);
+        let with_fill = |fill: Option<Fill>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { style, .. } = c.as_mut() {
+                    *style = Some(ShapeStyle { fill_color: Some(red), fill, ..Default::default() });
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default())
+        };
+        for fill in [
+            Fill::Pattern { pattern_type: PatternType::Slash, fg_color: red, bg_color: red },
+            Fill::Gradient {
+                gradient_type: GradientType::Linear,
+                angle: 45,
+                colors: vec![(red, 0), (red, 0)],
+                center_x: None,
+                center_y: None,
+                step: None,
+                step_center: None,
+            },
+            Fill::Image { image_id: "BinData/BIN0001.png".into(), mode: ImageFillMode::Stretch },
+        ] {
+            let err = with_fill(Some(fill.clone())).unwrap_err();
+            assert!(matches!(err, PdfError::UnsupportedContent { .. }), "{fill:?}: {err:?}");
+        }
+        assert!(with_fill(None).is_ok(), "a plain colour fill renders");
     }
 
     /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·
