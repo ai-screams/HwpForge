@@ -2404,56 +2404,11 @@ impl BodyTextParserState {
         if ctx.route_group_record(record, tag, level, warnings) {
             return true;
         }
-
-        match tag {
-            TagId::ShapeComponent => ctx.note_shape_component(&record.data, level),
-            TagId::CtrlData => ctx.note_ctrl_data(&record.data, level),
-            TagId::ShapeComponentRect => ctx.note_shape_rectangle(),
-            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
-                Ok(line) => ctx.note_shape_line(line),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
-                Ok(polygon) => ctx.note_shape_polygon(polygon),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
-                Ok(ellipse) => ctx.note_shape_ellipse(ellipse),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
-                Ok(curve) => ctx.note_shape_curve(curve),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeTextArt => {
-                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
-                    Ok(ta) => ctx.note_shape_text_art(ta),
-                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
-                        tag_id: record.header.tag_id,
-                        offset: 0,
-                    }),
-                }
-            }
-            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
-                Ok(picture) => ctx.note_shape_picture(picture),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
-                Ok(ole) => ctx.note_shape_ole(ole),
-                Err(_) => warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::Unknown(id) => {
-                warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
-            }
-            _ => {}
+        // The shape's text and any shape inside it (§19.5 1a).
+        if ctx.route_text_record(record, tag, level, warnings) {
+            return true;
         }
-
+        ctx.note_shape_record(record, tag, warnings);
         true
     }
 }
@@ -3487,6 +3442,107 @@ mod tests {
                 border_fill_id: Some(1),
             }),
         ));
+    }
+
+    /// `gso` rect with a text list at `level`: component, list header and
+    /// one paragraph per entry of `texts` (an entry of `None` holds an inner
+    /// rect with text "inner" instead), then the rect body record.
+    fn text_rect(stream: &mut Vec<u8>, level: u16, texts: &[Option<&str>]) {
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            level,
+            &gso_ctrl_header_data(0, 0, 9000, 3000),
+        ));
+        stream.extend(make_record(TagId::ShapeComponent, level + 1, b"cer$cer$"));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            level + 2,
+            &[texts.len() as u8, 0, 0, 0, 0, 0],
+        ));
+        for text in texts {
+            stream.extend(make_record(TagId::ParaHeader, level + 2, &para_header_data(0, 0)));
+            match text {
+                Some(t) => {
+                    stream.extend(make_record(TagId::ParaText, level + 3, &para_text_data(t)));
+                }
+                None => {
+                    stream.extend(make_record(
+                        TagId::ParaText,
+                        level + 3,
+                        &para_text_with_control_ref("", ""),
+                    ));
+                    text_rect(stream, level + 3, &[Some("inner")]);
+                }
+            }
+        }
+        stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &[0u8; 9]));
+    }
+
+    fn text_box_texts(control: &Hwp5Control) -> Vec<String> {
+        let Hwp5Control::TextBox(tb) = control else { panic!("text box expected: {control:?}") };
+        tb.paragraphs.iter().map(|p| p.text.clone()).collect()
+    }
+
+    /// 1a-T1/T2: a text box in a table cell keeps its paragraphs, and a text
+    /// box inside it (in the cell and in a body text box) keeps its own — the
+    /// body path's collection one level down. Before, both were plain rects
+    /// without text.
+    ///
+    /// 이것을 실패시키는 것: 칸 gso 의 글 수집 삭제(글 없는 사각형) / 안쪽 개체로
+    /// 보내지 않기(안쪽 글이 바깥 문단으로 섞이거나 사라짐) / 사각형+글 목록을
+    /// 글상자로 만들지 않기.
+    #[test]
+    fn shape_text_in_a_cell_and_in_a_text_box() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        text_rect(&mut stream, 2, &[None, Some("first"), Some("second")]);
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        text_rect(&mut stream, 0, &[None]);
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else { panic!() };
+        let cell = &table.cells[0].paragraphs[0].controls;
+        assert_eq!(cell.len(), 1, "{cell:?}");
+        let Hwp5Control::TextBox(outer) = &cell[0] else { panic!("{cell:?}") };
+        assert_eq!(text_box_texts(&cell[0]).len(), 3);
+        assert_eq!(&text_box_texts(&cell[0])[1..], ["first", "second"]);
+        assert_eq!(text_box_texts(&outer.paragraphs[0].controls[0]), ["inner"]);
+
+        let body = &result.paragraphs[1].controls;
+        let Hwp5Control::TextBox(body_box) = &body[0] else { panic!("{body:?}") };
+        assert_eq!(text_box_texts(&body_box.paragraphs[0].controls[0]), ["inner"]);
+    }
+
+    /// A record deeper than a shape's text (a table inside its text) is not
+    /// the shape's own: a rectangle record under that table does not turn
+    /// the ellipse holding it into a text box.
+    ///
+    /// 이것을 실패시키는 것: 글 수준보다 깊은 기록을 자기 기록으로 받기
+    /// (`_ => false`) — 타원이 글상자로 분류된다.
+    #[test]
+    fn records_under_an_object_in_shape_text_are_not_the_shape_s_own() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &gso_ctrl_header_data(0, 0, 9000, 3000)));
+        stream.extend(make_record(TagId::ShapeComponent, 3, b"lle$lle$"));
+        stream.extend(make_record(TagId::ListHeader, 4, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 5, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::ShapeComponentRect, 7, &[0u8; 9]));
+        stream.extend(make_record(TagId::ShapeComponentEllipse, 4, &[0u8; 60]));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else { panic!() };
+        let cell = &table.cells[0].paragraphs[0].controls;
+        assert!(matches!(cell[..], [Hwp5Control::Ellipse(_)]), "{cell:?}");
     }
 
     /// A footer in a cell paragraph: its paragraph becomes the footer's, not

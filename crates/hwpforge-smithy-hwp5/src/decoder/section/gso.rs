@@ -50,6 +50,17 @@ pub(super) struct InlineGsoContext {
     /// Set when the scope's first `ShapeComponent` is a group (`$con`):
     /// every deeper record then belongs to the group, as in body paragraphs.
     group: Option<Box<GsoGroupBuilder>>,
+    /// The shape has a text list (`LIST_HEADER` one level below its
+    /// component) — with a rectangle it is a text box, as in the body.
+    saw_list_header: bool,
+    /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
+    list_header_properties: Option<u32>,
+    /// The shape's text paragraphs (§19.5 1a — before, a shape in a table
+    /// cell or in a text box lost its text).
+    paragraphs: Vec<Hwp5Paragraph>,
+    current_para: Option<super::ParaBuf>,
+    /// A shape inside this shape's text, collected the same way.
+    inner: Option<Box<InlineGsoContext>>,
 }
 
 pub(super) struct GsoClassificationInput {
@@ -537,6 +548,189 @@ impl InlineGsoContext {
             comp_level: None,
             link: None,
             group: None,
+            saw_list_header: false,
+            list_header_properties: None,
+            paragraphs: Vec::new(),
+            current_para: None,
+            inner: None,
+        }
+    }
+
+    /// Routes a record that belongs to this shape's text: its `LIST_HEADER`
+    /// and paragraphs (one level below the component, their records two
+    /// below), and a shape inside a paragraph, which opens an inner context
+    /// that takes every record deeper than its control header — the body
+    /// path's collection, one level down (§19.5 1a). Returns `true` when the
+    /// record was taken. A record deeper than the text level that no inner
+    /// shape takes (a table in the text) is taken and ignored, so it cannot
+    /// be read as this shape's own.
+    pub(super) fn route_text_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+        warnings: &mut Vec<Hwp5Warning>,
+    ) -> bool {
+        if self.inner.as_ref().is_some_and(|inner| level <= inner.ctrl_depth) {
+            self.close_inner(warnings);
+        }
+        if let Some(inner) = self.inner.as_mut() {
+            // 이것을 실패시키는 것: 안쪽 개체로 보내지 않기(안쪽 글상자 글이
+            // 바깥 글상자 문단으로 섞임, `shape_text_in_a_cell_and_in_a_text_box`).
+            if !inner.route_group_record(record, tag, level, warnings)
+                && !inner.route_text_record(record, tag, level, warnings)
+            {
+                inner.note_shape_record(record, tag, warnings);
+            }
+            return true;
+        }
+        let Some(comp) = self.comp_level else {
+            return false;
+        };
+        let own = level == comp.saturating_add(1);
+        let in_paragraph = level == comp.saturating_add(2);
+        match tag {
+            TagId::ListHeader if own => {
+                self.saw_list_header = true;
+                if let Some(bytes) = record.data.get(2..6) {
+                    if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
+                        self.list_header_properties = Some(u32::from_le_bytes(arr));
+                    }
+                }
+                true
+            }
+            TagId::ParaHeader if own && self.saw_list_header => {
+                if let Some(buf) = self.current_para.take() {
+                    self.paragraphs.push(buf.finish(warnings));
+                }
+                self.current_para = BodyTextParserState::parse_para_header_buf(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                );
+                true
+            }
+            TagId::ParaText if in_paragraph => {
+                if let (Some(buf), Some(text)) = (
+                    self.current_para.as_mut(),
+                    BodyTextParserState::parse_para_text_value(
+                        record.header.tag_id,
+                        &record.data,
+                        warnings,
+                    ),
+                ) {
+                    buf.text = Some(text);
+                }
+                true
+            }
+            TagId::ParaCharShape if in_paragraph => {
+                if let (Some(buf), Some(runs)) = (
+                    self.current_para.as_mut(),
+                    BodyTextParserState::parse_para_char_shape_runs(
+                        record.header.tag_id,
+                        &record.data,
+                        warnings,
+                    ),
+                ) {
+                    buf.char_shape_runs = runs;
+                }
+                true
+            }
+            TagId::ParaLineSeg if in_paragraph => {
+                if let (Some(buf), Some(segments)) = (
+                    self.current_para.as_mut(),
+                    BodyTextParserState::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        warnings,
+                    ),
+                ) {
+                    buf.line_segments = segments;
+                }
+                true
+            }
+            TagId::CtrlHeader if in_paragraph => {
+                let ctrl_id = super::parse_ctrl_id(&record.data);
+                if ctrl_id == CTRL_ID_GSO {
+                    self.inner = Some(Box::new(InlineGsoContext::new(
+                        level,
+                        ctrl_id,
+                        super::extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                        super::ctrl_header_properties_raw(&record.data),
+                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
+                    )));
+                } else if let Some(buf) = self.current_para.as_mut() {
+                    buf.controls.push(
+                        BodyTextParserState::typed_inline_family_control(ctrl_id, &record.data)
+                            .unwrap_or_else(|| Hwp5Control::Unknown {
+                                ctrl_id,
+                                header_data: record.data.clone(),
+                            }),
+                    );
+                }
+                true
+            }
+            _ => level > comp.saturating_add(1),
+        }
+    }
+
+    /// Finishes the inner shape and attaches it to the current paragraph.
+    fn close_inner(&mut self, warnings: &mut Vec<Hwp5Warning>) {
+        if let Some(inner) = self.inner.take() {
+            let control = inner.into_control(warnings);
+            if let Some(buf) = self.current_para.as_mut() {
+                buf.controls.push(control);
+            }
+        }
+    }
+
+    /// The shape's own records (component, shape bodies, link).
+    pub(super) fn note_shape_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        warnings: &mut Vec<Hwp5Warning>,
+    ) {
+        let level = record.header.level;
+        let unsupported = |warnings: &mut Vec<Hwp5Warning>| {
+            warnings.push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 })
+        };
+        match tag {
+            TagId::ShapeComponent => self.note_shape_component(&record.data, level),
+            TagId::CtrlData => self.note_ctrl_data(&record.data, level),
+            TagId::ShapeComponentRect => self.note_shape_rectangle(),
+            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
+                Ok(line) => self.note_shape_line(line),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
+                Ok(polygon) => self.note_shape_polygon(polygon),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => self.note_shape_ellipse(ellipse),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => self.note_shape_curve(curve),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapeTextArt => match Hwp5ShapeTextArt::parse(&record.data) {
+                Ok(ta) => self.note_shape_text_art(ta),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
+                Ok(picture) => self.note_shape_picture(picture),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
+                Ok(ole) => self.note_shape_ole(ole),
+                Err(_) => unsupported(warnings),
+            },
+            TagId::Unknown(id) => {
+                warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
+            }
+            _ => {}
         }
     }
 
@@ -628,9 +822,28 @@ impl InlineGsoContext {
         self.text_art = Some(ta);
     }
 
-    pub(super) fn into_control(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+    pub(super) fn into_control(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
         if let Some(group) = self.group {
             return group.into_control(warnings);
+        }
+        self.close_inner(warnings);
+        if let Some(buf) = self.current_para.take() {
+            self.paragraphs.push(buf.finish(warnings));
+        }
+        // A rectangle with a text list is a text box, as in the body
+        // (`NestedSubtreeContext::kind`). Other shapes' text is not carried
+        // there either.
+        // 이것을 실패시키는 것: 이 갈래를 지우기(칸 안 글상자가 글 없는 사각형으로).
+        if self.saw_list_header && self.saw_shape_rectangle {
+            if let Some(geometry) = self.geometry {
+                return Hwp5Control::TextBox(super::Hwp5TextBoxControl {
+                    ctrl_id: self.ctrl_id,
+                    geometry,
+                    paragraphs: self.paragraphs,
+                    list_header_properties: self.list_header_properties,
+                    ctrl_properties: self.ctrl_properties,
+                });
+            }
         }
         classify_gso_control(GsoClassificationInput {
             ctrl_id: self.ctrl_id,
