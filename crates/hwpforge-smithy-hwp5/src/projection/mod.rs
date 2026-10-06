@@ -774,14 +774,16 @@ impl<'a> ProjectionImageState<'a> {
                     );
                     return style;
                 }
+                // 1 LINEAR·3 CONICAL (x6), 2 RADIAL (Hancom twins, 4 shapes);
+                // 4 is read in the border-fill table's order but unconfirmed.
+                // 이것을 실패시키는 것: 형 표 한 줄 교체(x6 F3·F4).
                 let gradient_type = match g.gradation_type {
                     Hwp5GradationType::Linear => GradientType::Linear,
+                    Hwp5GradationType::Circular => GradientType::Radial,
                     Hwp5GradationType::Conical => GradientType::Conical,
                     other => {
-                        // 2·4 는 테두리 채우기 표와 같은 순서로 읽되 확인 전(§19.18).
                         lost(&mut self.warnings, format!("gradient type {other:?} is unverified"));
                         match other {
-                            Hwp5GradationType::Circular => GradientType::Radial,
                             Hwp5GradationType::Rectangular => GradientType::Square,
                             _ => GradientType::Linear,
                         }

@@ -874,8 +874,31 @@ impl Hwp5ShapeRender {
         let properties = cur.read_u32::<LittleEndian>().ok()?;
         let _outline = cur.read_u8().ok()?;
         let fill_kind = cur.read_u32::<LittleEndian>().ok()?;
-        let fill =
-            super::border_fill::parse_fill_payload(fill_kind, &mut cur).map_err(|e| e.to_string());
+        let block_start = cur.position() as usize;
+        let fill = super::border_fill::parse_fill_payload(fill_kind, &mut cur)
+            .map_err(|e| e.to_string())
+            .or_else(|e| {
+                // Some writers end a shape's colour fill right after the
+                // hatch kind (four zero bytes, no alpha byte): the colours
+                // and hatch are all there, so read them rather than drop
+                // the fill (corpus: 12 shapes in 3 documents).
+                // 이것을 실패시키는 것: 이 대체 읽기를 지우기
+                // (`shape_look_reads_a_colour_fill_without_its_alpha_byte`).
+                let block = tail.get(block_start..block_start + 12).filter(|_| fill_kind == 1);
+                block
+                    .map(|b| {
+                        let word =
+                            |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+                        super::border_fill::Hwp5RawBorderFillFill::Color(
+                            super::border_fill::Hwp5RawColorFill::from_short_block(
+                                word(0),
+                                word(4),
+                                word(8) as i32,
+                            ),
+                        )
+                    })
+                    .ok_or(e)
+            });
         Some(Hwp5ShapeLook {
             line: Hwp5ShapeLine { color, thickness, properties },
             fill_kind,
@@ -3994,6 +4017,24 @@ mod tests {
             t.push(0);
         }
         t
+    }
+
+    /// A shape colour fill that ends right after its hatch kind still gives
+    /// its colours. 이것을 실패시키는 것: 짧은 블록 대체 읽기를 지우기.
+    #[test]
+    fn shape_look_reads_a_colour_fill_without_its_alpha_byte() {
+        let mut tail = vec![0u8; 13];
+        tail.extend_from_slice(&1u32.to_le_bytes());
+        tail.extend_from_slice(&0x00F1_F1F1u32.to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        tail.extend_from_slice(&(-1i32).to_le_bytes());
+        tail.extend_from_slice(&0u32.to_le_bytes());
+        let data = render_record(true, 0, (700, 300), 1, &[m(1.0), m(1.0), m(1.0)], &tail);
+        let look = Hwp5ShapeRender::parse_look(&data, true).expect("look");
+        let Ok(super::super::border_fill::Hwp5RawBorderFillFill::Color(c)) = &look.fill else {
+            panic!("{:?}", look.fill)
+        };
+        assert_eq!(c.background_color, 0x00F1_F1F1);
     }
 
     /// A level-1 child: `trans`, then two pairs in stored order, each `sca`

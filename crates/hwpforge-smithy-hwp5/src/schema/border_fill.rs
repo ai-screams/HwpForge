@@ -147,6 +147,24 @@ pub struct Hwp5RawColorFill {
     pub extra_data: Vec<u8>,
 }
 
+impl Hwp5RawColorFill {
+    /// A colour fill read from a block that stops after the hatch kind (no
+    /// alpha byte, no extra data) — as some shape components write it.
+    pub(crate) fn from_short_block(
+        background_color: u32,
+        pattern_color: u32,
+        pattern: i32,
+    ) -> Self {
+        Self {
+            background_color,
+            pattern_color,
+            pattern_kind: Hwp5FillPatternKind::from_raw(pattern),
+            alpha: 0,
+            extra_data: Vec::new(),
+        }
+    }
+}
+
 /// Parsed image fill payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5RawImageFill {
