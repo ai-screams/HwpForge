@@ -717,7 +717,10 @@ fn collect_anchored_images(
             y,
             width: img.width.as_i32(),
             height: img.height.as_i32(),
-            crop: picture_crop(img, location)?,
+            crop: {
+                refuse_caption_number(img.caption.as_ref(), location)?;
+                picture_crop(img, location)?
+            },
         }],
         marker_idx,
     ))
@@ -1721,12 +1724,40 @@ pub(crate) fn build_inline_object_line_atoms(
 
 /// 그림 원자 — 자르기를 비율로 싣는다 ([`picture_crop`]).
 fn line_image(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<LineImage> {
+    refuse_caption_number(img.caption.as_ref(), location)?;
     Ok(LineImage {
         canonical_key: img.path.clone(),
         width: img.width.as_i32(),
         height: img.height.as_i32(),
         crop: picture_crop(img, location)?,
     })
+}
+
+/// A caption that holds a caption number (`Control::AutoNumber`) is
+/// refused (§19.16 J, review r1): captions of pictures and text boxes are
+/// not drawn, so the number would vanish from a successful render.
+/// 이것을 실패시키는 것: 이 거부를 지우기(`caption_number_in_a_caption_is_refused`).
+fn refuse_caption_number(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    location: &str,
+) -> PdfResult<()> {
+    let Some(caption) = caption else { return Ok(()) };
+    let mut found = false;
+    for p in &caption.paragraphs {
+        p.for_each_paragraph(|q| {
+            found |= q.runs.iter().any(|r| {
+                matches!(&r.content, RunContent::Control(c)
+                    if matches!(**c, hwpforge_core::control::Control::AutoNumber { .. }))
+            });
+        });
+    }
+    if found {
+        return Err(PdfError::UnsupportedContent {
+            kind: "caption number",
+            location: location.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// 그림의 자르기를 그림 전체에 대한 비율 `[왼, 위, 오른, 아래]` 로 (§19.20
@@ -1885,6 +1916,7 @@ fn build_line_text_box(
         height,
         style,
         text_vertical_align,
+        caption,
         ..
     } = ctrl
     else {
@@ -1892,6 +1924,7 @@ fn build_line_text_box(
             detail: format!("{location}: build_line_text_box called on non-TextBox control"),
         });
     };
+    refuse_caption_number(caption.as_ref(), location)?;
     let mut inner_lines = Vec::new();
     for (pi, para) in paragraphs.iter().enumerate() {
         let inner_loc = format!("{location}/tb/p{pi}");
@@ -2906,6 +2939,93 @@ mod tests {
     }
 
     /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    /// P19 (review r1): a caption number in a picture's or a text box's
+    /// caption — captions are not drawn — is refused on the inline, the
+    /// anchored and the text-box paths; the same caption without the
+    /// number is not refused for it.
+    ///
+    /// 이것을 실패시키는 것: 세 경로의 `refuse_caption_number` 호출을 각각 지우기.
+    #[test]
+    fn caption_number_in_a_caption_is_refused() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind, Control};
+        use hwpforge_foundation::VerticalAlign;
+        let caption = |numbered: bool| {
+            let mut runs = vec![Run::text("그림 ", CharShapeIndex::new(0))];
+            if numbered {
+                runs.push(Run::control(
+                    Control::AutoNumber {
+                        kind: AutoNumberKind::Picture,
+                        num: 3,
+                        format: AutoNumberFormat::default(),
+                    },
+                    CharShapeIndex::new(0),
+                ));
+            }
+            Caption::new(
+                vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+                CaptionSide::Bottom,
+            )
+        };
+        let refused = |r: &PdfResult<()>| {
+            matches!(r, Err(PdfError::UnsupportedContent { kind: "caption number", .. }))
+        };
+        // Inline picture.
+        for numbered in [true, false] {
+            let mut run = inline_img("BinData/a.png");
+            if let RunContent::Image(img) = &mut run.content {
+                img.caption = Some(caption(numbered));
+            }
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = build_inline_image_line_atoms(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+                .map(|_| ());
+            assert_eq!(refused(&r), numbered, "inline {numbered}: {r:?}");
+        }
+        // Anchored picture.
+        for numbered in [true, false] {
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                img.caption = Some(caption(numbered));
+            }
+            let mut p = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = replay(&doc_of(vec![p]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), numbered, "anchored {numbered}: {r:?}");
+        }
+        // Text box.
+        for numbered in [true, false] {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::TextBox { caption: slot, .. } = c.as_mut() {
+                    *slot = Some(caption(numbered));
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            let r = replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), numbered, "text box {numbered}: {r:?}");
+        }
+    }
+
     #[test]
     fn text_box_with_round_corners_is_refused() {
         use hwpforge_core::control::{Control, ShapeStyle};
