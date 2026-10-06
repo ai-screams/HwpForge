@@ -34,6 +34,7 @@ struct RunValidationContext {
 /// 8. Footnote controls have at least 1 paragraph
 /// 9. A master page with a special scope applies to both page types
 /// 10. A header/footer anchor points at an existing body paragraph
+/// 11. A rectangle's or text box's corner ratio is at most 50
 ///
 /// Errors carry precise location context.
 pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationError> {
@@ -221,6 +222,20 @@ fn validate_control_run(
     control: &Control,
     ctx: RunValidationContext,
 ) -> Result<(), ValidationError> {
+    // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `> 50` 을 `>= 50` 으로
+    // (`corner_ratio_above_50_rejected`·`corner_ratio_50_accepted`).
+    if let Control::Rect { style: Some(style), .. } | Control::TextBox { style: Some(style), .. } =
+        control
+    {
+        if let Some(ratio) = style.corner_ratio.filter(|&r| r > 50) {
+            return Err(ValidationError::InvalidCornerRatio {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+                ratio,
+            });
+        }
+    }
     match control {
         Control::TextBox { paragraphs, .. } => validate_control_paragraphs(
             paragraphs.is_empty(),
@@ -607,6 +622,46 @@ mod tests {
     #[test]
     fn header_footer_anchor_on_last_paragraph_accepted() {
         assert_eq!(validate_sections(&[section_with_anchored_footer(3, 2)]), Ok(()));
+    }
+
+    // === Rule 11: corner ratio ≤ 50 ===
+
+    fn section_with_rect_ratio(ratio: u8) -> Section {
+        let mut rect =
+            Control::rect(HwpUnit::new(1000).unwrap(), HwpUnit::new(1000).unwrap()).unwrap();
+        if let Control::Rect { style, .. } = &mut rect {
+            *style = Some(crate::control::ShapeStyle {
+                corner_ratio: Some(ratio),
+                ..Default::default()
+            });
+        }
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(rect, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        )
+    }
+
+    #[test]
+    fn corner_ratio_above_50_rejected() {
+        let err = validate_sections(&[section_with_rect_ratio(51)]).unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::InvalidCornerRatio {
+                section_index: 0,
+                paragraph_index: 0,
+                run_index: 0,
+                ratio: 51
+            }
+        );
+        assert_eq!(err.code() as u32, 2023);
+    }
+
+    #[test]
+    fn corner_ratio_50_accepted() {
+        assert_eq!(validate_sections(&[section_with_rect_ratio(50)]), Ok(()));
     }
 
     // === Rule 1: At least 1 section ===

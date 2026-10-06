@@ -252,6 +252,15 @@ pub struct ShapeStyle {
     /// Controls whether the shape participates in a drop-cap layout.
     #[serde(default)]
     pub drop_cap_style: DropCapStyle,
+    /// Corner rounding of a rectangle or text box, in percent of the shorter
+    /// side (HWPX `<hp:rect ratio>`, HWP5 rectangle record byte 0): 0 =
+    /// square corners, 50 = semicircular ends. Only meaningful for
+    /// `Control::Rect` and `Control::TextBox`. `None` = 0.
+    /// [`Document::validate`](crate::Document::validate) rejects a value
+    /// above 50.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 50))]
+    pub corner_ratio: Option<u8>,
 }
 
 #[cfg(test)]

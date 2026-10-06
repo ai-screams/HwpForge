@@ -318,6 +318,20 @@ pub enum ValidationError {
         master_page_index: usize,
     },
 
+    /// A rectangle or text box has a corner ratio above 50
+    /// ([`ShapeStyle::corner_ratio`](crate::control::ShapeStyle::corner_ratio)).
+    #[error("Corner ratio {ratio} above 50 (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidCornerRatio {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+        /// The ratio given.
+        ratio: u8,
+    },
+
     /// A header or footer is anchored to a paragraph the section does not
     /// have ([`HeaderFooter::anchor_paragraph`](crate::section::HeaderFooter::anchor_paragraph)
     /// is past the last body paragraph).
@@ -398,6 +412,8 @@ pub enum CoreErrorCode {
     InvalidMasterPageScope = 2021,
     /// A header or footer is anchored past the section's last paragraph.
     HeaderFooterAnchorOutOfRange = 2022,
+    /// A rectangle or text box corner ratio above 50.
+    InvalidCornerRatio = 2023,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -432,6 +448,7 @@ impl ValidationError {
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::InvalidMasterPageScope { .. } => CoreErrorCode::InvalidMasterPageScope,
+            Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidCornerRatio,
             Self::HeaderFooterAnchorOutOfRange { .. } => {
                 CoreErrorCode::HeaderFooterAnchorOutOfRange
             }

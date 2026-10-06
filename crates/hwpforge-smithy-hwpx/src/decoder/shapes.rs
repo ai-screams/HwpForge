@@ -623,6 +623,7 @@ pub(crate) fn decode_shape_style_full(
         tail_arrow,
         fill,
         drop_cap_style: drop_cap,
+        corner_ratio: None,
     })
 }
 

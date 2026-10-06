@@ -2912,6 +2912,16 @@
           "description": "Drop cap style for the shape (HWPX `dropcapstyle` attribute).\nControls whether the shape participates in a drop-cap layout.",
           "$ref": "#/$defs/DropCapStyle",
           "default": "None"
+        },
+        "corner_ratio": {
+          "description": "Corner rounding of a rectangle or text box, in percent of the shorter\nside (HWPX `<hp:rect ratio>`, HWP5 rectangle record byte 0): 0 =\nsquare corners, 50 = semicircular ends. Only meaningful for\n`Control::Rect` and `Control::TextBox`. `None` = 0.\n[`Document::validate`](crate::Document::validate) rejects a value\nabove 50.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 50
         }
       }
     },
