@@ -26,9 +26,9 @@ use crate::color::parse_hex_color_raw;
 use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,
-    HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildKind, HxSection,
-    HxSubList, HxTable, HxTableCell, HxTableRow,
+    legacy_child_order, HxAutoNum, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation,
+    HxFieldBegin, HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildKind,
+    HxSection, HxSubList, HxTable, HxTableCell, HxTableRow,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -936,6 +936,8 @@ fn convert_ctrl_child<'a>(
                     content: RunContent::Control(Box::new(Control::InlinePageNumber { kind })),
                     char_shape_id,
                 });
+            } else if let Some(control) = decode_auto_number(an, ctx) {
+                runs.push(Run { content: RunContent::Control(Box::new(control)), char_shape_id });
             }
         }
         // NewNum (새 번호 지정) — W2: `<hp:newNum num numType/>` →
@@ -1398,6 +1400,78 @@ fn decode_picture_frame(hx: &HxPic, image: &mut Image, ctx: &mut DecodeCtx) {
     }
     image.crop = Some(ImageCrop { left, top, right, bottom });
     image.image_extent = extent.flatten();
+}
+
+/// A caption number (`<hp:autoNum numType="PICTURE|TABLE|EQUATION">`) →
+/// [`Control::AutoNumber`] (§19.16 J, S12). A format Core cannot hold — an
+/// unknown `type`, a character attribute longer than one character, a
+/// `supscript` other than `0`/`1` — and a `numType` nothing reads are
+/// reported lost rather than written as the default. Page numbers are
+/// decoded by the caller; note numbers belong to the note head.
+fn decode_auto_number(an: &HxAutoNum, ctx: &mut DecodeCtx) -> Option<Control> {
+    use hwpforge_core::control::{AutoNumberFormat, AutoNumberKind};
+    let kind = match an.num_type.as_str() {
+        "PICTURE" => AutoNumberKind::Picture,
+        "TABLE" => AutoNumberKind::Table,
+        "EQUATION" => AutoNumberKind::Equation,
+        "FOOTNOTE" | "ENDNOTE" | "PAGE" | "TOTAL_PAGE" => return None,
+        other => {
+            ctx.content_lost("auto_number", format!("autoNum numType {other:?} is not carried"));
+            return None;
+        }
+    };
+    let Some(hx) = an.auto_num_format.as_ref() else {
+        return Some(Control::AutoNumber {
+            kind,
+            num: an.num,
+            format: AutoNumberFormat::default(),
+        });
+    };
+    let mut lost = Vec::new();
+    let number_type = if hx.format_type.is_empty() {
+        Some(hwpforge_foundation::NumberFormatType::Digit)
+    } else {
+        super::header::parse_number_format_opt(&hx.format_type)
+    };
+    if number_type.is_none() {
+        lost.push(format!("type {:?}", hx.format_type));
+    }
+    let mut one_char = |name: &str, value: &str| {
+        let mut chars = value.chars();
+        match (chars.next(), chars.next()) {
+            (first, None) => first,
+            _ => {
+                lost.push(format!("{name} {value:?}"));
+                None
+            }
+        }
+    };
+    let user_char = one_char("userChar", &hx.user_char);
+    let prefix = one_char("prefixChar", &hx.prefix_char);
+    let suffix = one_char("suffixChar", &hx.suffix_char);
+    let superscript = match hx.supscript.as_str() {
+        "" | "0" => false,
+        "1" => true,
+        other => {
+            lost.push(format!("supscript {other:?}"));
+            false
+        }
+    };
+    if !lost.is_empty() {
+        ctx.content_lost(
+            "auto_number_format",
+            format!("autoNum {} format not carried: {}", an.num_type, lost.join(", ")),
+        );
+        return None;
+    }
+    let format = AutoNumberFormat {
+        number_type: number_type.unwrap_or_default(),
+        user_char,
+        prefix,
+        suffix,
+        superscript,
+    };
+    Some(Control::AutoNumber { kind, num: an.num, format })
 }
 
 /// What Hancom appends to the URL in an object's `href` (every picture link

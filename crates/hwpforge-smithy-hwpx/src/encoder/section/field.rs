@@ -456,6 +456,45 @@ pub(super) fn build_autonum_run_xml(
     ))
 }
 
+/// A caption number run: `<hp:autoNum num numType="PICTURE|TABLE|EQUATION">`
+/// with its `<hp:autoNumFormat>` (a `None` character is an empty
+/// attribute, as Hancom writes it). `None` for a kind this writer does not
+/// know — skipped rather than given another kind.
+pub(super) fn build_auto_number_run_xml(
+    char_pr_id_ref: u32,
+    kind: hwpforge_core::control::AutoNumberKind,
+    num: u32,
+    format: &hwpforge_core::control::AutoNumberFormat,
+) -> Option<String> {
+    use hwpforge_core::control::AutoNumberKind;
+    let num_type = match kind {
+        AutoNumberKind::Picture => "PICTURE",
+        AutoNumberKind::Table => "TABLE",
+        AutoNumberKind::Equation => "EQUATION",
+        _ => return None,
+    };
+    let ch = |c: Option<char>| c.map(|c| escape_xml(&c.to_string())).unwrap_or_default();
+    Some(format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:autoNum num="{num}" numType="{nt}">"#,
+            r#"<hp:autoNumFormat type="{ty}" userChar="{user}" prefixChar="{prefix}" suffixChar="{suffix}" supscript="{sup}"/>"#,
+            r#"</hp:autoNum>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        num = num,
+        nt = num_type,
+        ty = crate::encoder::header::number_format_to_hwpx(format.number_type),
+        user = ch(format.user_char),
+        prefix = ch(format.prefix),
+        suffix = ch(format.suffix),
+        sup = u8::from(format.superscript),
+    ))
+}
+
 /// Wave 12m Phase 2 Step 4 boundary: typed [`RefType`] → HWP5 `%xrf`
 /// N1 wire code. Returns the canonical code for known variants and
 /// `Unknown(code)` preserves the original byte.

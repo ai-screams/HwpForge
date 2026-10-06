@@ -366,7 +366,7 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
 }
 
 /// Maps a [`NumberFormatType`] to its HWPX string representation.
-fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
+pub(crate) fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
     match nf {
         NumberFormatType::Digit => "DIGIT",
         NumberFormatType::CircledDigit => "CIRCLED_DIGIT",

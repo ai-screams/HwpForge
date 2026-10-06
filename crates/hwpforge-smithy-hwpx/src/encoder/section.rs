@@ -83,9 +83,10 @@ use super::EncodeOptions;
 use self::chart::{build_embedded_chart_run_xml, encode_chart_switch};
 use self::equation::encode_equation_to_hx;
 use self::field::{
-    build_autonum_run_xml, build_bookmark_span_end_run_xml, build_bookmark_span_start_run_xml,
-    build_crossref_run_xml, build_field_run_xml, build_hyperlink_run_xml,
-    build_path_field_run_xml_raw, build_summary_run_xml_raw, unix_to_ymdhms,
+    build_auto_number_run_xml, build_autonum_run_xml, build_bookmark_span_end_run_xml,
+    build_bookmark_span_start_run_xml, build_crossref_run_xml, build_field_run_xml,
+    build_hyperlink_run_xml, build_path_field_run_xml_raw, build_summary_run_xml_raw,
+    unix_to_ymdhms,
 };
 #[cfg(test)]
 use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string};
@@ -1449,6 +1450,24 @@ fn build_runs(
                         // architect review CRITICAL: TotalPages/Unknown must not
                         // collapse to CurrentPage).
                         let Some(real_xml) = build_autonum_run_xml(char_pr_id_ref, *kind) else {
+                            ledger.mark_cache_inadmissible("unencodable control skipped");
+                            continue;
+                        };
+                        ledger.span(8, 0);
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFD", field_id);
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    Control::AutoNumber { kind, num, format } => {
+                        // §19.16 J (P19): a caption number, written as Hancom
+                        // writes it (`<hp:autoNum>` in its own run).
+                        let Some(real_xml) =
+                            build_auto_number_run_xml(char_pr_id_ref, *kind, *num, format)
+                        else {
                             ledger.mark_cache_inadmissible("unencodable control skipped");
                             continue;
                         };
