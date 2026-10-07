@@ -20,6 +20,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod char_shadow;
 pub mod color;
 pub mod diagnostics;
 pub mod enums;
@@ -29,6 +30,7 @@ pub mod index;
 mod macros;
 pub mod units;
 
+pub use char_shadow::{CharShadow, ShadowOffset};
 pub use color::Color;
 pub use diagnostics::{OpsCode, UnknownOpsCode, WarningInfo};
 pub use enums::{
