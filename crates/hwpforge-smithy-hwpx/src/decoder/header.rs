@@ -4,16 +4,18 @@
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
 use hwpforge_foundation::{
-    BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
-    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
-    TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
+    BorderFillIndex, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType,
+    FontIndex, HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowOffset, ShadowType,
+    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 
 use crate::decoder::{xml_error_detail, xml_from_str};
 use crate::error::{HwpxError, HwpxResult};
 use crate::list_bridge::bullet_def_from_hwpx;
 use crate::schema::header::{
-    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxStyle, HxTabItem, HxTabPr,
+    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxShadow, HxStyle, HxTabItem,
+    HxTabPr,
 };
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
@@ -60,6 +62,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         populate_store_from_ref_list(&mut store, ref_list);
         warnings = per_language_scalar_losses(ref_list);
         warnings.extend(border_offset_losses(ref_list));
+        warnings.extend(char_shadow_losses(ref_list));
     }
 
     Ok(HeaderParseResult { style_store: store, begin_num, warnings })
@@ -87,6 +90,32 @@ fn border_offset_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
                 reason: format!(
                     "paraPr {} border offset {bad:?} is out of range; kept as 0",
                     pp.id
+                ),
+            })
+        })
+        .collect()
+}
+
+/// A `charPr` shadow the style store cannot hold as written — an unknown
+/// `type`, a `color` that is neither `#RRGGBB` nor `none`, or an offset
+/// outside −100..=100. The store keeps a fallback (kind NONE, the default
+/// color, the clamped offset), so a re-encode would write a different
+/// shadow; the editors refuse the input instead (S21 r1-1).
+fn char_shadow_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(char_props) = &ref_list.char_properties else { return Vec::new() };
+    char_props
+        .items
+        .iter()
+        .filter_map(|cp| {
+            let problems = parse_char_shadow(cp.shadow.as_ref()?).1;
+            (!problems.is_empty()).then(|| super::DecodeWarning::ContentLost {
+                part: "Contents/header.xml".to_string(),
+                path: super::ParagraphPath::default(),
+                kind: "char_shadow".to_string(),
+                reason: format!(
+                    "charPr {} shadow {} cannot be kept as written",
+                    cp.id,
+                    problems.join(", ")
                 ),
             })
         })
@@ -399,13 +428,38 @@ fn parse_outline_type(s: &str) -> OutlineType {
     }
 }
 
-/// Parses a HWPX shadow type string to [`ShadowType`].
-fn parse_shadow_type(s: &str) -> ShadowType {
-    match s.to_ascii_uppercase().as_str() {
+/// Parses `<hh:shadow>` into a [`CharShadow`], naming each value it could
+/// not keep (an unknown type falls back to NONE, a bad color to the default
+/// color, an out-of-range offset is clamped).
+fn parse_char_shadow(s: &HxShadow) -> (CharShadow, Vec<String>) {
+    let mut problems = Vec::new();
+    let kind = match s.shadow_type.to_ascii_uppercase().as_str() {
         "NONE" => ShadowType::None,
         "DROP" => ShadowType::Drop,
-        _ => ShadowType::None,
+        "CONTINUOUS" => ShadowType::Continuous,
+        _ => {
+            problems.push(format!("type {:?}", s.shadow_type));
+            ShadowType::None
+        }
+    };
+    let color = if s.color.eq_ignore_ascii_case("none") {
+        None
+    } else if let Ok(c) = Color::from_hex_rgb(&s.color) {
+        Some(c)
+    } else {
+        problems.push(format!("color {:?}", s.color));
+        CharShadow::DEFAULT.color()
+    };
+    let (x, x_clamped) = ShadowOffset::saturating_from_i32(s.offset_x);
+    let (y, y_clamped) = ShadowOffset::saturating_from_i32(s.offset_y);
+    if x_clamped || y_clamped {
+        problems.push(format!("offset ({}, {})", s.offset_x, s.offset_y));
     }
+    let shadow = CharShadow::new(kind)
+        .with_color(color)
+        .expect("from_hex_rgb and DEFAULT colors have a zero upper byte")
+        .with_offset(x, y);
+    (shadow, problems)
 }
 
 /// Parses a HWPX shade color string into `Option<Color>`.
@@ -497,8 +551,9 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         .as_ref()
         .map(|o| parse_outline_type(&o.outline_type))
         .unwrap_or(OutlineType::None);
-    shape.shadow_type =
-        cp.shadow.as_ref().map(|s| parse_shadow_type(&s.shadow_type)).unwrap_or(ShadowType::None);
+    // No `<hh:shadow>` (older Hancom versions omit it for kind 0): the
+    // default, without a warning — the kind is NONE either way.
+    shape.shadow = cp.shadow.as_ref().map_or(CharShadow::DEFAULT, |s| parse_char_shadow(s).0);
     shape.emboss_type = if cp.emboss.is_some() { EmbossType::Emboss } else { EmbossType::None };
     shape.engrave_type =
         if cp.engrave.is_some() { EngraveType::Engrave } else { EngraveType::None };

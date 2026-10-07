@@ -6,9 +6,9 @@
 
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
-    Alignment, BreakType, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType,
-    NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
-    WordBreakType,
+    Alignment, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType, HwpUnit,
+    LineSpacingType, NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
+    VerticalPosition, WordBreakType,
 };
 
 use super::{escape_xml, header_tabs::build_tab_properties_xml};
@@ -655,12 +655,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         } else {
             None
         },
-        shadow: Some(HxShadow {
-            shadow_type: shadow_type_to_hwpx(cs.shadow_type).into(),
-            color: "#B2B2B2".into(),
-            offset_x: 10,
-            offset_y: 10,
-        }),
+        shadow: Some(char_shadow_to_hwpx(&cs.shadow)),
     }
 }
 
@@ -960,7 +955,20 @@ fn shadow_type_to_hwpx(st: ShadowType) -> &'static str {
     match st {
         ShadowType::None => "NONE",
         ShadowType::Drop => "DROP",
+        ShadowType::Continuous => "CONTINUOUS",
         _ => "NONE",
+    }
+}
+
+/// `<hh:shadow>` from a [`CharShadow`]: the color as `#RRGGBB` or `none`,
+/// offsets as signed decimals (XSD `xs:integer` −100..=100; Hancom writes
+/// `offsetX="-3"`, unlike the u32 wrap it uses for `hp:pos` offsets).
+fn char_shadow_to_hwpx(shadow: &CharShadow) -> HxShadow {
+    HxShadow {
+        shadow_type: shadow_type_to_hwpx(shadow.kind()).into(),
+        color: shadow.color().map_or_else(|| "none".into(), |c| c.to_hex_rgb()),
+        offset_x: i32::from(shadow.offset_x().get()),
+        offset_y: i32::from(shadow.offset_y().get()),
     }
 }
 

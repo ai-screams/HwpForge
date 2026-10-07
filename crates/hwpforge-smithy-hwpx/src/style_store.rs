@@ -17,9 +17,9 @@ use hwpforge_core::{
     TabDef,
 };
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
-    EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
-    ParaShapeIndex, ShadowType, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
+    Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
+    EmphasisType, EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType,
+    OutlineType, ParaShapeIndex, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
     VerticalPosition, WordBreakType,
 };
 
@@ -121,8 +121,12 @@ pub struct HwpxCharShape {
     pub vertical_position: VerticalPosition,
     /// Text outline type.
     pub outline_type: OutlineType,
-    /// Drop shadow type.
-    pub shadow_type: ShadowType,
+    /// Character shadow: kind, color and offsets (from `<hh:shadow>`).
+    ///
+    /// Older releases wrote only the kind, under `shadow_type`; that JSON
+    /// still reads, with the default color and offsets.
+    #[serde(alias = "shadow_type")]
+    pub shadow: CharShadow,
     /// Emboss effect type.
     pub emboss_type: EmbossType,
     /// Engrave effect type.
@@ -164,7 +168,7 @@ impl Default for HwpxCharShape {
             strikeout_color: None,
             vertical_position: VerticalPosition::Normal,
             outline_type: OutlineType::None,
-            shadow_type: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
             emphasis: EmphasisType::None,
@@ -807,7 +811,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
         strikeout_color: None,
         vertical_position: VerticalPosition::Normal,
         outline_type: OutlineType::None,
-        shadow_type: ShadowType::None,
+        shadow: CharShadow::DEFAULT,
         emboss_type: EmbossType::None,
         engrave_type: EngraveType::None,
         emphasis: EmphasisType::None,
@@ -1461,7 +1465,7 @@ fn build_store_from_registry_with(
             strikeout_color: cs.strikeout_color,
             vertical_position: cs.vertical_position,
             outline_type: cs.outline,
-            shadow_type: cs.shadow.kind(),
+            shadow: cs.shadow,
             emboss_type: cs.emboss,
             engrave_type: cs.engrave,
             emphasis: cs.emphasis,
@@ -2332,7 +2336,7 @@ mod tests {
             assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
             assert_eq!(hwpx_cs.vertical_position, bp_cs.vertical_position);
             assert_eq!(hwpx_cs.outline_type, bp_cs.outline);
-            assert_eq!(hwpx_cs.shadow_type, bp_cs.shadow.kind());
+            assert_eq!(hwpx_cs.shadow, bp_cs.shadow);
             assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
             assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
@@ -2354,6 +2358,23 @@ mod tests {
         let hwpx_cs = store.char_shape(CharShapeIndex::new(7)).unwrap();
         assert_eq!(hwpx_cs.underline_shape, UnderlineShape::Wave);
         assert_eq!(hwpx_cs.underline_type, UnderlineType::Bottom);
+    }
+
+    /// A Blueprint shadow reaches the store whole: kind, color and offsets.
+    /// 이것을 실패시키는 것: 다리가 종류만 옮기는 것(`CharShadow::new(cs.shadow.kind())`).
+    #[test]
+    fn from_registry_carries_the_whole_char_shadow() {
+        use hwpforge_foundation::{ShadowOffset, ShadowType};
+        let template = builtin_default().unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        let shadow = CharShadow::new(ShadowType::Continuous)
+            .with_color(Some(Color::from_rgb(0x12, 0x34, 0x56)))
+            .unwrap()
+            .with_offset(ShadowOffset::new(-3).unwrap(), ShadowOffset::new(4).unwrap());
+        registry.char_shapes[0].shadow = shadow;
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        assert_eq!(store.char_shape(CharShapeIndex::new(7)).unwrap().shadow, shadow);
     }
 
     #[test]

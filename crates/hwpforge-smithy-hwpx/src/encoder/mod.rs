@@ -1291,8 +1291,8 @@ mod tests {
     use hwpforge_core::section::Section;
     use hwpforge_core::PageSettings;
     use hwpforge_foundation::{
-        Alignment, CharShapeIndex, Color, EmbossType, EngraveType, FontIndex, HwpUnit,
-        LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape, UnderlineType,
+        Alignment, CharShadow, CharShapeIndex, Color, EmbossType, EngraveType, FontIndex, HwpUnit,
+        LineSpacingType, OutlineType, ParaShapeIndex, StrikeoutShape, UnderlineType,
         VerticalPosition,
     };
 
@@ -1398,7 +1398,7 @@ mod tests {
             strikeout_color: None,
             vertical_position: VerticalPosition::Normal,
             outline_type: OutlineType::None,
-            shadow_type: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
             ..Default::default()
@@ -1650,7 +1650,7 @@ mod tests {
             strikeout_color: None,
             vertical_position: VerticalPosition::Normal,
             outline_type: OutlineType::None,
-            shadow_type: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
             ..Default::default()

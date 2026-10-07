@@ -7,7 +7,7 @@
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
-    BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
+    BorderFillIndex, CharShadow, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
     StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use hwpforge_smithy_hwp5::schema::header::{
@@ -125,7 +125,7 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
         VerticalPosition::Normal
     };
     shape.outline_type = raw.outline_type();
-    shape.shadow_type = raw.shadow_type();
+    shape.shadow = CharShadow::new(raw.shadow_type());
     shape.emboss_type = if raw.emboss() { EmbossType::Emboss } else { EmbossType::None };
     shape.engrave_type = if raw.engrave() { EngraveType::Engrave } else { EngraveType::None };
     shape.emphasis = raw.emphasis();

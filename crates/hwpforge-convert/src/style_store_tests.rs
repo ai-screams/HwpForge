@@ -627,7 +627,7 @@ fn hwp5_char_shape_maps_supported_style_surface() {
     assert_eq!(hwpx.strikeout_color, Some(bgr_colorref_to_color(0x00332211)));
     assert_eq!(hwpx.vertical_position, VerticalPosition::Superscript);
     assert_eq!(hwpx.outline_type, OutlineType::Solid);
-    assert_eq!(hwpx.shadow_type, ShadowType::Drop);
+    assert_eq!(hwpx.shadow.kind(), ShadowType::Drop);
     assert_eq!(hwpx.emboss_type, EmbossType::Emboss);
     assert_eq!(hwpx.engrave_type, EngraveType::None);
     assert_eq!(hwpx.emphasis, EmphasisType::DotAbove);

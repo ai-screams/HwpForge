@@ -417,7 +417,7 @@ pub struct HxOutline {
     pub outline_type: String,
 }
 
-/// `<hh:shadow type="NONE" color="#B2B2B2" offsetX="10" offsetY="10"/>`.
+/// `<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>`.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxShadow {
     #[serde(rename = "@type", default)]
