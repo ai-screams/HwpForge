@@ -1169,14 +1169,18 @@ impl Hwp5ShapeComponentEllipse {
         Ok(Self { property, center, axis1, axis2, start1, end1, start2, end2 })
     }
 
-    /// Whether this record describes an arc rather than a plain ellipse.
+    /// Whether this record describes an arc rather than a plain ellipse:
+    /// property bit 1 ("changed into an arc"). Hancom leaves uninitialised
+    /// values in a plain ellipse's arc-point fields (§19.22 C: all 102
+    /// ellipse records in the corpus have property 0, 95 of them with such
+    /// points, and the Hancom HWPX files available for them write no arc),
+    /// so the points do not decide it.
     ///
-    /// True when the property bitfield is set or any arc endpoint is non-origin.
-    /// This content-based check is robust against unknown `property` bits.
+    /// 이것을 실패시키는 것: 끝점 판정 복귀
+    /// (`shape_component_ellipse_arc_points_alone_do_not_mark_arc`) / 다른
+    /// 속성 비트도 호로 보기(`..._other_property_bits_do_not_mark_arc`).
     pub(crate) fn is_arc(&self) -> bool {
-        let arc_points_present =
-            [self.start1, self.end1, self.start2, self.end2].iter().any(|p| p.x != 0 || p.y != 0);
-        self.property != 0 || arc_points_present
+        self.property & 0x2 != 0
     }
 }
 
@@ -3473,15 +3477,22 @@ mod tests {
         assert_eq!(arc.property, 2);
         assert_eq!(arc.start1, Hwp5ShapePoint { x: 11339, y: 4252 });
         assert_eq!(arc.end2, Hwp5ShapePoint { x: 5671, y: 27 });
-        assert!(arc.is_arc(), "non-zero property marks an arc");
+        assert!(arc.is_arc(), "property bit 1 marks an arc");
     }
 
     #[test]
-    fn shape_component_ellipse_arc_points_alone_mark_arc() {
-        // Even with property 0, a non-origin arc endpoint means an arc.
-        let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (0, 0), (0, 0), (0, 0)]);
+    fn shape_component_ellipse_arc_points_alone_do_not_mark_arc() {
+        // Property 0 with leftover arc points is a plain ellipse (§19.22 C).
+        let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (7, 3), (9, 9), (1, 2)]);
         let parsed = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
-        assert!(parsed.is_arc(), "content-based arc detection ignores unknown property bits");
+        assert!(!parsed.is_arc(), "leftover arc points do not make an arc");
+    }
+
+    #[test]
+    fn shape_component_ellipse_other_property_bits_do_not_mark_arc() {
+        // Only bit 1 marks an arc.
+        let data = ellipse_bytes(1, [(10, 10), (20, 10), (10, 20), (0, 0), (0, 0), (0, 0), (0, 0)]);
+        assert!(!Hwp5ShapeComponentEllipse::parse(&data).unwrap().is_arc());
     }
 
     #[test]
