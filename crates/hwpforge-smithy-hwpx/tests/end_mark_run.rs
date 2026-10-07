@@ -219,3 +219,66 @@ fn empty_text_end_run_is_an_end_mark() {
     assert_eq!(count(&input), count(&source));
     assert!(count(&input) > 0);
 }
+
+fn end_mark_count(bytes: &[u8]) -> usize {
+    let doc = HwpxDecoder::decode(bytes).expect("decode");
+    let mut n = 0;
+    for p in &doc.document.sections()[0].paragraphs {
+        p.for_each_paragraph(|q| n += usize::from(q.end_char_shape.is_some()));
+    }
+    n
+}
+
+/// A last run whose `<hp:t>` holds only a marker — a highlight end (also
+/// after a space), a track-change mark, a title mark — is not an end mark
+/// (review r1: the decoder drops the marker, which made the run look empty).
+///
+/// 이것을 실패시키는 것: 표지만 든 `<hp:t>` 를 끝 run 으로 보기.
+#[test]
+fn marker_runs_are_not_end_marks() {
+    let source = fixture("user_samples/sample-char-breakwordlatin-variants.hwpx");
+    let xml = section_xml(&source);
+    // The end runs: an empty run right before the paragraph's line cache.
+    let form = "<hp:run charPrIDRef=\"0\"/><hp:linesegarray>";
+    let all = xml.matches(form).count();
+    assert!(all > 0);
+    // With those runs removed, only the other end marks remain.
+    let others = end_mark_count(&with_section(&source, &xml.replace(form, "<hp:linesegarray>")));
+    assert!(others < end_mark_count(&source));
+    for marker in [
+        "<hp:markpenEnd/>",
+        " <hp:markpenEnd/>",
+        "<hp:deleteBegin Id=\"1\" TcId=\"2\"/>",
+        "<hp:titleMark ignore=\"1\"/>",
+    ] {
+        let edited = xml.replace(
+            form,
+            &format!("<hp:run charPrIDRef=\"0\"><hp:t>{marker}</hp:t></hp:run><hp:linesegarray>"),
+        );
+        assert_eq!(end_mark_count(&with_section(&source, &edited)), others, "{marker}");
+    }
+}
+
+/// An end run's char shape reference is bounded like every run's — in a
+/// table cell, whose paragraphs only the run conversion checked (review r1).
+///
+/// 이것을 실패시키는 것: 끝 run 의 참조 검사를 지우기.
+#[test]
+fn end_run_reference_is_bounded() {
+    let source = fixture("tables/table_20_real_world_ministry_stress.hwpx");
+    let xml = section_xml(&source);
+    // The only occurrence: a cell paragraph's end run.
+    let end_run = "</hp:run><hp:run charPrIDRef=\"13\"/><hp:linesegarray>";
+    assert_eq!(xml.matches(end_run).count(), 1);
+    let with_ref = |id: u32| {
+        with_section(
+            &source,
+            &xml.replace(
+                end_run,
+                &format!("</hp:run><hp:run charPrIDRef=\"{id}\"/><hp:linesegarray>"),
+            ),
+        )
+    };
+    assert!(HwpxDecoder::decode(&with_ref(100_001)).is_err());
+    assert!(HwpxDecoder::decode(&with_ref(100_000)).is_ok());
+}

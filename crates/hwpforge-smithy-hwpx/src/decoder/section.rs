@@ -586,6 +586,17 @@ fn convert_paragraph(
     // 이것을 실패시키는 것: 이 읽기를 지우기(`end_mark_run_round_trips`).
     let end_mark =
         (hx.runs.len() >= 2).then(|| hx.runs.last()).flatten().filter(|r| is_end_mark_run(r));
+    // The end run's reference is checked like every run's (`convert_run`),
+    // which it does not go through (review r1). 이것을 실패시키는 것: 이 검사를
+    // 지우기(`end_run_reference_is_bounded`).
+    if let Some(run) = end_mark.filter(|r| r.char_pr_id_ref > MAX_STYLE_INDEX) {
+        return Err(crate::error::HwpxError::InvalidStructure {
+            detail: format!(
+                "charPrIDRef {} exceeds maximum allowed index {}",
+                run.char_pr_id_ref, MAX_STYLE_INDEX,
+            ),
+        });
+    }
     let end_char_shape = end_mark.map(|r| CharShapeIndex::new(r.char_pr_id_ref as usize));
     let body_runs = &hx.runs[..hx.runs.len() - usize::from(end_mark.is_some())];
 
@@ -708,7 +719,7 @@ fn convert_paragraph(
 /// is the paragraph-end mark's char shape (§19.22 D5). Shared by the
 /// decoder and the preservation walk so both skip the same run.
 pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
-    use crate::schema::section::HxRunChildKind;
+    use crate::schema::section::{HxRunChildKind, HxTextPart};
     let order = if hx.child_order.is_empty() {
         crate::schema::section::legacy_child_order(hx)
     } else {
@@ -716,13 +727,14 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
     };
     match order[..] {
         [] => true,
-        [(HxRunChildKind::Text, idx)] => {
-            hx.texts.get(idx).is_some_and(|t| match t.to_run_content() {
-                RunContent::Text(s) => s.is_empty(),
-                RunContent::InlineText(it) => it.segments.is_empty(),
-                _ => false,
-            })
-        }
+        // Truly empty on the wire: no text and no inline element. A `<hp:t>`
+        // holding only a marker (highlight end, track change, title mark)
+        // is not an end mark, though the decoder drops the marker
+        // (review r1). 이것을 실패시키는 것: 내용 없는 표지 `<hp:t>` 를 끝 run
+        // 으로 보기(`marker_runs_are_not_end_marks`).
+        [(HxRunChildKind::Text, idx)] => hx.texts.get(idx).is_some_and(|t| {
+            t.parts.iter().all(|part| matches!(part, HxTextPart::Text(s) if s.is_empty()))
+        }),
         _ => false,
     }
 }
