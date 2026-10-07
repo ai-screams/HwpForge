@@ -270,7 +270,10 @@ fn encode_paragraph_styled(
                 let (mut md, tbl_images) =
                     table_to_styled_markdown(table, styles, false, footnotes);
                 images.extend(tbl_images);
-                md.push_str(&styled_caption(table.caption.as_ref(), styles, footnotes));
+                let (caption, caption_images) =
+                    styled_caption(table.caption.as_ref(), styles, footnotes);
+                md.push_str(&caption);
+                images.extend(caption_images);
                 return (md, images);
             }
             RunContent::Image(image) => {
@@ -280,7 +283,10 @@ fn encode_paragraph_styled(
                 if let Some(data) = styles.image_data(&image.path) {
                     images.insert(rel_path, data.to_vec());
                 }
-                md.push_str(&styled_caption(image.caption.as_ref(), styles, footnotes));
+                let (caption, caption_images) =
+                    styled_caption(image.caption.as_ref(), styles, footnotes);
+                md.push_str(&caption);
+                images.extend(caption_images);
                 return (md, images);
             }
             _ => {}
@@ -395,7 +401,10 @@ fn paragraph_text_styled(
                 if let Some(data) = styles.image_data(&image.path) {
                     images.insert(rel_path, data.to_vec());
                 }
-                output.push_str(&styled_caption(image.caption.as_ref(), styles, footnotes));
+                let (caption, caption_images) =
+                    styled_caption(image.caption.as_ref(), styles, footnotes);
+                output.push_str(&caption);
+                images.extend(caption_images);
             }
             RunContent::Table(table) => {
                 // Flush text group.
@@ -411,7 +420,10 @@ fn paragraph_text_styled(
                     table_to_styled_markdown(table, styles, false, footnotes);
                 output.push_str(&tbl_md);
                 images.extend(tbl_images);
-                output.push_str(&styled_caption(table.caption.as_ref(), styles, footnotes));
+                let (caption, caption_images) =
+                    styled_caption(table.caption.as_ref(), styles, footnotes);
+                output.push_str(&caption);
+                images.extend(caption_images);
             }
             RunContent::Control(control) => {
                 // Flush text group.
@@ -940,6 +952,10 @@ fn extract_paragraph_text_html(
                 if let Some(data) = styles.image_data(&image.path) {
                     images.insert(rel_path, data.to_vec());
                 }
+                let (caption, caption_images) =
+                    html_caption(image.caption.as_ref(), styles, footnotes);
+                output.push_str(&caption);
+                images.extend(caption_images);
             }
             RunContent::Table(table) => {
                 if !current_text.is_empty() {
@@ -950,6 +966,10 @@ fn extract_paragraph_text_html(
                 let (tbl_md, tbl_images) = table_to_html(table, styles, footnotes);
                 output.push_str(&tbl_md);
                 images.extend(tbl_images);
+                let (caption, caption_images) =
+                    html_caption(table.caption.as_ref(), styles, footnotes);
+                output.push_str(&caption);
+                images.extend(caption_images);
             }
             _ => {}
         }
@@ -988,35 +1008,67 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
     format!("images/{safe_filename}")
 }
 
+/// A picture's or table's caption as a paragraph after it (`\n\n` + its
+/// text) and the images it holds, empty without one. The caption's numbers
+/// ("그림 3") live here (§19.16 J, review r1: captions were not written at
+/// all; review r2: a picture inside the caption lost its bytes).
+/// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
+/// `f17_caption_numbers_reach_the_readable_views`) / 캡션 그림의 바이트를
+/// 버리기(`caption_pictures_and_html_table_captions_are_kept`).
+fn styled_caption(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    styles: &dyn StyleLookup,
+    footnotes: &mut FootnoteCollector,
+) -> (String, HashMap<String, Vec<u8>>) {
+    let mut images = HashMap::new();
+    let Some(caption) = caption else { return (String::new(), images) };
+    let mut text = Vec::new();
+    for p in &caption.paragraphs {
+        let (t, p_images) = paragraph_text_styled(p, styles, footnotes);
+        images.extend(p_images);
+        if !t.trim().is_empty() {
+            text.push(t);
+        }
+    }
+    if text.is_empty() {
+        (String::new(), images)
+    } else {
+        (format!("\n\n{}", text.join("\n\n")), images)
+    }
+}
+
+/// [`styled_caption`] inside an HTML table cell: the caption's paragraphs
+/// in HTML after a `<br>` (review r2: a picture or table in a merged or
+/// nested-table cell lost its caption and number).
+/// 이것을 실패시키는 것: HTML 칸의 캡션 출력을 지우기
+/// (`caption_pictures_and_html_table_captions_are_kept`).
+fn html_caption(
+    caption: Option<&hwpforge_core::caption::Caption>,
+    styles: &dyn StyleLookup,
+    footnotes: &mut FootnoteCollector,
+) -> (String, HashMap<String, Vec<u8>>) {
+    let mut images = HashMap::new();
+    let Some(caption) = caption else { return (String::new(), images) };
+    let mut text = Vec::new();
+    for p in &caption.paragraphs {
+        let (t, p_images) = extract_paragraph_text_html(p, styles, footnotes);
+        images.extend(p_images);
+        if !t.trim().is_empty() {
+            text.push(t);
+        }
+    }
+    if text.is_empty() {
+        (String::new(), images)
+    } else {
+        (format!("<br>{}", text.join("<br>")), images)
+    }
+}
+
 /// Escapes markdown-special characters in plain text content so they render
 /// literally instead of being interpreted as formatting markers.
 ///
 /// Applied to text extracted from HWPX (which is always plain text), BEFORE
 /// wrapping with inline format markers like `**bold**` or `<em>`.
-/// A picture's or table's caption as a paragraph after it (`\n\n` + its
-/// text), empty without one. The caption's numbers ("그림 3") live here
-/// (§19.16 J, review r1: captions were not written at all).
-/// 이것을 실패시키는 것: 캡션 출력을 지우기(F17 의 3·4·7 이 사라짐 —
-/// `f17_caption_numbers_reach_the_readable_views`).
-fn styled_caption(
-    caption: Option<&hwpforge_core::caption::Caption>,
-    styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> String {
-    let Some(caption) = caption else { return String::new() };
-    let text: Vec<String> = caption
-        .paragraphs
-        .iter()
-        .map(|p| paragraph_text_styled(p, styles, footnotes).0)
-        .filter(|t| !t.trim().is_empty())
-        .collect();
-    if text.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{}", text.join("\n\n"))
-    }
-}
-
 fn escape_markdown(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + input.len() / 8);
     for ch in input.chars() {
