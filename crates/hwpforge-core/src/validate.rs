@@ -122,29 +122,46 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
 }
 
 /// The first corner ratio above 50 in `run`: its own rectangle or text
-/// box, a group's shapes, and every paragraph nested in it.
+/// box, a group's shapes, and every paragraph nested in it — picture
+/// captions included, which the Core paragraph walk does not enter but the
+/// HWPX writer does (review r2).
+///
+/// (A group picture's caption is already in that walk.)
+///
+/// 이것을 실패시키는 것: 그림 run 의 캡션 / 중첩 문단 안 그림의 캡션을
+/// 건너뛰기(`corner_ratio_is_checked_in_nested_places`).
 fn run_corner_ratio_over_50(run: &crate::run::Run) -> Option<u8> {
+    fn caption_ratio(image: &crate::image::Image) -> Option<u8> {
+        image
+            .caption
+            .as_ref()?
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.runs)
+            .find_map(run_corner_ratio_over_50)
+    }
     fn control_ratio(control: &Control) -> Option<u8> {
         match control {
             Control::Rect { style: Some(style), .. }
             | Control::TextBox { style: Some(style), .. } => style.corner_ratio.filter(|&r| r > 50),
             Control::Group { children, .. } => children.iter().find_map(|child| match child {
                 crate::control::GroupChild::Shape(shape) => control_ratio(shape),
-                _ => None,
+                crate::control::GroupChild::Picture(_) => None,
             }),
             _ => None,
         }
     }
-    let mut found = match &run.content {
-        RunContent::Control(control) => control_ratio(control),
-        _ => None,
-    };
+    fn own_ratio(run: &crate::run::Run) -> Option<u8> {
+        match &run.content {
+            RunContent::Control(control) => control_ratio(control),
+            RunContent::Image(image) => caption_ratio(image),
+            _ => None,
+        }
+    }
+    let mut found = own_ratio(run);
     run.walk_paragraphs(&mut |nested| {
         if found.is_none() {
-            found = nested.runs.iter().find_map(|r| match &r.content {
-                RunContent::Control(control) => control_ratio(control),
-                _ => None,
-            });
+            found = nested.runs.iter().find_map(own_ratio);
         }
     });
     found
@@ -699,7 +716,8 @@ mod tests {
     }
 
     /// A ratio above 50 is refused wherever the shape sits — a table cell,
-    /// a text box's text, a group, a header, a footer, a master page — and
+    /// a text box's text, a group, a header, a footer, a master page, a
+    /// picture's caption (review r2) — and
     /// 50 passes there too (review r1: only top-level runs were checked, so
     /// a nested 51 reached the HWPX writer).
     #[test]
@@ -711,6 +729,13 @@ mod tests {
         let para = |run: Run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
         let plain = || para(Run::text("x", CharShapeIndex::new(0)));
         let unit = HwpUnit::new(1000).unwrap();
+        let captioned = move |r: u8| {
+            crate::image::Image::new("BinData/a.png", unit, unit, crate::image::ImageFormat::Png)
+                .with_caption(crate::caption::Caption::new(
+                    vec![para(rect_run(r))],
+                    crate::caption::CaptionSide::Bottom,
+                ))
+        };
         let places: Vec<(&str, Box<dyn Fn(u8) -> Section>)> = vec![
             (
                 "cell",
@@ -777,6 +802,46 @@ mod tests {
                         vec![para(rect_run(r))],
                     )]);
                     s
+                }),
+            ),
+            (
+                "picture caption",
+                Box::new(move |r| {
+                    let image = captioned(r);
+                    Section::with_paragraphs(
+                        vec![para(Run::image(image, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "caption of a picture in a cell",
+                Box::new(move |r| {
+                    let cell = TableCell::new(
+                        vec![para(Run::image(captioned(r), CharShapeIndex::new(0)))],
+                        unit,
+                    );
+                    let table = Table::new(vec![TableRow::new(vec![cell])]);
+                    Section::with_paragraphs(
+                        vec![para(Run::table(table, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
+                }),
+            ),
+            (
+                "caption of a group picture",
+                Box::new(move |r| {
+                    let group = Control::Group {
+                        children: vec![GroupChild::Picture(captioned(r))],
+                        width: unit,
+                        height: unit,
+                        placement: None,
+                        inst_id: None,
+                    };
+                    Section::with_paragraphs(
+                        vec![para(Run::control(group, CharShapeIndex::new(0)))],
+                        PageSettings::a4(),
+                    )
                 }),
             ),
         ];
