@@ -378,7 +378,8 @@ fn text_art_with_a_hangul_font_type_is_refused() {
 /// §19.22 D5: a restyle keeps every paragraph's end-mark char shape (the
 /// fixture's paragraphs end in empty runs, as Hancom writes them).
 ///
-/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기.
+/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기 /
+/// 다른 문단으로 옮기거나 다른 글자 모양으로 쓰기.
 #[test]
 fn restyle_keeps_end_mark_char_shapes() {
     let path = concat!(
@@ -397,8 +398,7 @@ fn restyle_keeps_end_mark_char_shapes() {
     let before = ends(&source);
     assert!(before.iter().any(Option::is_some));
     let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
-    assert_eq!(
-        ends(&out.bytes).iter().filter(|e| e.is_some()).count(),
-        before.iter().filter(|e| e.is_some()).count()
-    );
+    // Paragraph by paragraph (review r1: a count let a moved or renumbered
+    // end mark pass).
+    assert_eq!(ends(&out.bytes), before);
 }
