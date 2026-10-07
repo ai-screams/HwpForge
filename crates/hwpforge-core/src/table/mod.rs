@@ -508,6 +508,14 @@ pub struct TableCell {
     /// [`CellLineWrap::Break`].
     #[serde(default, skip_serializing_if = "is_break")]
     pub line_wrap: CellLineWrap,
+    /// The cell's own margin values while it uses the table's padding
+    /// (`margin` is `None`, HWPX `hasMargin="0"`): not used for layout, but
+    /// kept, as Hancom keeps them, so turning the cell's own margin back on
+    /// finds them again. `None` = the table's padding, what the encoder
+    /// writes then; ignored when `margin` is `Some`. JSON omits it when
+    /// `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dormant_margin: Option<TableMargin>,
 }
 
 impl TableCell {
@@ -541,6 +549,7 @@ impl TableCell {
             margin: None,
             vertical_align: None,
             line_wrap: CellLineWrap::Break,
+            dormant_margin: None,
         }
     }
 
@@ -580,6 +589,7 @@ impl TableCell {
             margin: None,
             vertical_align: None,
             line_wrap: CellLineWrap::Break,
+            dormant_margin: None,
         }
     }
 
@@ -631,6 +641,22 @@ mod tests {
     use super::*;
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+    /// S19: no dormant margin writes no `dormant_margin`; one round trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn dormant_margin_json() {
+        let cell = TableCell::new(vec![simple_paragraph()], HwpUnit::new(1000).unwrap());
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("dormant_margin").is_none(), "{json}");
+        let mut with = cell;
+        let u = HwpUnit::new(141).unwrap();
+        with.dormant_margin = Some(TableMargin { left: u, right: u, top: u, bottom: u });
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["dormant_margin"]["left"], 141);
+        assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), with);
+    }
 
     /// §19.22 D3: a breaking cell's JSON has no `line_wrap` (old JSON and
     /// output unchanged), a JSON without it reads as `Break`, and a squeezed

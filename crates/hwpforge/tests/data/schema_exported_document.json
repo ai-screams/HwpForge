@@ -629,6 +629,17 @@
           "description": "How the cell's text breaks into lines; omitted from JSON when it is\n[`CellLineWrap::Break`].",
           "$ref": "#/$defs/CellLineWrap"
         },
+        "dormant_margin": {
+          "description": "The cell's own margin values while it uses the table's padding\n(`margin` is `None`, HWPX `hasMargin=\"0\"`): not used for layout, but\nkept, as Hancom keeps them, so turning the cell's own margin back on\nfinds them again. `None` = the table's padding, what the encoder\nwrites then; ignored when `margin` is `Some`. JSON omits it when\n`None`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "addr": {
           "description": "Pre-merge logical grid anchor of this cell (0-based), added by to-json when the table tiles a well-formed grid. Optional on import: absent = unchecked, present = must match the derived grid.",
           "type": "object",

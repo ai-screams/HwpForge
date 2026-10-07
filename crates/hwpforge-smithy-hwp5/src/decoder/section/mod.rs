@@ -4027,6 +4027,79 @@ mod tests {
         assert_eq!(table.rows[0].cells[1].margin, Some(m(11, 12, 13, 14)));
     }
 
+    /// S19: a cell without its own margin keeps its own values as a dormant
+    /// margin unless they are the table's padding.
+    ///
+    /// 이것을 실패시키는 것: 휴면 값을 싣지 않기 / 표 여백과 같은 값을 지우지 않기 /
+    /// 안쪽 여백이 없는 표의 기본값을 바꾸기.
+    #[test]
+    fn dormant_cell_margin_is_kept() {
+        let mut ctrl = table_ctrl_data(0, 0, 0, 9000, 3000);
+        ctrl.resize(28, 0);
+        for v in [101i16, 102, 103, 104] {
+            ctrl.extend_from_slice(&v.to_le_bytes());
+        }
+        ctrl.extend_from_slice(&[0u8; 8]);
+        let mut body = basic_table_data(1, 3);
+        for (i, v) in [510i16, 520, 566, 576].iter().enumerate() {
+            body[10 + 2 * i..12 + 2 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let cell_with = |column: u16, properties: u32, m: [i16; 4]| {
+            list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties,
+                column,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4500,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: m[0], right: m[1], top: m[2], bottom: m[3] },
+                border_fill_id: Some(1),
+            })
+        };
+        let cell = |column: u16, properties: u32| cell_with(column, properties, [11, 12, 13, 14]);
+        let dormant_of = |body: &[u8], padding: [i16; 4]| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::CtrlHeader, 1, &ctrl));
+            stream.extend(make_record(TagId::Table, 2, body));
+            // Bits 15 and 17 set but not 16: no own margin.
+            stream.extend(make_record(TagId::ListHeader, 2, &cell(0, (1 << 15) | (1 << 17))));
+            stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ListHeader, 2, &cell(1, 1 << 16)));
+            stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+            // No own margin, values equal to the table's padding.
+            stream.extend(make_record(TagId::ListHeader, 2, &cell_with(2, 0, padding)));
+            stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+            let result = parse_body_text(&stream, &version()).unwrap();
+            let (doc, _) = crate::projection::project_to_core(vec![result]).expect("project");
+            let hwpforge_core::run::RunContent::Table(table) =
+                &doc.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!("{:?}", doc.sections()[0].paragraphs[0].runs)
+            };
+            table.rows[0].cells.iter().map(|c| c.dormant_margin).collect::<Vec<_>>()
+        };
+        let m = |l, r, t, b| hwpforge_core::table::TableMargin {
+            left: hwpforge_foundation::HwpUnit::new(l).unwrap(),
+            right: hwpforge_foundation::HwpUnit::new(r).unwrap(),
+            top: hwpforge_foundation::HwpUnit::new(t).unwrap(),
+            bottom: hwpforge_foundation::HwpUnit::new(b).unwrap(),
+        };
+        // S19: the first cell (no own margin) keeps its values; the third,
+        // whose values are the table's padding, carries none; the second
+        // has its own margin and no dormant one.
+        assert_eq!(dormant_of(&body, [510, 520, 566, 576]), [Some(m(11, 12, 13, 14)), None, None]);
+        // A table record too short for its padding: the padding is the
+        // 510/510/141/141 default.
+        assert_eq!(
+            dormant_of(&body[..10], [510, 510, 141, 141]),
+            [Some(m(11, 12, 13, 14)), None, None]
+        );
+    }
+
     /// §19.22 D3: cell property bits 3–4 — 0 break, 1 squeeze, 2 keep (no
     /// Hancom twin, reported), 3 no meaning (reported, read as break). Bits
     /// 5–6 (vertical align) set in every cell so a shifted read shows.

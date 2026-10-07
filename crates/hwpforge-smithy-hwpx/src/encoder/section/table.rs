@@ -255,10 +255,13 @@ fn build_table_cell(
             width: cell.width.as_i32(),
             height: cell.height.or(ctx.row_height).unwrap_or(HwpUnit::ZERO).as_i32(),
         }),
-        // hasMargin=0 이어도 한컴은 실효값을 element 로 쓴다 (H5) — 셀
-        // 오버라이드 → 표 inMargin → 기본값 순.
+        // 셀 오버라이드 → (hasMargin=0 이면) 칸이 지닌 휴면 값(S19 — 한컴은
+        // HWP5 에서 온 칸의 자기 값을 그대로 둔다) → 표 inMargin → 기본값 순.
+        // 이것을 실패시키는 것: 휴면 값을 쓰지 않기
+        // (`dormant_cell_margins_round_trip`).
         cell_margin: Some(
             cell.margin
+                .or(cell.dormant_margin)
                 .or(ctx.table_in_margin)
                 .map(encode_table_margin)
                 .unwrap_or(DEFAULT_CELL_MARGIN),

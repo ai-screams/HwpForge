@@ -108,3 +108,108 @@ fn unknown_cell_line_wrap_is_reported() {
         "{warnings:?}"
     );
 }
+
+/// S19: a cell without its own margin (`hasMargin="0"`) keeps the values
+/// Hancom left in its `<hp:cellMargin>` through decode and re-encode; one
+/// whose values are the table's padding carries nothing extra.
+///
+/// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기 /
+/// 표 여백과 같은 값도 싣기.
+#[test]
+fn dormant_cell_margins_round_trip() {
+    let source = fixture("tables/table_01_basic_2x2.hwpx");
+    let xml = section_xml(&source);
+    let padding = r#"<hp:cellMargin left="510" right="510" top="141" bottom="141"/>"#;
+    let own = r#"<hp:cellMargin left="11" right="12" top="13" bottom="14"/>"#;
+    assert_eq!(xml.matches(padding).count(), 4);
+    let input = with_section(&source, &xml.replacen(padding, own, 1));
+    let doc = HwpxDecoder::decode(&input).expect("decode");
+    let mut dormant = Vec::new();
+    for p in &doc.document.sections()[0].paragraphs {
+        for run in &p.runs {
+            if let RunContent::Table(t) = &run.content {
+                for c in t.rows.iter().flat_map(|r| &r.cells) {
+                    assert!(c.margin.is_none());
+                    dormant.push(c.dormant_margin.map(|m| m.left.as_i32()));
+                }
+            }
+        }
+    }
+    assert_eq!(dormant, [Some(11), None, None, None]);
+    // Without `<hp:inMargin>` the padding is the 510/510/141/141 default,
+    // and cells holding it carry nothing either.
+    let no_in = xml.replacen(padding, own, 1);
+    let no_in = strip_first_element(&no_in, "<hp:inMargin ");
+    let bare = HwpxDecoder::decode(&with_section(&source, &no_in)).expect("decode");
+    let mut bare_dormant = Vec::new();
+    for p in &bare.document.sections()[0].paragraphs {
+        for run in &p.runs {
+            if let RunContent::Table(t) = &run.content {
+                assert!(t.in_margin.is_none());
+                bare_dormant.extend(
+                    t.rows
+                        .iter()
+                        .flat_map(|r| &r.cells)
+                        .map(|c| c.dormant_margin.map(|m| m.left.as_i32())),
+                );
+            }
+        }
+    }
+    assert_eq!(bare_dormant, [Some(11), None, None, None]);
+    let out = HwpxEncoder::encode(
+        &doc.document.validate().expect("validate"),
+        &doc.style_store,
+        &doc.image_store,
+    )
+    .expect("encode");
+    let out_xml = section_xml(&out);
+    assert_eq!(out_xml.matches(own).count(), 1, "{out_xml}");
+    assert_eq!(out_xml.matches(padding).count(), 3);
+    assert_eq!(out_xml.matches("hasMargin=\"0\"").count(), 4);
+}
+
+/// Removes the first self-closing element starting with `open`.
+fn strip_first_element(xml: &str, open: &str) -> String {
+    let start = xml.find(open).expect("element");
+    let end = start + xml[start..].find("/>").expect("self-closing") + 2;
+    format!("{}{}", &xml[..start], &xml[end..])
+}
+
+/// S19: diff reports a changed dormant margin on its raw axis (the cell
+/// differs beyond its text).
+///
+/// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기(그러면 package 차이만
+/// 남는다) / 표 여백과 같은 값 정리를 지우기.
+#[test]
+fn diff_reports_a_changed_dormant_margin() {
+    let source = fixture("tables/table_01_basic_2x2.hwpx");
+    let xml = section_xml(&source);
+    let padding = r#"<hp:cellMargin left="510" right="510" top="141" bottom="141"/>"#;
+    let own = r#"<hp:cellMargin left="11" right="12" top="13" bottom="14"/>"#;
+    let input = with_section(&source, &xml.replacen(padding, own, 1));
+    let diff = hwpforge_smithy_hwpx::HwpxDiffer::diff(&source, &input).expect("diff");
+    let raw: Vec<_> = diff.semantic.raw.iter().map(|r| r.detail.as_str()).collect();
+    assert_eq!(raw, ["$.runs[0].content.Table.rows[0].cells[0].dormant_margin"], "{diff:?}");
+}
+
+/// S19: set-cell re-encodes the package and keeps another cell's dormant
+/// margin.
+///
+/// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기.
+#[test]
+fn set_cell_keeps_a_dormant_margin() {
+    let padding = r#"<hp:cellMargin left="510" right="510" top="141" bottom="141"/>"#;
+    let own = r#"<hp:cellMargin left="11" right="12" top="13" bottom="14"/>"#;
+    let form = fixture("tables/merged_grid_form.hwpx");
+    let form = with_section(&form, &section_xml(&form).replacen(padding, own, 1));
+    let spec = hwpforge_smithy_hwpx::CellSpec {
+        table: 0,
+        target: hwpforge_smithy_hwpx::CellTarget::At(hwpforge_core::table::grid::GridCoord::new(
+            1, 1,
+        )),
+        text: "x".to_string(),
+    };
+    let edited = hwpforge_smithy_hwpx::HwpxCellEditor::set_cells_with_diagnostics(&form, &[spec])
+        .expect("set-cell");
+    assert_eq!(section_xml(&edited.value.bytes).matches(own).count(), 1);
+}

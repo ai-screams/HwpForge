@@ -1101,6 +1101,7 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     if let Some(value) = decode_table_margin(hx.in_margin.as_ref())? {
         table = table.with_in_margin(value);
     }
+    keep_only_distinct_dormant_margins(&mut table);
     // decode-only 캐시 승격: 재저장 sz height (0/absent = None — native 저작
     // 분할 표 실측, 분할 표에서 양수값은 첫 조각 높이) + 기본 flow pos 판별
     // (렌더러의 verified-profile admission 용).
@@ -1191,6 +1192,27 @@ fn table_pos_is_default_flow(pos: Option<&crate::schema::section::HxTablePos>) -
         && pos.horz_offset == 0
 }
 
+/// Drops a cell's dormant margin (S19) that equals the table's padding — the
+/// value the encoder writes for such a cell anyway — so only values that
+/// would otherwise be lost are carried.
+/// 이것을 실패시키는 것: 이 정리를 지우기(같은 값도 실림 —
+/// `dormant_cell_margins_round_trip`).
+fn keep_only_distinct_dormant_margins(table: &mut Table) {
+    let padding = table.in_margin.unwrap_or(TableMargin {
+        left: HwpUnit::new(510).expect("510"),
+        right: HwpUnit::new(510).expect("510"),
+        top: HwpUnit::new(141).expect("141"),
+        bottom: HwpUnit::new(141).expect("141"),
+    });
+    for row in &mut table.rows {
+        for cell in &mut row.cells {
+            if cell.dormant_margin == Some(padding) {
+                cell.dormant_margin = None;
+            }
+        }
+    }
+}
+
 /// Converts an `HxTableCell` into a Core `TableCell`.
 fn convert_table_cell(
     hx: &HxTableCell,
@@ -1225,6 +1247,10 @@ fn convert_table_cell(
     // 승격하면 표 inMargin fallback 이 영원히 죽는다.
     let margin: Option<TableMargin> =
         if hx.has_margin != 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
+    // S19: without its own margin the cell still keeps the values Hancom
+    // wrote; the table pass drops them when they are the table's padding.
+    let dormant_margin: Option<TableMargin> =
+        if hx.has_margin == 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
     let vertical_align: Option<TableVerticalAlign> = match hx.sub_list.as_ref() {
         Some(sub_list) => decode_table_vertical_align(&sub_list.vert_align)?,
         None => None,
@@ -1261,6 +1287,7 @@ fn convert_table_cell(
     if let Some(value) = vertical_align {
         cell = cell.with_vertical_align(value);
     }
+    cell.dormant_margin = dormant_margin;
     Ok(cell)
 }
 

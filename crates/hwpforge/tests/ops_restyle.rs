@@ -402,3 +402,60 @@ fn restyle_keeps_end_mark_char_shapes() {
     // end mark pass).
     assert_eq!(ends(&out.bytes), before);
 }
+
+/// S19: a restyle keeps a cell's dormant margin (its own values while it
+/// uses the table's padding).
+///
+/// 이것을 실패시키는 것: 디코더가 휴면 값을 읽지 않기 / 인코더가 쓰지 않기.
+#[test]
+fn restyle_keeps_dormant_cell_margins() {
+    use hwpforge::core::table::{Table, TableCell, TableMargin, TableRow};
+    use hwpforge::foundation::HwpUnit;
+
+    let cell = || {
+        TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("칸", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::new(5000).unwrap(),
+        )
+    };
+    let mut own = cell();
+    let unit = |v| HwpUnit::new(v).unwrap();
+    own.dormant_margin =
+        Some(TableMargin { left: unit(11), right: unit(12), top: unit(13), bottom: unit(14) });
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow::new(vec![own, cell()])]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let source = HwpxEncoder::encode(
+        &doc.validate().expect("validate"),
+        &minimal_store(),
+        &ImageStore::new(),
+    )
+    .expect("encode");
+    let dormant = |bytes: &[u8]| {
+        let doc = HwpxDecoder::decode(bytes).expect("decode");
+        let mut out = Vec::new();
+        for p in &doc.document.sections()[0].paragraphs {
+            for run in &p.runs {
+                if let Some(t) = run.content.as_table() {
+                    out.extend(t.rows.iter().flat_map(|r| &r.cells).map(|c| c.dormant_margin));
+                }
+            }
+        }
+        out
+    };
+    let before = dormant(&source);
+    assert!(before[0].is_some() && before[1].is_none(), "{before:?}");
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    assert_eq!(dormant(&out.bytes), before);
+}

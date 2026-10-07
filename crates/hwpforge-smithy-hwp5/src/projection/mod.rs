@@ -4253,6 +4253,22 @@ fn apply_table_projection_metadata(
     // encoder's defaults (as the HWPX decoder carries the wire values).
     core_table.in_margin = table.inner_margin.map(core_margin);
     core_table.out_margin = table.ctrl.as_ref().and_then(|ctrl| ctrl.outer_margin).map(core_margin);
+    // S19: a dormant cell margin equal to the table's padding is what the
+    // encoder writes anyway; only distinct values are carried.
+    // 이것을 실패시키는 것: 이 정리를 지우기(`dormant_cell_margin_is_kept`).
+    let padding = core_table.in_margin.unwrap_or(TableMargin {
+        left: HwpUnit::new(510).expect("510"),
+        right: HwpUnit::new(510).expect("510"),
+        top: HwpUnit::new(141).expect("141"),
+        bottom: HwpUnit::new(141).expect("141"),
+    });
+    for row in &mut core_table.rows {
+        for cell in &mut row.cells {
+            if cell.dormant_margin == Some(padding) {
+                cell.dormant_margin = None;
+            }
+        }
+    }
     // §19.6 A: 표 자신의 CtrlHeader 속성 word·오프셋 → `Table::placement`.
     if let Some(ctrl) = &table.ctrl {
         let wire = parse_object_placement_wire(ctrl.properties, ctrl.geometry.x, ctrl.geometry.y);
@@ -4310,6 +4326,11 @@ fn project_table_cell_with_images(
     // uses the table's default padding. 이것을 실패시키는 것: 판정 반전 /
     // 비트 번호 15·17(`table_margins_and_cell_margin_flag_are_read`).
     core_cell.margin = cell.has_margin.then(|| core_margin(cell.margin));
+    // S19: a cell using the table's padding keeps its own values (Hancom
+    // keeps them in `<hp:cellMargin>`); the table pass drops those equal to
+    // the padding. 이것을 실패시키는 것: 이 값을 싣지 않기
+    // (`dormant_cell_margin_is_kept`).
+    core_cell.dormant_margin = (!cell.has_margin).then(|| core_margin(cell.margin));
     // §19.22 D3: line wrap. 2 (keep) has no Hancom twin to confirm it and
     // is reported; 3 has no meaning and is read as break.
     // 이것을 실패시키는 것: 비트 3–4 를 5–6 으로 / 2 의 경고 삭제 / 3 을
