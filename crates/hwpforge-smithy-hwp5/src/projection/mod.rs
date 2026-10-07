@@ -3740,13 +3740,26 @@ fn chart_dimension(value: i32) -> Option<HwpUnit> {
 /// `2=bottom`), mirroring `parse_table_cell`. `None` (no ListHeader 속성
 /// captured) and any unmapped value default to [`VerticalAlign::Top`], which
 /// matches 한컴's default and keeps default shapes byte-unchanged downstream.
-fn shape_vertical_align_from_list_header(list_header_properties: Option<u32>) -> VerticalAlign {
+///
+/// Value 3 has no meaning and is reported (§19.22 D4).
+/// 이것을 실패시키는 것: 3 의 보고를 지우기(`shape_vertical_align_3_is_reported`).
+fn shape_vertical_align_from_list_header(
+    list_header_properties: Option<u32>,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> VerticalAlign {
     match list_header_properties {
         Some(props) => match ((props >> 5) & 0x03) as u8 {
             0 => VerticalAlign::Top,
             1 => VerticalAlign::Center,
             2 => VerticalAlign::Bottom,
-            _ => VerticalAlign::Top,
+            raw => {
+                push_projection_fallback(
+                    warnings,
+                    "textbox.vertical_align",
+                    format!("text vertical align {raw} has no meaning; read as top"),
+                );
+                VerticalAlign::Top
+            }
         },
         None => VerticalAlign::Top,
     }
@@ -3793,6 +3806,7 @@ fn project_textbox_run(
             style,
             text_vertical_align: shape_vertical_align_from_list_header(
                 textbox.list_header_properties,
+                &mut projection_images.warnings,
             ),
         },
         CharShapeIndex::new(0),
@@ -3833,7 +3847,10 @@ fn attach_shape_text(
         | Control::Polygon { paragraphs, text_vertical_align, .. } = control.as_mut()
         {
             *paragraphs = projected;
-            *text_vertical_align = shape_vertical_align_from_list_header(list_header_properties);
+            *text_vertical_align = shape_vertical_align_from_list_header(
+                list_header_properties,
+                &mut projection_images.warnings,
+            );
         }
     }
 }
@@ -4370,20 +4387,34 @@ mod tests {
         // 표 65 문단 리스트 헤더 속성 bit 5~6 = 세로 정렬 (0=top, 1=center, 2=bottom).
         // value << 5 places the alignment code in the right bits.
         assert_eq!(
-            shape_vertical_align_from_list_header(Some(0 << 5)),
+            shape_vertical_align_from_list_header(Some(0 << 5), &mut Vec::new()),
             VerticalAlign::Top,
             "code 0 → top"
         );
         assert_eq!(
-            shape_vertical_align_from_list_header(Some(1 << 5)),
+            shape_vertical_align_from_list_header(Some(1 << 5), &mut Vec::new()),
             VerticalAlign::Center,
             "code 1 → center"
         );
         assert_eq!(
-            shape_vertical_align_from_list_header(Some(2 << 5)),
+            shape_vertical_align_from_list_header(Some(2 << 5), &mut Vec::new()),
             VerticalAlign::Bottom,
             "code 2 → bottom"
         );
+    }
+
+    /// §19.22 D4: value 3 has no meaning — read as top and reported.
+    #[test]
+    fn shape_vertical_align_3_is_reported() {
+        let mut warnings = Vec::new();
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(3 << 5), &mut warnings),
+            VerticalAlign::Top
+        );
+        assert!(matches!(
+            warnings[..],
+            [Hwp5Warning::ProjectionFallback { subject: "textbox.vertical_align", .. }]
+        ));
     }
 
     #[test]
@@ -4391,19 +4422,28 @@ mod tests {
         // Lower bits (text direction, line wrap) and higher bits must not leak
         // into the alignment. Set every bit *except* 5~6 and expect Top.
         let noise = !0b0110_0000u32;
-        assert_eq!(shape_vertical_align_from_list_header(Some(noise)), VerticalAlign::Top);
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(noise), &mut Vec::new()),
+            VerticalAlign::Top
+        );
         // center with surrounding noise still decodes center.
         assert_eq!(
-            shape_vertical_align_from_list_header(Some(noise | (1 << 5))),
+            shape_vertical_align_from_list_header(Some(noise | (1 << 5)), &mut Vec::new()),
             VerticalAlign::Center
         );
     }
 
     #[test]
     fn shape_vertical_align_defaults_top_when_absent() {
-        assert_eq!(shape_vertical_align_from_list_header(None), VerticalAlign::Top);
+        assert_eq!(
+            shape_vertical_align_from_list_header(None, &mut Vec::new()),
+            VerticalAlign::Top
+        );
         // code 3 (reserved) is not a real value → default Top, no fake mapping.
-        assert_eq!(shape_vertical_align_from_list_header(Some(3 << 5)), VerticalAlign::Top);
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(3 << 5), &mut Vec::new()),
+            VerticalAlign::Top
+        );
     }
 
     #[test]

@@ -417,6 +417,9 @@ struct NestedSubtreeContext {
     unread_corner_ratio: u8,
     /// Initial box of the scope's first `ShapeComponent` (HWPX `orgSz`).
     original_size: Option<(u32, u32)>,
+    /// Length of the last list header seen (a shape's text list when the
+    /// scope is a shape).
+    list_header_len: Option<usize>,
 }
 
 impl NestedSubtreeContext {
@@ -453,18 +456,16 @@ impl NestedSubtreeContext {
             caption_paragraphs: 0,
             unread_corner_ratio: 0,
             original_size: None,
+            list_header_len: None,
         }
     }
 
     fn note_list_header(&mut self, data: &[u8]) {
         self.saw_list_header = true;
-        // 표 65 문단 리스트 헤더: INT16 문단 수 + UINT32 속성. Capture the
-        // 속성 word so projection can recover bits 5–6 (text vertical align).
-        if let Some(bytes) = data.get(2..6) {
-            if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
-                self.list_header_properties = Some(u32::from_le_bytes(arr));
-            }
-        }
+        // A shape's text list (§19.22 D4): its own layout. A header's or
+        // footer's list header passes here too; its word is not used.
+        self.list_header_properties = gso::shape_text_list_properties(data);
+        self.list_header_len = Some(data.len());
     }
 
     /// A rectangle record: its byte 0 is the corner ratio (§19.5 1c).
@@ -496,6 +497,7 @@ impl NestedSubtreeContext {
             self.paragraphs.clear();
             self.saw_list_header = false;
             self.list_header_properties = None;
+            self.list_header_len = None;
             self.original_size = crate::schema::section::Hwp5ShapeRender::initial_size(data, true);
         }
         self.comp_level.get_or_insert(level);
@@ -576,6 +578,14 @@ impl NestedSubtreeContext {
                     self.unread_corner_ratio
                 ),
             });
+        }
+        // A shape's text list too short for its property word (§19.22 D4).
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`shape_text_list_header_reads_its_own_layout`).
+        if let Some(len) = self.list_header_len.filter(|_| self.comp_level.is_some()) {
+            if self.list_header_properties.is_none() {
+                warnings.push(gso::short_list_header_warning(len));
+            }
         }
         if self.caption_paragraphs > 0 {
             warnings.push(Hwp5Warning::DroppedControl {
@@ -4013,6 +4023,128 @@ mod tests {
             })
             .collect();
         assert_eq!(subjects, ["cell.line_wrap_unverified", "cell.line_wrap"]);
+    }
+
+    /// A shape text `LIST_HEADER` of `len` bytes: u32 paragraph count 1,
+    /// then `properties`, then zeros.
+    fn shape_text_list_header(len: usize, properties: u32) -> Vec<u8> {
+        let mut data = 1u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&properties.to_le_bytes());
+        data.resize(len, 0);
+        data
+    }
+
+    /// §19.22 D4: a shape's text list header carries a u32 paragraph count
+    /// and its property word at bytes 4..8 (vertical align bits 5–6), in all
+    /// three readers — a body text box (33 bytes), a group child (45 bytes)
+    /// and a text box in a table cell (33 bytes). A header shorter than 8
+    /// bytes is reported, in each reader.
+    ///
+    /// 이것을 실패시키는 것: 세 읽기 중 하나를 옛 오프셋(2..6)으로 / 짧은 길이
+    /// 보고를 지우기(세 곳 각각).
+    #[test]
+    fn shape_text_list_header_reads_its_own_layout() {
+        let build = |len: usize| {
+            let lh = shape_text_list_header(len.min(33), 0x20);
+            let lh45 = shape_text_list_header(len.min(45), 0x20);
+            let mut stream = Vec::new();
+            // Body text box.
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                0,
+                &gso_ctrl_header_data(0, 0, 7000, 5000),
+            ));
+            stream.extend(make_record(TagId::ShapeComponent, 1, b"cer$cer$"));
+            stream.extend(make_record(TagId::ListHeader, 2, &lh));
+            stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 3, &para_text_data("body")));
+            stream.extend(make_record(TagId::ShapeComponentRect, 2, &[0u8; 9]));
+            // Group with a text-box child.
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                1,
+                &gso_ctrl_header_data(0, 0, 3000, 1000),
+            ));
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                2,
+                &shape_component_render_data(
+                    &SHAPE_COMPONENT_TYPE_GROUP,
+                    true,
+                    0,
+                    (3000, 1000),
+                    0.0,
+                ),
+            ));
+            for x in [0.0, 2000.0] {
+                stream.extend(make_record(
+                    TagId::ShapeComponent,
+                    3,
+                    &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+                ));
+                stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+            }
+            stream.extend(make_record(TagId::ListHeader, 4, &lh45));
+            stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 5, &para_text_data("child")));
+            // A text box in a table cell.
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            one_cell_table(&mut stream, 1);
+            stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                2,
+                &gso_ctrl_header_data(0, 0, 9000, 3000),
+            ));
+            stream.extend(make_record(TagId::ShapeComponent, 3, b"cer$cer$"));
+            stream.extend(make_record(TagId::ListHeader, 4, &lh));
+            stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 5, &para_text_data("cell")));
+            stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+            parse_body_text(&stream, &version()).unwrap()
+        };
+        let props = |result: &SectionResult| {
+            let Hwp5Control::TextBox(body) = &result.paragraphs[0].controls[0] else {
+                panic!("{:?}", result.paragraphs[0].controls)
+            };
+            let Hwp5Control::Group(group) = &result.paragraphs[1].controls[0] else {
+                panic!("{:?}", result.paragraphs[1].controls)
+            };
+            let Hwp5Control::Table(table) = &result.paragraphs[2].controls[0] else { panic!() };
+            let Hwp5Control::TextBox(in_cell) = &table.cells[0].paragraphs[0].controls[0] else {
+                panic!("{:?}", table.cells[0].paragraphs[0].controls)
+            };
+            [
+                body.list_header_properties,
+                group.children.last().unwrap().list_header_properties,
+                in_cell.list_header_properties,
+            ]
+        };
+        let shorts = |result: &SectionResult| {
+            result
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        Hwp5Warning::ProjectionFallback {
+                            subject: "textbox.list_header_short",
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        let full = build(usize::MAX);
+        assert_eq!(props(&full), [Some(0x20); 3]);
+        assert_eq!(shorts(&full), 0);
+        let short = build(6);
+        assert_eq!(props(&short), [None; 3]);
+        assert_eq!(shorts(&short), 3, "{:?}", short.warnings);
     }
 
     /// [`one_cell_table`] whose control header sits at `base`.

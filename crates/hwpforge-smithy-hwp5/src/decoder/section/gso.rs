@@ -21,6 +21,27 @@ use super::{
     SHAPE_COMPONENT_TYPE_GROUP,
 };
 
+/// The property word of a shape's text `LIST_HEADER` (§19.22 D4): a u32
+/// paragraph count, then the property word at bytes 4..8 — not the cell
+/// layout (u16 count) the three readers used before, which put the vertical
+/// align two bytes off. Every shape text list in the corpus is 20, 28, 33 or
+/// 45 bytes long (2,139 records); in the Hancom twin pairs the 33- and
+/// 45-byte forms match `vertAlign` 348/348. `None` when shorter than 8 bytes.
+///
+/// 이것을 실패시키는 것: 오프셋을 2..6 으로(`shape_text_list_header_reads_its_own_layout`).
+pub(super) fn shape_text_list_properties(data: &[u8]) -> Option<u32> {
+    data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
+/// The warning for a shape text `LIST_HEADER` too short for its property
+/// word (none in the corpus): the text keeps the default (top) alignment.
+pub(super) fn short_list_header_warning(len: usize) -> Hwp5Warning {
+    Hwp5Warning::ProjectionFallback {
+        subject: "textbox.list_header_short",
+        reason: format!("shape text list header of {len} bytes; its properties are not read"),
+    }
+}
+
 /// Active paragraph-local `gso ` scope while collecting image evidence.
 pub(super) struct InlineGsoContext {
     pub(super) ctrl_depth: u16,
@@ -408,10 +429,9 @@ impl GsoGroupBuilder {
         match tag {
             TagId::ListHeader if own => {
                 child.saw_list_header = true;
-                if let Some(bytes) = record.data.get(2..6) {
-                    if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
-                        child.list_header_properties = Some(u32::from_le_bytes(arr));
-                    }
+                child.list_header_properties = shape_text_list_properties(&record.data);
+                if child.list_header_properties.is_none() {
+                    warnings.push(short_list_header_warning(record.data.len()));
                 }
             }
             TagId::CtrlHeader if in_paragraph => {
@@ -617,10 +637,9 @@ impl InlineGsoContext {
         match tag {
             TagId::ListHeader if own => {
                 self.saw_list_header = true;
-                if let Some(bytes) = record.data.get(2..6) {
-                    if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
-                        self.list_header_properties = Some(u32::from_le_bytes(arr));
-                    }
+                self.list_header_properties = shape_text_list_properties(&record.data);
+                if self.list_header_properties.is_none() {
+                    warnings.push(short_list_header_warning(record.data.len()));
                 }
                 true
             }

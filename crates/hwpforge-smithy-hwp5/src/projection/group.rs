@@ -819,7 +819,8 @@ fn attach_text(
 ) {
     let projected =
         project_nested_paragraphs(&child.paragraphs, state, ImageProjectionContext::TextBox);
-    let valign = shape_vertical_align_from_list_header(child.list_header_properties);
+    let valign =
+        shape_vertical_align_from_list_header(child.list_header_properties, &mut state.warnings);
     match control {
         Control::TextBox { paragraphs, text_vertical_align, .. }
         | Control::Ellipse { paragraphs, text_vertical_align, .. } => {
