@@ -8,7 +8,8 @@ use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
     BorderFillIndex, CharShadow, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
-    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
+    ShadowOffset, StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType,
+    VerticalPosition,
 };
 use hwpforge_smithy_hwp5::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
@@ -22,6 +23,20 @@ use hwpforge_smithy_hwpx::{
 
 pub(crate) fn bgr_colorref_to_color(bgr: u32) -> Color {
     Color::from_raw(bgr & 0x00FF_FFFF)
+}
+
+/// The HWP5 shadow as a [`CharShadow`]: kind (bits 11-12), color (COLORREF,
+/// `0xFFFFFFFF` = no color, otherwise the low 24 bits) and gaps (INT8,
+/// clamped to −100..=100). What does not fit is reported by
+/// [`append_char_shape_projection_warnings`].
+pub(crate) fn char_shadow(raw: &Hwp5RawCharShape) -> CharShadow {
+    let color = (raw.shadow_color != 0xFFFF_FFFF).then(|| bgr_colorref_to_color(raw.shadow_color));
+    let x = ShadowOffset::saturating_from_i32(i32::from(raw.shadow_gap_x)).0;
+    let y = ShadowOffset::saturating_from_i32(i32::from(raw.shadow_gap_y)).0;
+    CharShadow::new(raw.shadow_type())
+        .with_color(color)
+        .expect("bgr_colorref_to_color clears the upper byte")
+        .with_offset(x, y)
 }
 
 pub(crate) fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
@@ -125,7 +140,7 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
         VerticalPosition::Normal
     };
     shape.outline_type = raw.outline_type();
-    shape.shadow = CharShadow::new(raw.shadow_type());
+    shape.shadow = char_shadow(raw);
     shape.emboss_type = if raw.emboss() { EmbossType::Emboss } else { EmbossType::None };
     shape.engrave_type = if raw.engrave() { EngraveType::Engrave } else { EngraveType::None };
     shape.emphasis = raw.emphasis();
@@ -317,15 +332,14 @@ fn warn_on_char_shadow_kind(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
+    if raw.shadow_kind_raw() != 3 {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_kind",
         format!(
-            "char shape {raw_id} shadow kind {} collapsed to Drop because the shared IR only carries None vs Drop",
-            raw.shadow_kind_raw()
+            "char shape {raw_id} shadow kind 3 is outside the spec (0 none, 1 discrete, 2 continuous); written as NONE with its color and offsets"
         ),
     );
 }
@@ -335,14 +349,14 @@ fn warn_on_char_shadow_color(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
+    if raw.shadow_color >> 24 == 0 || raw.shadow_color == 0xFFFF_FFFF {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_color",
         format!(
-            "char shape {raw_id} shadow color 0x{:08X} is not carried because HwpxCharShape does not store shadow_color",
+            "char shape {raw_id} shadow color 0x{:08X} has a non-zero upper byte; only the low 24 bits are kept",
             raw.shadow_color
         ),
     );
@@ -353,17 +367,15 @@ fn warn_on_char_shadow_offset(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.shadow_kind_raw() == 0 {
-        return;
-    }
-    if raw.shadow_gap_x == 0 && raw.shadow_gap_y == 0 {
+    let clamped = |v: i8| ShadowOffset::saturating_from_i32(i32::from(v)).1;
+    if !clamped(raw.shadow_gap_x) && !clamped(raw.shadow_gap_y) {
         return;
     }
     push_projection_fallback(
         warnings,
         "style.char_shape.shadow_offset",
         format!(
-            "char shape {raw_id} shadow offset (dx={}, dy={}) is not carried because HwpxCharShape does not store shadow gaps",
+            "char shape {raw_id} shadow offset (dx={}, dy={}) is outside -100..=100; clamped",
             raw.shadow_gap_x, raw.shadow_gap_y
         ),
     );

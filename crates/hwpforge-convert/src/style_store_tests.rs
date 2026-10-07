@@ -5,9 +5,10 @@ use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
 };
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
-    EngraveType, GradientType, HeadingType, LineSpacingType, OutlineType, ParaShapeIndex,
-    ShadowType, StrikeoutShape, TabAlign, UnderlineType, VerticalPosition, WordBreakType,
+    Alignment, BorderFillIndex, BreakType, CharShadow, CharShapeIndex, Color, EmbossType,
+    EmphasisType, EngraveType, GradientType, HeadingType, LineSpacingType, OutlineType,
+    ParaShapeIndex, ShadowType, StrikeoutShape, TabAlign, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 use hwpforge_smithy_hwp5::schema::border_fill::{
     Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5FillPatternKind,
@@ -734,7 +735,8 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.underline_shape"
     )));
-    assert!(warnings.iter().any(|warning| matches!(
+    // Kind 1 is a discrete shadow, carried as Drop: nothing to report.
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.shadow_kind"
@@ -768,14 +770,13 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
     )));
 }
 
-#[test]
-fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
+/// One char shape through the store conversion: its shadow and the shadow
+/// warnings.
+fn shadow_of(property: u32, color: u32, gap: (i8, i8)) -> (CharShadow, Vec<&'static str>) {
     let mut raw = default_char_shape();
-    raw.property = 1 << 11; // shadow active (bits 11-12 carry shadow_kind_raw)
-    raw.shadow_color = 0x0011_2233;
-    raw.shadow_gap_x = 5;
-    raw.shadow_gap_y = -2;
-
+    raw.property = property;
+    raw.shadow_color = color;
+    (raw.shadow_gap_x, raw.shadow_gap_y) = gap;
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![Hwp5RawFaceName {
@@ -786,7 +787,7 @@ fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
             panose1: None,
             default_font_name: None,
         }],
-        char_shapes: vec![raw],
+        char_shapes: vec![raw.clone()],
         para_shapes: vec![],
         numberings: vec![],
         bullets: vec![],
@@ -794,59 +795,91 @@ fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
         styles: vec![],
         border_fills: vec![],
     };
-
     let (_, warnings) = crate::hwp5_style_store_to_hwpx(&store);
-
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.char_shape.shadow_color"
-                && reason.contains("0x00112233")
-    )));
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.char_shape.shadow_offset"
-                && reason.contains("dx=5")
-                && reason.contains("dy=-2")
-    )));
+    let subjects = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback { subject, .. } if subject.contains("shadow") => {
+                Some(*subject)
+            }
+            _ => None,
+        })
+        .collect();
+    (hwp5_char_shape_to_hwpx(&raw).shadow, subjects)
 }
 
+fn tuple(s: CharShadow) -> (ShadowType, Option<String>, i8, i8) {
+    (s.kind(), s.color().map(|c| c.to_hex_rgb()), s.offset_x().get(), s.offset_y().get())
+}
+
+fn some(hex: &str) -> Option<String> {
+    Some(hex.to_string())
+}
+
+/// 법무부 charPr 114 (kind 1, 0x00C0C0C0, gaps 5·5) — the shadow Hancom drew
+/// under 붙임 on page 3.
+/// 이것을 실패시키는 것: 색·간격 하드코딩(`#B2B2B2` 10 10) 복귀.
 #[test]
-fn hwp5_char_shape_skips_shadow_warnings_when_inactive() {
-    let mut raw = default_char_shape();
-    // shadow_kind stays 0 => shadow is inactive
-    raw.shadow_color = 0x00FF_0000;
-    raw.shadow_gap_x = 10;
-    raw.shadow_gap_y = 7;
+fn hwp5_discrete_shadow_keeps_color_and_offsets() {
+    let (s, w) = shadow_of(1 << 11, 0x00C0_C0C0, (5, 5));
+    assert_eq!(tuple(s), (ShadowType::Drop, some("#C0C0C0"), 5, 5));
+    assert!(w.is_empty(), "{w:?}");
+}
 
-    let store = Hwp5StyleStore {
-        id_mappings: None,
-        fonts: vec![Hwp5RawFaceName {
-            property: 0,
-            face_name: "함초롬바탕".into(),
-            alternate_font_type: None,
-            alternate_font_name: None,
-            panose1: None,
-            default_font_name: None,
-        }],
-        char_shapes: vec![raw],
-        para_shapes: vec![],
-        numberings: vec![],
-        bullets: vec![],
-        tab_defs: vec![],
-        styles: vec![],
-        border_fills: vec![],
-    };
+/// 이것을 실패시키는 것: 종류 2 를 Drop 으로, BGR 바이트 순서 생략(`#563412`),
+/// 간격 x·y 뒤바꿈.
+#[test]
+fn hwp5_continuous_shadow_keeps_kind_and_rgb_color() {
+    let (s, w) = shadow_of(2 << 11, 0x0056_3412, (-3, 4));
+    assert_eq!(tuple(s), (ShadowType::Continuous, some("#123456"), -3, 4));
+    assert!(w.is_empty(), "{w:?}");
+}
 
-    let (_, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+/// 0xFFFFFFFF is "no color" (Hancom writes `color="none"`).
+/// 이것을 실패시키는 것: 마스크로 `#FFFFFF` 를 만드는 것.
+#[test]
+fn hwp5_shadow_color_all_ones_is_no_color() {
+    let (s, w) = shadow_of(0, 0xFFFF_FFFF, (0, 0));
+    assert_eq!(tuple(s), (ShadowType::None, None, 0, 0));
+    assert!(w.is_empty(), "{w:?}");
+}
 
-    assert!(!warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, .. }
-            if *subject == "style.char_shape.shadow_color"
-                || *subject == "style.char_shape.shadow_offset"
-    )));
+/// 이것을 실패시키는 것: 상위 바이트 경고 누락, `0xFFFFFFFF` 판정을 상위 바이트만으로
+/// 하는 것(0x01C0C0C0 을 색 없음으로).
+#[test]
+fn hwp5_shadow_color_upper_byte_is_dropped_and_reported() {
+    let (s, w) = shadow_of(1 << 11, 0x01C0_C0C0, (5, 5));
+    assert_eq!(tuple(s), (ShadowType::Drop, some("#C0C0C0"), 5, 5));
+    assert_eq!(w, ["style.char_shape.shadow_color"]);
+}
+
+/// 이것을 실패시키는 것: 자르지 않는 것, 경계(±100)를 범위 밖으로 보는 것, 경고 누락.
+#[test]
+fn hwp5_shadow_gaps_outside_100_clamp_and_are_reported() {
+    let (s, w) = shadow_of(1 << 11, 0x00C0_C0C0, (127, -128));
+    assert_eq!(tuple(s), (ShadowType::Drop, some("#C0C0C0"), 100, -100));
+    assert_eq!(w, ["style.char_shape.shadow_offset"]);
+    let (s, w) = shadow_of(1 << 11, 0x00C0_C0C0, (100, -100));
+    assert_eq!(tuple(s), (ShadowType::Drop, some("#C0C0C0"), 100, -100));
+    assert!(w.is_empty(), "{w:?}");
+}
+
+/// Kind 3 is outside the spec: NONE, keeping color and gaps, reported.
+/// 이것을 실패시키는 것: 3 을 Drop 으로, 경고 삭제.
+#[test]
+fn hwp5_shadow_kind_3_is_none_and_reported() {
+    let (s, w) = shadow_of(3 << 11, 0x0056_3412, (5, 5));
+    assert_eq!(tuple(s), (ShadowType::None, some("#123456"), 5, 5));
+    assert_eq!(w, ["style.char_shape.shadow_kind"]);
+}
+
+/// Kind 0 still carries its color and gaps (Hancom writes them on NONE too).
+/// 이것을 실패시키는 것: 종류 0 에서 색·간격을 버리는 것.
+#[test]
+fn hwp5_shadow_kind_0_keeps_color_and_gaps_quietly() {
+    let (s, w) = shadow_of(0, 0x00FF_0000, (10, 7));
+    assert_eq!(tuple(s), (ShadowType::None, some("#0000FF"), 10, 7));
+    assert!(w.is_empty(), "{w:?}");
 }
 
 #[test]

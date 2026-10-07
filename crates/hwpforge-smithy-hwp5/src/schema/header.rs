@@ -842,15 +842,14 @@ impl Hwp5RawCharShape {
         (self.property >> 11) & 0b11
     }
 
-    /// Returns the shadow effect encoded in bits 11-12.
-    ///
-    /// HWP5 distinguishes discrete vs continuous shadows; the current shared
-    /// IR only carries `None` vs `Drop`.
+    /// Returns the shadow kind encoded in bits 11-12: 0 none, 1 discrete
+    /// (비연속, `Drop`), 2 continuous (연속). 3 is outside the spec and reads
+    /// as none; the projection reports it.
     pub fn shadow_type(&self) -> ShadowType {
-        if self.shadow_kind_raw() == 0 {
-            ShadowType::None
-        } else {
-            ShadowType::Drop
+        match self.shadow_kind_raw() {
+            1 => ShadowType::Drop,
+            2 => ShadowType::Continuous,
+            _ => ShadowType::None,
         }
     }
 
