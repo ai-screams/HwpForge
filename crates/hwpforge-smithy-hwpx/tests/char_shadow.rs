@@ -208,3 +208,42 @@ fn a_new_document_writes_the_hancom_default_shadow() {
         assert_eq!(s, r##"<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>"##);
     }
 }
+
+/// A Blueprint document: the built-in template with `shadow: drop` on
+/// heading1 (kind only). Every `charPr` the registry writes is Hancom's
+/// new-document value, and the heading's shadow takes the default color and
+/// offsets — the visible change from `#B2B2B2` that the release notes name.
+///
+/// 이것을 실패시키는 것: 기본 charPr 묶음(`HwpxStyleStore` 의 Hancom 기본 글자 모양)을
+/// DEFAULT 아닌 값으로 두는 것, `PartialCharShadow::resolve` 의 기본 색을 바꾸는 것.
+#[test]
+fn a_blueprint_document_writes_the_default_shadow_and_a_kind_only_drop() {
+    use hwpforge_blueprint::builtins::builtin_default;
+    use hwpforge_blueprint::registry::StyleRegistry;
+    use hwpforge_blueprint::style::PartialCharShadow;
+
+    let mut template = builtin_default().unwrap();
+    let mut drop = PartialCharShadow::default();
+    drop.kind = Some(ShadowType::Drop);
+    template.styles["heading1"].char_shape.as_mut().expect("heading1 char shape").shadow =
+        Some(drop);
+    let registry = StyleRegistry::from_template(&template).unwrap();
+    let styles = HwpxStyleStore::from_registry(&registry).unwrap();
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("가", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new()).unwrap();
+    let all = shadows(&header(&bytes));
+    let (drops, rest): (Vec<_>, Vec<_>) = all.iter().partition(|s| s.contains("DROP"));
+    assert_eq!(drops, [r##"<hh:shadow type="DROP" color="#C0C0C0" offsetX="10" offsetY="10"/>"##]);
+    assert!(rest.len() >= 7, "{all:?}");
+    for s in rest {
+        assert_eq!(s, r##"<hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>"##);
+    }
+}
