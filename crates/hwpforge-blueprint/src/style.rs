@@ -12,9 +12,9 @@
 
 use hwpforge_core::{BulletDef, NumberingDef, ParagraphListRef};
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
-    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineShape,
-    UnderlineType, VerticalPosition,
+    Alignment, BorderFillIndex, BreakType, CharShadow, Color, EmbossType, EmphasisType,
+    EngraveType, HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowOffset, ShadowType,
+    StrikeoutShape, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -161,9 +161,10 @@ pub struct PartialCharShape {
     /// Text outline (1pt border around glyphs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline: Option<OutlineType>,
-    /// Drop shadow.
+    /// Character shadow; each part (kind, color, offsets) inherits on its
+    /// own. YAML accepts a kind string (`shadow: drop`) or a map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shadow: Option<ShadowType>,
+    pub shadow: Option<PartialCharShadow>,
     /// Emboss effect (raised).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emboss: Option<EmbossType>,
@@ -374,8 +375,8 @@ impl PartialCharShape {
         if other.outline.is_some() {
             self.outline = other.outline;
         }
-        if other.shadow.is_some() {
-            self.shadow = other.shadow;
+        if let Some(child) = &other.shadow {
+            self.shadow.get_or_insert_with(PartialCharShadow::default).merge(child);
         }
         if other.emboss.is_some() {
             self.emboss = other.emboss;
@@ -437,7 +438,7 @@ impl PartialCharShape {
             strikeout_shape: self.strikeout_shape.unwrap_or(StrikeoutShape::None),
             strikeout_color: self.strikeout_color,
             outline: self.outline.unwrap_or(OutlineType::None),
-            shadow: self.shadow.unwrap_or(ShadowType::None),
+            shadow: self.shadow.unwrap_or_default().resolve(style_name)?,
             emboss: self.emboss.unwrap_or(EmbossType::None),
             engrave: self.engrave.unwrap_or(EngraveType::None),
             vertical_position: self.vertical_position.unwrap_or(VerticalPosition::Normal),
@@ -451,6 +452,164 @@ impl PartialCharShape {
             use_font_space: self.use_font_space.unwrap_or(false),
             char_border_fill_id: self.char_border_fill_id,
         })
+    }
+}
+
+/// A character shadow with every part optional, for YAML and inheritance.
+///
+/// Each part inherits on its own: a child that only sets `color` keeps the
+/// parent's kind and offsets. `color` has three states — `None` inherits,
+/// `Some(None)` is an explicit `none` (no color), `Some(Some(c))` overrides.
+///
+/// YAML: a kind string (`shadow: drop`, which sets only the kind) or a map
+/// `{kind, color: "#RRGGBB" | none, offset_x, offset_y}`. A null color,
+/// unknown keys and offsets outside −100..=100 are errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct PartialCharShadow {
+    /// Shadow kind.
+    pub kind: Option<ShadowType>,
+    /// `None` = inherit, `Some(None)` = no color, `Some(Some(c))` = `c`.
+    pub color: Option<Option<Color>>,
+    /// Horizontal offset in percent.
+    pub offset_x: Option<ShadowOffset>,
+    /// Vertical offset in percent.
+    pub offset_y: Option<ShadowOffset>,
+}
+
+impl PartialCharShadow {
+    /// Overrides each part that `other` sets.
+    pub fn merge(&mut self, other: &PartialCharShadow) {
+        if other.kind.is_some() {
+            self.kind = other.kind;
+        }
+        if other.color.is_some() {
+            self.color = other.color;
+        }
+        if other.offset_x.is_some() {
+            self.offset_x = other.offset_x;
+        }
+        if other.offset_y.is_some() {
+            self.offset_y = other.offset_y;
+        }
+    }
+
+    /// Fills unset parts from [`CharShadow::DEFAULT`].
+    ///
+    /// # Errors
+    ///
+    /// [`BlueprintError::StyleResolution`] (`field: "shadow.color"`) when the
+    /// color has a non-zero upper byte.
+    pub fn resolve(&self, style_name: &str) -> BlueprintResult<CharShadow> {
+        let base = CharShadow::DEFAULT;
+        let color = self.color.unwrap_or(base.color());
+        Ok(base
+            .with_kind(self.kind.unwrap_or(base.kind()))
+            .with_color(color)
+            .map_err(|_| BlueprintError::StyleResolution {
+                style_name: style_name.to_string(),
+                field: "shadow.color".to_string(),
+            })?
+            .with_offset(
+                self.offset_x.unwrap_or(base.offset_x()),
+                self.offset_y.unwrap_or(base.offset_y()),
+            ))
+    }
+}
+
+impl Serialize for PartialCharShadow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeMap};
+        if let (Some(kind), None, None, None) =
+            (self.kind, self.color, self.offset_x, self.offset_y)
+        {
+            return serializer.serialize_str(&kind.to_string());
+        }
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(kind) = self.kind {
+            map.serialize_entry("kind", &kind.to_string())?;
+        }
+        match self.color {
+            None => {}
+            Some(None) => map.serialize_entry("color", "none")?,
+            Some(Some(c)) if c.to_raw() >> 24 != 0 => {
+                return Err(S::Error::custom(format!(
+                    "shadow color 0x{:08X} has a non-zero upper byte",
+                    c.to_raw()
+                )))
+            }
+            Some(Some(c)) => map.serialize_entry("color", &c.to_hex_rgb())?,
+        }
+        if let Some(x) = self.offset_x {
+            map.serialize_entry("offset_x", &x)?;
+        }
+        if let Some(y) = self.offset_y {
+            map.serialize_entry("offset_y", &y)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PartialCharShadow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{self, MapAccess, Visitor};
+        fn kind<E: de::Error>(s: &str) -> Result<ShadowType, E> {
+            s.parse::<ShadowType>().map_err(E::custom)
+        }
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = PartialCharShadow;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a shadow kind string or a map {kind, color, offset_x, offset_y}")
+            }
+
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<PartialCharShadow, E> {
+                Ok(PartialCharShadow { kind: Some(kind(s)?), ..PartialCharShadow::default() })
+            }
+
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<PartialCharShadow, A::Error> {
+                let mut out = PartialCharShadow::default();
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "kind" => out.kind = Some(kind(&map.next_value::<String>()?)?),
+                        "color" => {
+                            let s = map.next_value::<String>()?;
+                            out.color = Some(if s.eq_ignore_ascii_case("none") {
+                                None
+                            } else {
+                                Some(Color::from_hex_rgb(&s).map_err(de::Error::custom)?)
+                            });
+                        }
+                        "offset_x" => out.offset_x = Some(map.next_value()?),
+                        "offset_y" => out.offset_y = Some(map.next_value()?),
+                        other => {
+                            return Err(de::Error::unknown_field(
+                                other,
+                                &["kind", "color", "offset_x", "offset_y"],
+                            ))
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_any(V)
+    }
+}
+
+impl JsonSchema for PartialCharShadow {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PartialCharShadow".into()
+    }
+
+    /// Same shape as [`CharShadow`]: a kind string or a map whose parts are
+    /// all optional.
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <CharShadow as JsonSchema>::json_schema(gen)
     }
 }
 
@@ -724,8 +883,8 @@ pub struct CharShape {
     pub strikeout_color: Option<Color>,
     /// Text outline.
     pub outline: OutlineType,
-    /// Drop shadow.
-    pub shadow: ShadowType,
+    /// Character shadow.
+    pub shadow: CharShadow,
     /// Emboss effect.
     pub emboss: EmbossType,
     /// Engrave effect.
@@ -1193,7 +1352,7 @@ mod tests {
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,
             outline: OutlineType::None,
-            shadow: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss: EmbossType::None,
             engrave: EngraveType::None,
             vertical_position: VerticalPosition::Normal,
@@ -1227,7 +1386,7 @@ mod tests {
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,
             outline: OutlineType::None,
-            shadow: ShadowType::None,
+            shadow: CharShadow::DEFAULT,
             emboss: EmbossType::None,
             engrave: EngraveType::None,
             vertical_position: VerticalPosition::Normal,
@@ -1342,5 +1501,124 @@ widow_orphan: true
         let ls: LineSpacing = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(ls.spacing_type, Some(LineSpacingType::Percentage));
         assert_eq!(ls.value, Some(160.0));
+    }
+
+    // ── 글자 그림자: 칸별 상속(설계 S21 7.4) ─────────────────────
+
+    fn shadow_partial(yaml_shadow: &str) -> PartialCharShape {
+        serde_yaml::from_str(&format!("font: A\nsize: 10pt\nshadow: {yaml_shadow}\n")).unwrap()
+    }
+
+    fn off(v: i8) -> ShadowOffset {
+        ShadowOffset::new(v).unwrap()
+    }
+
+    /// 부모 `{kind: drop, color: "#FF0000", offset_x: 5}` 에 `child` 를 합쳐 결정한 그림자.
+    fn inherited(child: Option<&str>) -> CharShadow {
+        let mut parent = shadow_partial("{kind: drop, color: '#FF0000', offset_x: 5}");
+        let child = match child {
+            Some(c) => shadow_partial(c),
+            None => serde_yaml::from_str("bold: true\n").unwrap(),
+        };
+        parent.merge(&child);
+        parent.resolve("child").unwrap().shadow
+    }
+
+    fn shadow(kind: ShadowType, color: Option<Color>, x: i8, y: i8) -> CharShadow {
+        CharShadow::new(kind).with_color(color).unwrap().with_offset(off(x), off(y))
+    }
+
+    /// 이것을 실패시키는 것: resolve 가 부모 값을 DEFAULT 로 덮는 것.
+    #[test]
+    fn shadow_child_without_shadow_inherits_every_part() {
+        assert_eq!(inherited(None), shadow(ShadowType::Drop, Some(Color::RED), 5, 10));
+    }
+
+    /// 이것을 실패시키는 것: 명시적 `color: none`(`Some(None)`)을 미지정과 합치는 것.
+    #[test]
+    fn shadow_child_color_none_removes_the_parent_color() {
+        assert_eq!(inherited(Some("{color: none}")), shadow(ShadowType::Drop, None, 5, 10));
+    }
+
+    /// 이것을 실패시키는 것: 문자열 축약이 그림자 전체를 바꾸는 것(통째 교체),
+    /// 문자열 `none` 을 색 none 으로 읽는 것.
+    #[test]
+    fn shadow_kind_string_sets_only_the_kind() {
+        assert_eq!(inherited(Some("drop")), shadow(ShadowType::Drop, Some(Color::RED), 5, 10));
+        assert_eq!(inherited(Some("none")), shadow(ShadowType::None, Some(Color::RED), 5, 10));
+    }
+
+    /// 이것을 실패시키는 것: `PartialCharShadow::merge` 가 색 칸을 빠뜨리는 것.
+    #[test]
+    fn shadow_child_color_overrides_only_the_color() {
+        assert_eq!(
+            inherited(Some("{color: '#00FF00'}")),
+            shadow(ShadowType::Drop, Some(Color::GREEN), 5, 10)
+        );
+    }
+
+    /// 이것을 실패시키는 것: null 색 허용 · 간격 범위 미검사 · 모르는 키 허용.
+    #[test]
+    fn shadow_yaml_rejects_null_color_out_of_range_and_unknown_keys() {
+        for bad in
+            ["{color: null}", "{offset_x: 101}", "{alpha: 1}", "{color: '#12345'}", "sparkle"]
+        {
+            let yaml = format!("font: A\nsize: 10pt\nshadow: {bad}\n");
+            assert!(serde_yaml::from_str::<PartialCharShape>(&yaml).is_err(), "{bad}");
+        }
+    }
+
+    /// 이것을 실패시키는 것: resolve·직렬화가 상위 바이트 색을 무음으로 받아들이는 것.
+    #[test]
+    fn shadow_upper_byte_color_is_refused_by_resolve_and_serialize() {
+        let p = PartialCharShadow {
+            color: Some(Some(Color::from_raw(0x0103_0201))),
+            ..PartialCharShadow::default()
+        };
+        let err = p.resolve("s").unwrap_err();
+        assert!(
+            matches!(&err, BlueprintError::StyleResolution { field, .. } if field == "shadow.color"),
+            "{err:?}"
+        );
+        assert!(serde_yaml::to_string(&p).is_err());
+    }
+
+    /// 이것을 실패시키는 것: 직렬화가 `Some(None)` 을 생략하는 것, 종류만 있는 값을
+    /// 맵으로 쓰고 다시 읽지 못하는 것, 칸을 빠뜨리는 것.
+    #[test]
+    fn shadow_partial_roundtrips_in_four_shapes() {
+        let cases = [
+            PartialCharShadow::default(),
+            PartialCharShadow { color: Some(None), ..PartialCharShadow::default() },
+            PartialCharShadow {
+                kind: Some(ShadowType::Continuous),
+                color: Some(Some(Color::from_rgb(0x12, 0x34, 0x56))),
+                offset_x: Some(off(-3)),
+                offset_y: Some(off(4)),
+            },
+            PartialCharShadow { kind: Some(ShadowType::Drop), ..PartialCharShadow::default() },
+        ];
+        for p in cases {
+            let yaml = serde_yaml::to_string(&p).unwrap();
+            let back: PartialCharShadow = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(back, p, "{yaml}");
+        }
+        let kind_only = PartialCharShadow { kind: Some(ShadowType::Drop), ..Default::default() };
+        assert_eq!(serde_yaml::to_string(&kind_only).unwrap().trim(), "Drop");
+        let rgb = PartialCharShadow {
+            color: Some(Some(Color::from_rgb(0x12, 0x34, 0x56))),
+            ..Default::default()
+        };
+        assert!(serde_yaml::to_string(&rgb).unwrap().contains("'#123456'"));
+    }
+
+    /// 이것을 실패시키는 것: 결정값 역직렬화의 문자열 축약(`visit_str`)을 지우는 것.
+    #[test]
+    fn resolved_char_shape_reads_the_old_shadow_string() {
+        let cs = shadow_partial("drop").resolve("s").unwrap();
+        let mut value = serde_yaml::to_value(&cs).unwrap();
+        value["shadow"] = serde_yaml::Value::String("None".into());
+        let back: CharShape = serde_yaml::from_value(value).unwrap();
+        assert_eq!(back.shadow, CharShadow::new(ShadowType::None));
     }
 }

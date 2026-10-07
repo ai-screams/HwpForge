@@ -1461,7 +1461,7 @@ fn build_store_from_registry_with(
             strikeout_color: cs.strikeout_color,
             vertical_position: cs.vertical_position,
             outline_type: cs.outline,
-            shadow_type: cs.shadow,
+            shadow_type: cs.shadow.kind(),
             emboss_type: cs.emboss,
             engrave_type: cs.engrave,
             emphasis: cs.emphasis,
@@ -2332,7 +2332,7 @@ mod tests {
             assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
             assert_eq!(hwpx_cs.vertical_position, bp_cs.vertical_position);
             assert_eq!(hwpx_cs.outline_type, bp_cs.outline);
-            assert_eq!(hwpx_cs.shadow_type, bp_cs.shadow);
+            assert_eq!(hwpx_cs.shadow_type, bp_cs.shadow.kind());
             assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
             assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
