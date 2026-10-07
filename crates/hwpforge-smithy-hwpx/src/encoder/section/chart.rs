@@ -98,8 +98,9 @@ pub(super) fn build_embedded_chart_run_xml(
         ole = ole_item_id,
         w = width,
         h = height,
-        vo = vert_offset,
-        ho = horz_offset,
+        // Hancom writes a negative offset as its unsigned wrap.
+        vo = vert_offset as u32,
+        ho = horz_offset as u32,
     )
 }
 

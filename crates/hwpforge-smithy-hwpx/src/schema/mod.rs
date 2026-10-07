@@ -37,11 +37,14 @@ pub(crate) fn deser_i32_or_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result
 }
 
 /// Serializes an `i32` read by [`deser_i32_or_u32`] back as the unsigned
-/// value Hancom wrote, for attributes the schema types as non-negative.
+/// value Hancom wrote, for attributes Hancom only ever writes unsigned:
+/// margins (`xs:nonNegativeInteger`) and object offsets and sizes, which
+/// Hancom writes as the unsigned wrap even where the schema allows a
+/// negative integer.
 ///
-/// `-1` is written as `4294967295`, never `-1`, which those attributes do
-/// not allow. 이것을 실패시키는 것: i32 그대로 쓰기
-/// (`dormant_unset_cell_margin_round_trips_as_unsigned`).
+/// `-1` is written as `4294967295`, never `-1`. 이것을 실패시키는 것: i32
+/// 그대로 쓰기 (`dormant_unset_cell_margin_round_trips_as_unsigned`,
+/// `tests/wrapped_offsets.rs`).
 pub(crate) fn ser_i32_as_u32<S: serde::Serializer>(v: &i32, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_u32(*v as u32)
 }

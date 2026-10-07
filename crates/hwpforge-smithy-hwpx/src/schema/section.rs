@@ -1995,6 +1995,10 @@ pub struct HxTableSz {
 }
 
 /// `<hp:pos>` — table position specification.
+///
+/// Hancom writes a negative offset as its unsigned wrap (`4294964867` =
+/// −2429), never as a negative literal, so the offsets are written back
+/// unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTablePos {
     #[serde(rename = "@treatAsChar", default)]
@@ -2015,9 +2019,19 @@ pub struct HxTablePos {
     pub vert_align: String,
     #[serde(rename = "@horzAlign", default)]
     pub horz_align: String,
-    #[serde(rename = "@vertOffset", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@vertOffset",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub vert_offset: i32,
-    #[serde(rename = "@horzOffset", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@horzOffset",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub horz_offset: i32,
 }
 
@@ -2410,22 +2424,49 @@ pub struct HxImg {
 }
 
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
+///
+/// Hancom writes a negative `<hp:curSz>` side as its unsigned wrap and
+/// never as a negative literal, so both sides are written back unsigned.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
-    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@width",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub width: i32,
-    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@height",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub height: i32,
 }
 
 // ── Picture-specific sub-elements ────────────────────────────────
 
 /// `<hp:offset x="0" y="0"/>` — position offset for shapes.
+///
+/// The schema allows a negative `xs:integer`, but Hancom writes a negative
+/// offset as its unsigned wrap (`4294966986` = −310), so it is written
+/// back unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxOffset {
-    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@x",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub x: i32,
-    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@y",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub y: i32,
 }
 

@@ -1180,7 +1180,11 @@ fn set_group_level(xml: &str, level: u32) -> String {
 /// position lives in `<hp:offset>` relative to the group origin. We rewrite
 /// the leftmost (own) `<hp:offset>` rather than thread coordinates through
 /// every per-shape encoder signature — same approach as [`set_group_level`].
+///
+/// A negative offset is written as its unsigned wrap, as Hancom writes it
+/// (the `transMatrix` translation stays signed, as Hancom writes that one).
 fn set_group_child_offset(xml: &str, x: i32, y: i32) -> String {
+    let (x, y) = (x as u32, y as u32);
     xml.replacen(r#"<hp:offset x="0" y="0"/>"#, &format!(r#"<hp:offset x="{x}" y="{y}"/>"#), 1)
 }
 
@@ -1288,8 +1292,9 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         id = id,
         instid = instid,
         text = text_esc,
-        hx = hx,
-        vy = vy,
+        // Hancom writes a negative offset as its unsigned wrap.
+        hx = hx as u32,
+        vy = vy as u32,
         w = w,
         h = h,
         center_x = center_x,
@@ -2512,6 +2517,26 @@ mod tests {
         let style = make_style(Some("#FF0000"), None, None);
         let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.line_shape.color, "#FF0000");
+    }
+
+    /// Hancom writes a negative `<hp:curSz>` side or `<hp:offset>` as its
+    /// unsigned wrap (44 curSz and 2,076 offset attributes in 485
+    /// Hancom-saved files, never as a negative literal).
+    ///
+    /// 이것을 실패시키는 것: `HxSizeAttr` 의 `width`·`height`, `HxOffset` 의
+    /// `x`·`y` 를 i32 로 쓰기(각각).
+    #[test]
+    fn negative_size_and_offset_are_written_wrapped() {
+        let sz = HxSizeAttr { width: -14173, height: -2355 };
+        assert_eq!(
+            serialize_with_root(&sz, "hp:curSz").unwrap(),
+            r#"<hp:curSz width="4294953123" height="4294964941"/>"#
+        );
+        let offset = HxOffset { x: -310, y: -8148 };
+        assert_eq!(
+            serialize_with_root(&offset, "hp:offset").unwrap(),
+            r#"<hp:offset x="4294966986" y="4294959148"/>"#
+        );
     }
 
     #[test]
