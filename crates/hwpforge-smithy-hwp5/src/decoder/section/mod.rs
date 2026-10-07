@@ -171,13 +171,13 @@ fn segment_lengths(segment: &TextSegment) -> (u32, u32) {
 /// Takes the paragraph-end mark's char shape out of the wire boundaries
 /// (§19.22 D5, S17), before they move to text positions: the entry placed
 /// exactly at the wire position of the paragraph-end character (the last
-/// segment, `ParaBreak`) — the last one there when several share it. It is
-/// returned only when it differs from the shape of the last character
-/// before it (wire position − 1), as Hancom writes an end run only then
-/// (3,385/3,385 and 6/6 in the Hancom twin pairs). Entries past the end
-/// character are left to the conversion. An empty paragraph (no segment
-/// but the end character, or none) keeps its boundary: its one run takes
-/// the shape at position 0 (§19.22 B).
+/// segment, `ParaBreak`) — the last one there when several share it.
+/// Whether it differs from the last character is decided at projection,
+/// against the last run actually written (review r1: the last wire boundary
+/// can belong to something that writes no run, such as a field end). Entries
+/// past the end character are left to the conversion. An empty paragraph
+/// (no segment but the end character, or none) keeps its boundary: its one
+/// run takes the shape at position 0 (§19.22 B).
 ///
 /// 이것을 실패시키는 것: 변환 뒤 위치로 판정 / 끝 경계를 본문 목록에 남기기 /
 /// 빈 문단에서도 판정 / 문자 수로 셈(`end_mark_shape_is_read_from_the_wire`).
@@ -209,8 +209,7 @@ fn split_end_mark_shape(
         return (runs, None);
     };
     let body_runs: Vec<_> = runs.into_iter().filter(|r| r.position != end).collect();
-    let last_glyph = body_runs.iter().rfind(|r| r.position < end).map_or(0, |r| r.char_shape_id);
-    (body_runs, (end_shape != last_glyph).then_some(end_shape))
+    (body_runs, Some(end_shape))
 }
 
 /// In-progress capture state for one `HWPTAG_MEMO_LIST` (0x5D) cluster.
@@ -4794,8 +4793,8 @@ mod tests {
         let text = |t: &str| [utf16(t), vec![0x0D]].concat();
         // Differs from the last character: carried, and not a body boundary.
         assert_eq!(end(&text("가나"), &[(0, 1), (2, 5)]), (Some(5), vec![(0, 1)]));
-        // Same as the last character: no end shape.
-        assert_eq!(end(&text("가나"), &[(0, 1), (2, 1)]).0, None);
+        // Same as the last character: kept here, folded at projection.
+        assert_eq!(end(&text("가나"), &[(0, 1), (2, 1)]).0, Some(1));
         // Past the end character: not the end mark.
         assert_eq!(end(&text("가나"), &[(0, 1), (3, 5)]).0, None);
         // A field end just before the end character (8 wire units, no text):
@@ -4818,6 +4817,24 @@ mod tests {
         let no_text = parse_body_text(&stream, &version()).unwrap();
         assert_eq!(no_text.paragraphs[0].end_char_shape, None);
         assert_eq!(no_text.paragraphs[0].char_shape_runs.len(), 1);
+    }
+
+    /// Review r1 counterexample: body shape 1, a field end with shape 2 just
+    /// before the end mark, end mark 2. The field end writes no run, so the
+    /// last written run has shape 1 and the end mark (2) must be kept.
+    ///
+    /// 이것을 실패시키는 것: 마지막 wire 경계(필드 끝)와 비교해 접기.
+    #[test]
+    fn end_shape_after_a_field_end_is_kept() {
+        let field = [utf16("가"), ctrl(0x04), vec![0x0D]].concat();
+        let result = decode_paragraph(&field, &[(0, 1), (1, 2), (9, 2)]);
+        let (doc, _) = crate::projection::project_to_core(vec![result]).expect("project");
+        let p = &doc.sections()[0].paragraphs[0];
+        assert_eq!(
+            p.runs.last().unwrap().char_shape_id,
+            hwpforge_foundation::CharShapeIndex::new(1)
+        );
+        assert_eq!(p.end_char_shape, Some(hwpforge_foundation::CharShapeIndex::new(2)));
     }
 
     /// The same reading in a group child's text (§19.22 D5).

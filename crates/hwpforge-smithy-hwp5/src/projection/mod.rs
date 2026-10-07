@@ -1417,10 +1417,17 @@ fn project_paragraph_with_images(
     // tab character was consumed by a hyperlink display or field
     // begin/end pair) still falls through to the warning below, so the
     // audit baseline keeps a foothold on the silent loss.
-    // §19.22 D5 (S17): the paragraph-end mark's char shape.
-    // 이것을 실패시키는 것: 이 줄을 지우기(`end_mark_shape_is_read_from_the_wire`).
-    projected.paragraph.end_char_shape =
-        hwp_para.end_char_shape.map(|id| CharShapeIndex::new(id as usize));
+    // §19.22 D5 (S17): the paragraph-end mark's char shape, kept only when
+    // it differs from the last run written — Hancom writes an end run only
+    // then (3,385/3,385 and 6/6 in the twin pairs). Compared with the run,
+    // not the last wire boundary, which may belong to something that writes
+    // no run (a field end; review r1).
+    // 이것을 실패시키는 것: 이 줄을 지우기 / 비교를 지우기 / 마지막 wire 경계와
+    // 비교(`end_char_shape_reaches_core`, `end_shape_after_a_field_end_is_kept`).
+    projected.paragraph.end_char_shape = hwp_para
+        .end_char_shape
+        .map(|id| CharShapeIndex::new(id as usize))
+        .filter(|end| projected.paragraph.runs.last().map(|r| r.char_shape_id) != Some(*end));
     let unconsumed = carry_inline_tab_attrs(&mut projected.paragraph, &hwp_para.text_segments);
     for (width, leader, tab_type) in unconsumed {
         projection_images.warnings.push(crate::decoder::Hwp5Warning::ProjectionFallback {
@@ -4623,13 +4630,18 @@ mod tests {
     /// 이것을 실패시키는 것: 투영에서 이 칸을 옮기지 않기.
     #[test]
     fn end_char_shape_reaches_core() {
-        let mut para = _make_paragraph_with_runs(
-            "가",
-            vec![Hwp5CharShapeRun { position: 0, char_shape_id: 1 }],
-        );
-        para.end_char_shape = Some(5);
-        let (doc, _) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
-        assert_eq!(doc.sections()[0].paragraphs[0].end_char_shape, Some(CharShapeIndex::new(5)));
+        let project = |end: u32| {
+            let mut para = _make_paragraph_with_runs(
+                "가",
+                vec![Hwp5CharShapeRun { position: 0, char_shape_id: 1 }],
+            );
+            para.end_char_shape = Some(end);
+            let (doc, _) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+            doc.sections()[0].paragraphs[0].end_char_shape
+        };
+        assert_eq!(project(5), Some(CharShapeIndex::new(5)));
+        // The same shape as the last run: no end mark.
+        assert_eq!(project(1), None);
     }
 
     /// §19.22 B: an empty paragraph keeps the char shape of position 0 —
