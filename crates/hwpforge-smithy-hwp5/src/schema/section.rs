@@ -879,12 +879,21 @@ impl Hwp5ShapeRender {
             .map_err(|e| e.to_string())
             .or_else(|e| {
                 // Some writers end a shape's colour fill right after the
-                // hatch kind (four zero bytes, no alpha byte): the colours
-                // and hatch are all there, so read them rather than drop
-                // the fill (corpus: 12 shapes in 3 documents).
+                // hatch kind with four zero bytes and nothing more (no alpha
+                // byte, no extra-data length): the colours and hatch are all
+                // there, so read them rather than drop the fill. Only that
+                // exact form — 16 bytes to the end of the record, the last
+                // four zero — is read this way (corpus: all 12 colour fills
+                // on this path that fail the full layout have that form;
+                // review r2: a damaged block with alpha 128 must not come
+                // out as an opaque fill).
                 // 이것을 실패시키는 것: 이 대체 읽기를 지우기
-                // (`shape_look_reads_a_colour_fill_without_its_alpha_byte`).
-                let block = tail.get(block_start..block_start + 12).filter(|_| fill_kind == 1);
+                // (`shape_look_reads_a_colour_fill_without_its_alpha_byte`) /
+                // 끝 네 바이트·종류 조건을 지우기
+                // (`only_the_short_colour_fill_form_is_read_past_its_error`).
+                let block = tail
+                    .get(block_start..)
+                    .filter(|b| fill_kind == 1 && b.get(12..) == Some(&[0u8; 4][..]));
                 block
                     .map(|b| {
                         let word =
@@ -4035,6 +4044,45 @@ mod tests {
             panic!("{:?}", look.fill)
         };
         assert_eq!(c.background_color, 0x00F1_F1F1);
+    }
+
+    /// Only the short form is read past the parser's error: a colour fill
+    /// with alpha 128 and an extra-data length of 1 but no extra byte, or a
+    /// 16-byte block whose last four bytes are not zero, or a gradient fill
+    /// cut to the short form's 16 bytes, keeps its error
+    /// (review r2 — it came out as an opaque fill and the transparency
+    /// warning was lost).
+    ///
+    /// 이것을 실패시키는 것: 대체 읽기의 끝 네 바이트 조건 / 색 채우기 종류
+    /// 조건을 지우기.
+    #[test]
+    fn only_the_short_colour_fill_form_is_read_past_its_error() {
+        let look_of = |kind: u32, block: &[u8]| {
+            let mut tail = vec![0u8; 13];
+            tail.extend_from_slice(&kind.to_le_bytes());
+            tail.extend_from_slice(block);
+            let data = render_record(true, 0, (700, 300), 1, &[m(1.0), m(1.0), m(1.0)], &tail);
+            Hwp5ShapeRender::parse_look(&data, true).expect("look").fill
+        };
+        let look = |block: &[u8]| look_of(1, block);
+        let mut colours = Vec::new();
+        colours.extend_from_slice(&0x00F1_F1F1u32.to_le_bytes());
+        colours.extend_from_slice(&0u32.to_le_bytes());
+        colours.extend_from_slice(&(-1i32).to_le_bytes());
+        // alpha 128, extra length 1, no extra byte.
+        let mut damaged = colours.clone();
+        damaged.push(128);
+        damaged.extend_from_slice(&1u32.to_le_bytes());
+        assert!(look(&damaged).is_err(), "{:?}", look(&damaged));
+        // 16 bytes, but the last four are not zero.
+        let mut not_zero = colours.clone();
+        not_zero.extend_from_slice(&[128, 1, 0, 0]);
+        assert!(look(&not_zero).is_err(), "{:?}", look(&not_zero));
+        // The short form itself still reads — as a colour fill only.
+        let mut short = colours;
+        short.extend_from_slice(&[0; 4]);
+        assert!(look(&short).is_ok());
+        assert!(look_of(4, &short).is_err(), "{:?}", look_of(4, &short));
     }
 
     /// A level-1 child: `trans`, then two pairs in stored order, each `sca`
