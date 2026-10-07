@@ -4182,6 +4182,10 @@ fn apply_table_projection_metadata(
         .transpose()
         .unwrap_or(None);
     core_table.border_fill_id = table.border_fill_id.map(u32::from);
+    // §19.22 D1: the table's own margins, carried even when they equal the
+    // encoder's defaults (as the HWPX decoder carries the wire values).
+    core_table.in_margin = table.inner_margin.map(core_margin);
+    core_table.out_margin = table.ctrl.as_ref().and_then(|ctrl| ctrl.outer_margin).map(core_margin);
     // §19.6 A: 표 자신의 CtrlHeader 속성 word·오프셋 → `Table::placement`.
     if let Some(ctrl) = &table.ctrl {
         let wire = parse_object_placement_wire(ctrl.properties, ctrl.geometry.x, ctrl.geometry.y);
@@ -4235,12 +4239,10 @@ fn project_table_cell_with_images(
     core_cell.height =
         (cell.height > 0).then(|| HwpUnit::new(cell.height)).transpose().unwrap_or(None);
     core_cell.border_fill_id = cell.border_fill_id.map(u32::from);
-    core_cell.margin = Some(TableMargin {
-        left: HwpUnit::new(i32::from(cell.margin.left)).unwrap_or(HwpUnit::ZERO),
-        right: HwpUnit::new(i32::from(cell.margin.right)).unwrap_or(HwpUnit::ZERO),
-        top: HwpUnit::new(i32::from(cell.margin.top)).unwrap_or(HwpUnit::ZERO),
-        bottom: HwpUnit::new(i32::from(cell.margin.bottom)).unwrap_or(HwpUnit::ZERO),
-    });
+    // §19.22 D2: a cell without its own margin (property bit 16 clear)
+    // uses the table's default padding. 이것을 실패시키는 것: 판정 반전 /
+    // 비트 번호 15·17(`table_margins_and_cell_margin_flag_are_read`).
+    core_cell.margin = cell.has_margin.then(|| core_margin(cell.margin));
     match core_table_cell_vertical_align(cell.vertical_align) {
         Some(vertical_align) => core_cell.vertical_align = Some(vertical_align),
         None => push_projection_fallback(
@@ -4257,6 +4259,18 @@ fn project_table_cell_with_images(
         ),
     }
     core_cell
+}
+
+/// A HWP5 margin block as a Core margin (negative values become 0, as
+/// before for cells).
+fn core_margin(m: crate::decoder::section::Hwp5TableCellMargin) -> TableMargin {
+    let unit = |v: i16| HwpUnit::new(i32::from(v)).unwrap_or(HwpUnit::ZERO);
+    TableMargin {
+        left: unit(m.left),
+        right: unit(m.right),
+        top: unit(m.top),
+        bottom: unit(m.bottom),
+    }
 }
 
 fn empty_paragraph() -> Paragraph {
@@ -5758,6 +5772,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 2,
                 cols: 3,
                 page_break: Hwp5TablePageBreak::None,
@@ -5785,6 +5800,7 @@ mod tests {
 
     fn table_with_ctrl(properties: u32, x: i32, y: i32) -> Hwp5Table {
         Hwp5Table {
+            inner_margin: None,
             rows: 1,
             cols: 1,
             page_break: Hwp5TablePageBreak::Cell,
@@ -5794,6 +5810,7 @@ mod tests {
             cells: vec![grid_test_cell(0, 0, 1, 1)],
             instance_id: 0,
             ctrl: Some(crate::decoder::section::Hwp5TableCtrl {
+                outer_margin: None,
                 properties,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x,
@@ -5881,6 +5898,7 @@ mod tests {
 
     fn grid_test_cell(row: u16, column: u16, row_span: u16, col_span: u16) -> Hwp5TableCell {
         Hwp5TableCell {
+            has_margin: true,
             column,
             row,
             col_span,
@@ -5923,6 +5941,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows,
                 cols,
                 page_break: Hwp5TablePageBreak::None,
@@ -6001,6 +6020,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6008,6 +6028,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![Hwp5TableCell {
+                    has_margin: true,
                     column: 0,
                     row: 0,
                     col_span: 1,
@@ -6079,6 +6100,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6086,6 +6108,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![Hwp5TableCell {
+                    has_margin: true,
                     column: 0,
                     row: 0,
                     col_span: 1,
@@ -6156,6 +6179,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 1,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6164,6 +6188,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![
                     Hwp5TableCell {
+                        has_margin: true,
                         column: 0,
                         row: 0,
                         col_span: 1,
@@ -6193,6 +6218,7 @@ mod tests {
                         }],
                     },
                     Hwp5TableCell {
+                        has_margin: true,
                         column: 1,
                         row: 0,
                         col_span: 1,
@@ -6251,6 +6277,7 @@ mod tests {
         // aborting the whole conversion.
         fn header_cell(row: u16, is_header: bool, text: &str) -> Hwp5TableCell {
             Hwp5TableCell {
+                has_margin: true,
                 column: 0,
                 row,
                 col_span: 1,
@@ -6292,6 +6319,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 3,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6338,6 +6366,7 @@ mod tests {
         // a body-paragraph-only scan would drop it.
         fn pgnp_cell() -> Hwp5TableCell {
             Hwp5TableCell {
+                has_margin: true,
                 column: 0,
                 row: 0,
                 col_span: 1,
@@ -6383,6 +6412,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
+                inner_margin: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6429,6 +6459,7 @@ mod tests {
         }
         fn table_cell_pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
             let cell = Hwp5TableCell {
+                has_margin: true,
                 column: 0,
                 row: 0,
                 col_span: 1,
@@ -6457,6 +6488,7 @@ mod tests {
                 char_shape_runs: vec![],
                 line_segments: Vec::new(),
                 controls: vec![Hwp5Control::Table(Hwp5Table {
+                    inner_margin: None,
                     rows: 1,
                     cols: 1,
                     page_break: Hwp5TablePageBreak::Cell,
@@ -6726,6 +6758,7 @@ mod tests {
         let mut warnings: Vec<Hwp5Warning> = Vec::new();
         let t = build_empty_table(
             &Hwp5Table {
+                inner_margin: None,
                 rows: 3,
                 cols: 4,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6752,6 +6785,7 @@ mod tests {
         let mut warnings: Vec<Hwp5Warning> = Vec::new();
         let t = build_empty_table(
             &Hwp5Table {
+                inner_margin: None,
                 rows: 0,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::None,
@@ -6776,6 +6810,7 @@ mod tests {
         let mut warnings: Vec<Hwp5Warning> = Vec::new();
         let t = build_empty_table(
             &Hwp5Table {
+                inner_margin: None,
                 rows: 2,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::Table,
@@ -6799,6 +6834,7 @@ mod tests {
         let mut warnings: Vec<Hwp5Warning> = Vec::new();
         let t = build_empty_table(
             &Hwp5Table {
+                inner_margin: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Unknown(3),

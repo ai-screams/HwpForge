@@ -1351,6 +1351,7 @@ mod tests {
                     line_segments: Vec::new(),
                     controls: vec![
                         Hwp5Control::Table(Hwp5Table {
+                            inner_margin: None,
                             rows: 1,
                             cols: 1,
                             page_break: Hwp5TablePageBreak::Cell,
@@ -1358,6 +1359,7 @@ mod tests {
                             cell_spacing: 120,
                             border_fill_id: Some(8),
                             cells: vec![Hwp5TableCell {
+                                has_margin: true,
                                 column: 0,
                                 row: 0,
                                 col_span: 1,

@@ -554,6 +554,10 @@ pub(crate) struct Hwp5Table {
     /// The table's own `CtrlHeader` placement facts (§19.6 A); `None` when the
     /// header is too short to hold them.
     pub ctrl: Option<Hwp5TableCtrl>,
+    /// Default cell padding: table body record bytes 10..18 (left, right,
+    /// top, bottom — §19.22 D1; 5,131/5,131 Hancom twins match `inMargin`).
+    /// `None` when the record is too short.
+    pub inner_margin: Option<Hwp5TableCellMargin>,
 }
 
 /// Placement facts of a table's `CtrlHeader` (표 70 object common header):
@@ -565,6 +569,19 @@ pub(crate) struct Hwp5TableCtrl {
     /// Offsets (`x` = horizontal, `y` = vertical) and size (bytes 8..24);
     /// `height` is the table's height as Hancom saved it.
     pub geometry: crate::schema::section::Hwp5ShapeComponentGeometry,
+    /// Outer margin: bytes 28..36 (left, right, top, bottom — §19.22 D1;
+    /// 5,131/5,131 Hancom twins match `outMargin`). `None` when the header
+    /// is too short.
+    pub outer_margin: Option<Hwp5TableCellMargin>,
+}
+
+impl Hwp5TableCellMargin {
+    /// Four little-endian `i16` (left, right, top, bottom) at `data[at..at+8]`.
+    pub(crate) fn read(data: &[u8], at: usize) -> Option<Self> {
+        let b = data.get(at..at.checked_add(8)?)?;
+        let v = |i: usize| i16::from_le_bytes([b[i], b[i + 1]]);
+        Some(Self { left: v(0), right: v(2), top: v(4), bottom: v(6) })
+    }
 }
 
 impl Hwp5TableCtrl {
@@ -574,7 +591,8 @@ impl Hwp5TableCtrl {
         let geometry =
             crate::schema::section::Hwp5ShapeComponentGeometry::parse_from_ctrl_header(data)
                 .ok()?;
-        Some(Self { properties, geometry })
+        let outer_margin = Hwp5TableCellMargin::read(data, 28);
+        Some(Self { properties, geometry, outer_margin })
     }
 }
 
@@ -638,6 +656,10 @@ pub(crate) struct Hwp5TableCell {
     pub vertical_align: Hwp5TableCellVerticalAlign,
     /// Whether this cell is marked as belonging to a title/header row.
     pub is_header: bool,
+    /// Property bit 16: the cell has its own margin. Without it the cell
+    /// uses the table's default padding (§19.22 D2; 61,246/61,246 Hancom
+    /// twin cells match `hasMargin`).
+    pub has_margin: bool,
     /// Optional border/fill reference.
     #[allow(dead_code)] // reserved for later border/fill projection work
     pub border_fill_id: Option<u16>,

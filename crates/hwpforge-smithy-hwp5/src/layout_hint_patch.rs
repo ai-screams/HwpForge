@@ -343,6 +343,7 @@ mod tests {
     #[test]
     fn table_height_hint_is_the_ctrl_header_height() {
         let mut table = Hwp5Table {
+            inner_margin: None,
             rows: 0,
             cols: 0,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -355,6 +356,7 @@ mod tests {
         };
         assert_eq!(derive_table_height(&table), None);
         table.ctrl = Some(crate::decoder::section::Hwp5TableCtrl {
+            outer_margin: None,
             properties: 0,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 x: 0,
@@ -369,6 +371,7 @@ mod tests {
     #[test]
     fn derive_table_height_uses_line_segments_and_cell_margin() {
         let table = Hwp5Table {
+            inner_margin: None,
             rows: 1,
             cols: 1,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -376,6 +379,7 @@ mod tests {
             cell_spacing: 0,
             border_fill_id: None,
             cells: vec![crate::decoder::section::Hwp5TableCell {
+                has_margin: true,
                 column: 0,
                 row: 0,
                 col_span: 1,

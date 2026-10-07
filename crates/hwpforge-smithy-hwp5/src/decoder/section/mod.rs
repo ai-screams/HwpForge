@@ -221,6 +221,7 @@ impl TableContext {
         Self {
             ctrl_depth,
             table: Hwp5Table {
+                inner_margin: None,
                 rows: 0,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::None,
@@ -1235,6 +1236,7 @@ impl BodyTextParserState {
                     ctx.table.repeat_header = table_header.repeat_header;
                     ctx.table.cell_spacing = table_header.cell_spacing;
                     ctx.table.border_fill_id = table_header.border_fill_id;
+                    ctx.table.inner_margin = table_header.inner_margin;
                     ctx.seen_table_body = true;
                 }
             }
@@ -2619,6 +2621,7 @@ struct ParsedTableHeader {
     repeat_header: bool,
     cell_spacing: i16,
     border_fill_id: Option<u16>,
+    inner_margin: Option<Hwp5TableCellMargin>,
 }
 
 /// Extract minimal table-level fields from a `Table` record data payload.
@@ -2643,6 +2646,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
             repeat_header: false,
             cell_spacing: 0,
             border_fill_id: None,
+            inner_margin: None,
         };
     }
     let properties = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -2664,7 +2668,19 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
         .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
         .filter(|&id| id > 0);
 
-    ParsedTableHeader { rows, cols, page_break, repeat_header, cell_spacing, border_fill_id }
+    // Bytes 10..18: the default cell padding (left, right, top, bottom).
+    // 이것을 실패시키는 것: 오프셋 ±2 / 안쪽·바깥 맞바꿈
+    // (`table_margins_and_cell_margin_flag_are_read`).
+    let inner_margin = Hwp5TableCellMargin::read(data, 10);
+    ParsedTableHeader {
+        rows,
+        cols,
+        page_break,
+        repeat_header,
+        cell_spacing,
+        border_fill_id,
+        inner_margin,
+    }
 }
 
 /// Parse a table cell `ListHeader` payload.
@@ -2711,12 +2727,14 @@ fn parse_table_cell(data: &[u8]) -> Hwp5Result<(usize, Hwp5TableCell)> {
         raw => Hwp5TableCellVerticalAlign::Unknown(raw),
     };
     let is_header = (properties & TABLE_CELL_HEADER_FLAG) != 0;
+    let has_margin = properties & (1 << 16) != 0;
     let border_fill_id =
         (base.len() >= 26).then(|| u16::from_le_bytes([base[24], base[25]])).filter(|&id| id > 0);
 
     Ok((
         paragraph_count,
         Hwp5TableCell {
+            has_margin,
             column,
             row,
             col_span,
@@ -3870,6 +3888,69 @@ mod tests {
         // then the header's, then the footer's.
         assert_eq!(heights[..2], [Some(43_643), Some(1200)]);
         assert_eq!(heights[3..], [Some(900), Some(700)]);
+    }
+
+    /// §19.22 D1·D2: the table body record's bytes 10..18 are the default
+    /// cell padding, the table `CtrlHeader`'s bytes 28..36 the outer margin
+    /// (all four sides different, so a swapped side or offset shows), and a
+    /// cell's property bit 16 says whether it has its own margin — a cell
+    /// without it uses the table padding (`margin: None`).
+    ///
+    /// 이것을 실패시키는 것: 두 오프셋 ±2 / 안쪽·바깥 맞바꿈 / 칸 비트 번호
+    /// 15·17 / 판정 반전.
+    #[test]
+    fn table_margins_and_cell_margin_flag_are_read() {
+        let mut ctrl = table_ctrl_data(0, 0, 0, 9000, 3000);
+        ctrl.resize(28, 0);
+        for v in [101i16, 102, 103, 104] {
+            ctrl.extend_from_slice(&v.to_le_bytes());
+        }
+        ctrl.extend_from_slice(&[0u8; 8]);
+        let mut body = basic_table_data(1, 2);
+        for (i, v) in [510i16, 520, 566, 576].iter().enumerate() {
+            body[10 + 2 * i..12 + 2 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let cell = |column: u16, properties: u32| {
+            list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties,
+                column,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4500,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 11, right: 12, top: 13, bottom: 14 },
+                border_fill_id: Some(1),
+            })
+        };
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &ctrl));
+        stream.extend(make_record(TagId::Table, 2, &body));
+        // Bits 15 and 17 set but not 16: no own margin.
+        stream.extend(make_record(TagId::ListHeader, 2, &cell(0, (1 << 15) | (1 << 17))));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ListHeader, 2, &cell(1, 1 << 16)));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let (doc, _) = crate::projection::project_to_core(vec![result]).expect("project");
+        let hwpforge_core::run::RunContent::Table(table) =
+            &doc.sections()[0].paragraphs[0].runs[0].content
+        else {
+            panic!("{:?}", doc.sections()[0].paragraphs[0].runs)
+        };
+        let m = |l, r, t, b| hwpforge_core::table::TableMargin {
+            left: hwpforge_foundation::HwpUnit::new(l).unwrap(),
+            right: hwpforge_foundation::HwpUnit::new(r).unwrap(),
+            top: hwpforge_foundation::HwpUnit::new(t).unwrap(),
+            bottom: hwpforge_foundation::HwpUnit::new(b).unwrap(),
+        };
+        assert_eq!(table.in_margin, Some(m(510, 520, 566, 576)));
+        assert_eq!(table.out_margin, Some(m(101, 102, 103, 104)));
+        assert_eq!(table.rows[0].cells[0].margin, None);
+        assert_eq!(table.rows[0].cells[1].margin, Some(m(11, 12, 13, 14)));
     }
 
     /// [`one_cell_table`] whose control header sits at `base`.
