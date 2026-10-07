@@ -195,7 +195,7 @@ pub(crate) fn decode_textbox(
             Control::TextBox {
                 // §19.22 D4: the wire value, also when it is 283 everywhere.
                 // 이것을 실패시키는 것: 읽지 않기(`shape_text_margins_round_trip`).
-                text_margin: draw_text_margin(draw_text.text_margin.as_ref()),
+                text_margin: draw_text_margin(draw_text.text_margin.as_ref())?,
                 paragraphs,
                 width,
                 height,
@@ -1740,17 +1740,25 @@ fn fits_hwpunit(values: &[i32]) -> bool {
 }
 
 /// A drawn shape's text margin (`<hp:drawText><hp:textMargin>`) as a Core
-/// margin; `None` when absent or not representable (§19.22 D4).
+/// margin; `None` when absent (§19.22 D4). A side outside the HWPUNIT range
+/// is an error, as for table margins — not a silent fall back to 283
+/// (review r1). 이것을 실패시키는 것: 범위 밖 한 변을 `None` 으로 접기
+/// (`out_of_range_text_margin_is_refused`).
 fn draw_text_margin(
     margin: Option<&crate::schema::section::HxTableMargin>,
-) -> Option<hwpforge_core::table::TableMargin> {
-    let m = margin?;
-    Some(hwpforge_core::table::TableMargin {
-        left: HwpUnit::new(m.left).ok()?,
-        right: HwpUnit::new(m.right).ok()?,
-        top: HwpUnit::new(m.top).ok()?,
-        bottom: HwpUnit::new(m.bottom).ok()?,
-    })
+) -> crate::error::HwpxResult<Option<hwpforge_core::table::TableMargin>> {
+    let Some(m) = margin else { return Ok(None) };
+    let side = |v: i32, name: &str| {
+        HwpUnit::new(v).map_err(|_| crate::error::HwpxError::InvalidStructure {
+            detail: format!("invalid text box margin {name}: {v}"),
+        })
+    };
+    Ok(Some(hwpforge_core::table::TableMargin {
+        left: side(m.left, "left")?,
+        right: side(m.right, "right")?,
+        top: side(m.top, "top")?,
+        bottom: side(m.bottom, "bottom")?,
+    }))
 }
 
 /// An ellipse's or polygon's text margin other than 283 on every side: Core

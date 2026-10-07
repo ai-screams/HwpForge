@@ -194,3 +194,17 @@ fn text_box_without_a_margin_writes_283() {
     .expect("encode");
     assert_eq!(section_xml(&bytes).matches(DEFAULT).count(), 1);
 }
+
+/// A text box margin with a side outside the HWPUNIT range is refused, not
+/// read as "no margin" (which re-encodes as 283 and skips the PDF and
+/// Markdown refusals).
+///
+/// 이것을 실패시키는 것: 범위 밖 한 변을 `None` 으로 접기.
+#[test]
+fn out_of_range_text_margin_is_refused() {
+    let source = fixture("shapes/textbox.hwpx");
+    let xml = section_xml(&source);
+    let bad = r#"<hp:textMargin left="283" right="283" top="283" bottom="2000000000"/>"#;
+    let input = with_section(&source, &xml.replacen(DEFAULT, bad, 1));
+    assert!(HwpxDecoder::decode(&input).is_err());
+}
