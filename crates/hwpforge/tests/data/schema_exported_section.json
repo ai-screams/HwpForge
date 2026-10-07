@@ -202,6 +202,17 @@
               "type": "null"
             }
           ]
+        },
+        "end_char_shape": {
+          "description": "The char shape of the paragraph-end mark, when it differs from the\nlast character's (HWPX: an empty last `<hp:run>`; HWP5: the char\nshape entry at the paragraph-end character). Hancom uses its size for\nthe height of the paragraph's last line. `None` = the mark takes the\nlast run's char shape. It is not a run: a paragraph still needs at\nleast one run.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Index"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

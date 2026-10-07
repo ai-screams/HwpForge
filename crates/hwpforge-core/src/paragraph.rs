@@ -28,7 +28,7 @@
 //! assert_eq!(para.run_count(), 2);
 //! ```
 
-use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +83,14 @@ pub struct Paragraph {
     /// 수행한다 — [`crate::document::Document::strip_layout_caches`] 참조.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_cache: Option<crate::layout::LayoutCache>,
+    /// The char shape of the paragraph-end mark, when it differs from the
+    /// last character's (HWPX: an empty last `<hp:run>`; HWP5: the char
+    /// shape entry at the paragraph-end character). Hancom uses its size for
+    /// the height of the paragraph's last line. `None` = the mark takes the
+    /// last run's char shape. It is not a run: a paragraph still needs at
+    /// least one run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_char_shape: Option<CharShapeIndex>,
 }
 
 impl Paragraph {
@@ -106,6 +114,7 @@ impl Paragraph {
             heading_level: None,
             style_id: None,
             layout_cache: None,
+            end_char_shape: None,
         }
     }
 
@@ -133,6 +142,7 @@ impl Paragraph {
             heading_level: None,
             style_id: None,
             layout_cache: None,
+            end_char_shape: None,
         }
     }
 
@@ -459,6 +469,26 @@ mod tests {
 
     fn text_run(s: &str) -> Run {
         Run::text(s, CharShapeIndex::new(0))
+    }
+
+    /// §19.22 D5 (S17): `None` writes no `end_char_shape`, an absent field
+    /// and `null` read as `None`, and `Some` round trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn end_char_shape_json() {
+        let p = Paragraph::with_runs(vec![text_run("가")], ParaShapeIndex::new(0));
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("end_char_shape").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<Paragraph>(json.clone()).unwrap(), p);
+        let mut with_null = json;
+        with_null["end_char_shape"] = serde_json::Value::Null;
+        assert_eq!(serde_json::from_value::<Paragraph>(with_null).unwrap().end_char_shape, None);
+        let mut some = p.clone();
+        some.end_char_shape = Some(CharShapeIndex::new(7));
+        let json = serde_json::to_value(&some).unwrap();
+        assert_eq!(json["end_char_shape"], 7);
+        assert_eq!(serde_json::from_value::<Paragraph>(json).unwrap(), some);
     }
 
     #[test]

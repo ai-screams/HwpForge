@@ -374,3 +374,31 @@ fn text_art_with_a_hangul_font_type_is_refused() {
     assert_eq!(err.code(), OpsCode::InputNotRoundtripSafe, "{err}");
     assert!(err.to_string().contains("textart_font_type"), "{err}");
 }
+
+/// §19.22 D5: a restyle keeps every paragraph's end-mark char shape (the
+/// fixture's paragraphs end in empty runs, as Hancom writes them).
+///
+/// 이것을 실패시키는 것: 디코더가 끝 run 을 읽지 않기 / 인코더가 쓰지 않기.
+#[test]
+fn restyle_keeps_end_mark_char_shapes() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/user_samples/sample-char-breakwordlatin-variants.hwpx"
+    );
+    let source = std::fs::read(path).expect("fixture");
+    let ends = |bytes: &[u8]| {
+        let doc = HwpxDecoder::decode(bytes).expect("decode");
+        let mut out = Vec::new();
+        for p in &doc.document.sections()[0].paragraphs {
+            p.for_each_paragraph(|q| out.push(q.end_char_shape));
+        }
+        out
+    };
+    let before = ends(&source);
+    assert!(before.iter().any(Option::is_some));
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    assert_eq!(
+        ends(&out.bytes).iter().filter(|e| e.is_some()).count(),
+        before.iter().filter(|e| e.is_some()).count()
+    );
+}

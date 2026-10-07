@@ -306,6 +306,7 @@ mod tests {
         controls: Vec<Hwp5Control>,
     ) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -397,6 +398,7 @@ mod tests {
                 is_header: false,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,

@@ -1417,6 +1417,10 @@ fn project_paragraph_with_images(
     // tab character was consumed by a hyperlink display or field
     // begin/end pair) still falls through to the warning below, so the
     // audit baseline keeps a foothold on the silent loss.
+    // §19.22 D5 (S17): the paragraph-end mark's char shape.
+    // 이것을 실패시키는 것: 이 줄을 지우기(`end_mark_shape_is_read_from_the_wire`).
+    projected.paragraph.end_char_shape =
+        hwp_para.end_char_shape.map(|id| CharShapeIndex::new(id as usize));
     let unconsumed = carry_inline_tab_attrs(&mut projected.paragraph, &hwp_para.text_segments);
     for (width, leader, tab_type) in unconsumed {
         projection_images.warnings.push(crate::decoder::Hwp5Warning::ProjectionFallback {
@@ -4584,6 +4588,7 @@ mod tests {
 
     fn make_paragraph(text: &str, para_shape_id: u16, style_id: u8) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -4599,6 +4604,7 @@ mod tests {
 
     fn _make_paragraph_with_runs(text: &str, runs: Vec<Hwp5CharShapeRun>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -4610,6 +4616,20 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![],
         }
+    }
+
+    /// §19.22 D5: the decoder's end-mark char shape reaches Core.
+    ///
+    /// 이것을 실패시키는 것: 투영에서 이 칸을 옮기지 않기.
+    #[test]
+    fn end_char_shape_reaches_core() {
+        let mut para = _make_paragraph_with_runs(
+            "가",
+            vec![Hwp5CharShapeRun { position: 0, char_shape_id: 1 }],
+        );
+        para.end_char_shape = Some(5);
+        let (doc, _) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        assert_eq!(doc.sections()[0].paragraphs[0].end_char_shape, Some(CharShapeIndex::new(5)));
     }
 
     /// §19.22 B: an empty paragraph keeps the char shape of position 0 —
@@ -4860,6 +4880,7 @@ mod tests {
             segments.push(crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] });
         }
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             text: String::new(),
             text_segments: segments,
@@ -4896,6 +4917,7 @@ mod tests {
         let form_id = u32::from_be_bytes(*b"form"); // 기지 deferred ctrl
         let mk = || Hwp5Control::Unknown { ctrl_id: form_id, header_data: vec![] };
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             text: String::new(),
             text_segments: vec![
@@ -4992,6 +5014,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5067,6 +5090,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5125,6 +5149,7 @@ mod tests {
         let bookmark =
             Hwp5Control::Unknown { ctrl_id: CTRL_ID_BOOKMARK_POINT, header_data: Vec::new() };
         let paragraph = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -5180,6 +5205,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5195,6 +5221,7 @@ mod tests {
                         properties_raw: 0,
                         instance_id: 0,
                         paragraphs: vec![Hwp5Paragraph {
+                            end_char_shape: None,
                             silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
@@ -5275,6 +5302,7 @@ mod tests {
             text_margin: None,
             ctrl_properties: 0,
             paragraphs: vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5289,6 +5317,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5364,6 +5393,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5414,6 +5444,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5476,6 +5507,7 @@ mod tests {
             });
             let section = make_section(
                 vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -5541,6 +5573,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -5871,6 +5904,7 @@ mod tests {
     #[test]
     fn table_control_becomes_run_table() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -5933,6 +5967,7 @@ mod tests {
 
     fn projected_table_placement(table: Hwp5Table) -> (Option<ObjectPlacement>, Vec<String>) {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6025,6 +6060,7 @@ mod tests {
             vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
             border_fill_id: None,
             paragraphs: vec![Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -6041,6 +6077,7 @@ mod tests {
 
     fn grid_test_table_paragraph(rows: u16, cols: u16, cells: Vec<Hwp5TableCell>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6120,6 +6157,7 @@ mod tests {
     #[test]
     fn table_cell_text_is_projected() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6156,6 +6194,7 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        end_char_shape: None,
                         silent_wires: Vec::new(),
                         page_break: false,
                         column_break: false,
@@ -6201,6 +6240,7 @@ mod tests {
     #[test]
     fn unknown_table_cell_vertical_align_emits_projection_fallback_warning() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6237,6 +6277,7 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Unknown(3),
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        end_char_shape: None,
                         silent_wires: Vec::new(),
                         page_break: false,
                         column_break: false,
@@ -6281,6 +6322,7 @@ mod tests {
     #[test]
     fn mixed_table_header_cells_emit_warning_and_do_not_promote_header_row() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6318,6 +6360,7 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            end_char_shape: None,
                             silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
@@ -6349,6 +6392,7 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            end_char_shape: None,
                             silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
@@ -6409,6 +6453,7 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: Some(3),
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -6424,6 +6469,7 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6499,6 +6545,7 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -6518,6 +6565,7 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6558,6 +6606,7 @@ mod tests {
         // body-only scan would have returned the later top-level control).
         fn pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
             Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -6595,6 +6644,7 @@ mod tests {
                 paragraphs: vec![pgnp_para(pos_byte)],
             };
             Hwp5Paragraph {
+                end_char_shape: None,
                 silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
@@ -6640,6 +6690,7 @@ mod tests {
         // surrounding text runs, inside a single Core paragraph — never on
         // its own line / paragraph, and never drained to the paragraph tail.
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6654,6 +6705,7 @@ mod tests {
                 properties_raw: 0,
                 instance_id: 7,
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -6704,6 +6756,7 @@ mod tests {
     #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6748,6 +6801,7 @@ mod tests {
     #[test]
     fn polygon_control_becomes_visible_core_polygon() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6803,6 +6857,7 @@ mod tests {
     #[test]
     fn rect_control_carries_into_core_rect_without_warning() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
@@ -6850,6 +6905,7 @@ mod tests {
     #[test]
     fn unknown_control_is_ignored() {
         let para = Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,

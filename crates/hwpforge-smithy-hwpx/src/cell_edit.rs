@@ -405,8 +405,15 @@ pub fn apply_set_cells(
             for edit in edits {
                 let cell = &mut table.rows[edit.row_idx].cells[edit.cell_idx];
                 let (para_shape, char_shape) = inherit_style(cell);
-                cell.paragraphs =
-                    vec![Paragraph::with_runs(vec![Run::text(&edit.text, char_shape)], para_shape)];
+                // §19.22 D5: the end mark keeps its char shape, as when the
+                // text is retyped in Hancom (the first paragraph's).
+                // 이것을 실패시키는 것: 물려받지 않기
+                // (`set_cell_keeps_the_end_char_shape`).
+                let end_char_shape = cell.paragraphs.first().and_then(|p| p.end_char_shape);
+                let mut paragraph =
+                    Paragraph::with_runs(vec![Run::text(&edit.text, char_shape)], para_shape);
+                paragraph.end_char_shape = end_char_shape;
+                cell.paragraphs = vec![paragraph];
             }
         }
     });
@@ -769,6 +776,24 @@ mod tests {
         let para = &table.rows[0].cells[1].paragraphs[0];
         assert_eq!(para.para_shape_id, ParaShapeIndex::new(2));
         assert_eq!(para.runs[0].char_shape_id, CharShapeIndex::new(3));
+    }
+
+    /// §19.22 D5: set-cell keeps the cell's end-mark char shape.
+    ///
+    /// 이것을 실패시키는 것: 새 문단을 `None` 으로 만들기.
+    #[test]
+    fn set_cell_keeps_the_end_char_shape() {
+        let mut form = label_form();
+        form.rows[0].cells[1].paragraphs[0].end_char_shape = Some(CharShapeIndex::new(7));
+        let mut doc = doc_with(vec![form]);
+        apply_set_cells(&mut doc, &[spec(0, CellTarget::At(GridCoord::new(0, 1)), "홍길동")])
+            .unwrap();
+        let table =
+            doc.sections()[0].paragraphs[0].runs.iter().find_map(|r| r.content.as_table()).unwrap();
+        assert_eq!(
+            table.rows[0].cells[1].paragraphs[0].end_char_shape,
+            Some(CharShapeIndex::new(7))
+        );
     }
 
     #[test]

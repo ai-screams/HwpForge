@@ -64,6 +64,10 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     Ok(output)
 }
 
+/// One paragraph. Its end-mark char shape (`Paragraph::end_char_shape`,
+/// §19.22 D5) is not written: like the layout cache it only sets the height
+/// of the last line Hancom computes, which this grammar does not carry
+/// (decided for the closed grammar of the lossless view).
 fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
     let mut out = format!("<p data-para-shape=\"{}\">", paragraph.para_shape_id.get());
 

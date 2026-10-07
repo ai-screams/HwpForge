@@ -128,12 +128,10 @@ impl ParaBuf {
             |paragraph_text| (paragraph_text.segments, paragraph_text.silent_wires),
         );
         let text = segments_to_string(&text_segments);
-        let char_shape_runs = char_shape_runs_to_text_positions(
-            &text_segments,
-            &silent_wires,
-            &self.char_shape_runs,
-            warnings,
-        );
+        let (body_runs, end_char_shape) =
+            split_end_mark_shape(&text_segments, &silent_wires, self.char_shape_runs);
+        let char_shape_runs =
+            char_shape_runs_to_text_positions(&text_segments, &silent_wires, &body_runs, warnings);
         Hwp5Paragraph {
             silent_wires,
             text,
@@ -147,8 +145,72 @@ impl ParaBuf {
             char_shape_runs,
             line_segments: self.line_segments,
             controls: self.controls,
+            end_char_shape,
         }
     }
+}
+
+/// The wire length and text length of one text segment.
+fn segment_lengths(segment: &TextSegment) -> (u32, u32) {
+    match segment {
+        TextSegment::Text(text) => {
+            let units = text.encode_utf16().count() as u32;
+            (units, units)
+        }
+        TextSegment::LineBreak | TextSegment::NonBreakingSpace | TextSegment::FwSpace => (1, 1),
+        TextSegment::Tab { .. }
+        | TextSegment::ControlRef { .. }
+        | TextSegment::ExtendedControlRef { .. } => (8, 1),
+        TextSegment::SectionColumnDef { .. }
+        | TextSegment::FieldBegin { .. }
+        | TextSegment::FieldEnd => (8, 0),
+        TextSegment::ParaBreak => (1, 0),
+    }
+}
+
+/// Takes the paragraph-end mark's char shape out of the wire boundaries
+/// (§19.22 D5, S17), before they move to text positions: the entry placed
+/// exactly at the wire position of the paragraph-end character (the last
+/// segment, `ParaBreak`) — the last one there when several share it. It is
+/// returned only when it differs from the shape of the last character
+/// before it (wire position − 1), as Hancom writes an end run only then
+/// (3,385/3,385 and 6/6 in the Hancom twin pairs). Entries past the end
+/// character are left to the conversion. An empty paragraph (no segment
+/// but the end character, or none) keeps its boundary: its one run takes
+/// the shape at position 0 (§19.22 B).
+///
+/// 이것을 실패시키는 것: 변환 뒤 위치로 판정 / 끝 경계를 본문 목록에 남기기 /
+/// 빈 문단에서도 판정 / 문자 수로 셈(`end_mark_shape_is_read_from_the_wire`).
+fn split_end_mark_shape(
+    segments: &[TextSegment],
+    silent_wires: &[crate::schema::section::SilentWire],
+    runs: Vec<Hwp5CharShapeRun>,
+) -> (Vec<Hwp5CharShapeRun>, Option<u32>) {
+    let Some((TextSegment::ParaBreak, body)) = segments.split_last() else {
+        return (runs, None);
+    };
+    if body.is_empty() {
+        return (runs, None);
+    }
+    let mut wire = 0u32;
+    let mut silent = silent_wires.iter().peekable();
+    for segment in body {
+        while let Some(skipped) = silent.next_if(|skipped| skipped.start <= wire) {
+            wire = wire.saturating_add(skipped.len);
+        }
+        wire = wire.saturating_add(segment_lengths(segment).0);
+    }
+    while let Some(skipped) = silent.next_if(|skipped| skipped.start <= wire) {
+        wire = wire.saturating_add(skipped.len);
+    }
+    let end = wire;
+    let Some(end_shape) = runs.iter().rev().find(|r| r.position == end).map(|r| r.char_shape_id)
+    else {
+        return (runs, None);
+    };
+    let body_runs: Vec<_> = runs.into_iter().filter(|r| r.position != end).collect();
+    let last_glyph = body_runs.iter().rfind(|r| r.position < end).map_or(0, |r| r.char_shape_id);
+    (body_runs, (end_shape != last_glyph).then_some(end_shape))
 }
 
 /// In-progress capture state for one `HWPTAG_MEMO_LIST` (0x5D) cluster.
@@ -845,20 +907,7 @@ fn char_shape_runs_to_text_positions(
             builder.push_span(skipped.len, 0);
             wire = wire.saturating_add(skipped.len);
         }
-        let (wire_len, text_len) = match segment {
-            TextSegment::Text(text) => {
-                let units = text.encode_utf16().count() as u32;
-                (units, units)
-            }
-            TextSegment::LineBreak | TextSegment::NonBreakingSpace | TextSegment::FwSpace => (1, 1),
-            TextSegment::Tab { .. }
-            | TextSegment::ControlRef { .. }
-            | TextSegment::ExtendedControlRef { .. } => (8, 1),
-            TextSegment::SectionColumnDef { .. }
-            | TextSegment::FieldBegin { .. }
-            | TextSegment::FieldEnd => (8, 0),
-            TextSegment::ParaBreak => (1, 0),
-        };
+        let (wire_len, text_len) = segment_lengths(segment);
         if wire_len == text_len {
             builder.advance_identity(wire_len);
         } else {
@@ -4722,6 +4771,91 @@ mod tests {
             run_texts(&child.paragraphs[0]),
             [(1, "가\t나".to_string()), (2, "다라".to_string())]
         );
+    }
+
+    /// §19.22 D5 (S17): the char shape entry at the wire position of the
+    /// paragraph-end character is the end mark's, taken out of the body
+    /// boundaries before they move to text positions; it is kept only when it
+    /// differs from the last character's.
+    ///
+    /// 이것을 실패시키는 것: 변환 뒤 위치로 판정(필드 끝 뒤 끝 표시가 필드 끝
+    /// 경계를 덮음) / 끝 경계를 본문에 남기기 / 빈 문단에서도 판정 / 글자 수로
+    /// 셈(비-BMP) / 같은 모양도 `Some` / 범위 밖 경계를 끝 표시로.
+    #[test]
+    fn end_mark_shape_is_read_from_the_wire() {
+        let end = |units: &[u16], runs: &[(u32, u32)]| {
+            let result = decode_paragraph(units, runs);
+            let p = &result.paragraphs[0];
+            (
+                p.end_char_shape,
+                p.char_shape_runs.iter().map(|r| (r.position, r.char_shape_id)).collect::<Vec<_>>(),
+            )
+        };
+        let text = |t: &str| [utf16(t), vec![0x0D]].concat();
+        // Differs from the last character: carried, and not a body boundary.
+        assert_eq!(end(&text("가나"), &[(0, 1), (2, 5)]), (Some(5), vec![(0, 1)]));
+        // Same as the last character: no end shape.
+        assert_eq!(end(&text("가나"), &[(0, 1), (2, 1)]).0, None);
+        // Past the end character: not the end mark.
+        assert_eq!(end(&text("가나"), &[(0, 1), (3, 5)]).0, None);
+        // A field end just before the end character (8 wire units, no text):
+        // the field end's boundary stays the last character's shape.
+        let field = [utf16("가"), ctrl(0x04), vec![0x0D]].concat();
+        let (shape, runs) = end(&field, &[(0, 1), (1, 2), (9, 5)]);
+        assert_eq!(shape, Some(5));
+        assert_eq!(runs, [(0, 1), (1, 2)]);
+        // An object-only paragraph (a table and the end mark).
+        let object = [ctrl(0x0B), vec![0x0D]].concat();
+        assert_eq!(end(&object, &[(0, 1), (8, 5)]).0, Some(5));
+        // A character outside the BMP: two code units.
+        assert_eq!(end(&text("𝒜"), &[(0, 1), (2, 5)]).0, Some(5));
+        // An empty paragraph keeps its boundary for its one run (§19.22 B),
+        // with or without a ParaText.
+        assert_eq!(end(&[0x0D], &[(0, 5)]), (None, vec![(0, 5)]));
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaCharShape, 1, &char_shape_runs_data(&[(0, 5)])));
+        let no_text = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(no_text.paragraphs[0].end_char_shape, None);
+        assert_eq!(no_text.paragraphs[0].char_shape_runs.len(), 1);
+    }
+
+    /// The same reading in a group child's text (§19.22 D5).
+    ///
+    /// 이것을 실패시키는 것: 묶음 자식 글에서 끝 표시를 빼지 않기.
+    #[test]
+    fn end_mark_shape_of_a_group_child_text() {
+        let units = [utf16("가나"), vec![0x0D]].concat();
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            2,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                3,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+        }
+        stream.extend(make_record(TagId::ListHeader, 4, &[0u8; 8]));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &units_data(&units)));
+        stream.extend(make_record(
+            TagId::ParaCharShape,
+            5,
+            &char_shape_runs_data(&[(0, 1), (2, 5)]),
+        ));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let [Hwp5Control::Group(group)] = &result.paragraphs[0].controls[..] else { panic!() };
+        let p = &group.children.last().unwrap().paragraphs[0];
+        assert_eq!(p.end_char_shape, Some(5));
+        assert_eq!(p.char_shape_runs.len(), 1);
     }
 
     /// D-T6: a boundary inside an object's eight wire units (no file has

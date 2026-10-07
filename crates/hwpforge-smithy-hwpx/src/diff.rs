@@ -462,8 +462,16 @@ fn classify_pair(
         return;
     }
 
-    if let Some(changes) = try_cell_diff(&b, &r, base, base_tables) {
+    let at = format!("$.sections[{section}].paragraphs[{para}]");
+    if let Some((changes, end_marks)) = try_cell_diff(&b, &r, base, base_tables) {
         out.cells.extend(changes);
+        // §19.22 D5: a cell paragraph's end-mark char shape that changed with
+        // its text is reported on the raw axis (cell changes carry text only).
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`).
+        for (path, detail) in end_marks {
+            out.push_raw(format!("{at}.{path}"), detail);
+        }
         return;
     }
 
@@ -476,10 +484,19 @@ fn classify_pair(
             before: Some(excerpt(&b_text)),
             after: Some(excerpt(&r_text)),
         });
+        // §19.22 D5: the text change does not say the end mark changed too.
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`).
+        if b.end_char_shape != r.end_char_shape {
+            out.push_raw(
+                format!("{at}.end_char_shape"),
+                format!("{:?} vs {:?}", b.end_char_shape, r.end_char_shape),
+            );
+        }
         return;
     }
 
-    out.push_raw(format!("$.sections[{section}].paragraphs[{para}]"), first_diff_path(&b, &r));
+    out.push_raw(at, first_diff_path(&b, &r));
 }
 
 /// Blanks every field body (recursing into table cells) so field-value
@@ -523,16 +540,21 @@ fn strip_in_paragraph(paragraph: &mut Paragraph) {
 /// Attempts to explain a paragraph pair entirely as table-cell text
 /// changes. Returns `None` when anything else differs (falls to other
 /// classifications).
+/// Raw entries for cell paragraphs whose end-mark char shape changed, as
+/// (path relative to the host paragraph, detail).
+type EndMarkChanges = Vec<(String, String)>;
+
 fn try_cell_diff(
     base: &Paragraph,
     rev: &Paragraph,
     original_base: &Paragraph,
     base_tables: &[TableEntry<'_>],
-) -> Option<Vec<CellTextChange>> {
+) -> Option<(Vec<CellTextChange>, EndMarkChanges)> {
     if base.runs.len() != rev.runs.len() {
         return None;
     }
     let mut changes = Vec::new();
+    let mut end_marks = Vec::new();
     for (idx, (b_run, r_run)) in base.runs.iter().zip(&rev.runs).enumerate() {
         match (&b_run.content, &r_run.content) {
             (RunContent::Table(b_table), RunContent::Table(r_table)) => {
@@ -552,6 +574,22 @@ fn try_cell_diff(
                     .find(|e| std::ptr::eq(e.table, original_table.as_ref()))
                     .map(|e| e.ordinal)?;
                 collect_cell_changes(ordinal, b_table, r_table, &mut changes)?;
+                for (ri, (b_row, r_row)) in b_table.rows.iter().zip(&r_table.rows).enumerate() {
+                    for (ci, (b_cell, r_cell)) in b_row.cells.iter().zip(&r_row.cells).enumerate() {
+                        for (k, (bp, rp)) in
+                            b_cell.paragraphs.iter().zip(&r_cell.paragraphs).enumerate()
+                        {
+                            if bp.end_char_shape != rp.end_char_shape {
+                                end_marks.push((
+                                    format!(
+                                        "runs[{idx}].table.rows[{ri}].cells[{ci}].paragraphs[{k}].end_char_shape"
+                                    ),
+                                    format!("{:?} vs {:?}", bp.end_char_shape, rp.end_char_shape),
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             (b, r) if b == r => {}
             _ => return None,
@@ -560,7 +598,7 @@ fn try_cell_diff(
     if changes.is_empty() {
         None
     } else {
-        Some(changes)
+        Some((changes, end_marks))
     }
 }
 
@@ -726,6 +764,62 @@ mod tests {
         let cut = excerpt(&long);
         assert!(cut.ends_with('…'));
         assert_eq!(cut.chars().count(), EXCERPT_MAX + 1);
+    }
+
+    /// §19.22 D5: an end-mark char shape change is reported on the raw axis
+    /// — alone (already, by the first-difference path), with a text change
+    /// of the paragraph, and with a text change of a table cell; a cell
+    /// end-mark change alone too.
+    ///
+    /// 이것을 실패시키는 것: 글자 변경과 함께일 때의 raw 보고 둘을 각각 지우기.
+    #[test]
+    fn end_char_shape_change_is_reported_with_a_text_change() {
+        let encode = |paragraphs: Vec<Paragraph>| {
+            let mut doc = hwpforge_core::Document::new();
+            doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::default()));
+            HwpxEncoder::encode(
+                &doc.validate().unwrap(),
+                &crate::style_store::HwpxStyleStore::with_default_fonts("함초롬바탕"),
+                &Default::default(),
+            )
+            .unwrap()
+        };
+        let with_end = |mut p: Paragraph| {
+            p.end_char_shape = Some(CharShapeIndex::new(0));
+            p
+        };
+        let cell_host = |cell: Paragraph| {
+            let table = hwpforge_core::table::Table::new(vec![
+                hwpforge_core::table::TableRow::new(vec![hwpforge_core::table::TableCell::new(
+                    vec![cell],
+                    hwpforge_foundation::HwpUnit::new(5000).unwrap(),
+                )]),
+            ]);
+            Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let raws = |a: Vec<Paragraph>, b: Vec<Paragraph>| {
+            let diff = HwpxDiffer::diff(&encode(a), &encode(b)).unwrap();
+            diff.semantic.raw.iter().map(|r| r.path.clone()).collect::<Vec<_>>()
+        };
+        // Alone.
+        let only = raws(vec![text_para("A")], vec![with_end(text_para("A"))]);
+        assert!(only.iter().any(|p| p.contains("paragraphs[0]")), "{only:?}");
+        // With a text change.
+        let both = raws(vec![text_para("A")], vec![with_end(text_para("B"))]);
+        assert_eq!(both, ["$.sections[0].paragraphs[0].end_char_shape"]);
+        // In a cell with a text change.
+        let cell = raws(vec![cell_host(text_para("A"))], vec![cell_host(with_end(text_para("B")))]);
+        assert_eq!(
+            cell,
+            ["$.sections[0].paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[0].end_char_shape"]
+        );
+        // In a cell alone.
+        let cell_only =
+            raws(vec![cell_host(text_para("A"))], vec![cell_host(with_end(text_para("A")))]);
+        assert_eq!(cell_only.len(), 1, "{cell_only:?}");
     }
 
     // -- editing-chain regression gates ----------------------------------

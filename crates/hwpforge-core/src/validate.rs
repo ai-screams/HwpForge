@@ -894,6 +894,18 @@ mod tests {
 
     // === Rule 3: Every paragraph has at least 1 run ===
 
+    /// §19.22 D5: an end-mark char shape does not stand in for a run.
+    #[test]
+    fn end_char_shape_does_not_make_a_paragraph_non_empty() {
+        let mut p = Paragraph::new(ParaShapeIndex::new(0));
+        p.end_char_shape = Some(hwpforge_foundation::CharShapeIndex::new(3));
+        let result = validate_sections(&[Section::with_paragraphs(vec![p], PageSettings::a4())]);
+        assert_eq!(
+            result,
+            Err(ValidationError::EmptyParagraph { section_index: 0, paragraph_index: 0 })
+        );
+    }
+
     #[test]
     fn empty_paragraph_rejected() {
         let sections = vec![Section::with_paragraphs(

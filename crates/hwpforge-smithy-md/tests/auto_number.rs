@@ -273,3 +273,28 @@ fn caption_pictures_and_html_table_captions_are_kept() {
         );
     }
 }
+
+/// §19.22 D5: a table paragraph with an end-mark char shape is still a
+/// table block in both readable views (the end mark is not a run).
+#[test]
+fn table_paragraph_with_an_end_mark_stays_a_table_block() {
+    let unit = HwpUnit::new(1000).unwrap();
+    let cell = TableCell::new(
+        vec![Paragraph::with_runs(
+            vec![Run::text("칸", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        unit,
+    );
+    let mut host = Paragraph::with_runs(
+        vec![Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    host.end_char_shape = Some(CharShapeIndex::new(4));
+    let doc = doc_of(vec![host]);
+    let lossy = MdEncoder::encode_lossy(&doc).expect("lossy");
+    let styled = MdEncoder::encode_styled(&doc, &PlainStyles).markdown;
+    for view in [&lossy, &styled] {
+        assert!(view.trim_start().starts_with('|'), "{view}");
+    }
+}

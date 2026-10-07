@@ -543,6 +543,15 @@ impl GsoGroupBuilder {
                     warnings,
                 ) {
                     if let Some(last) = child.paragraphs.last_mut() {
+                        // §19.22 D5: as in the body (`ParaBuf::finish`).
+                        // 이것을 실패시키는 것: 묶음 자식 글에서 끝 표시를 빼지 않기
+                        // (`end_mark_shape_is_read_from_the_wire`).
+                        let (runs, end) = super::split_end_mark_shape(
+                            &last.text_segments,
+                            &last.silent_wires,
+                            runs,
+                        );
+                        last.end_char_shape = end;
                         last.char_shape_runs = super::char_shape_runs_to_text_positions(
                             &last.text_segments,
                             &last.silent_wires,

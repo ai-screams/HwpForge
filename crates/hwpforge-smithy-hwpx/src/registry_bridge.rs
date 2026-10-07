@@ -121,6 +121,12 @@ impl HwpxRegistryBridge {
 
     fn rebind_paragraph(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
         paragraph.para_shape_id = self.map_para_shape(paragraph.para_shape_id)?;
+        // §19.22 D5: the end mark's char shape is a char shape reference too.
+        // 이것을 실패시키는 것: 이 다시 매기기를 지우기
+        // (`end_char_shape_is_rebound_in_a_cell`).
+        if let Some(end) = paragraph.end_char_shape {
+            paragraph.end_char_shape = Some(self.map_char_shape(end)?);
+        }
         for run in &mut paragraph.runs {
             self.rebind_run(run)?;
         }
@@ -340,6 +346,31 @@ mod tests {
             section.master_pages.as_ref().unwrap()[0].paragraphs[0].para_shape_id,
             expected_para
         );
+    }
+
+    /// §19.22 D5: a paragraph's end-mark char shape is rebound like its
+    /// runs', also in a table cell.
+    ///
+    /// 이것을 실패시키는 것: `end_char_shape` 다시 매기기를 지우기.
+    #[test]
+    fn end_char_shape_is_rebound_in_a_cell() {
+        let (registry, body_cs, body_ps) = body_registry();
+        let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
+        let expected = bridge.char_shape_map[body_cs.get()];
+        assert_ne!(expected, body_cs, "the test needs a remapped id");
+        let mut cell_para = simple_paragraph(body_cs, body_ps);
+        cell_para.end_char_shape = Some(body_cs);
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![cell_para],
+            HwpUnit::from_mm(30.0).unwrap(),
+        )])]);
+        let mut root = simple_paragraph(body_cs, body_ps);
+        root.add_run(Run::table(table, body_cs));
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(vec![root], PageSettings::a4()));
+        let rebound = bridge.rebind_draft_document(document).unwrap();
+        let table = rebound.sections()[0].paragraphs[0].runs[1].content.as_table().unwrap();
+        assert_eq!(table.rows[0].cells[0].paragraphs[0].end_char_shape, Some(expected));
     }
 
     #[test]

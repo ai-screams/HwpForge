@@ -40,6 +40,9 @@ pub(crate) struct Hwp5Paragraph {
     pub line_segments: Vec<Hwp5ParaLineSeg>,
     /// Inline control objects found in this paragraph (table refs, footnote refs, etc.).
     pub controls: Vec<Hwp5Control>,
+    /// The paragraph-end mark's char shape when it differs from the last
+    /// character's (§19.22 D5).
+    pub end_char_shape: Option<u32>,
 }
 
 /// A control object reference found inline in paragraph text.

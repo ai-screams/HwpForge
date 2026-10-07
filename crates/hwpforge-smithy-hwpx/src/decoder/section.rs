@@ -580,9 +580,18 @@ fn convert_paragraph(
     let para_shape_id = ParaShapeIndex::new(hx.para_pr_id_ref as usize);
     let mut page_settings = None;
 
+    // §19.22 D5 (S17): the last run of a paragraph with two or more runs
+    // that holds nothing — no child, or one empty `<hp:t/>` — carries the
+    // paragraph-end mark's char shape; it is that, not a run.
+    // 이것을 실패시키는 것: 이 읽기를 지우기(`end_mark_run_round_trips`).
+    let end_mark =
+        (hx.runs.len() >= 2).then(|| hx.runs.last()).flatten().filter(|r| is_end_mark_run(r));
+    let end_char_shape = end_mark.map(|r| CharShapeIndex::new(r.char_pr_id_ref as usize));
+    let body_runs = &hx.runs[..hx.runs.len() - usize::from(end_mark.is_some())];
+
     let mut runs = Vec::new();
     let mut has_title_mark = false;
-    for (run_idx, hx_run) in hx.runs.iter().enumerate() {
+    for (run_idx, hx_run) in body_runs.iter().enumerate() {
         // Extract page settings from secPr in first paragraph
         if is_first && page_settings.is_none() {
             if let Some(sec_pr) = &hx_run.sec_pr {
@@ -682,6 +691,7 @@ fn convert_paragraph(
     });
 
     let paragraph = Paragraph {
+        end_char_shape,
         runs,
         para_shape_id,
         column_break: hx.column_break != 0,
@@ -691,6 +701,30 @@ fn convert_paragraph(
         layout_cache,
     };
     Ok((paragraph, page_settings))
+}
+
+/// A run that holds nothing a Core run carries: no child, or a single
+/// `<hp:t>` without content. As a paragraph's last run (of two or more) it
+/// is the paragraph-end mark's char shape (§19.22 D5). Shared by the
+/// decoder and the preservation walk so both skip the same run.
+pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
+    use crate::schema::section::HxRunChildKind;
+    let order = if hx.child_order.is_empty() {
+        crate::schema::section::legacy_child_order(hx)
+    } else {
+        hx.child_order.clone()
+    };
+    match order[..] {
+        [] => true,
+        [(HxRunChildKind::Text, idx)] => {
+            hx.texts.get(idx).is_some_and(|t| match t.to_run_content() {
+                RunContent::Text(s) => s.is_empty(),
+                RunContent::InlineText(it) => it.segments.is_empty(),
+                _ => false,
+            })
+        }
+        _ => false,
+    }
 }
 
 /// Converts an `HxRun` into one or more Core `Run`s.

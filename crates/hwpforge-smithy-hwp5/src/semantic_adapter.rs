@@ -1340,6 +1340,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1377,6 +1378,7 @@ mod tests {
                                 vertical_align: Hwp5TableCellVerticalAlign::Bottom,
                                 border_fill_id: Some(3),
                                 paragraphs: vec![Hwp5Paragraph {
+                                    end_char_shape: None,
                                     silent_wires: Vec::new(),
                                     page_break: false,
                                     column_break: false,
@@ -1587,6 +1589,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1634,6 +1637,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1687,6 +1691,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1778,6 +1783,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1855,6 +1861,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1937,6 +1944,7 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    end_char_shape: None,
                     silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
@@ -1959,6 +1967,7 @@ mod tests {
                         text_margin: None,
                         ctrl_properties: 0,
                         paragraphs: vec![Hwp5Paragraph {
+                            end_char_shape: None,
                             silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,

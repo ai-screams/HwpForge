@@ -1030,6 +1030,7 @@ mod tests {
 
     fn paragraph(text: &str) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            end_char_shape: None,
             silent_wires: Vec::new(),
             page_break: false,
             column_break: false,

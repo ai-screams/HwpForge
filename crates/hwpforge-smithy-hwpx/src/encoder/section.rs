@@ -897,6 +897,15 @@ fn build_paragraph(
         None
     };
 
+    // §19.22 D5 (S17): the paragraph-end mark's char shape is an empty last
+    // run, as Hancom writes it. 이것을 실패시키는 것: 이 run 을 쓰지 않기
+    // (`end_mark_run_round_trips`).
+    if let Some(end) = para.end_char_shape {
+        let mut end_run = note_head_run(end.get() as u32, HxCtrl::default());
+        end_run.ctrls.clear();
+        runs.push(end_run);
+    }
+
     Ok(HxParagraph {
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
