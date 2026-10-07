@@ -472,6 +472,15 @@ fn classify_pair(
         for (path, detail) in end_marks {
             out.push_raw(format!("{at}.{path}"), detail);
         }
+        // The host paragraph's own end mark too (review r1).
+        // 이것을 실패시키는 것: 이 보고를 지우기
+        // (`end_char_shape_change_is_reported_with_a_text_change`, host 경우).
+        if b.end_char_shape != r.end_char_shape {
+            out.push_raw(
+                format!("{at}.end_char_shape"),
+                format!("{:?} vs {:?}", b.end_char_shape, r.end_char_shape),
+            );
+        }
         return;
     }
 
@@ -816,6 +825,9 @@ mod tests {
             cell,
             ["$.sections[0].paragraphs[0].runs[0].table.rows[0].cells[0].paragraphs[0].end_char_shape"]
         );
+        // The host paragraph's end mark, with a cell text change.
+        let host = raws(vec![cell_host(text_para("A"))], vec![with_end(cell_host(text_para("B")))]);
+        assert_eq!(host, ["$.sections[0].paragraphs[0].end_char_shape"]);
         // In a cell alone.
         let cell_only =
             raws(vec![cell_host(text_para("A"))], vec![cell_host(with_end(text_para("A")))]);
