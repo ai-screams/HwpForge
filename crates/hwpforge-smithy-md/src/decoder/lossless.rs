@@ -477,6 +477,7 @@ fn attach_closed_node(
                 stack,
                 Run::control(
                     Control::TextBox {
+                        text_margin: None,
                         paragraphs,
                         width: text_box.width,
                         height: text_box.height,

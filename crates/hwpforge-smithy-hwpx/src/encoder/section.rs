@@ -3394,6 +3394,7 @@ mod tests {
             vec![Paragraph::with_runs(
                 vec![Run::control(
                     Control::TextBox {
+                        text_margin: None,
                         paragraphs: vec![tb_para],
                         width: HwpUnit::new(14000).unwrap(),
                         height: HwpUnit::new(8000).unwrap(),
@@ -3819,6 +3820,7 @@ mod tests {
             vec![Paragraph::with_runs(
                 vec![Run::control(
                     Control::TextBox {
+                        text_margin: None,
                         paragraphs: vec![tb_para],
                         width: HwpUnit::new(14000).unwrap(),
                         height: HwpUnit::new(8000).unwrap(),

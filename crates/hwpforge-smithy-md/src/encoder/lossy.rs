@@ -679,6 +679,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    text_margin: None,
                     paragraphs: vec![textbox_body],
                     width: hwpforge_foundation::HwpUnit::from_mm(80.0).unwrap(),
                     height: hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),

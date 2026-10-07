@@ -266,6 +266,7 @@ pub(crate) struct Hwp5PolygonControl {
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
@@ -295,6 +296,7 @@ pub(crate) struct Hwp5EllipseControl {
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -446,6 +448,7 @@ pub(crate) struct Hwp5TextBoxControl {
     /// maps `(props >> 5) & 0x03` → Core `VerticalAlign`. `None` when the
     /// ListHeader was absent or too short to carry the 속성 word.
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
     /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
     /// from it, mirroring `Hwp5ImageControl::ctrl_properties`. Distinct from
@@ -518,6 +521,7 @@ pub(crate) struct Hwp5GroupChild {
     /// when present. Bits 5–6 carry text vertical alignment; projection maps
     /// `(props >> 5) & 0x03` → Core `VerticalAlign` for text-bearing children.
     pub list_header_properties: Option<u32>,
+    pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     /// The child's rendering block (initial size, matrix chain, fill facts),
     /// or why it could not be read.
     pub render: Result<Hwp5ShapeRender, String>,

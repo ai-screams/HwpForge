@@ -1081,6 +1081,7 @@ mod tests {
     #[test]
     fn empty_text_box_rejected() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -1128,6 +1129,7 @@ mod tests {
     #[test]
     fn valid_text_box_accepted() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),

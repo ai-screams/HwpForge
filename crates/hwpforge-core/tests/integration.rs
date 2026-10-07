@@ -101,6 +101,7 @@ fn lifecycle_complex_document_with_all_content_types() {
     };
 
     let text_box = Control::TextBox {
+        text_margin: None,
         paragraphs: vec![simple_paragraph("Inside text box")],
         width: HwpUnit::from_mm(60.0).unwrap(),
         height: HwpUnit::from_mm(30.0).unwrap(),
@@ -218,6 +219,7 @@ fn validation_rejects_table_with_zero_col_span() {
 #[test]
 fn validation_rejects_empty_text_box() {
     let ctrl = Control::TextBox {
+        text_margin: None,
         paragraphs: vec![],
         width: HwpUnit::from_mm(80.0).unwrap(),
         height: HwpUnit::from_mm(40.0).unwrap(),

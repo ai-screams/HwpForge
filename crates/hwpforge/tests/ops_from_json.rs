@@ -540,6 +540,7 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         inst_id: None,
     };
     let text_box = Control::TextBox {
+        text_margin: None,
         paragraphs: vec![boxed_para],
         width: HwpUnit::new(2000).unwrap(),
         height: HwpUnit::new(2000).unwrap(),

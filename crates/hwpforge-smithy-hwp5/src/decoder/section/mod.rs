@@ -386,6 +386,7 @@ struct NestedSubtreeContext {
     /// extracts them for text-bearing shapes. Mirrors how `parse_table_cell`
     /// recovers the same field for table cells.
     list_header_properties: Option<u32>,
+    text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
     geometry: Option<Hwp5ShapeComponentGeometry>,
@@ -437,6 +438,7 @@ impl NestedSubtreeContext {
             instance_id,
             saw_list_header: false,
             list_header_properties: None,
+            text_margin: None,
             saw_shape_rectangle: false,
             saw_shape_component: false,
             geometry,
@@ -465,6 +467,7 @@ impl NestedSubtreeContext {
         // A shape's text list (§19.22 D4): its own layout. A header's or
         // footer's list header passes here too; its word is not used.
         self.list_header_properties = gso::shape_text_list_properties(data);
+        self.text_margin = gso::shape_text_list_margin(data);
         self.list_header_len = Some(data.len());
     }
 
@@ -497,6 +500,7 @@ impl NestedSubtreeContext {
             self.paragraphs.clear();
             self.saw_list_header = false;
             self.list_header_properties = None;
+            self.text_margin = None;
             self.list_header_len = None;
             self.original_size = crate::schema::section::Hwp5ShapeRender::initial_size(data, true);
         }
@@ -583,7 +587,7 @@ impl NestedSubtreeContext {
         // 이것을 실패시키는 것: 이 보고를 지우기
         // (`shape_text_list_header_reads_its_own_layout`).
         if let Some(len) = self.list_header_len.filter(|_| self.comp_level.is_some()) {
-            if self.list_header_properties.is_none() {
+            if self.text_margin.is_none() {
                 warnings.push(gso::short_list_header_warning(len));
             }
         }
@@ -636,6 +640,7 @@ impl NestedSubtreeContext {
                     geometry,
                     paragraphs: self.paragraphs,
                     list_header_properties: self.list_header_properties,
+                    text_margin: self.text_margin,
                     ctrl_properties: self.properties_raw,
                 }),
                 None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id, header_data: Vec::new() },
@@ -659,6 +664,7 @@ impl NestedSubtreeContext {
                 look: self.look,
                 paragraphs: self.paragraphs,
                 list_header_properties: self.list_header_properties,
+                text_margin: self.text_margin,
                 original_size: self.original_size,
             }),
         }
@@ -712,6 +718,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
                 paragraphs: input.paragraphs.clone(),
                 list_header_properties: input.list_header_properties,
+                text_margin: input.text_margin,
                 look: input.look.clone(),
                 ctrl_id,
                 geometry,
@@ -795,6 +802,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             Hwp5Control::Polygon(Hwp5PolygonControl {
                 paragraphs: input.paragraphs.clone(),
                 list_header_properties: input.list_header_properties,
+                text_margin: input.text_margin,
                 look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry,
@@ -4147,6 +4155,165 @@ mod tests {
         assert_eq!(shorts(&short), 3, "{:?}", short.warnings);
     }
 
+    /// A 33-byte shape text list header with margins `m` (left, right, top,
+    /// bottom) at bytes 8..16.
+    fn margined_list_header(len: usize, m: [i16; 4]) -> Vec<u8> {
+        let mut data = shape_text_list_header(16, 0);
+        for (i, v) in m.iter().enumerate() {
+            data[8 + 2 * i..10 + 2 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        data.resize(len, 0);
+        data
+    }
+
+    /// §19.22 D4: a text box's margin is bytes 8..16 of its text list
+    /// header, read in all three readers (body, group child, in a cell) and
+    /// carried to Core — all four sides different, so a swapped pair shows;
+    /// an ellipse's or polygon's margin other than 283 is reported; a header
+    /// of 12 bytes is reported and leaves the margin `None`.
+    ///
+    /// 이것을 실패시키는 것: 세 읽기 중 하나의 여백 읽기 / 오프셋 / 왼·오, 위·아래
+    /// 맞바꿈 / 타원·다각형 보고 / 12 바이트 보고.
+    #[test]
+    fn text_margins_are_read() {
+        let odd = [850i16, 700, 566, 400];
+        let lh = margined_list_header(33, odd);
+        let mut stream = Vec::new();
+        // Body text box.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 7000, 5000)));
+        stream.extend(make_record(TagId::ShapeComponent, 1, b"cer$cer$"));
+        stream.extend(make_record(TagId::ListHeader, 2, &lh));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 3, &para_text_data("body")));
+        stream.extend(make_record(TagId::ShapeComponentRect, 2, &[0u8; 9]));
+        // Group with a text-box child.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            2,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                3,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+        }
+        stream.extend(make_record(TagId::ListHeader, 4, &margined_list_header(45, odd)));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &para_text_data("child")));
+        // A text box in a table cell.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        one_cell_table(&mut stream, 1);
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 2, &gso_ctrl_header_data(0, 0, 9000, 3000)));
+        stream.extend(make_record(TagId::ShapeComponent, 3, b"cer$cer$"));
+        stream.extend(make_record(TagId::ListHeader, 4, &lh));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &para_text_data("cell")));
+        stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+        // An ellipse and a polygon with text and a margin.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 7000, 5000)));
+        stream.extend(make_record(TagId::ShapeComponent, 1, b"lle$lle$"));
+        stream.extend(make_record(TagId::ListHeader, 2, &lh));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 3, &para_text_data("ellipse")));
+        stream.extend(make_record(TagId::ShapeComponentEllipse, 2, &[0u8; 60]));
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 7000, 5000)));
+        stream.extend(make_record(TagId::ShapeComponent, 1, b"lop$lop$"));
+        stream.extend(make_record(TagId::ListHeader, 2, &lh));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 3, &para_text_data("polygon")));
+        stream.extend(make_record(
+            TagId::ShapeComponentPolygon,
+            2,
+            &shape_component_polygon_data(&[(0, 0), (100, 0), (50, 80)]),
+        ));
+        // A group with an ellipse child that has text and a margin.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &gso_ctrl_header_data(0, 0, 3000, 1000)));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            2,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for (x, tag) in [(0.0, b"cer$"), (2000.0, b"lle$")] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                3,
+                &shape_component_render_data(tag, false, 1, (1000, 1000), x),
+            ));
+            if tag == b"cer$" {
+                stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+            } else {
+                stream.extend(make_record(TagId::ShapeComponentEllipse, 4, &[0u8; 60]));
+            }
+        }
+        stream.extend(make_record(TagId::ListHeader, 4, &lh));
+        stream.extend(make_record(TagId::ParaHeader, 4, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 5, &para_text_data("group ellipse")));
+        // A text box with a 12-byte list header.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 7000, 5000)));
+        stream.extend(make_record(TagId::ShapeComponent, 1, b"cer$cer$"));
+        stream.extend(make_record(TagId::ListHeader, 2, &margined_list_header(12, odd)));
+        stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 3, &para_text_data("short")));
+        stream.extend(make_record(TagId::ShapeComponentRect, 2, &[0u8; 9]));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let section_warnings = result.warnings.clone();
+        let (doc, warnings) = crate::projection::project_to_core(vec![result]).expect("project");
+        let margin = |c: &hwpforge_core::control::Control| match c {
+            hwpforge_core::control::Control::TextBox { text_margin, .. } => text_margin
+                .map(|m| [m.left.as_i32(), m.right.as_i32(), m.top.as_i32(), m.bottom.as_i32()]),
+            other => panic!("{other:?}"),
+        };
+        let paras = &doc.sections()[0].paragraphs;
+        let control = |p: &hwpforge_core::Paragraph| {
+            p.runs.iter().find_map(|r| match &r.content {
+                hwpforge_core::run::RunContent::Control(c) => Some(c.as_ref().clone()),
+                _ => None,
+            })
+        };
+        let want = Some([850, 700, 566, 400]);
+        assert_eq!(margin(&control(&paras[0]).unwrap()), want, "body");
+        let hwpforge_core::control::Control::Group { children, .. } = control(&paras[1]).unwrap()
+        else {
+            panic!()
+        };
+        let hwpforge_core::control::GroupChild::Shape(child) = children.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(margin(child), want, "group child");
+        let hwpforge_core::run::RunContent::Table(table) = &paras[2].runs[0].content else {
+            panic!("{:?}", paras[2].runs)
+        };
+        assert_eq!(margin(&control(&table.rows[0].cells[0].paragraphs[0]).unwrap()), want, "cell");
+        assert_eq!(margin(&control(&paras[6]).unwrap()), None, "short");
+        let count = |subject: &str, ws: &[Hwp5Warning]| {
+            ws.iter()
+                .filter(|w| matches!(w, Hwp5Warning::ProjectionFallback { subject: s, .. } if *s == subject))
+                .count()
+        };
+        // The body ellipse and polygon, and the group's ellipse child.
+        assert_eq!(count("shape.text_margin", &warnings), 3, "{warnings:?}");
+        assert_eq!(
+            count("textbox.list_header_short", &section_warnings),
+            1,
+            "{section_warnings:?}"
+        );
+    }
+
     /// [`one_cell_table`] whose control header sits at `base`.
     fn one_cell_table_at(stream: &mut Vec<u8>, base: u16, text: &str) {
         stream.extend(make_record(TagId::CtrlHeader, base, &ctrl_header_data(CTRL_ID_TABLE)));
@@ -5628,6 +5795,7 @@ mod tests {
             look: None,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             original_size: None,
             instance_id: 0,
             ctrl_properties: 0,

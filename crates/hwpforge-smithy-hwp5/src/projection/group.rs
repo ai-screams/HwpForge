@@ -822,8 +822,13 @@ fn attach_text(
     let valign =
         shape_vertical_align_from_list_header(child.list_header_properties, &mut state.warnings);
     match control {
-        Control::TextBox { paragraphs, text_vertical_align, .. }
-        | Control::Ellipse { paragraphs, text_vertical_align, .. } => {
+        Control::TextBox { paragraphs, text_vertical_align, text_margin, .. } => {
+            *paragraphs = projected;
+            *text_vertical_align = valign;
+            *text_margin = super::text_box_margin(child.text_margin);
+        }
+        Control::Ellipse { paragraphs, text_vertical_align, .. } => {
+            super::report_shape_text_margin(child.text_margin, &mut state.warnings);
             *paragraphs = projected;
             *text_vertical_align = valign;
         }
@@ -911,6 +916,7 @@ mod tests {
             control,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             render,
             nested_controls: Vec::new(),
         }
@@ -931,6 +937,7 @@ mod tests {
             ctrl_id: 0,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             geometry: geo(0, 0, 0, 0),
             points: points.iter().map(|&(x, y)| Hwp5ShapePoint { x, y }).collect(),
             ctrl_properties: 0,
@@ -1213,6 +1220,7 @@ mod tests {
             ctrl_id: 0,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             geometry: geo(0, 0, 0, 0),
             ctrl_properties: 0,
             shape,

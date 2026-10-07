@@ -407,18 +407,29 @@ pub(crate) fn encode_textbox_to_rect(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, placement, caption, style, text_vertical_align) = match ctrl {
-        Control::TextBox {
-            paragraphs,
-            width,
-            height,
-            placement,
-            caption,
-            style,
-            text_vertical_align,
-        } => (paragraphs, *width, *height, placement, caption, style, *text_vertical_align),
-        _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
-    };
+    let (paragraphs, width, height, placement, caption, style, text_vertical_align, text_margin) =
+        match ctrl {
+            Control::TextBox {
+                text_margin,
+                paragraphs,
+                width,
+                height,
+                placement,
+                caption,
+                style,
+                text_vertical_align,
+            } => (
+                paragraphs,
+                *width,
+                *height,
+                placement,
+                caption,
+                style,
+                *text_vertical_align,
+                *text_margin,
+            ),
+            _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
+        };
 
     let width_hwp = width.as_i32();
     let height_hwp = height.as_i32();
@@ -485,11 +496,17 @@ pub(crate) fn encode_textbox_to_rect(
             name: String::new(),
             editable: 0,
             sub_list,
-            text_margin: Some(HxTableMargin {
-                left: MARGIN,
-                right: MARGIN,
-                top: MARGIN,
-                bottom: MARGIN,
+            // §19.22 D4: the box's own margin; `None` = 283 on every side.
+            // 이것을 실패시키는 것: 상수 복귀 / 왼·오, 위·아래 맞바꿈
+            // (`shape_text_margins_round_trip`).
+            text_margin: Some(match text_margin {
+                Some(m) => HxTableMargin {
+                    left: m.left.as_i32(),
+                    right: m.right.as_i32(),
+                    top: m.top.as_i32(),
+                    bottom: m.bottom.as_i32(),
+                },
+                None => HxTableMargin { left: MARGIN, right: MARGIN, top: MARGIN, bottom: MARGIN },
             }),
         }),
 
@@ -3571,6 +3588,7 @@ mod tests {
     #[test]
     fn encode_textbox_non_zero_offset_uses_floating_shape_defaults() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),

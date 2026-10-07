@@ -444,6 +444,7 @@ mod tests {
             control,
             paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
             list_header_properties: None,
+            text_margin: None,
             render,
             nested_controls: Vec::new(),
         };
@@ -466,6 +467,7 @@ mod tests {
                         ctrl_id: 0,
                         paragraphs: Vec::new(),
                         list_header_properties: None,
+                        text_margin: None,
                         geometry: geo.clone(),
                         points: Vec::new(),
                         ctrl_properties: 0,
@@ -516,6 +518,7 @@ mod tests {
             }),
             paragraphs: vec![paragraph("t", vec![line_segment(start, 0, 1000)], Vec::new())],
             list_header_properties: None,
+            text_margin: None,
             render: render(sca),
             nested_controls: Vec::new(),
         };
@@ -530,6 +533,7 @@ mod tests {
             }),
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             render: render(id),
             nested_controls: Vec::new(),
         };

@@ -1956,6 +1956,7 @@ mod tests {
                             height: 6_000,
                         },
                         list_header_properties: None,
+                        text_margin: None,
                         ctrl_properties: 0,
                         paragraphs: vec![Hwp5Paragraph {
                             silent_wires: Vec::new(),

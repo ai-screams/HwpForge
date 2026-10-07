@@ -33,12 +33,24 @@ pub(super) fn shape_text_list_properties(data: &[u8]) -> Option<u32> {
     data.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
+/// The inner margin of a shape's text `LIST_HEADER` (§19.22 D4): bytes
+/// 8..16, left, right, top, bottom (Hancom twins match `textMargin` in all
+/// 348 text boxes). `None` when shorter than 16 bytes.
+///
+/// 이것을 실패시키는 것: 오프셋을 바꾸기(`text_margins_are_read`).
+pub(super) fn shape_text_list_margin(data: &[u8]) -> Option<super::Hwp5TableCellMargin> {
+    super::Hwp5TableCellMargin::read(data, 8)
+}
+
 /// The warning for a shape text `LIST_HEADER` too short for its property
-/// word (none in the corpus): the text keeps the default (top) alignment.
+/// word or its margin (none in the corpus): what is missing keeps its
+/// default (top alignment, 283 margin).
 pub(super) fn short_list_header_warning(len: usize) -> Hwp5Warning {
     Hwp5Warning::ProjectionFallback {
         subject: "textbox.list_header_short",
-        reason: format!("shape text list header of {len} bytes; its properties are not read"),
+        reason: format!(
+            "shape text list header of {len} bytes; its properties or margin are not read"
+        ),
     }
 }
 
@@ -76,6 +88,7 @@ pub(super) struct InlineGsoContext {
     saw_list_header: bool,
     /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
     list_header_properties: Option<u32>,
+    text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     /// The shape's text paragraphs (§19.5 1a — before, a shape in a table
     /// cell or in a text box lost its text).
     paragraphs: Vec<Hwp5Paragraph>,
@@ -122,6 +135,7 @@ pub(super) struct GsoClassificationInput {
     /// a text box before classification.
     pub(super) paragraphs: Vec<super::Hwp5Paragraph>,
     pub(super) list_header_properties: Option<u32>,
+    pub(super) text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     /// The initial box of the scope's first `ShapeComponent` (single
     /// shapes; `None` for group children).
     pub(super) original_size: Option<(u32, u32)>,
@@ -144,6 +158,7 @@ pub(super) struct GsoChildBuilder {
     /// `속성` (UINT32) word of this child's `HWPTAG_LIST_HEADER` record (표 65),
     /// when present. Bits 5–6 carry text vertical alignment.
     list_header_properties: Option<u32>,
+    text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     geometry: Option<Hwp5ShapeComponentGeometry>,
     picture: Option<Hwp5ShapePicture>,
     ole: Option<Hwp5ShapeComponentOle>,
@@ -173,6 +188,7 @@ impl GsoChildBuilder {
             saw_shape_rectangle: false,
             saw_list_header: false,
             list_header_properties: None,
+            text_margin: None,
             geometry,
             picture: None,
             ole: None,
@@ -212,6 +228,7 @@ impl GsoChildBuilder {
                 control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
                 paragraphs: Vec::new(),
                 list_header_properties: None,
+                text_margin: None,
                 render: self.render,
                 nested_controls: self.nested_controls,
             };
@@ -238,12 +255,14 @@ impl GsoChildBuilder {
             look: None,
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             original_size: None,
         });
         Hwp5GroupChild {
             control,
             paragraphs: self.paragraphs,
             list_header_properties: self.list_header_properties,
+            text_margin: self.text_margin,
             render: self.render,
             nested_controls: self.nested_controls,
         }
@@ -307,6 +326,7 @@ impl GsoActiveChild {
                     control: b.into_control(warnings),
                     paragraphs: Vec::new(),
                     list_header_properties: None,
+                    text_margin: None,
                     render,
                     nested_controls: Vec::new(),
                 }
@@ -430,7 +450,8 @@ impl GsoGroupBuilder {
             TagId::ListHeader if own => {
                 child.saw_list_header = true;
                 child.list_header_properties = shape_text_list_properties(&record.data);
-                if child.list_header_properties.is_none() {
+                child.text_margin = shape_text_list_margin(&record.data);
+                if child.text_margin.is_none() {
                     warnings.push(short_list_header_warning(record.data.len()));
                 }
             }
@@ -592,6 +613,7 @@ impl InlineGsoContext {
             group: None,
             saw_list_header: false,
             list_header_properties: None,
+            text_margin: None,
             paragraphs: Vec::new(),
             current_para: None,
             inner: None,
@@ -638,7 +660,8 @@ impl InlineGsoContext {
             TagId::ListHeader if own => {
                 self.saw_list_header = true;
                 self.list_header_properties = shape_text_list_properties(&record.data);
-                if self.list_header_properties.is_none() {
+                self.text_margin = shape_text_list_margin(&record.data);
+                if self.text_margin.is_none() {
                     warnings.push(short_list_header_warning(record.data.len()));
                 }
                 true
@@ -908,6 +931,7 @@ impl InlineGsoContext {
                     geometry,
                     paragraphs: self.paragraphs,
                     list_header_properties: self.list_header_properties,
+                    text_margin: self.text_margin,
                     ctrl_properties: self.ctrl_properties,
                 });
             }
@@ -931,6 +955,7 @@ impl InlineGsoContext {
             look: self.look,
             paragraphs: self.paragraphs,
             list_header_properties: self.list_header_properties,
+            text_margin: self.text_margin,
             original_size: self.original_size,
         })
     }

@@ -97,6 +97,7 @@ fn main() {
     let sec3 = {
         // TextBox with DropCapStyle::DoubleLine
         let textbox = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![p("바탕글 테스트 문단입니다. \
                  이 글상자는 dropcapstyle=\"DoubleLine\"으로 설정되어 \
                  2줄 바탕글 효과가 적용됩니다.")],
@@ -113,6 +114,7 @@ fn main() {
 
         // TextBox with DropCapStyle::Margin
         let textbox2 = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![p("여백 바탕글 테스트입니다. \
                  이 글상자는 dropcapstyle=\"Margin\"으로 설정되어 \
                  여백 바탕글 효과가 적용됩니다.")],

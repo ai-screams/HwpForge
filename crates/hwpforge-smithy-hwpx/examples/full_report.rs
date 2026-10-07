@@ -396,6 +396,7 @@ fn build_section_1() -> Section {
     paras.push(text_para("Dual Serde Rename 패턴:", CS_BOLD, PS_LEFT));
     paras.push(ctrl_para(
         Control::TextBox {
+            text_margin: None,
             paragraphs: vec![
                 text_para(r#"#[serde(rename(serialize = "hh:refList","#, CS_NORMAL, PS_LEFT),
                 text_para(r#"                deserialize = "refList"))]"#, CS_NORMAL, PS_LEFT),

@@ -73,6 +73,7 @@ use crate::run::Run;
 ///     caption: None,
 ///     style: None,
 ///     text_vertical_align: VerticalAlign::Top,
+///     text_margin: None,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -105,6 +106,12 @@ pub enum Control {
         /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
         #[serde(default)]
         text_vertical_align: VerticalAlign,
+        /// Inner margin between the box and its text (HWPX
+        /// `<hp:drawText><hp:textMargin>`, HWP5 text list header bytes 8–16).
+        /// `None` = 283 HWPUNIT (1 mm) on every side, what the encoder wrote
+        /// before this field existed; decoders carry the wire value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text_margin: Option<crate::table::TableMargin>,
     },
 
     /// A hyperlink with display text and URL.
@@ -1315,6 +1322,7 @@ impl Control {
     /// ```
     pub fn text_box(paragraphs: Vec<Paragraph>, width: HwpUnit, height: HwpUnit) -> Self {
         Self::TextBox {
+            text_margin: None,
             paragraphs,
             width,
             height,
@@ -2033,6 +2041,32 @@ impl std::fmt::Display for Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S16: a text box without a margin writes no `text_margin` (old JSON
+    /// and its output unchanged) and reads back as `None`; a margin round
+    /// trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn text_box_margin_json() {
+        let unit = HwpUnit::new(1000).unwrap();
+        let tb = Control::text_box(vec![], unit, unit);
+        let json = serde_json::to_value(&tb).unwrap();
+        assert!(json["TextBox"].get("text_margin").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<Control>(json).unwrap(), tb);
+        let mut with = tb.clone();
+        if let Control::TextBox { text_margin, .. } = &mut with {
+            *text_margin = Some(crate::table::TableMargin {
+                left: unit,
+                right: unit,
+                top: unit,
+                bottom: unit,
+            });
+        }
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["TextBox"]["text_margin"]["left"], 1000);
+        assert_eq!(serde_json::from_value::<Control>(json).unwrap(), with);
+    }
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex, VerticalAlign};
 
@@ -2112,6 +2146,7 @@ mod tests {
     #[test]
     fn text_box_construction() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -2259,6 +2294,7 @@ mod tests {
     #[test]
     fn display_text_box() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![simple_paragraph(), simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
@@ -2322,6 +2358,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_text_box() {
         let ctrl = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),

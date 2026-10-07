@@ -1288,7 +1288,7 @@
       ]
     },
     "Control": {
-      "description": "An inline control element.\n\nControls are non-text elements that appear within a Run.\nEach variant carries its own data; the enum is `#[non_exhaustive]`\nfor forward compatibility.\n\n# Examples\n\n```\nuse hwpforge_core::control::Control;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};\n\nlet text_box = Control::TextBox {\n    paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    height: HwpUnit::from_mm(40.0).unwrap(),\n    placement: None,\n    caption: None,\n    style: None,\n    text_vertical_align: VerticalAlign::Top,\n};\nassert!(text_box.is_text_box());\nassert!(!text_box.is_hyperlink());\n```",
+      "description": "An inline control element.\n\nControls are non-text elements that appear within a Run.\nEach variant carries its own data; the enum is `#[non_exhaustive]`\nfor forward compatibility.\n\n# Examples\n\n```\nuse hwpforge_core::control::Control;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};\n\nlet text_box = Control::TextBox {\n    paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    height: HwpUnit::from_mm(40.0).unwrap(),\n    placement: None,\n    caption: None,\n    style: None,\n    text_vertical_align: VerticalAlign::Top,\n    text_margin: None,\n};\nassert!(text_box.is_text_box());\nassert!(!text_box.is_hyperlink());\n```",
       "oneOf": [
         {
           "description": "An inline text box with its own paragraph content.\nMaps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).",
@@ -1349,6 +1349,17 @@
                   "description": "Vertical alignment of the embedded text within the box.\nMaps to HWPX `<hp:drawText><hp:subList vertAlign=\"...\">` and HWP5\n문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].",
                   "$ref": "#/$defs/VerticalAlign",
                   "default": "Top"
+                },
+                "text_margin": {
+                  "description": "Inner margin between the box and its text (HWPX\n`<hp:drawText><hp:textMargin>`, HWP5 text list header bytes 8–16).\n`None` = 283 HWPUNIT (1 mm) on every side, what the encoder wrote\nbefore this field existed; decoders carry the wire value.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TableMargin"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               },
               "required": [

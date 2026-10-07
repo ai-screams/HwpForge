@@ -193,6 +193,9 @@ pub(crate) fn decode_textbox(
             let paragraphs = result?;
             let text_vertical_align = decode_shape_vert_align(&draw_text.sub_list.vert_align);
             Control::TextBox {
+                // §19.22 D4: the wire value, also when it is 283 everywhere.
+                // 이것을 실패시키는 것: 읽지 않기(`shape_text_margins_round_trip`).
+                text_margin: draw_text_margin(draw_text.text_margin.as_ref()),
                 paragraphs,
                 width,
                 height,
@@ -304,6 +307,7 @@ pub(crate) fn decode_ellipse(
 
     let (paragraphs, text_vertical_align) = match &ellipse.draw_text {
         Some(dt) => {
+            report_shape_text_margin(dt.text_margin.as_ref(), ctx);
             ctx.enter(super::PathSeg::TextBox);
             let result = decode_sublist_paragraphs(&dt.sub_list, depth, ctx);
             ctx.leave();
@@ -368,6 +372,7 @@ pub(crate) fn decode_polygon(
 
     let (paragraphs, text_vertical_align) = match &polygon.draw_text {
         Some(dt) => {
+            report_shape_text_margin(dt.text_margin.as_ref(), ctx);
             ctx.enter(super::PathSeg::TextBox);
             let result = decode_sublist_paragraphs(&dt.sub_list, depth, ctx);
             ctx.leave();
@@ -1732,6 +1737,39 @@ fn control_style_mut(control: &mut Control) -> Option<&mut ShapeStyle> {
 /// must be — an invalid one would be stored as 0).
 fn fits_hwpunit(values: &[i32]) -> bool {
     values.iter().all(|&v| HwpUnit::new(v).is_ok())
+}
+
+/// A drawn shape's text margin (`<hp:drawText><hp:textMargin>`) as a Core
+/// margin; `None` when absent or not representable (§19.22 D4).
+fn draw_text_margin(
+    margin: Option<&crate::schema::section::HxTableMargin>,
+) -> Option<hwpforge_core::table::TableMargin> {
+    let m = margin?;
+    Some(hwpforge_core::table::TableMargin {
+        left: HwpUnit::new(m.left).ok()?,
+        right: HwpUnit::new(m.right).ok()?,
+        top: HwpUnit::new(m.top).ok()?,
+        bottom: HwpUnit::new(m.bottom).ok()?,
+    })
+}
+
+/// An ellipse's or polygon's text margin other than 283 on every side: Core
+/// carries a text margin for text boxes only, so the re-encode writes 283 —
+/// reported, not refused (the text stays; only its inset changes).
+/// 이것을 실패시키는 것: 이 보고를 지우기(`shape_text_margins_round_trip`).
+fn report_shape_text_margin(
+    margin: Option<&crate::schema::section::HxTableMargin>,
+    ctx: &mut super::section::DecodeCtx,
+) {
+    if let Some(m) = margin {
+        if [m.left, m.right, m.top, m.bottom] != [283; 4] {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:drawText/hp:textMargin",
+                raw: format!("{} {} {} {}", m.left, m.right, m.top, m.bottom),
+                fallback: "283",
+            });
+        }
+    }
 }
 
 #[cfg(test)]

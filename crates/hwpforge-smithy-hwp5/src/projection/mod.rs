@@ -3364,6 +3364,7 @@ fn project_control_run(
                 run.as_mut(),
                 &polygon.paragraphs,
                 polygon.list_header_properties,
+                polygon.text_margin,
                 projection_images,
             );
             projection_images.styled(run, polygon.look.as_ref(), true)
@@ -3374,6 +3375,7 @@ fn project_control_run(
                 run.as_mut(),
                 &ellipse.paragraphs,
                 ellipse.list_header_properties,
+                ellipse.text_margin,
                 projection_images,
             );
             projection_images.styled(run, ellipse.look.as_ref(), true)
@@ -3794,6 +3796,7 @@ fn project_textbox_run(
     );
     Run::control(
         Control::TextBox {
+            text_margin: text_box_margin(textbox.text_margin),
             paragraphs,
             width: hwp_unit_from_u32(textbox.geometry.width),
             height: hwp_unit_from_u32(textbox.geometry.height),
@@ -3834,6 +3837,7 @@ fn attach_shape_text(
     run: Option<&mut Run>,
     paragraphs: &[Hwp5Paragraph],
     list_header_properties: Option<u32>,
+    text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
     projection_images: &mut ProjectionImageState<'_>,
 ) {
     let Some(run) = run else { return };
@@ -3842,6 +3846,7 @@ fn attach_shape_text(
     }
     let projected =
         project_nested_paragraphs(paragraphs, projection_images, ImageProjectionContext::TextBox);
+    report_shape_text_margin(text_margin, &mut projection_images.warnings);
     if let RunContent::Control(control) = &mut run.content {
         if let Control::Ellipse { paragraphs, text_vertical_align, .. }
         | Control::Polygon { paragraphs, text_vertical_align, .. } = control.as_mut()
@@ -3850,6 +3855,37 @@ fn attach_shape_text(
             *text_vertical_align = shape_vertical_align_from_list_header(
                 list_header_properties,
                 &mut projection_images.warnings,
+            );
+        }
+    }
+}
+
+/// A text box's inner margin from its text list header (§19.22 D4; Hancom
+/// twins match `textMargin` in all 348 text boxes), carried also when it is
+/// 283 on every side.
+pub(super) fn text_box_margin(
+    margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+) -> Option<TableMargin> {
+    margin.map(core_margin)
+}
+
+/// An ellipse's or polygon's text margin other than 283 on every side: Core
+/// carries a text margin for text boxes only (S16), so the output writes
+/// 283 — reported, not refused (the text stays; only its inset changes).
+/// 이것을 실패시키는 것: 이 보고를 지우기(`text_margins_are_read`).
+pub(super) fn report_shape_text_margin(
+    margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if let Some(m) = margin {
+        if [m.left, m.right, m.top, m.bottom] != [283; 4] {
+            push_projection_fallback(
+                warnings,
+                "shape.text_margin",
+                format!(
+                    "text margin {} {} {} {} of an ellipse or polygon is not carried; 283 is written",
+                    m.left, m.right, m.top, m.bottom
+                ),
             );
         }
     }
@@ -4461,6 +4497,7 @@ mod tests {
             },
             paragraphs: vec![make_paragraph("가운데", 0, 0)],
             list_header_properties: Some(1 << 5),
+            text_margin: None,
             ctrl_properties: 0,
         };
         let mut images =
@@ -4487,6 +4524,7 @@ mod tests {
             },
             paragraphs: vec![make_paragraph("위", 0, 0)],
             list_header_properties: None,
+            text_margin: None,
             ctrl_properties: 0,
         };
         let mut images =
@@ -5234,6 +5272,7 @@ mod tests {
                 height: 6_000,
             },
             list_header_properties: None,
+            text_margin: None,
             ctrl_properties: 0,
             paragraphs: vec![Hwp5Paragraph {
                 silent_wires: Vec::new(),
@@ -6723,6 +6762,7 @@ mod tests {
                 ctrl_id: 0x6773_6F20,
                 paragraphs: Vec::new(),
                 list_header_properties: None,
+                text_margin: None,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     x: 17_804,
                     y: 13_900,
@@ -7322,6 +7362,7 @@ mod tests {
                 },
                 paragraphs: vec![chart_paragraph()],
                 list_header_properties: None,
+                text_margin: None,
                 ctrl_properties: 0,
             }),
             other => panic!("unknown container {other}"),
@@ -7518,6 +7559,7 @@ mod shape_style_tests {
             },
             paragraphs: Vec::new(),
             list_header_properties: None,
+            text_margin: None,
             ctrl_properties: 0,
         };
         let mut images =

@@ -676,6 +676,7 @@ mod tests {
         ));
         para.add_run(Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![text_para("inside box")],
                 width: HwpUnit::new(1000).unwrap(),
                 height: HwpUnit::new(1000).unwrap(),

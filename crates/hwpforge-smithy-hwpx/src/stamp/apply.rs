@@ -795,6 +795,7 @@ mod tests {
         let mut controls = Paragraph::new(ParaShapeIndex::new(0));
         controls.add_run(Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![text_para("글상자 (  )")],
                 width,
                 height: width,

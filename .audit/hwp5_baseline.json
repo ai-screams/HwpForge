@@ -3,7 +3,7 @@
   "fixtures_scanned": 166,
   "fixtures_decoded": 166,
   "fixtures_failed": 0,
-  "total_warnings": 20,
+  "total_warnings": 22,
   "categories": {
     "ContentLost:group_child_picture": {
       "count": 2,
@@ -48,6 +48,12 @@
       "count": 1,
       "fixtures": {
         "tests/fixtures/hwp5/crossref/sample-eq-caption-4-refs.hwp": 1
+      }
+    },
+    "ProjectionFallback:shape.text_margin": {
+      "count": 2,
+      "fixtures": {
+        "tests/fixtures/mixed/full_report.hwp": 2
       }
     }
   },

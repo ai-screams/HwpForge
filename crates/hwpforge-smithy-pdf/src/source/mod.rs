@@ -1928,6 +1928,7 @@ fn build_line_text_box(
         style,
         text_vertical_align,
         caption,
+        text_margin,
         ..
     } = ctrl
     else {
@@ -1936,6 +1937,17 @@ fn build_line_text_box(
         });
     };
     refuse_caption_number(caption.as_ref(), location)?;
+    // §19.22 D4: the layout uses `TEXTBOX_TEXT_MARGIN` (283) on every side;
+    // another margin would put the text in the wrong place.
+    // 이것을 실패시키는 것: 이 거부를 지우기(`text_box_margin_other_than_283_is_refused`).
+    if text_margin.is_some_and(|m| {
+        [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != TEXTBOX_TEXT_MARGIN)
+    }) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "text box with a text margin other than 283",
+            location: location.to_string(),
+        });
+    }
     let mut inner_lines = Vec::new();
     for (pi, para) in paragraphs.iter().enumerate() {
         let inner_loc = format!("{location}/tb/p{pi}");
@@ -2895,6 +2907,7 @@ mod tests {
         use hwpforge_core::control::Control;
         Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                text_margin: None,
                 paragraphs: inner,
                 width: HwpUnit::new(width).unwrap(),
                 height: HwpUnit::new(height).unwrap(),
@@ -2950,6 +2963,43 @@ mod tests {
     }
 
     /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    /// §19.22 D4: a text box whose margin is not 283 on every side is
+    /// refused (the layout uses 283); 283 on every side, carried as `Some`
+    /// by the decoders, is drawn.
+    ///
+    /// 이것을 실패시키는 것: 거부를 지우기 / 한 변만 보기.
+    #[test]
+    fn text_box_margin_other_than_283_is_refused() {
+        use hwpforge_core::table::TableMargin;
+        use hwpforge_foundation::VerticalAlign;
+        let u = |v| HwpUnit::new(v).unwrap();
+        let render = |margin: Option<TableMargin>| {
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let hwpforge_core::control::Control::TextBox { text_margin, .. } = c.as_mut() {
+                    *text_margin = margin;
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ())
+        };
+        let refused = |r: &PdfResult<()>| matches!(r, Err(PdfError::UnsupportedContent { kind, .. }) if kind.contains("text margin"));
+        for (l, r, t, b) in [(850, 283, 283, 283), (283, 283, 283, 400)] {
+            let res =
+                render(Some(TableMargin { left: u(l), right: u(r), top: u(t), bottom: u(b) }));
+            assert!(refused(&res), "{l} {r} {t} {b}: {res:?}");
+        }
+        let all_283 = TableMargin { left: u(283), right: u(283), top: u(283), bottom: u(283) };
+        assert!(!refused(&render(Some(all_283))));
+        assert!(!refused(&render(None)));
+    }
+
     /// P19 (review r1): a caption number in a picture's or a text box's
     /// caption — captions are not drawn — is refused on the inline, the
     /// anchored and the text-box paths; the same caption without the
@@ -3345,6 +3395,7 @@ mod tests {
         placement.treat_as_char = false;
         let run = Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![tb_inner(vec![seg(0, 0)], "가")],
                 width: HwpUnit::new(17008).unwrap(),
                 height: HwpUnit::new(7087).unwrap(),

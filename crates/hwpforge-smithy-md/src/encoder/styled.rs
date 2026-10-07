@@ -1880,6 +1880,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    text_margin: None,
                     paragraphs: vec![textbox_body],
                     width: HwpUnit::from_mm(80.0).unwrap(),
                     height: HwpUnit::from_mm(40.0).unwrap(),

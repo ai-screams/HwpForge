@@ -115,7 +115,18 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(text)
                     ));
                 }
-                Control::TextBox { paragraphs, width, height, style, .. } => {
+                Control::TextBox { paragraphs, width, height, style, text_margin, .. } => {
+                    // §19.22 D4: nor for a text margin other than 283 (P5b).
+                    // 이것을 실패시키는 것: 이 거부를 지우기
+                    // (`text_box_margin_is_refused`).
+                    if text_margin.is_some_and(|m| {
+                        [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 283)
+                    }) {
+                        return Err(MdError::UnsupportedStructure {
+                            detail: "text box text margin is not carried by the lossless encoder"
+                                .to_string(),
+                        });
+                    }
                     // §19.5 1c (review r1): the lossless grammar has no place
                     // for a rounded corner yet (P5b) — refuse rather than
                     // write a square box. 이것을 실패시키는 것: 이 거부를 지우기
@@ -387,6 +398,39 @@ mod tests {
         ));
         assert!(encode_lossless(&doc(None)).is_ok());
     }
+    /// A text box whose margin is not 283 everywhere is refused (§19.22 D4);
+    /// 283 everywhere is written.
+    #[test]
+    fn text_box_margin_is_refused() {
+        use hwpforge_core::table::TableMargin;
+        let doc = |v: i32| {
+            let unit = HwpUnit::new(3000).unwrap();
+            let inner = Paragraph::with_runs(
+                vec![Run::text("box", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            let mut tb = Control::text_box(vec![inner], unit, unit);
+            if let Control::TextBox { text_margin, .. } = &mut tb {
+                let m = HwpUnit::new(283).unwrap();
+                *text_margin = Some(TableMargin {
+                    left: m,
+                    right: m,
+                    top: m,
+                    bottom: HwpUnit::new(v).unwrap(),
+                });
+            }
+            let para = Paragraph::with_runs(
+                vec![Run::control(tb, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
+            d.validate().unwrap()
+        };
+        assert!(matches!(encode_lossless(&doc(400)), Err(MdError::UnsupportedStructure { .. })));
+        assert!(encode_lossless(&doc(283)).is_ok());
+    }
+
     /// A squeezed cell is refused (§19.22 D3 — the grammar cannot carry it
     /// yet); a breaking one is written.
     #[test]
@@ -527,6 +571,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    text_margin: None,
                     paragraphs: vec![textbox_paragraph],
                     width: HwpUnit::from_mm(50.0).unwrap(),
                     height: HwpUnit::from_mm(20.0).unwrap(),

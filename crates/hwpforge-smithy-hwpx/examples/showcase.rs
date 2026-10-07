@@ -215,6 +215,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    text_margin: None,
                     paragraphs: vec![
                         text_para("글상자 제목", 1, 1),
                         text_para(

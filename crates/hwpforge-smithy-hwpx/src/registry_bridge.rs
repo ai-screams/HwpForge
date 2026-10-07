@@ -275,6 +275,7 @@ mod tests {
         ));
         root.add_run(Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![simple_paragraph(body_cs, body_ps)],
                 width: HwpUnit::from_mm(20.0).unwrap(),
                 height: HwpUnit::from_mm(10.0).unwrap(),

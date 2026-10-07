@@ -799,6 +799,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![p(
                     "\u{ae30}\u{bcf8} \u{ae00}\u{c0c1}\u{c790} \u{b0b4}\u{c6a9}\u{c785}\u{b2c8}\u{b2e4}.",
                     CS_NORMAL,
@@ -822,6 +823,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![p("This is a TextBox with a caption.", CS_NORMAL, PS_LEFT)],
                 width: HwpUnit::from_mm(80.0).unwrap(),
                 height: HwpUnit::from_mm(20.0).unwrap(),
@@ -848,6 +850,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![p(
                     "\u{d30c}\u{b780} \u{d14c}\u{b450}\u{b9ac} + \u{c5f0}\u{d55c} \u{d30c}\u{b780} \u{bc30}\u{acbd}",
                     CS_BLUE,
@@ -880,6 +883,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![p(
                     "\u{be68}\u{ac04} \u{b450}\u{ae4c}\u{c6b4} \u{d14c}\u{b450}\u{b9ac} \u{ae00}\u{c0c1}\u{c790}",
                     CS_RED,
@@ -910,6 +914,7 @@ fn gen_06_textbox() {
         paras.push(Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    text_margin: None,
                     paragraphs: vec![p(label, CS_NORMAL, PS_CENTER)],
                     width: HwpUnit::from_mm(w).unwrap(),
                     height: HwpUnit::from_mm(h).unwrap(),
@@ -930,6 +935,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                text_margin: None,
                 paragraphs: vec![
                     p(
                         "\u{ccab} \u{bc88}\u{c9f8} \u{bb38}\u{b2e8}",

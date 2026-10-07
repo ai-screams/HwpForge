@@ -358,6 +358,7 @@ mod tests {
         host.add_run(Run::table(caption_host, CharShapeIndex::new(0)));
 
         let textbox = Control::TextBox {
+            text_margin: None,
             paragraphs: vec![{
                 let mut p = Paragraph::new(ParaShapeIndex::new(0));
                 p.add_run(Run::table(
