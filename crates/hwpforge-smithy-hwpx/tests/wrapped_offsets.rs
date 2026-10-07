@@ -259,3 +259,71 @@ fn hwp5_chart_offsets_are_written_wrapped() {
     assert_eq!(out.matches(&format!(r#"vertOffset="{V}" horzOffset="{H}""#)).count(), 2, "{out}");
     assert_no_signed_offset(&out);
 }
+
+/// A group moved 145 up: every picture's `<hp:offset y>` is written wrapped
+/// and its `transMatrix e6` signed, as Hancom writes them, independently of
+/// `x`. Decoding the output gives the same group.
+///
+/// 이것을 실패시키는 것: 묶음 자식 offset 의 `y` 만 i32 로 쓰기 / 행렬 `e6`
+/// 을 부호 없는 값으로 쓰기.
+#[test]
+fn group_child_negative_y_round_trips_wrapped() {
+    let source = fixture("shapes/group-f3a-logo.hwpx");
+    let mut xml = section_xml(&source);
+    let first = xml.find("<hp:pic ").expect("first picture");
+    // Only the `transMatrix` translation changes: each picture also has
+    // `rotMatrix` entries followed by a `scaMatrix`.
+    let tail = xml[first..].replace(r#"y="0"/><hp:orgSz"#, r#"y="4294967151"/><hp:orgSz"#).replace(
+        r#"e4="0" e5="1" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix"#,
+        r#"e4="0" e5="1" e6="-145"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix"#,
+    );
+    xml.replace_range(first.., &tail);
+    assert_eq!(xml.matches(r#"y="4294967151""#).count(), 3);
+    assert_eq!(xml.matches(r#"e6="-145""#).count(), 3);
+    let input = with_section(&source, &xml);
+    let before = HwpxDecoder::decode(&input).expect("decode");
+    assert!(before.warnings.is_empty(), "{:?}", before.warnings);
+
+    let bytes = reencode(&input);
+    let out = section_xml(&bytes);
+    assert_eq!(out.matches(r#"y="4294967151"/>"#).count(), 3, "{out}");
+    assert_eq!(out.matches(r#"e5="1" e6="-145"/>"#).count(), 3, "{out}");
+    assert_no_signed_offset(&out);
+
+    let again = HwpxDecoder::decode(&bytes).expect("decode again");
+    assert!(again.warnings.is_empty(), "{:?}", again.warnings);
+    let runs = |d: &hwpforge_smithy_hwpx::HwpxDocument| {
+        d.document.sections()[0].paragraphs.iter().map(|p| p.runs.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(runs(&again), runs(&before));
+}
+
+/// A TextArt whose Core size is negative (validation rejects only 0) writes
+/// `<hp:curSz>` as the unsigned wrap Hancom uses; the derived `scaMatrix`
+/// stays signed.
+///
+/// 이것을 실패시키는 것: 글맵시 `<hp:curSz>` 의 `width`·`height` 를 i32 로
+/// 쓰기(각각) / 크기 계산(`scaMatrix`)까지 부호 없는 값으로 하기.
+#[test]
+fn text_art_negative_size_writes_wrapped_cur_sz() {
+    let art = Control::TextArt {
+        text: "글".to_string(),
+        shape: "WAVE2".to_string(),
+        font_name: "함초롬바탕".to_string(),
+        font_style: "보통".to_string(),
+        align: "LEFT".to_string(),
+        line_spacing: 120,
+        char_spacing: 100,
+        width: HwpUnit::new(-14173).unwrap(),
+        height: HwpUnit::new(-2355).unwrap(),
+        placement: None,
+        fill_color: None,
+        inst_id: None,
+    };
+    let out = section_xml(&encode_one(Run::control(art, CharShapeIndex::new(0))));
+    assert!(out.contains(r#"<hp:curSz width="4294953123" height="4294964941"/>"#), "{out}");
+    assert!(
+        out.contains(r#"<hc:scaMatrix e1="-1.000000" e2="0" e3="0" e4="0" e5="-0.166161""#),
+        "{out}"
+    );
+}
