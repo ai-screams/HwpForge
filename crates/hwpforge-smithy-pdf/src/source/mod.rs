@@ -1741,17 +1741,28 @@ fn refuse_caption_number(
     caption: Option<&hwpforge_core::caption::Caption>,
     location: &str,
 ) -> PdfResult<()> {
-    let Some(caption) = caption else { return Ok(()) };
-    let mut found = false;
-    for p in &caption.paragraphs {
-        p.for_each_paragraph(|q| {
-            found |= q.runs.iter().any(|r| {
-                matches!(&r.content, RunContent::Control(c)
-                    if matches!(**c, hwpforge_core::control::Control::AutoNumber { .. }))
+    // The Core paragraph walk does not enter a picture's caption, so a
+    // picture inside the caption has its own caption looked at here
+    // (review r2: caption → picture → caption → number passed).
+    // 이것을 실패시키는 것: 그림 캡션으로 재귀하지 않기
+    // (`caption_number_in_a_caption_is_refused`).
+    fn holds_number(caption: &hwpforge_core::caption::Caption) -> bool {
+        let mut found = false;
+        for p in &caption.paragraphs {
+            p.for_each_paragraph(|q| {
+                found |= q.runs.iter().any(|r| match &r.content {
+                    RunContent::Control(c) => {
+                        matches!(**c, hwpforge_core::control::Control::AutoNumber { .. })
+                    }
+                    RunContent::Image(img) => img.caption.as_ref().is_some_and(holds_number),
+                    _ => false,
+                });
             });
-        });
+        }
+        found
     }
-    if found {
+    let Some(caption) = caption else { return Ok(()) };
+    if holds_number(caption) {
         return Err(PdfError::UnsupportedContent {
             kind: "caption number",
             location: location.to_string(),
@@ -2944,7 +2955,8 @@ mod tests {
     /// anchored and the text-box paths; the same caption without the
     /// number is not refused for it.
     ///
-    /// 이것을 실패시키는 것: 세 경로의 `refuse_caption_number` 호출을 각각 지우기.
+    /// 이것을 실패시키는 것: 세 경로의 `refuse_caption_number` 호출을 각각 지우기 /
+    /// 캡션 속 그림의 캡션으로 재귀하지 않기.
     #[test]
     fn caption_number_in_a_caption_is_refused() {
         use hwpforge_core::caption::{Caption, CaptionSide};
@@ -2970,6 +2982,28 @@ mod tests {
         let refused = |r: &PdfResult<()>| {
             matches!(r, Err(PdfError::UnsupportedContent { kind: "caption number", .. }))
         };
+        // A caption whose picture has the numbered caption (review r2).
+        let nested = |numbered: bool| {
+            let size = HwpUnit::new(1000).unwrap();
+            let inner = hwpforge_core::image::Image::new(
+                "BinData/b.png",
+                size,
+                size,
+                hwpforge_core::image::ImageFormat::Png,
+            )
+            .with_caption(caption(numbered));
+            Caption::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::image(inner, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                CaptionSide::Bottom,
+            )
+        };
+        for numbered in [true, false] {
+            let r = refuse_caption_number(Some(&nested(numbered)), "s0/p0");
+            assert_eq!(refused(&r), numbered, "nested {numbered}: {r:?}");
+        }
         // Inline picture.
         for numbered in [true, false] {
             let mut run = inline_img("BinData/a.png");
