@@ -2558,3 +2558,64 @@ fn hwp5_char_shape_warns_on_outline_kind_when_nonzero() {
         "non-zero outline_kind must emit ProjectionFallback: {warnings:?}"
     );
 }
+
+/// A store with two border fills — slot 1 without lines, slot 2 a solid box
+/// — and the given char shape border ids.
+fn store_with_char_borders(borders: &[Option<u16>]) -> Hwp5StyleStore {
+    let line = |kind| Hwp5RawBorderLine { kind, width: 1, color: 0 };
+    let fill = |kind| Hwp5RawBorderFill {
+        property: 0,
+        three_d: false,
+        shadow: false,
+        slash_diagonal_shape: 0,
+        back_slash_diagonal_shape: 0,
+        center_line: false,
+        left: line(kind),
+        right: line(kind),
+        top: line(kind),
+        bottom: line(kind),
+        diagonal: none_border_line(),
+        fill: Hwp5RawBorderFillFill::None,
+    };
+    let mut doc_info = empty_doc_info();
+    doc_info.char_shapes = borders
+        .iter()
+        .map(|b| Hwp5RawCharShape { border_fill_id: *b, ..default_char_shape() })
+        .collect();
+    doc_info.border_fills = vec![
+        border_fill_slot(1, fill(Hwp5BorderLineKind::None)),
+        border_fill_slot(2, fill(Hwp5BorderLineKind::Solid)),
+    ];
+    Hwp5StyleStore::from_doc_info(&doc_info)
+}
+
+/// A char shape whose border is 0 or absent points at an empty border fill
+/// appended after the document's own; one pointing at slot 2 keeps slot 2
+/// (§19.22 A — slot 2 is the document's solid box here, not "no border").
+///
+/// 이것을 실패시키는 것: `!= 2` 필터 복귀(2 가 `None` 이 되어 실패) / 덧붙이기를
+/// 지우기 / 덧붙인 것에 선 넣기.
+#[test]
+fn char_shape_without_a_border_points_at_an_empty_border_fill() {
+    let (out, _) =
+        crate::hwp5_style_store_to_hwpx(&store_with_char_borders(&[Some(0), None, Some(2)]));
+    assert_eq!(out.border_fill_count(), 3);
+    let zero = out.char_shape(CharShapeIndex::new(0)).unwrap().border_fill_id;
+    assert_eq!(zero, Some(3));
+    assert_eq!(out.char_shape(CharShapeIndex::new(1)).unwrap().border_fill_id, Some(3));
+    assert_eq!(out.char_shape(CharShapeIndex::new(2)).unwrap().border_fill_id, Some(2));
+    let empty = out.border_fill(3).unwrap();
+    for side in [&empty.left, &empty.right, &empty.top, &empty.bottom] {
+        assert_eq!(side.line_type, "NONE");
+    }
+    assert!(empty.fill.is_none() && empty.gradient_fill.is_none() && empty.image_fill.is_none());
+}
+
+/// Without a borderless char shape nothing is appended.
+///
+/// 이것을 실패시키는 것: 빈 테두리를 무조건 덧붙이기.
+#[test]
+fn no_empty_border_fill_without_a_borderless_char_shape() {
+    let (out, _) = crate::hwp5_style_store_to_hwpx(&store_with_char_borders(&[Some(1), Some(2)]));
+    assert_eq!(out.border_fill_count(), 2);
+}

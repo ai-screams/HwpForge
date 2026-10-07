@@ -135,7 +135,10 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape.char_offset = raw.primary_offset();
     shape.use_kerning = raw.use_kerning();
     shape.use_font_space = raw.use_font_space();
-    shape.border_fill_id = raw.border_fill_id.filter(|id| *id != 0 && *id != 2).map(u32::from);
+    // Slot 2 is an ordinary slot of the document (§19.22 A): a char shape
+    // pointing at it keeps it. 0 means "no border"; the store conversion
+    // points those char shapes at an empty border fill it appends.
+    shape.border_fill_id = raw.border_fill_id.filter(|id| *id != 0).map(u32::from);
     shape
 }
 

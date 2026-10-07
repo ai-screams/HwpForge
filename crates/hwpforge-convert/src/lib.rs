@@ -22,6 +22,7 @@ use hwpforge_smithy_hwp5::schema::border_fill::Hwp5RawBorderFillFill;
 use hwpforge_smithy_hwp5::schema::header::{Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot};
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::{decode_hwp5_to_core, Hwp5Error, Hwp5Result, Hwp5Warning};
+use hwpforge_smithy_hwpx::style_store::HwpxBorderFill;
 use hwpforge_smithy_hwpx::{EncodeOptions, HwpxEncoder, HwpxStyleStore};
 
 use crate::style_store_border_fill::{push_hwp5_border_fills, push_required_border_fills};
@@ -347,18 +348,38 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     } else {
         push_hwp5_border_fills(&mut out, border_fills, image_ids, &mut warnings);
     }
+    // A char shape whose border is 0 ("none") or absent (before 5.0.2.1)
+    // points at an empty border fill appended after the document's own
+    // (§19.22 A): the encoder's fallback, slot 2, is a real slot here and
+    // drew a box around the text. Appended only when some char shape needs
+    // it.
+    // 이것을 실패시키는 것: 덧붙이기를 지우기 / 무조건 덧붙이기 / 덧붙인 것에 선
+    // 넣기(`char_shape_without_a_border_points_at_an_empty_border_fill`).
+    let borderless =
+        store.char_shapes.iter().any(|raw| matches!(raw.border_fill_id, None | Some(0))).then(
+            || {
+                let id = out.iter_border_fills().map(|bf| bf.id).max().unwrap_or(0) + 1;
+                let mut empty = HwpxBorderFill::default_page_border();
+                empty.id = id;
+                out.push_border_fill(empty)
+            },
+        );
     push_fonts(&mut out, store);
     let font_group_counts = resolved_font_group_counts(store);
     let tab_id_map = Hwp5TabIdMap::from_doc_info(&store.tab_defs);
 
     // Map character shapes.
     for (raw_id, raw) in store.char_shapes.iter().enumerate() {
-        out.push_char_shape(hwp5_char_shape_to_hwpx_with_counts_and_warnings(
+        let mut shape = hwp5_char_shape_to_hwpx_with_counts_and_warnings(
             raw,
             font_group_counts,
             raw_id,
             &mut warnings,
-        ));
+        );
+        if matches!(raw.border_fill_id, None | Some(0)) {
+            shape.border_fill_id = borderless;
+        }
+        out.push_char_shape(shape);
     }
 
     // Map numbering definitions before paragraph shapes so references are stable.
