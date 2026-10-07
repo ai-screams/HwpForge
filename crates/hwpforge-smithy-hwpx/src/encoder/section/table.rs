@@ -225,14 +225,27 @@ fn build_table_cell(
         editable: 0,
         dirty: 0,
         border_fill_id_ref: cell.border_fill_id.unwrap_or(ctx.table_border_fill_id),
-        sub_list: Some(build_sublist(
-            &cell.paragraphs,
-            depth,
-            encode_table_vertical_align(cell.vertical_align.unwrap_or(TableVerticalAlign::Center)),
-            hyperlink_entries,
-            options,
-            sink,
-        )?),
+        sub_list: Some({
+            let mut sub_list = build_sublist(
+                &cell.paragraphs,
+                depth,
+                encode_table_vertical_align(
+                    cell.vertical_align.unwrap_or(TableVerticalAlign::Center),
+                ),
+                hyperlink_entries,
+                options,
+                sink,
+            )?;
+            // §19.22 D3: the cell's line wrap, not a fixed `BREAK`.
+            // 이것을 실패시키는 것: 고정 BREAK 복귀(`cell_line_wrap_round_trips`).
+            sub_list.line_wrap = match cell.line_wrap {
+                hwpforge_core::table::CellLineWrap::Squeeze => "SQUEEZE",
+                hwpforge_core::table::CellLineWrap::Keep => "KEEP",
+                _ => "BREAK",
+            }
+            .to_string();
+            sub_list
+        }),
         cell_addr: Some(HxCellAddr { col_addr: ctx.col_idx, row_addr: ctx.row_idx }),
         cell_span: Some(HxCellSpan {
             col_span: cell.col_span as u32,

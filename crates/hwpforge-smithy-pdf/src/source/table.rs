@@ -458,6 +458,26 @@ pub(crate) fn cell_content_extent(
 fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
+            // §19.22 D3: the renderer draws line atoms at their natural width
+            // and does not squeeze them, with or without the layout cache;
+            // what Hancom does for KEEP is not confirmed. Both are refused.
+            // 이것을 실패시키는 것: 이 거부를 지우기
+            // (`squeezed_and_kept_cells_are_refused`).
+            match cell.line_wrap {
+                hwpforge_core::table::CellLineWrap::Break => {}
+                hwpforge_core::table::CellLineWrap::Squeeze => {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table cell with squeezed lines",
+                        location: location.to_string(),
+                    });
+                }
+                _ => {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table cell with kept lines",
+                        location: location.to_string(),
+                    });
+                }
+            }
             for para in &cell.paragraphs {
                 // W3 (§7 v2 D1): 3상태 — 글자취급 인라인 이미지는 통과,
                 // `[Table+Image]` 혼합은 명시 거부 (hosted-table replay 가

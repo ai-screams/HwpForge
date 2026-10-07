@@ -660,6 +660,10 @@ pub(crate) struct Hwp5TableCell {
     /// uses the table's default padding (§19.22 D2; 61,246/61,246 Hancom
     /// twin cells match `hasMargin`).
     pub has_margin: bool,
+    /// Property bits 3–4: line wrap (0 break, 1 squeeze, 2 keep — §19.22
+    /// D3; 0 and 1 match `lineWrap` in all Hancom twin cells, 2 has no
+    /// twin, 3 has no meaning).
+    pub line_wrap: u8,
     /// Optional border/fill reference.
     #[allow(dead_code)] // reserved for later border/fill projection work
     pub border_fill_id: Option<u16>,

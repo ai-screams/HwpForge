@@ -380,6 +380,7 @@ mod tests {
             border_fill_id: None,
             cells: vec![crate::decoder::section::Hwp5TableCell {
                 has_margin: true,
+                line_wrap: 0,
                 column: 0,
                 row: 0,
                 col_span: 1,

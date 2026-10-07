@@ -5076,6 +5076,55 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 표 admission 비교에서 네 필드 중 하나를 빼기(그
     /// 필드만 켠 표가 그려진다).
+    /// §19.22 D3: a cell whose lines are squeezed or kept is refused — the
+    /// renderer cannot squeeze a line, with or without the layout cache (the
+    /// cells here have a valid one, and a line wider than the cell would only
+    /// be warned about) — in a body table and in a nested one; a breaking
+    /// cell is drawn.
+    ///
+    /// 이것을 실패시키는 것: 거부를 지우기 / 거부를 캐시 없을 때만으로.
+    #[test]
+    fn squeezed_and_kept_cells_are_refused() {
+        use hwpforge_core::table::{CellLineWrap, TableLayoutCache};
+        let table_with = |wrap: CellLineWrap| {
+            let mut cell =
+                cell_with_cache("아주 긴 칸 글이 칸 폭을 넘는다 아주 긴 칸 글이 칸 폭을 넘는다");
+            cell.width = HwpUnit::from_pt(10.0).unwrap();
+            Table::new(vec![TableRow::new(vec![cell.with_line_wrap(wrap)])])
+                .with_layout_cache(TableLayoutCache::new(None, true))
+        };
+        for (wrap, kind) in [
+            (CellLineWrap::Squeeze, "table cell with squeezed lines"),
+            (CellLineWrap::Keep, "table cell with kept lines"),
+        ] {
+            let r = replay(&doc_of(vec![table_host(table_with(wrap), 0)]), &PdfOptions::default());
+            assert!(
+                matches!(&r, Err(PdfError::UnsupportedContent { kind: k, .. }) if *k == kind),
+                "body {wrap:?}: {r:?}"
+            );
+            let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
+            inner_host.add_run(Run::table(table_with(wrap), CharShapeIndex::new(0)));
+            let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![inner_host],
+                HwpUnit::from_pt(100.0).unwrap(),
+            )])])
+            .with_layout_cache(TableLayoutCache::new(None, true));
+            let r = replay(&doc_of(vec![table_host(outer, 0)]), &PdfOptions::default());
+            assert!(
+                matches!(&r, Err(PdfError::UnsupportedContent { kind: k, .. }) if *k == kind),
+                "nested {wrap:?}: {r:?}"
+            );
+        }
+        let r = replay(
+            &doc_of(vec![table_host(table_with(CellLineWrap::Break), 0)]),
+            &PdfOptions::default(),
+        );
+        assert!(
+            !matches!(&r, Err(PdfError::UnsupportedContent { kind, .. }) if kind.contains("lines")),
+            "{r:?}"
+        );
+    }
+
     #[test]
     fn each_new_table_placement_field_is_refused_alone() {
         use hwpforge_core::placement::{

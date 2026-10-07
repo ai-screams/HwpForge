@@ -23,7 +23,7 @@ use hwpforge_core::placement::{
 };
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
-use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
+use hwpforge_core::table::{CellLineWrap, Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
@@ -4243,6 +4243,36 @@ fn project_table_cell_with_images(
     // uses the table's default padding. 이것을 실패시키는 것: 판정 반전 /
     // 비트 번호 15·17(`table_margins_and_cell_margin_flag_are_read`).
     core_cell.margin = cell.has_margin.then(|| core_margin(cell.margin));
+    // §19.22 D3: line wrap. 2 (keep) has no Hancom twin to confirm it and
+    // is reported; 3 has no meaning and is read as break.
+    // 이것을 실패시키는 것: 비트 3–4 를 5–6 으로 / 2 의 경고 삭제 / 3 을
+    // squeeze 로(`cell_line_wrap_is_read_from_bits_3_and_4`).
+    core_cell.line_wrap = match cell.line_wrap {
+        0 => CellLineWrap::Break,
+        1 => CellLineWrap::Squeeze,
+        2 => {
+            push_projection_fallback(
+                &mut projection_images.warnings,
+                "cell.line_wrap_unverified",
+                format!(
+                    "row={} col={}: line wrap 2 (keep) has no verified twin",
+                    cell.row, cell.column
+                ),
+            );
+            CellLineWrap::Keep
+        }
+        raw => {
+            push_projection_fallback(
+                &mut projection_images.warnings,
+                "cell.line_wrap",
+                format!(
+                    "row={} col={}: line wrap {raw} has no meaning; read as break",
+                    cell.row, cell.column
+                ),
+            );
+            CellLineWrap::Break
+        }
+    };
     match core_table_cell_vertical_align(cell.vertical_align) {
         Some(vertical_align) => core_cell.vertical_align = Some(vertical_align),
         None => push_projection_fallback(
@@ -5899,6 +5929,7 @@ mod tests {
     fn grid_test_cell(row: u16, column: u16, row_span: u16, col_span: u16) -> Hwp5TableCell {
         Hwp5TableCell {
             has_margin: true,
+            line_wrap: 0,
             column,
             row,
             col_span,
@@ -6029,6 +6060,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![Hwp5TableCell {
                     has_margin: true,
+                    line_wrap: 0,
                     column: 0,
                     row: 0,
                     col_span: 1,
@@ -6109,6 +6141,7 @@ mod tests {
                 border_fill_id: None,
                 cells: vec![Hwp5TableCell {
                     has_margin: true,
+                    line_wrap: 0,
                     column: 0,
                     row: 0,
                     col_span: 1,
@@ -6189,6 +6222,7 @@ mod tests {
                 cells: vec![
                     Hwp5TableCell {
                         has_margin: true,
+                        line_wrap: 0,
                         column: 0,
                         row: 0,
                         col_span: 1,
@@ -6219,6 +6253,7 @@ mod tests {
                     },
                     Hwp5TableCell {
                         has_margin: true,
+                        line_wrap: 0,
                         column: 1,
                         row: 0,
                         col_span: 1,
@@ -6278,6 +6313,7 @@ mod tests {
         fn header_cell(row: u16, is_header: bool, text: &str) -> Hwp5TableCell {
             Hwp5TableCell {
                 has_margin: true,
+                line_wrap: 0,
                 column: 0,
                 row,
                 col_span: 1,
@@ -6367,6 +6403,7 @@ mod tests {
         fn pgnp_cell() -> Hwp5TableCell {
             Hwp5TableCell {
                 has_margin: true,
+                line_wrap: 0,
                 column: 0,
                 row: 0,
                 col_span: 1,
@@ -6460,6 +6497,7 @@ mod tests {
         fn table_cell_pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
             let cell = Hwp5TableCell {
                 has_margin: true,
+                line_wrap: 0,
                 column: 0,
                 row: 0,
                 col_span: 1,

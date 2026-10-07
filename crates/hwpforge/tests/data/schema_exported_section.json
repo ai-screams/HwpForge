@@ -614,6 +614,10 @@
             }
           ]
         },
+        "line_wrap": {
+          "description": "How the cell's text breaks into lines; omitted from JSON when it is\n[`CellLineWrap::Break`].",
+          "$ref": "#/$defs/CellLineWrap"
+        },
         "addr": {
           "description": "Pre-merge logical grid anchor of this cell (0-based), added by to-json when the table tiles a well-formed grid. Optional on import: absent = unchecked, present = must match the derived grid.",
           "type": "object",
@@ -692,6 +696,26 @@
           "description": "Align cell content to the bottom edge.",
           "type": "string",
           "const": "bottom"
+        }
+      ]
+    },
+    "CellLineWrap": {
+      "description": "How the text of a table cell breaks into lines (`<hp:subList lineWrap>`,\nHWP5 cell property bits 3–4).\n\n# Examples\n\n```\nuse hwpforge_core::table::{CellLineWrap, TableCell};\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\nuse hwpforge_core::paragraph::Paragraph;\n\nlet cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO)\n    .with_line_wrap(CellLineWrap::Squeeze);\nassert_eq!(cell.line_wrap, CellLineWrap::Squeeze);\nassert_eq!(CellLineWrap::default(), CellLineWrap::Break);\n```",
+      "oneOf": [
+        {
+          "description": "Lines break at the cell width (Hancom's default).",
+          "type": "string",
+          "const": "BREAK"
+        },
+        {
+          "description": "A line that would break is squeezed into the cell width instead.",
+          "type": "string",
+          "const": "SQUEEZE"
+        },
+        {
+          "description": "The line is kept as it is (Hancom's `KEEP`).",
+          "type": "string",
+          "const": "KEEP"
         }
       ]
     },

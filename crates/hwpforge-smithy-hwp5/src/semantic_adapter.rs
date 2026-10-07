@@ -1360,6 +1360,7 @@ mod tests {
                             border_fill_id: Some(8),
                             cells: vec![Hwp5TableCell {
                                 has_margin: true,
+                                line_wrap: 0,
                                 column: 0,
                                 row: 0,
                                 col_span: 1,

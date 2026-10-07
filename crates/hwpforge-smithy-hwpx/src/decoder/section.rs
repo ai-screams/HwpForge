@@ -14,7 +14,8 @@ use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{
-    Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
+    CellLineWrap, Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak, TableRow,
+    TableVerticalAlign,
 };
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -1183,7 +1184,25 @@ fn convert_table_cell(
         None => None,
     };
 
-    let mut cell: TableCell = TableCell::with_span(paragraphs, width, col_span, row_span);
+    // §19.22 D3: `subList@lineWrap`; an unknown value is reported and read
+    // as BREAK. 이것을 실패시키는 것: 읽지 않기(`cell_line_wrap_round_trips`) /
+    // 미지 값 경고 삭제(`unknown_cell_line_wrap_is_reported`).
+    let line_wrap = match hx.sub_list.as_ref().map(|s| s.line_wrap.as_str()) {
+        None | Some("" | "BREAK") => CellLineWrap::Break,
+        Some("SQUEEZE") => CellLineWrap::Squeeze,
+        Some("KEEP") => CellLineWrap::Keep,
+        Some(other) => {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:subList@lineWrap",
+                raw: other.to_string(),
+                fallback: "BREAK",
+            });
+            CellLineWrap::Break
+        }
+    };
+
+    let mut cell: TableCell =
+        TableCell::with_span(paragraphs, width, col_span, row_span).with_line_wrap(line_wrap);
     if let Some(value) = height {
         cell = cell.with_height(value);
     }

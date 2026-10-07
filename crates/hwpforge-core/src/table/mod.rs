@@ -71,6 +71,40 @@ pub enum TableVerticalAlign {
     Bottom,
 }
 
+/// How the text of a table cell breaks into lines (`<hp:subList lineWrap>`,
+/// HWP5 cell property bits 3–4).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::table::{CellLineWrap, TableCell};
+/// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+/// use hwpforge_core::paragraph::Paragraph;
+///
+/// let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO)
+///     .with_line_wrap(CellLineWrap::Squeeze);
+/// assert_eq!(cell.line_wrap, CellLineWrap::Squeeze);
+/// assert_eq!(CellLineWrap::default(), CellLineWrap::Break);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
+#[non_exhaustive]
+pub enum CellLineWrap {
+    /// Lines break at the cell width (Hancom's default).
+    #[default]
+    #[serde(rename = "BREAK")]
+    Break,
+    /// A line that would break is squeezed into the cell width instead.
+    #[serde(rename = "SQUEEZE")]
+    Squeeze,
+    /// The line is kept as it is (Hancom's `KEEP`).
+    #[serde(rename = "KEEP")]
+    Keep,
+}
+
+fn is_break(wrap: &CellLineWrap) -> bool {
+    *wrap == CellLineWrap::Break
+}
+
 /// Explicit margins inside a table cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct TableMargin {
@@ -470,6 +504,10 @@ pub struct TableCell {
     /// Optional vertical alignment override for the cell content box.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical_align: Option<TableVerticalAlign>,
+    /// How the cell's text breaks into lines; omitted from JSON when it is
+    /// [`CellLineWrap::Break`].
+    #[serde(default, skip_serializing_if = "is_break")]
+    pub line_wrap: CellLineWrap,
 }
 
 impl TableCell {
@@ -502,6 +540,7 @@ impl TableCell {
             border_fill_id: None,
             margin: None,
             vertical_align: None,
+            line_wrap: CellLineWrap::Break,
         }
     }
 
@@ -540,7 +579,15 @@ impl TableCell {
             border_fill_id: None,
             margin: None,
             vertical_align: None,
+            line_wrap: CellLineWrap::Break,
         }
+    }
+
+    /// Sets how the cell's text breaks into lines.
+    #[must_use]
+    pub fn with_line_wrap(mut self, line_wrap: CellLineWrap) -> Self {
+        self.line_wrap = line_wrap;
+        self
     }
 
     /// Sets an explicit cell height.
@@ -584,6 +631,24 @@ mod tests {
     use super::*;
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+    /// §19.22 D3: a breaking cell's JSON has no `line_wrap` (old JSON and
+    /// output unchanged), a JSON without it reads as `Break`, and a squeezed
+    /// cell writes and reads `"SQUEEZE"`.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제 / serde 이름 바꾸기.
+    #[test]
+    fn cell_line_wrap_json() {
+        let cell = TableCell::new(vec![simple_paragraph()], HwpUnit::new(1000).unwrap());
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("line_wrap").is_none(), "{json}");
+        let back: TableCell = serde_json::from_value(json).unwrap();
+        assert_eq!(back.line_wrap, CellLineWrap::Break);
+        let squeezed = cell.with_line_wrap(CellLineWrap::Squeeze);
+        let json = serde_json::to_value(&squeezed).unwrap();
+        assert_eq!(json["line_wrap"], "SQUEEZE");
+        assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), squeezed);
+    }
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(

@@ -276,6 +276,14 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             out.push_str("<tr>");
         }
         for cell in &row.cells {
+            // §19.22 D3: the lossless grammar has no place for a cell's line
+            // wrap yet (P5b) — refuse rather than write a breaking cell.
+            // 이것을 실패시키는 것: 이 거부를 지우기(`squeezed_cell_is_refused`).
+            if cell.line_wrap != hwpforge_core::table::CellLineWrap::Break {
+                return Err(MdError::UnsupportedStructure {
+                    detail: "cell line wrap is not carried by the lossless encoder".to_string(),
+                });
+            }
             out.push_str(&format!(
                 "<td data-col-span=\"{}\" data-row-span=\"{}\" data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
                 cell.col_span,
@@ -378,6 +386,34 @@ mod tests {
             Err(MdError::UnsupportedStructure { .. })
         ));
         assert!(encode_lossless(&doc(None)).is_ok());
+    }
+    /// A squeezed cell is refused (§19.22 D3 — the grammar cannot carry it
+    /// yet); a breaking one is written.
+    #[test]
+    fn squeezed_cell_is_refused() {
+        use hwpforge_core::table::{CellLineWrap, Table};
+        let doc = |wrap: CellLineWrap| {
+            let para = Paragraph::with_runs(
+                vec![Run::text("칸", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            let cell = TableCell::new(vec![para], HwpUnit::new(3000).unwrap()).with_line_wrap(wrap);
+            let host = Paragraph::with_runs(
+                vec![Run::table(
+                    Table::new(vec![TableRow::new(vec![cell])]),
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            );
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![host], hwpforge_core::PageSettings::a4()));
+            d.validate().unwrap()
+        };
+        assert!(matches!(
+            encode_lossless(&doc(CellLineWrap::Squeeze)),
+            Err(MdError::UnsupportedStructure { .. })
+        ));
+        assert!(encode_lossless(&doc(CellLineWrap::Break)).is_ok());
     }
     use hwpforge_core::{
         Control, Document, Image, ImageFormat, Paragraph, Run, Section, TableCell, TableRow,

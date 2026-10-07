@@ -2728,6 +2728,7 @@ fn parse_table_cell(data: &[u8]) -> Hwp5Result<(usize, Hwp5TableCell)> {
     };
     let is_header = (properties & TABLE_CELL_HEADER_FLAG) != 0;
     let has_margin = properties & (1 << 16) != 0;
+    let line_wrap = ((properties >> 3) & 0b11) as u8;
     let border_fill_id =
         (base.len() >= 26).then(|| u16::from_le_bytes([base[24], base[25]])).filter(|&id| id > 0);
 
@@ -2735,6 +2736,7 @@ fn parse_table_cell(data: &[u8]) -> Hwp5Result<(usize, Hwp5TableCell)> {
         paragraph_count,
         Hwp5TableCell {
             has_margin,
+            line_wrap,
             column,
             row,
             col_span,
@@ -3951,6 +3953,66 @@ mod tests {
         assert_eq!(table.out_margin, Some(m(101, 102, 103, 104)));
         assert_eq!(table.rows[0].cells[0].margin, None);
         assert_eq!(table.rows[0].cells[1].margin, Some(m(11, 12, 13, 14)));
+    }
+
+    /// §19.22 D3: cell property bits 3–4 — 0 break, 1 squeeze, 2 keep (no
+    /// Hancom twin, reported), 3 no meaning (reported, read as break). Bits
+    /// 5–6 (vertical align) set in every cell so a shifted read shows.
+    ///
+    /// 이것을 실패시키는 것: 비트 3–4 를 5–6 으로 / 2 의 경고 삭제 / 3 을
+    /// squeeze 로.
+    #[test]
+    fn cell_line_wrap_is_read_from_bits_3_and_4() {
+        use hwpforge_core::table::CellLineWrap;
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 2, &basic_table_data(1, 4)));
+        for column in 0..4u16 {
+            let properties = (u32::from(column) << 3) | (1 << 5) | (1 << 16);
+            stream.extend(make_record(
+                TagId::ListHeader,
+                2,
+                &list_header_table_cell_data(TestCellSpec {
+                    paragraph_count: 1,
+                    legacy_u16_count: false,
+                    properties,
+                    column,
+                    row: 0,
+                    col_span: 1,
+                    row_span: 1,
+                    width: 2000,
+                    height: 1000,
+                    margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                    border_fill_id: Some(1),
+                }),
+            ));
+            stream.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+        }
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let (doc, warnings) = crate::projection::project_to_core(vec![result]).expect("project");
+        let hwpforge_core::run::RunContent::Table(table) =
+            &doc.sections()[0].paragraphs[0].runs[0].content
+        else {
+            panic!()
+        };
+        let wraps: Vec<_> = table.rows[0].cells.iter().map(|c| c.line_wrap).collect();
+        assert_eq!(
+            wraps,
+            [CellLineWrap::Break, CellLineWrap::Squeeze, CellLineWrap::Keep, CellLineWrap::Break]
+        );
+        let subjects: Vec<&str> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::ProjectionFallback { subject, .. }
+                    if subject.starts_with("cell.line_wrap") =>
+                {
+                    Some(*subject)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(subjects, ["cell.line_wrap_unverified", "cell.line_wrap"]);
     }
 
     /// [`one_cell_table`] whose control header sits at `base`.
