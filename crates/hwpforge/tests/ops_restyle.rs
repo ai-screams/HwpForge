@@ -459,3 +459,54 @@ fn restyle_keeps_dormant_cell_margins() {
     let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
     assert_eq!(dormant(&out.bytes), before);
 }
+
+/// S19: a restyle writes a dormant margin Hancom left unset (`4294967295`
+/// on every side, read as -1) back as `4294967295`, not `-1` — the margin
+/// attributes are `xs:nonNegativeInteger`.
+///
+/// 이것을 실패시키는 것: 여백 속성을 i32 로 쓰기(`-1` 이 나간다) / 한 변만
+/// 부호 없는 값으로 쓰기.
+#[test]
+fn restyle_writes_an_unset_dormant_cell_margin_unsigned() {
+    use std::io::{Cursor, Read};
+
+    use hwpforge::core::table::{Table, TableCell, TableMargin, TableRow};
+    use hwpforge::foundation::HwpUnit;
+
+    let unset = HwpUnit::new(-1).unwrap();
+    let mut cell = TableCell::new(
+        vec![Paragraph::with_runs(
+            vec![Run::text("칸", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::new(5000).unwrap(),
+    );
+    cell.dormant_margin =
+        Some(TableMargin { left: unset, right: unset, top: unset, bottom: unset });
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let source = HwpxEncoder::encode(
+        &doc.validate().expect("validate"),
+        &minimal_store(),
+        &ImageStore::new(),
+    )
+    .expect("encode");
+    let out = restyle(&source, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    let mut zip = zip::ZipArchive::new(Cursor::new(&out.bytes)).expect("zip");
+    let mut xml = String::new();
+    zip.by_name("Contents/section0.xml").expect("section0").read_to_string(&mut xml).unwrap();
+    let wire = r#"<hp:cellMargin left="4294967295" right="4294967295" top="4294967295" bottom="4294967295"/>"#;
+    assert_eq!(xml.matches(wire).count(), 1, "{xml}");
+    let negative = xml
+        .split("<hp:cellMargin ")
+        .skip(1)
+        .filter(|rest| rest[..rest.find("/>").expect("self-closing")].contains('-'))
+        .count();
+    assert_eq!(negative, 0, "{xml}");
+}

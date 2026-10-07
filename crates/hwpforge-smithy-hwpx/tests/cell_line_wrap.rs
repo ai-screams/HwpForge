@@ -213,3 +213,48 @@ fn set_cell_keeps_a_dormant_margin() {
         .expect("set-cell");
     assert_eq!(section_xml(&edited.value.bytes).matches(own).count(), 1);
 }
+
+/// S19: Hancom fills the dormant `<hp:cellMargin>` of some cells with
+/// `4294967295` on every side (4,484 cells in 33 of 485 Hancom-saved
+/// documents, all on `hasMargin="0"`; none holds a negative margin). The
+/// value reads as -1 and must be written back as `4294967295` — the margin
+/// attributes are `xs:nonNegativeInteger`, so `-1` is not valid HWPX.
+///
+/// 이것을 실패시키는 것: 여백 속성을 i32 로 쓰기(`-1` 이 나간다) / 한 변만
+/// 부호 없는 값으로 쓰기.
+#[test]
+fn dormant_unset_cell_margin_round_trips_as_unsigned() {
+    let source = fixture("tables/table_01_basic_2x2.hwpx");
+    let xml = section_xml(&source);
+    let padding = r#"<hp:cellMargin left="510" right="510" top="141" bottom="141"/>"#;
+    let unset = r#"<hp:cellMargin left="4294967295" right="4294967295" top="4294967295" bottom="4294967295"/>"#;
+    let input = with_section(&source, &xml.replacen(padding, unset, 1));
+    let doc = HwpxDecoder::decode(&input).expect("decode");
+    let mut dormant = Vec::new();
+    for p in &doc.document.sections()[0].paragraphs {
+        for run in &p.runs {
+            if let RunContent::Table(t) = &run.content {
+                dormant.extend(t.rows.iter().flat_map(|r| &r.cells).map(|c| {
+                    c.dormant_margin.map(|m| {
+                        [m.left.as_i32(), m.right.as_i32(), m.top.as_i32(), m.bottom.as_i32()]
+                    })
+                }));
+            }
+        }
+    }
+    assert_eq!(dormant, [Some([-1; 4]), None, None, None]);
+    let out = HwpxEncoder::encode(
+        &doc.document.validate().expect("validate"),
+        &doc.style_store,
+        &doc.image_store,
+    )
+    .expect("encode");
+    let out_xml = section_xml(&out);
+    assert_eq!(out_xml.matches(unset).count(), 1, "{out_xml}");
+    let negative = out_xml
+        .split("<hp:cellMargin ")
+        .skip(1)
+        .filter(|rest| rest[..rest.find("/>").expect("self-closing")].contains('-'))
+        .count();
+    assert_eq!(negative, 0, "{out_xml}");
+}

@@ -12,7 +12,7 @@ use hwpforge_core::run::RunContent;
 use hwpforge_foundation::HwpUnit;
 use serde::{Deserialize, Serialize};
 
-use super::deser_i32_or_u32;
+use super::{deser_i32_or_u32, ser_i32_as_u32};
 
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
@@ -2022,15 +2022,39 @@ pub struct HxTablePos {
 }
 
 /// `<hp:outMargin>` / `<hp:inMargin>` / `<hp:cellMargin>` — margin specification.
+///
+/// Every side is `xs:nonNegativeInteger`; Hancom writes `4294967295` (read
+/// as -1) in the dormant `<hp:cellMargin>` of some cells, so a side is
+/// written back unsigned.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTableMargin {
-    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@left",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub left: i32,
-    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@right",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub right: i32,
-    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@top",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub top: i32,
-    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
+    #[serde(
+        rename = "@bottom",
+        default,
+        deserialize_with = "deser_i32_or_u32",
+        serialize_with = "ser_i32_as_u32"
+    )]
     pub bottom: i32,
 }
 
