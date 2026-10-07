@@ -1704,6 +1704,7 @@ mod tests {
                     controls: vec![Hwp5Control::Image(Hwp5ImageControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 0,
                             y: 0,
                             width: 3_210,
@@ -1796,6 +1797,7 @@ mod tests {
                     controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 10,
                             y: 20,
                             width: 5_000,
@@ -1874,6 +1876,7 @@ mod tests {
                     controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 10,
                             y: 20,
                             width: 5_000,
@@ -1958,6 +1961,7 @@ mod tests {
                         look: None,
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                            outer_margin: [0; 4],
                             x: 10,
                             y: 20,
                             width: 8_000,

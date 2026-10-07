@@ -625,8 +625,8 @@ fn textart_default_char_spacing() -> i32 {
 /// so the decoder keeps the wire child order and can report each element it
 /// does not support instead of skipping it silently. The container's own
 /// shape-common block (`offset`, `orgSz`, `curSz`, `renderingInfo`, `sz`,
-/// `pos`) is parsed for geometry; `flip`/`rotationInfo`/`outMargin`/
-/// `shapeComment` are not needed by the decoder and are skipped.
+/// `pos`, `outMargin`) is parsed; `flip`/`rotationInfo`/`shapeComment` are
+/// not needed by the decoder and are skipped.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HxContainer {
     /// Group nesting level (`0` = outermost).
@@ -652,6 +652,8 @@ pub struct HxContainer {
     pub pos: Option<HxTablePos>,
     /// Group display size (`<hp:sz>`).
     pub sz: Option<HxTableSz>,
+    /// The group's outer margin (`<hp:outMargin>`, S18).
+    pub out_margin: Option<HxTableMargin>,
 
     /// `<hp:rect>` children (textboxes / pure rects).
     pub rects: Vec<HxRect>,
@@ -725,7 +727,7 @@ enum HxContainerChildDe {
     #[serde(rename = "rotationInfo")]
     RotationInfo(serde::de::IgnoredAny),
     #[serde(rename = "outMargin")]
-    OutMargin(serde::de::IgnoredAny),
+    OutMargin(HxTableMargin),
     #[serde(rename = "shapeComment")]
     ShapeComment(serde::de::IgnoredAny),
     #[serde(rename = "rect")]
@@ -799,7 +801,8 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
                 C::RenderingInfo(x) => c.rendering_info = Some(*x),
                 C::Pos(x) => c.pos = Some(*x),
                 C::Sz(x) => c.sz = Some(*x),
-                C::Flip(_) | C::RotationInfo(_) | C::OutMargin(_) | C::ShapeComment(_) => {}
+                C::OutMargin(x) => c.out_margin = Some(x),
+                C::Flip(_) | C::RotationInfo(_) | C::ShapeComment(_) => {}
                 C::Rect(x) => {
                     c.child_order.push((K::Rect, c.rects.len()));
                     c.rects.push(*x);

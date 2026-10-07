@@ -103,7 +103,7 @@ pub(crate) fn build_picture(
             protect: 0,
         }),
         pos: Some(build_picture_position(placement)),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(crate::encoder::shapes::object_out_margin(placement)),
         caption: img
             .caption
             .as_ref()

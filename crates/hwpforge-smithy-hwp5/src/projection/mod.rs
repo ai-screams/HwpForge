@@ -1380,7 +1380,10 @@ fn image_placement_from_wire(
     warnings: &mut Vec<Hwp5Warning>,
 ) -> ObjectPlacement {
     let _ = context;
-    object_placement_from_ctrl_properties(ctrl_properties, geometry.x, geometry.y, warnings)
+    let mut placement =
+        object_placement_from_ctrl_properties(ctrl_properties, geometry.x, geometry.y, warnings);
+    placement.out_margin = shapes::outer_margin(geometry, warnings);
+    placement
 }
 
 fn project_paragraph_with_images(
@@ -4501,6 +4504,7 @@ mod tests {
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 10,
                 y: 20,
                 width: 8_000,
@@ -4528,6 +4532,7 @@ mod tests {
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 8_000,
@@ -5010,6 +5015,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 3_000,
@@ -5088,6 +5094,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 3_000,
@@ -5146,6 +5153,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 3_000,
@@ -5203,6 +5211,7 @@ mod tests {
         let header_image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 1_200,
@@ -5285,6 +5294,7 @@ mod tests {
         let nested_image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 1_500,
@@ -5305,6 +5315,7 @@ mod tests {
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 50,
                 y: 60,
                 width: 8_000,
@@ -5391,6 +5402,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 1_000,
@@ -5442,6 +5454,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 0,
@@ -5505,6 +5518,7 @@ mod tests {
             let image = Hwp5Control::Image(Hwp5ImageControl {
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 0,
                     y: 0,
                     width: 100,
@@ -5571,6 +5585,7 @@ mod tests {
         let image = Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 0,
@@ -5626,6 +5641,7 @@ mod tests {
         // 속성 word bit0=0 → 부유. relTo/wrap/flow/overlap 이 실비트로
         // 디코드된다 (이전 Flow 관례 Paper/Paper/InFrontOfText 폐기).
         let zero_origin = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 0,
             y: 0,
             width: 100,
@@ -5665,6 +5681,7 @@ mod tests {
         // 오프셋은 signed CtrlHeader 필드를 그대로 싣는다 (음수 포함 —
         // corpus 의 문단 위 돌출 offset).
         let neg = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: -1_234,
             y: -5_678,
             width: 100,
@@ -5684,6 +5701,7 @@ mod tests {
     fn image_placement_from_wire_bit0_inline_collapses_to_legacy_default() {
         // bit0=1 → 좌표·다른 비트 무관 인라인 (legacy default). W2p 계약 보존.
         let non_zero = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 1_234,
             y: 5_678,
             width: 100,
@@ -5713,6 +5731,7 @@ mod tests {
         // W5 w0: 배치는 속성 word 로만 결정된다 — Flow/TextBox context 는 더
         // 이상 축을 바꾸지 않는다 (이전 TextBox 관례 Para/Square 폐기).
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 8_503,
             y: 2_834,
             width: 100,
@@ -5748,6 +5767,7 @@ mod tests {
         // 인라인 이미지(bit0=1)는 이제 TextBox 컨텍스트에서도 inline 으로
         // 판정된다 (구 테스트 `..._textbox_context_ignores_bit` 대체).
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 0,
             y: 0,
             width: 100,
@@ -5968,6 +5988,7 @@ mod tests {
                 outer_margin: None,
                 properties,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x,
                     y,
                     width: 50_737,
@@ -6782,6 +6803,7 @@ mod tests {
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 9_884,
                     y: 11_980,
                     width: 29_360,
@@ -6830,6 +6852,7 @@ mod tests {
                 list_header_properties: None,
                 text_margin: None,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 17_804,
                     y: 13_900,
                     width: 12_560,
@@ -6883,6 +6906,7 @@ mod tests {
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 13_200,
                     y: 14_280,
                     width: 10_020,
@@ -7285,6 +7309,7 @@ mod tests {
         Hwp5Control::OleObject(Hwp5OleObjectControl {
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 30_000,
@@ -7423,6 +7448,7 @@ mod tests {
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 0,
                     y: 0,
                     width: 8_000,
@@ -7620,6 +7646,7 @@ mod shape_style_tests {
             look: Some(look(0, 1, colour_fill(0x00DC_AF86, Hwp5FillPatternKind::None))),
             ctrl_id: 0,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 8_000,
@@ -7666,6 +7693,7 @@ mod shape_style_tests {
             let image = Hwp5ImageControl {
                 ctrl_id: 0,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
                     x: 0,
                     y: 0,
                     width: 3_000,

@@ -360,6 +360,7 @@ mod tests {
             outer_margin: None,
             properties: 0,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 0,
                 y: 0,
                 width: 50_737,
@@ -434,7 +435,8 @@ mod tests {
             Hwp5GroupChild, Hwp5GroupControl, Hwp5PolygonControl, Hwp5RectControl,
         };
         use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
-        let geo = Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 };
+        let geo =
+            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0, outer_margin: [0; 4] };
         let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let render = Ok(Hwp5ShapeRender {
             initial: (100, 100),
@@ -500,7 +502,8 @@ mod tests {
     fn group_hints_skip_text_the_fold_drops() {
         use crate::decoder::section::{Hwp5GroupChild, Hwp5GroupControl, Hwp5RectControl};
         use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapeFill, Hwp5ShapeRender};
-        let geo = Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 };
+        let geo =
+            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0, outer_margin: [0; 4] };
         let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let render = |sca| {

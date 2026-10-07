@@ -1337,7 +1337,10 @@ pub(crate) fn convert_picture(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
-    let placement = decode_image_placement(hx, ctx);
+    let placement = super::shapes::with_object_out_margin(
+        decode_image_placement(hx, ctx),
+        hx.out_margin.as_ref(),
+    )?;
 
     let mut image: Image = Image::new(path, width, height, format);
     if let Some(value) = caption {

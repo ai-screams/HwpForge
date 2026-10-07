@@ -735,7 +735,11 @@ pub(super) fn project_group_run(
             children,
             width: hwp_unit_from_u32(group.geometry.width),
             height: hwp_unit_from_u32(group.geometry.height),
-            placement: offset_placement(group.geometry.x, group.geometry.y),
+            placement: super::shapes::with_outer_margin(
+                offset_placement(group.geometry.x, group.geometry.y),
+                &group.geometry,
+                &mut state.warnings,
+            ),
             inst_id,
         },
         CharShapeIndex::new(0),
@@ -908,7 +912,7 @@ mod tests {
     }
 
     fn geo(x: i32, y: i32, width: u32, height: u32) -> Hwp5ShapeComponentGeometry {
-        Hwp5ShapeComponentGeometry { x, y, width, height }
+        Hwp5ShapeComponentGeometry { x, y, width, height, outer_margin: [0; 4] }
     }
 
     fn child(control: Hwp5Control, render: Result<Hwp5ShapeRender, String>) -> Hwp5GroupChild {

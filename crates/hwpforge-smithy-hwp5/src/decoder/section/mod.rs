@@ -1957,7 +1957,13 @@ impl BodyTextParserState {
             // that child arrives (Wave 12p Step 1c-2). Wave 12p
             // Step 5: eqed instance_id at data[36..40] (audited).
             let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
-                .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
+                .unwrap_or(Hwp5ShapeComponentGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                    outer_margin: [0; 4],
+                });
             let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
             self.eqed_pending = Some((geometry, instance_id));
         } else if ctrl_id == CTRL_ID_DUTMAL {
@@ -4362,6 +4368,78 @@ mod tests {
         );
     }
 
+    /// S18: an object's outer margin (`CtrlHeader` bytes 28–36) reaches its
+    /// Core placement — a body ellipse (treat-as-char, otherwise the inline
+    /// default) and a group — and a negative side is reported and dropped.
+    ///
+    /// 이것을 실패시키는 것: 바이트 28–36 을 읽지 않기 / 도형·묶음 갈래의 여백
+    /// 싣기를 각각 지우기 / 음수 보고를 지우기.
+    #[test]
+    fn object_outer_margin_is_read() {
+        let header = |margin: [i16; 4]| {
+            let mut data = gso_ctrl_header_data_with_properties(0, 0, 850, 850, 0x1);
+            data.resize(28, 0);
+            for v in margin {
+                data.extend_from_slice(&v.to_le_bytes());
+            }
+            data
+        };
+        let ellipse = |stream: &mut Vec<u8>, margin: [i16; 4]| {
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::CtrlHeader, 0, &header(margin)));
+            stream.extend(make_record(TagId::ShapeComponent, 1, b"lle$lle$"));
+            stream.extend(make_record(TagId::ShapeComponentEllipse, 2, &[0u8; 60]));
+        };
+        let mut stream = Vec::new();
+        ellipse(&mut stream, [0, 0, 0, 140]);
+        ellipse(&mut stream, [-1, -1, -1, -1]);
+        ellipse(&mut stream, [0; 4]);
+        // A group with two rect children.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 1, &header([283, 283, 283, 283])));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            2,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_GROUP, true, 0, (3000, 1000), 0.0),
+        ));
+        for x in [0.0, 2000.0] {
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                3,
+                &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+            ));
+            stream.extend(make_record(TagId::ShapeComponentRect, 4, &[0u8; 9]));
+        }
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let (doc, warnings) = crate::projection::project_to_core(vec![result]).expect("project");
+        let margin = |i: usize| {
+            let paragraphs = &doc.sections()[0].paragraphs;
+            let hwpforge_core::run::RunContent::Control(c) = &paragraphs[i].runs[0].content else {
+                panic!("{:?}", paragraphs[i].runs)
+            };
+            let placement = match c.as_ref() {
+                hwpforge_core::control::Control::Ellipse { placement, .. }
+                | hwpforge_core::control::Control::Group { placement, .. } => placement.clone(),
+                other => panic!("{other:?}"),
+            };
+            placement
+                .and_then(|p| p.out_margin)
+                .map(|m| [m.left.as_i32(), m.right.as_i32(), m.top.as_i32(), m.bottom.as_i32()])
+        };
+        assert_eq!(margin(0), Some([0, 0, 0, 140]));
+        assert_eq!(margin(1), None);
+        assert_eq!(margin(2), None);
+        assert_eq!(margin(3), Some([283; 4]));
+        let negative = warnings
+            .iter()
+            .filter(|w| {
+                matches!(w, Hwp5Warning::ProjectionFallback { subject: "object.out_margin", .. })
+            })
+            .count();
+        assert_eq!(negative, 1, "{warnings:?}");
+    }
+
     /// [`one_cell_table`] whose control header sits at `base`.
     fn one_cell_table_at(stream: &mut Vec<u8>, base: u16, text: &str) {
         stream.extend(make_record(TagId::CtrlHeader, base, &ctrl_header_data(CTRL_ID_TABLE)));
@@ -5880,6 +5958,7 @@ mod tests {
     #[test]
     fn inline_gso_with_picture_and_ole_stays_unknown() {
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 10,
             y: 20,
             width: 5_000,
@@ -5901,6 +5980,7 @@ mod tests {
     #[test]
     fn nested_subtree_gso_with_picture_and_ole_stays_unknown() {
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 10,
             y: 20,
             width: 5_000,
@@ -5926,6 +6006,7 @@ mod tests {
             saw_shape_component: true,
             saw_shape_rectangle: false,
             geometry: Some(crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
                 x: 1,
                 y: 2,
                 width: 100,

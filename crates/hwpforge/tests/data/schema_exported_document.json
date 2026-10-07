@@ -901,6 +901,17 @@
           "description": "Whether the object keeps its anchor when other objects overlap it\n(HWPX `<hp:pos holdAnchorAndSO>`).",
           "type": "boolean",
           "default": false
+        },
+        "out_margin": {
+          "description": "The object's outer margin (HWPX `<hp:outMargin>`, HWP5 object common\nheader bytes 28–36): the space kept between the object and the text\naround it. A treat-as-char object with a bottom margin sits that much\nhigher on its line. `None` = 0 on every side, what the encoders wrote\nbefore this field existed; decoders write `Some` only for a margin\nthat is not 0 everywhere, so placements that only differed by it keep\ncollapsing to `None`. JSON omits it when `None`. A table's outer\nmargin is [`Table::out_margin`](crate::table::Table::out_margin), not\nthis field: decoders leave it `None` on tables and the table encoder\ndoes not read it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [

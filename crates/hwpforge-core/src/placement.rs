@@ -87,6 +87,18 @@ pub struct ObjectPlacement {
     /// (HWPX `<hp:pos holdAnchorAndSO>`).
     #[serde(default)]
     pub hold_anchor_and_so: bool,
+    /// The object's outer margin (HWPX `<hp:outMargin>`, HWP5 object common
+    /// header bytes 28–36): the space kept between the object and the text
+    /// around it. A treat-as-char object with a bottom margin sits that much
+    /// higher on its line. `None` = 0 on every side, what the encoders wrote
+    /// before this field existed; decoders write `Some` only for a margin
+    /// that is not 0 everywhere, so placements that only differed by it keep
+    /// collapsing to `None`. JSON omits it when `None`. A table's outer
+    /// margin is [`Table::out_margin`](crate::table::Table::out_margin), not
+    /// this field: decoders leave it `None` on tables and the table encoder
+    /// does not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_margin: Option<crate::table::TableMargin>,
 }
 
 impl ObjectPlacement {
@@ -125,6 +137,7 @@ impl ObjectPlacement {
             horz_align: HorzAlign::Left,
             affect_line_spacing: false,
             hold_anchor_and_so: false,
+            out_margin: None,
         }
     }
 
@@ -166,6 +179,7 @@ impl ObjectPlacement {
             horz_align: HorzAlign::Left,
             affect_line_spacing: false,
             hold_anchor_and_so: false,
+            out_margin: None,
         }
     }
 
@@ -479,6 +493,29 @@ impl ObjectRelativeTo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S18: no outer margin writes no `out_margin` (old JSON and its output
+    /// unchanged); a margin round trips.
+    ///
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제.
+    #[test]
+    fn out_margin_json() {
+        let p = ObjectPlacement::legacy_inline_defaults();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(json.get("out_margin").is_none(), "{json}");
+        assert_eq!(serde_json::from_value::<ObjectPlacement>(json).unwrap(), p);
+        let mut with = p;
+        let u = HwpUnit::new(140).unwrap();
+        with.out_margin = Some(crate::table::TableMargin {
+            left: HwpUnit::ZERO,
+            right: HwpUnit::ZERO,
+            top: HwpUnit::ZERO,
+            bottom: u,
+        });
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["out_margin"]["bottom"], 140);
+        assert_eq!(serde_json::from_value::<ObjectPlacement>(json).unwrap(), with);
+    }
 
     #[test]
     fn legacy_inline_defaults_are_inline() {

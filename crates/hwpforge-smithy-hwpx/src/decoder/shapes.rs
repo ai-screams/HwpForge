@@ -151,8 +151,10 @@ pub(crate) fn decode_textbox(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement =
-        decode_object_placement(rect.pos.as_ref(), &rect.text_wrap, &rect.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(rect.pos.as_ref(), &rect.text_wrap, &rect.text_flow, ctx),
+        rect.out_margin.as_ref(),
+    )?;
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
@@ -244,8 +246,10 @@ pub(crate) fn decode_line(
 
     let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let placement =
-        decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow, ctx),
+        line.out_margin.as_ref(),
+    )?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
@@ -319,8 +323,10 @@ pub(crate) fn decode_ellipse(
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let placement =
-        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx),
+        ellipse.out_margin.as_ref(),
+    )?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
@@ -384,8 +390,10 @@ pub(crate) fn decode_polygon(
     let caption =
         polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let placement =
-        decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow, ctx),
+        polygon.out_margin.as_ref(),
+    )?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
@@ -691,8 +699,10 @@ pub(crate) fn decode_arc(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement =
-        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx),
+        ellipse.out_margin.as_ref(),
+    )?;
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
 
@@ -765,8 +775,10 @@ pub(crate) fn decode_curve(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement =
-        decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow, ctx),
+        curve.out_margin.as_ref(),
+    )?;
     let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -966,7 +978,10 @@ pub(crate) fn decode_connect_line(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let placement = decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow, ctx);
+    let placement = with_object_out_margin(
+        decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow, ctx),
+        cl.out_margin.as_ref(),
+    )?;
     let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -1092,12 +1107,15 @@ pub(crate) fn decode_container(
         return Ok(None);
     };
 
-    let placement = decode_object_placement(
-        container.pos.as_ref(),
-        &container.text_wrap,
-        &container.text_flow,
-        ctx,
-    );
+    let placement = with_object_out_margin(
+        decode_object_placement(
+            container.pos.as_ref(),
+            &container.text_wrap,
+            &container.text_flow,
+            ctx,
+        ),
+        container.out_margin.as_ref(),
+    )?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Group {
             children,
@@ -1778,6 +1796,35 @@ fn report_shape_text_margin(
             });
         }
     }
+}
+
+/// `placement` with the object's outer margin (`<hp:outMargin>`, S18). A
+/// margin that is 0 everywhere (or absent) leaves the placement as it is, so
+/// an inline default still collapses to `None`; any other margin is carried,
+/// on the inline default when there was no placement. A side outside the
+/// HWPUNIT range is an error, as for table and text box margins.
+/// 이것을 실패시키는 것: 여백을 싣지 않기 / 0 여백도 `Some` 으로
+/// (`object_out_margins_round_trip`).
+pub(super) fn with_object_out_margin(
+    placement: Option<ObjectPlacement>,
+    margin: Option<&crate::schema::section::HxTableMargin>,
+) -> crate::error::HwpxResult<Option<ObjectPlacement>> {
+    let Some(m) = margin.filter(|m| [m.left, m.right, m.top, m.bottom] != [0; 4]) else {
+        return Ok(placement);
+    };
+    let side = |v: i32, name: &str| {
+        HwpUnit::new(v).map_err(|_| crate::error::HwpxError::InvalidStructure {
+            detail: format!("invalid object outer margin {name}: {v}"),
+        })
+    };
+    let mut placement = placement.unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+    placement.out_margin = Some(hwpforge_core::table::TableMargin {
+        left: side(m.left, "left")?,
+        right: side(m.right, "right")?,
+        top: side(m.top, "top")?,
+        bottom: side(m.bottom, "bottom")?,
+    });
+    Ok(Some(placement))
 }
 
 #[cfg(test)]

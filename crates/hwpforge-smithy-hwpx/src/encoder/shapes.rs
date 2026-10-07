@@ -485,7 +485,7 @@ pub(crate) fn encode_textbox_to_rect(
 
         pos: Some(shape_position(placement.as_ref())),
 
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
             .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options, sink))
@@ -572,7 +572,7 @@ pub(crate) fn encode_rect_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         caption: caption
             .as_ref()
             .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options, sink))
@@ -636,7 +636,7 @@ pub(crate) fn encode_line_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -752,7 +752,7 @@ pub(crate) fn encode_ellipse_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -859,7 +859,7 @@ pub(crate) fn encode_polygon_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -952,7 +952,7 @@ pub(crate) fn encode_arc_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -1035,7 +1035,7 @@ pub(crate) fn encode_curve_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -1136,7 +1136,7 @@ pub(crate) fn encode_connect_line_to_hx(
             protect: 0,
         }),
         pos: Some(shape_position(placement.as_ref())),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        out_margin: Some(object_out_margin(placement.as_ref())),
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
             .as_ref()
@@ -1627,8 +1627,10 @@ fn encode_group_at(
     )?;
     let pos = serialize_with_root(&shape_position(placement), "hp:pos")?;
     let (sz, pos) = if as_child { (String::new(), String::new()) } else { (sz, pos) };
+    // A group child is placed by its parent; only the outer group carries a
+    // margin (S18).
     let out_margin = serialize_with_root(
-        &HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 },
+        &object_out_margin(if as_child { None } else { placement }),
         "hp:outMargin",
     )?;
     let shape_comment = serialize_with_root(
@@ -1644,6 +1646,23 @@ fn encode_group_at(
         wrap = shape_text_wrap(placement),
         flow = shape_text_flow(placement),
     ))
+}
+
+/// The `<hp:outMargin>` of a drawn object or picture: its placement's outer
+/// margin (S18), 0 on every side without one — what every object wrote
+/// before.
+/// 이것을 실패시키는 것: 개체 종류 하나라도 0 상수로 되돌리기
+/// (`object_out_margins_round_trip`).
+pub(crate) fn object_out_margin(placement: Option<&ObjectPlacement>) -> HxTableMargin {
+    placement.and_then(|p| p.out_margin).map_or(
+        HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 },
+        |m| HxTableMargin {
+            left: m.left.as_i32(),
+            right: m.right.as_i32(),
+            top: m.top.as_i32(),
+            bottom: m.bottom.as_i32(),
+        },
+    )
 }
 
 #[cfg(test)]

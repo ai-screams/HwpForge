@@ -49,6 +49,57 @@ pub(super) fn shape_placement(
     (placement != ObjectPlacement::legacy_inline_defaults()).then_some(placement)
 }
 
+/// The object's outer margin from its `CtrlHeader` bytes 28–36 (S18): `None`
+/// when 0 on every side (so an inline default still collapses), and for a
+/// negative side — the corpus has `-1` on all four in a few old documents,
+/// whose meaning is unknown — which is reported and read as 0.
+/// 이것을 실패시키는 것: 여백을 싣지 않기 / 음수 보고를 지우기
+/// (`object_outer_margin_is_read`).
+pub(super) fn outer_margin(
+    geometry: &Hwp5ShapeComponentGeometry,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<hwpforge_core::table::TableMargin> {
+    let [left, right, top, bottom] = geometry.outer_margin;
+    if [left, right, top, bottom] == [0; 4] {
+        return None;
+    }
+    if [left, right, top, bottom].iter().any(|v| *v < 0) {
+        super::push_projection_fallback(
+            warnings,
+            "object.out_margin",
+            format!("outer margin {left} {right} {top} {bottom} has a negative side; read as 0"),
+        );
+        return None;
+    }
+    let unit = |v: i16| {
+        hwpforge_foundation::HwpUnit::new(i32::from(v))
+            .unwrap_or(hwpforge_foundation::HwpUnit::ZERO)
+    };
+    Some(hwpforge_core::table::TableMargin {
+        left: unit(left),
+        right: unit(right),
+        top: unit(top),
+        bottom: unit(bottom),
+    })
+}
+
+/// `placement` with the outer margin of `geometry` (S18), on the inline
+/// default when there was no placement.
+pub(super) fn with_outer_margin(
+    placement: Option<ObjectPlacement>,
+    geometry: &Hwp5ShapeComponentGeometry,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<ObjectPlacement> {
+    match outer_margin(geometry, warnings) {
+        None => placement,
+        Some(margin) => {
+            let mut placement = placement.unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+            placement.out_margin = Some(margin);
+            Some(placement)
+        }
+    }
+}
+
 /// Placement for shape families whose `gso ` 속성 word (bit0) is not threaded
 /// into the decoder model — the group container, `EmbeddedChart`, and
 /// `TextArt`. Falls back to the pre-placement offset heuristic: a non-zero
@@ -313,7 +364,13 @@ mod tests {
     use super::*;
 
     fn zero_geometry() -> crate::schema::section::Hwp5ShapeComponentGeometry {
-        crate::schema::section::Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 100, height: 100 }
+        crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            outer_margin: [0; 4],
+        }
     }
 
     fn shape_point(x: i32, y: i32) -> crate::schema::section::Hwp5ShapePoint {
@@ -402,6 +459,7 @@ mod tests {
     #[test]
     fn shape_placement_collapses_inline_and_byte_grounds_floating_axes() {
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            outer_margin: [0; 4],
             x: 1_234,
             y: 5_678,
             width: 8_000,

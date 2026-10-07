@@ -64,6 +64,23 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     Ok(output)
 }
 
+/// An object's outer margin (S18) has no place in the grammar yet (P5b):
+/// refused rather than dropped.
+/// 이것을 실패시키는 것: 이 거부를 지우기(`object_outer_margin_is_refused`).
+fn refuse_out_margin(
+    placement: Option<&hwpforge_core::placement::ObjectPlacement>,
+) -> MdResult<()> {
+    if placement
+        .and_then(|p| p.out_margin)
+        .is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 0))
+    {
+        return Err(MdError::UnsupportedStructure {
+            detail: "object outer margin is not carried by the lossless encoder".to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// One paragraph. Its end-mark char shape (`Paragraph::end_char_shape`,
 /// §19.22 D5) is not written: like the layout cache it only sets the height
 /// of the last line Hancom computes, which this grammar does not carry
@@ -92,6 +109,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 ));
             }
             RunContent::Image(image) => {
+                refuse_out_margin(image.placement.as_ref())?;
                 // The picture's link, when it has one (`Image::hyperlink`).
                 let link = image
                     .hyperlink
@@ -119,7 +137,16 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(text)
                     ));
                 }
-                Control::TextBox { paragraphs, width, height, style, text_margin, .. } => {
+                Control::TextBox {
+                    paragraphs,
+                    width,
+                    height,
+                    style,
+                    text_margin,
+                    placement,
+                    ..
+                } => {
+                    refuse_out_margin(placement.as_ref())?;
                     // §19.22 D4: nor for a text margin other than 283 (P5b).
                     // 이것을 실패시키는 것: 이 거부를 지우기
                     // (`text_box_margin_is_refused`).
@@ -402,6 +429,56 @@ mod tests {
         ));
         assert!(encode_lossless(&doc(None)).is_ok());
     }
+    /// S18: a picture or a text box with an outer margin is refused; without
+    /// one it is written.
+    ///
+    /// 이것을 실패시키는 것: 그림·글상자 거부를 각각 지우기.
+    #[test]
+    fn object_outer_margin_is_refused() {
+        use hwpforge_core::placement::ObjectPlacement;
+        use hwpforge_core::table::TableMargin;
+        let with_margin = |bottom: i32| {
+            let u = |v| HwpUnit::new(v).unwrap();
+            let mut p = ObjectPlacement::legacy_inline_defaults();
+            p.out_margin =
+                Some(TableMargin { left: u(0), right: u(0), top: u(0), bottom: u(bottom) });
+            p
+        };
+        let doc = |run: Run| {
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                hwpforge_core::PageSettings::a4(),
+            ));
+            d.validate().unwrap()
+        };
+        for bottom in [140, 0] {
+            let unit = HwpUnit::new(3000).unwrap();
+            let image = Image::new("BinData/a.png", unit, unit, ImageFormat::Png)
+                .with_placement(with_margin(bottom));
+            let r = encode_lossless(&doc(Run::image(image, CharShapeIndex::new(0))));
+            assert_eq!(
+                matches!(r, Err(MdError::UnsupportedStructure { .. })),
+                bottom != 0,
+                "image"
+            );
+            let inner = Paragraph::with_runs(
+                vec![Run::text("box", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            let mut tb = Control::text_box(vec![inner], unit, unit);
+            if let Control::TextBox { placement, .. } = &mut tb {
+                *placement = Some(with_margin(bottom));
+            }
+            let r = encode_lossless(&doc(Run::control(tb, CharShapeIndex::new(0))));
+            assert_eq!(
+                matches!(r, Err(MdError::UnsupportedStructure { .. })),
+                bottom != 0,
+                "text box"
+            );
+        }
+    }
+
     /// A text box whose margin is not 283 everywhere is refused (§19.22 D4);
     /// 283 everywhere is written.
     #[test]

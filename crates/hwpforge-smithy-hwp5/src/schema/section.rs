@@ -648,6 +648,10 @@ pub(crate) struct Hwp5ShapeComponentGeometry {
     pub width: u32,
     /// Object height in HWPUNIT.
     pub height: u32,
+    /// Outer margin (left, right, top, bottom) from bytes 28–36 of the
+    /// object's `CtrlHeader` (S18); zeros when the header is shorter or the
+    /// geometry comes from elsewhere (a group child's component).
+    pub outer_margin: [i16; 4],
 }
 
 impl Hwp5ShapeComponentGeometry {
@@ -672,7 +676,10 @@ impl Hwp5ShapeComponentGeometry {
         let x = cur.read_i32::<LittleEndian>()?;
         let width = cur.read_u32::<LittleEndian>()?;
         let height = cur.read_u32::<LittleEndian>()?;
-        Ok(Self { x, y, width, height })
+        let outer_margin = data.get(28..36).map_or([0; 4], |b| {
+            std::array::from_fn(|i| i16::from_le_bytes([b[2 * i], b[2 * i + 1]]))
+        });
+        Ok(Self { x, y, width, height, outer_margin })
     }
 
     /// Minimum `ShapeComponent` (`0x4C`) payload to recover child geometry.
@@ -712,7 +719,7 @@ impl Hwp5ShapeComponentGeometry {
         let _flags = cur.read_u32::<LittleEndian>()?;
         let width = cur.read_u32::<LittleEndian>()?;
         let height = cur.read_u32::<LittleEndian>()?;
-        Ok(Self { x, y, width, height })
+        Ok(Self { x, y, width, height, outer_margin: [0; 4] })
     }
 }
 
@@ -3957,7 +3964,13 @@ mod tests {
         let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&data).unwrap();
         assert_eq!(
             geometry,
-            Hwp5ShapeComponentGeometry { x: 1440, y: -720, width: 28_800, height: 14_400 }
+            Hwp5ShapeComponentGeometry {
+                x: 1440,
+                y: -720,
+                width: 28_800,
+                height: 14_400,
+                outer_margin: [0; 4]
+            }
         );
     }
 
@@ -3985,7 +3998,13 @@ mod tests {
         let geometry = Hwp5ShapeComponentGeometry::parse_from_shape_component(&data).unwrap();
         assert_eq!(
             geometry,
-            Hwp5ShapeComponentGeometry { x: 17_360, y: 0, width: 6998, height: 12_426 }
+            Hwp5ShapeComponentGeometry {
+                x: 17_360,
+                y: 0,
+                width: 6998,
+                height: 12_426,
+                outer_margin: [0; 4]
+            }
         );
     }
 

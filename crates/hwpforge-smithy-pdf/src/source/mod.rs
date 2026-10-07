@@ -719,6 +719,7 @@ fn collect_anchored_images(
             height: img.height.as_i32(),
             crop: {
                 refuse_caption_number(img.caption.as_ref(), location)?;
+                refuse_object_out_margin(img.placement.as_ref(), location)?;
                 picture_crop(img, location)?
             },
         }],
@@ -1725,12 +1726,32 @@ pub(crate) fn build_inline_object_line_atoms(
 /// 그림 원자 — 자르기를 비율로 싣는다 ([`picture_crop`]).
 fn line_image(img: &hwpforge_core::image::Image, location: &str) -> PdfResult<LineImage> {
     refuse_caption_number(img.caption.as_ref(), location)?;
+    refuse_object_out_margin(img.placement.as_ref(), location)?;
     Ok(LineImage {
         canonical_key: img.path.clone(),
         width: img.width.as_i32(),
         height: img.height.as_i32(),
         crop: picture_crop(img, location)?,
     })
+}
+
+/// An object with an outer margin (S18) is refused: Hancom keeps that space
+/// around it (a treat-as-char object with a bottom margin sits that much
+/// higher on its line) and this layout does not.
+/// 이것을 실패시키는 것: 세 경로의 호출을 각각 지우기
+/// (`object_with_an_outer_margin_is_refused`).
+fn refuse_object_out_margin(
+    placement: Option<&hwpforge_core::placement::ObjectPlacement>,
+    location: &str,
+) -> PdfResult<()> {
+    let margin = placement.and_then(|p| p.out_margin);
+    if margin.is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 0)) {
+        return Err(PdfError::UnsupportedContent {
+            kind: "object with an outer margin",
+            location: location.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// A caption that holds a caption number (`Control::AutoNumber`) is
@@ -1929,6 +1950,7 @@ fn build_line_text_box(
         text_vertical_align,
         caption,
         text_margin,
+        placement,
         ..
     } = ctrl
     else {
@@ -1937,6 +1959,7 @@ fn build_line_text_box(
         });
     };
     refuse_caption_number(caption.as_ref(), location)?;
+    refuse_object_out_margin(placement.as_ref(), location)?;
     // §19.22 D4: the layout uses `TEXTBOX_TEXT_MARGIN` (283) on every side;
     // another margin would put the text in the wrong place.
     // 이것을 실패시키는 것: 이 거부를 지우기(`text_box_margin_other_than_283_is_refused`).
@@ -2963,6 +2986,86 @@ mod tests {
     }
 
     /// P17: 둥근 모서리(ratio 20) 글상자는 거부, 0 은 그린다.
+    /// S18: a picture (inline and anchored) or a text box with an outer
+    /// margin is refused; the same objects without one are not refused for
+    /// it.
+    ///
+    /// 이것을 실패시키는 것: 세 경로의 바깥 여백 거부를 각각 지우기.
+    #[test]
+    fn object_with_an_outer_margin_is_refused() {
+        use hwpforge_core::placement::ObjectPlacement;
+        use hwpforge_core::table::TableMargin;
+        use hwpforge_foundation::VerticalAlign;
+        let margin = |bottom: i32| {
+            let u = |v| HwpUnit::new(v).unwrap();
+            Some(TableMargin { left: u(0), right: u(0), top: u(0), bottom: u(bottom) })
+        };
+        let refused = |r: &PdfResult<()>| {
+            matches!(
+                r,
+                Err(PdfError::UnsupportedContent { kind: "object with an outer margin", .. })
+            )
+        };
+        for bottom in [140, 0] {
+            // Inline picture.
+            let mut run = inline_img("BinData/a.png");
+            if let RunContent::Image(img) = &mut run.content {
+                let mut p =
+                    img.placement.clone().unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+                p.out_margin = margin(bottom);
+                img.placement = Some(p);
+            }
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("가", CharShapeIndex::new(0)), run],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = build_inline_image_line_atoms(&p, p.layout_cache.as_ref().unwrap(), "s0/p0")
+                .map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "inline {bottom}: {r:?}");
+            // Anchored picture.
+            let mut run = anchored_body_img(
+                "BinData/anch.png",
+                ObjectTextWrap::Square,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+                500,
+                700,
+            );
+            if let RunContent::Image(img) = &mut run.content {
+                if let Some(p) = img.placement.as_mut() {
+                    p.out_margin = margin(bottom);
+                }
+            }
+            let mut p = Paragraph::with_runs(
+                vec![run, Run::text("본문", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+            let r = replay(&doc_of(vec![p]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "anchored {bottom}: {r:?}");
+            // Text box.
+            let mut run = textbox_run(
+                22677,
+                11339,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            );
+            if let RunContent::Control(c) = &mut run.content {
+                if let hwpforge_core::control::Control::TextBox { placement, .. } = c.as_mut() {
+                    let mut p =
+                        placement.clone().unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
+                    p.out_margin = margin(bottom);
+                    *placement = Some(p);
+                }
+            }
+            let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+            host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+            let r = replay(&doc_of(vec![host]), &PdfOptions::default()).map(|_| ());
+            assert_eq!(refused(&r), bottom != 0, "text box {bottom}: {r:?}");
+        }
+    }
+
     /// §19.22 D4: a text box whose margin is not 283 on every side is
     /// refused (the layout uses 283); 283 on every side, carried as `Some`
     /// by the decoders, is drawn.
