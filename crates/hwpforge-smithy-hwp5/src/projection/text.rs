@@ -87,8 +87,14 @@ pub(super) fn split_text_by_runs(text: &str, runs: &[Hwp5CharShapeRun]) -> Vec<R
         }
     }
 
+    // No segment (an empty text): the char shape of position 0, the last
+    // entry there (§19.22 B). 이것을 실패시키는 것: 0 으로 되돌리기 / 첫 항목
+    // 쓰기(`empty_text_takes_the_last_char_shape_at_position_0`).
     if result.is_empty() {
-        result.push(Run::text(text, CharShapeIndex::new(0)));
+        result.push(Run::text(
+            text,
+            CharShapeIndex::new(char_shape_id_at_position(runs, 0) as usize),
+        ));
     }
     result
 }
@@ -136,6 +142,17 @@ mod tests {
 
     fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
         Hwp5CharShapeRun { position, char_shape_id }
+    }
+
+    /// §19.22 B: an empty text with two entries at position 0 takes the
+    /// last one (a later entry at the same position overrides the earlier).
+    ///
+    /// 이것을 실패시키는 것: 빈 글의 대체 런을 0 으로 / 첫 항목으로.
+    #[test]
+    fn empty_text_takes_the_last_char_shape_at_position_0() {
+        let runs = split_text_by_runs("", &[char_run(0, 120), char_run(0, 68)]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].char_shape_id, CharShapeIndex::new(68));
     }
 
     #[test]

@@ -1597,8 +1597,12 @@ fn project_paragraph_with_images_flat(
         }
     }
 
+    // An empty paragraph keeps the char shape of its position 0 (the last
+    // entry there — §19.22 B), not char shape 0: its height sets the blank
+    // line's height. 이것을 실패시키는 것: 0 으로 되돌리기
+    // (`empty_paragraph_keeps_its_char_shape`).
     if runs.is_empty() {
-        runs.push(Run::text("", CharShapeIndex::new(0)));
+        runs.push(Run::text("", shape_starting_at(hwp_para, 0)));
     }
 
     let mut paragraph =
@@ -2067,8 +2071,10 @@ fn project_paragraph_with_images_structural(
         image_context,
     );
 
+    // As in the flat path (§19.22 B). 이것을 실패시키는 것: 0 으로 되돌리기
+    // (`empty_paragraph_keeps_its_char_shape`, structural case).
     if runs.is_empty() {
-        runs.push(Run::text("", CharShapeIndex::new(0)));
+        runs.push(Run::text("", shape_starting_at(hwp_para, 0)));
     }
 
     let mut paragraph =
@@ -4481,6 +4487,32 @@ mod tests {
             char_shape_runs: runs,
             line_segments: Vec::new(),
             controls: vec![],
+        }
+    }
+
+    /// §19.22 B: an empty paragraph keeps the char shape of position 0 —
+    /// the last entry there — on the flat path and on the structural path
+    /// (a page-number control sends it there and yields no run).
+    ///
+    /// 이것을 실패시키는 것: 두 경로의 대체 런을 0 으로 / 첫 항목으로.
+    #[test]
+    fn empty_paragraph_keeps_its_char_shape() {
+        let runs = vec![
+            Hwp5CharShapeRun { position: 0, char_shape_id: 120 },
+            Hwp5CharShapeRun { position: 0, char_shape_id: 5 },
+        ];
+        let flat = _make_paragraph_with_runs("", runs.clone());
+        let mut structural = _make_paragraph_with_runs("", runs);
+        structural.controls =
+            vec![Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data: vec![0; 12] }];
+        structural.text_segments =
+            vec![crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] }];
+        assert!(paragraph_needs_structural_projection(&structural));
+        let (doc, _) = project_to_core(vec![make_section(vec![flat, structural], None)]).unwrap();
+        let paragraphs = &doc.sections()[0].paragraphs;
+        for (name, p) in [("flat", &paragraphs[0]), ("structural", &paragraphs[1])] {
+            assert_eq!(p.runs.len(), 1, "{name}: {:?}", p.runs);
+            assert_eq!(p.runs[0].char_shape_id, CharShapeIndex::new(5), "{name}");
         }
     }
 
