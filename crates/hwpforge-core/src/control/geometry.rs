@@ -471,6 +471,283 @@ pub fn emission_residual(control: &Control, policy: &EmissionPolicy) -> Emission
     EmissionCheck { residual, unstorable }
 }
 
+// ── Frame emission plan ────────────────────────────────────────
+
+/// What a writer stores for one object's box: the original size, the scale
+/// between it and the displayed size, and the defining points in the stored
+/// box — decided once, so the writer and a decoder checking a source against
+/// it read the same values (§19.23.17 M2).
+///
+/// [`frame_plan`] builds it in three steps:
+///
+/// 1. the frame as Core holds it: original box `O` (the
+///    [`ObjectFrame`](crate::frame::ObjectFrame) value or the kind's
+///    default), scale `width / O.width` and `height / O.height` (1 on an
+///    original axis of 0) and the points as they are;
+/// 2. the stored values put back through the policy (coefficients rounded,
+///    the angle rounded) are compared with the exact Core shape at the box
+///    corners and every defining point;
+/// 3. more than 2 HWPUNIT off with a frame that is not the displayed box:
+///    the plan falls back to the displayed box — original size = displayed
+///    size, scale 1, points rounded into the displayed box — and is measured
+///    again. What is still off is reported ([`Self::loss`]).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::{frame_plan, EmissionPolicy};
+/// use hwpforge_core::control::Control;
+/// use hwpforge_foundation::{HwpUnit, Size};
+///
+/// let u = |v| HwpUnit::new(v).unwrap();
+/// let mut circle = Control::ellipse(u(560), u(560));
+/// circle.resize(u(850), u(850));
+/// let plan = frame_plan(&circle, &EmissionPolicy::exact()).unwrap();
+/// assert_eq!(plan.original_size(), (560, 560));
+/// assert_eq!(plan.points()[0].x, 280); // the centre, in the original box
+/// assert!((plan.scale().0 - 850.0 / 560.0).abs() < 1e-12);
+/// assert!(!plan.is_fallback() && plan.loss().is_none());
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct FramePlan {
+    original: (i32, i32),
+    scale: (f64, f64),
+    points: Vec<ShapePoint>,
+    stored: Vec<(f64, f64)>,
+    fallback: bool,
+    loss: Option<FoldLoss>,
+}
+
+impl FramePlan {
+    /// The original size to store (`<hp:orgSz>`).
+    pub fn original_size(&self) -> (i32, i32) {
+        self.original
+    }
+
+    /// The scale to store, exact: displayed / original on each axis,
+    /// `(1.0, 1.0)` when the original box is the displayed one.
+    pub fn scale(&self) -> (f64, f64) {
+        self.scale
+    }
+
+    /// The defining points to store, in the original box, in
+    /// [`defining_points`] order.
+    pub fn points(&self) -> &[ShapePoint] {
+        &self.points
+    }
+
+    /// Where the stored values put the original box's corners (top-left,
+    /// top-right, bottom-right, bottom-left) and then each point, before the
+    /// object's offset: the stored rotation and mirror applied to the stored
+    /// scale applied to the stored point.
+    pub fn stored_positions(&self) -> &[(f64, f64)] {
+        &self.stored
+    }
+
+    /// The frame did not survive the policy and the plan uses the displayed
+    /// box instead (step 3).
+    pub fn is_fallback(&self) -> bool {
+        self.fallback
+    }
+
+    /// What the stored values still miss: [`FoldLossKind::Residual`] more
+    /// than 2 HWPUNIT from the exact shape, [`FoldLossKind::Unemittable`]
+    /// for a mirror and rotation the policy cannot store together.
+    pub fn loss(&self) -> Option<&FoldLoss> {
+        self.loss.as_ref()
+    }
+}
+
+/// The emission plan of `control`'s box under `policy` (see [`FramePlan`]).
+/// `None` for a control without a frame. Groups and TextArt have no rotation
+/// field: their box is stored unturned.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::{frame_plan, EmissionPolicy};
+/// use hwpforge_core::control::Control;
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let w = HwpUnit::new(100).unwrap();
+/// let plan = frame_plan(&Control::rect(w, w).unwrap(), &EmissionPolicy::exact()).unwrap();
+/// assert_eq!((plan.original_size(), plan.scale()), ((100, 100), (1.0, 1.0)));
+/// assert!(frame_plan(&Control::bookmark("x"), &EmissionPolicy::exact()).is_none());
+/// ```
+pub fn frame_plan(control: &Control, policy: &EmissionPolicy) -> Option<FramePlan> {
+    let original = control.effective_original_size()?;
+    let b = shape_box(control)?;
+    let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
+    Some(plan_box(
+        (b.width, b.height),
+        (original.width.as_i32(), original.height.as_i32()),
+        rotation,
+        flip,
+        defining_points(control),
+        policy,
+    ))
+}
+
+/// The emission plan of a picture's box under `policy` (see [`FramePlan`]):
+/// no rotation, no points.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::{picture_frame_plan, EmissionPolicy};
+/// use hwpforge_core::image::{Image, ImageFormat};
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let u = |v| HwpUnit::new(v).unwrap();
+/// let mut img = Image::new("BinData/a.png", u(1000), u(500), ImageFormat::Png);
+/// img.resize(u(2000), u(500));
+/// assert_eq!(picture_frame_plan(&img, &EmissionPolicy::exact()).scale(), (2.0, 1.0));
+/// ```
+pub fn picture_frame_plan(image: &crate::image::Image, policy: &EmissionPolicy) -> FramePlan {
+    let o = image.effective_original_size();
+    plan_box(
+        (image.width.as_i32(), image.height.as_i32()),
+        (o.width.as_i32(), o.height.as_i32()),
+        None,
+        None,
+        Vec::new(),
+        policy,
+    )
+}
+
+/// Drops `control`'s original size: its defining points move into the
+/// displayed box (scaled and rounded), so the shape draws the same up to
+/// rounding, and the frame keeps only its size lock. A TextArt, whose
+/// default box is its design box, takes its displayed size as its original
+/// box. Returns `false`, changing nothing, when the frame holds no original
+/// size.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::drop_original_size;
+/// use hwpforge_core::control::{Control, ShapePoint};
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let u = |v| HwpUnit::new(v).unwrap();
+/// let mut circle = Control::ellipse(u(560), u(560));
+/// circle.resize(u(850), u(850));
+/// assert!(drop_original_size(&mut circle));
+/// let Control::Ellipse { center, frame, .. } = &circle else { unreachable!() };
+/// assert_eq!(*center, ShapePoint { x: 425, y: 425 });
+/// assert!(frame.original_size.is_none());
+/// ```
+pub fn drop_original_size(control: &mut Control) -> bool {
+    let Some(original) = control.frame().and_then(|f| f.original_size) else { return false };
+    let Some(b) = shape_box(control) else { return false };
+    let (sx, sy) = (
+        axis_scale(b.width, original.width.as_i32()),
+        axis_scale(b.height, original.height.as_i32()),
+    );
+    let displayed = hwpforge_foundation::Size::new(
+        HwpUnit::new(b.width).unwrap_or(HwpUnit::ZERO),
+        HwpUnit::new(b.height).unwrap_or(HwpUnit::ZERO),
+    );
+    for p in defining_points_mut(control) {
+        p.x = round_i32(f64::from(p.x) * sx);
+        p.y = round_i32(f64::from(p.y) * sy);
+    }
+    // The kind's default is the displayed size for every kind but TextArt,
+    // whose default is its design box.
+    // 이것을 실패시키는 것: 글맵시도 `None` 으로 두기(원래 상자가 14173 설계
+    // 상자로 돌아가 배율이 바뀐다 — `drop_original_size_keeps_the_drawing`).
+    let design = |v: HwpUnit| v.as_i32() == crate::frame::TEXT_ART_DESIGN_SIDE;
+    let keep = matches!(control, Control::TextArt { .. })
+        && !(design(displayed.width) && design(displayed.height));
+    let Some(frame) = control.frame_mut() else { return false };
+    frame.original_size = keep.then_some(displayed);
+    true
+}
+
+/// Displayed / original on one axis; 1 for an original axis of 0 (its
+/// points all lie on that axis, nothing to stretch).
+fn axis_scale(displayed: i32, original: i32) -> f64 {
+    if original == 0 {
+        1.0
+    } else {
+        f64::from(displayed) / f64::from(original)
+    }
+}
+
+fn plan_box(
+    (w, h): (i32, i32),
+    (ow, oh): (i32, i32),
+    rotation: Option<f32>,
+    flip: Option<Flip>,
+    points: Vec<ShapePoint>,
+    policy: &EmissionPolicy,
+) -> FramePlan {
+    let (wf, hf) = (f64::from(w), f64::from(h));
+    let (sx, sy) = (axis_scale(w, ow), axis_scale(h, oh));
+    let (exact_l, _) = local_affine(wf, hf, rotation, flip, &EmissionPolicy::exact());
+    let (stored_l, unstorable) = local_affine(wf, hf, rotation, flip, policy);
+    let source: Vec<(f64, f64)> = box_corners(f64::from(ow), f64::from(oh))
+        .into_iter()
+        .chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+        .collect();
+    let exact: Vec<(f64, f64)> =
+        source.iter().map(|&(x, y)| exact_l.apply((x * sx, y * sy))).collect();
+    let (qx, qy) = (quantize(sx, policy.coefficients), quantize(sy, policy.coefficients));
+    let stored: Vec<(f64, f64)> =
+        source.iter().map(|&(x, y)| stored_l.apply((x * qx, y * qy))).collect();
+    let residual = max_residual(&exact, &stored);
+    let loss = |residual: f64| {
+        if unstorable {
+            Some(FoldLoss::new(
+                FoldLossKind::Unemittable,
+                format!("mirror and rotation cannot be stored together (off by {residual:.2})"),
+            ))
+        } else if exceeds_tolerance(residual) {
+            Some(FoldLoss::new(
+                FoldLossKind::Residual,
+                format!("stored transform is off by {residual:.2} HWPUNIT"),
+            ))
+        } else {
+            None
+        }
+    };
+    // 이것을 실패시키는 것: 이 fallback 을 지우기(극단 비율이 배율 0.000000 으로
+    // 써진다 — `extreme_ratio_falls_back`) / 원래 상자가 표시 상자와 같을 때도
+    // fallback 으로 보기.
+    if exceeds_tolerance(residual) && (ow, oh) != (w, h) {
+        let points: Vec<ShapePoint> = points
+            .iter()
+            .map(|p| ShapePoint {
+                x: round_i32(f64::from(p.x) * sx),
+                y: round_i32(f64::from(p.y) * sy),
+            })
+            .collect();
+        let stored: Vec<(f64, f64)> = box_corners(wf, hf)
+            .into_iter()
+            .chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+            .map(|p| stored_l.apply(p))
+            .collect();
+        let residual = max_residual(&exact, &stored);
+        return FramePlan {
+            original: (w, h),
+            scale: (1.0, 1.0),
+            points,
+            stored,
+            fallback: true,
+            loss: loss(residual),
+        };
+    }
+    FramePlan {
+        original: (ow, oh),
+        scale: (sx, sy),
+        points,
+        stored,
+        fallback: false,
+        loss: loss(residual),
+    }
+}
+
 // ── Folding ────────────────────────────────────────────────────
 
 /// Facts about a shape that decide how its transform folds, which Core may
@@ -895,7 +1172,24 @@ fn group_child_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     )
 }
 
-fn defining_points(control: &Control) -> Vec<ShapePoint> {
+/// A shape's defining points in their stored order: a line's start and end;
+/// an ellipse's centre and two axes; an arc's centre, axes, then start/end
+/// 1 and 2; a polygon's or curve's points; a connector's start, end, then
+/// control points. Empty for a control without points (boxes, groups,
+/// TextArt).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::defining_points;
+/// use hwpforge_core::control::Control;
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let w = HwpUnit::new(100).unwrap();
+/// assert_eq!(defining_points(&Control::ellipse(w, w)).len(), 3);
+/// assert!(defining_points(&Control::rect(w, w).unwrap()).is_empty());
+/// ```
+pub fn defining_points(control: &Control) -> Vec<ShapePoint> {
     match control {
         Control::Line { start, end, .. } => vec![*start, *end],
         Control::Ellipse { center, axis1, axis2, .. } => vec![*center, *axis1, *axis2],

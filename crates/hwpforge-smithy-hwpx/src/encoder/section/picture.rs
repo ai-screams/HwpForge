@@ -37,6 +37,20 @@ pub(crate) fn build_picture(
 
     let w = img.width.as_i32();
     let h = img.height.as_i32();
+    // A negative original size is refused, as for shapes
+    // (`shapes::shape_frame_plan`).
+    // 이것을 실패시키는 것: 이 거부를 지우기(`negative_original_size_is_not_written`).
+    if let Some(o) = img.frame.original_size {
+        if o.width.as_i32() < 0 || o.height.as_i32() < 0 {
+            return Err(crate::error::HwpxError::InvalidStructure {
+                detail: format!(
+                    "picture has a negative original size {}x{}",
+                    o.width.as_i32(),
+                    o.height.as_i32()
+                ),
+            });
+        }
+    }
     let href = picture_href(img, sink);
     let half_w = w / 2;
     let half_h = h / 2;
@@ -75,7 +89,7 @@ pub(crate) fn build_picture(
         }),
         rendering_info: Some(HxRenderingInfo {
             trans_matrix: HxMatrix::identity(),
-            sca_matrix: frame.scale_matrix(w, h),
+            sca_matrix: crate::encoder::shapes::scale_matrix(frame.scale),
             rot_matrix: HxMatrix::identity(),
             extra_pairs: Vec::new(),
         }),
@@ -100,7 +114,8 @@ pub(crate) fn build_picture(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
+            protect: u32::from(img.frame.size_protect),
         }),
         pos: Some(build_picture_position(placement)),
         out_margin: Some(crate::encoder::shapes::object_out_margin(placement)),
@@ -119,12 +134,11 @@ pub(crate) fn build_picture(
 /// (the extent of I). With none of the Core fields set every value is the
 /// display size — the whole image, unscaled.
 struct PictureFrame {
-    /// `orgSz` (and the `imgRect` corners).
+    /// `orgSz` (and the `imgRect` corners): the emission plan's original box
+    /// ([`picture_frame_plan`](hwpforge_core::control::geometry::picture_frame_plan)).
     original: (i32, i32),
-    /// Whether `original` came from the picture's frame
-    /// ([`ObjectFrame::original_size`](hwpforge_core::frame::ObjectFrame::original_size));
-    /// the scale matrix is then display / original.
-    scaled: bool,
+    /// `scaMatrix`: the plan's display / original.
+    scale: (f64, f64),
     /// `imgClip`.
     clip: HxImgClip,
     /// `imgDim`; `None` = not written (a crop whose extent is unknown —
@@ -136,12 +150,10 @@ impl PictureFrame {
     fn of(img: &Image) -> Self {
         let display = (img.width.as_i32(), img.height.as_i32());
         let pair = |(a, b): (HwpUnit, HwpUnit)| (a.as_i32(), b.as_i32());
-        // A non-positive original box cannot scale to the display size.
-        let original = img
-            .frame
-            .original_size
-            .map(|s| pair((s.width, s.height)))
-            .filter(|&(ow, oh)| ow > 0 && oh > 0);
+        let plan = hwpforge_core::control::geometry::picture_frame_plan(
+            img,
+            &crate::encoder::shapes::HWPX_POLICY,
+        );
         let extent = img.image_extent.map(pair);
         let clip = match img.crop {
             Some(c) => HxImgClip {
@@ -159,24 +171,7 @@ impl PictureFrame {
             (Some(_), None) => None,
             (_, extent) => Some(extent.unwrap_or(display)),
         };
-        Self { original: original.unwrap_or(display), scaled: original.is_some(), clip, extent }
-    }
-
-    /// `scaMatrix`: display / original on each axis (Hancom writes the same
-    /// ratio, 6 decimals), identity when the original box is the display
-    /// size.
-    fn scale_matrix(&self, w: i32, h: i32) -> HxMatrix {
-        if !self.scaled {
-            return HxMatrix::identity();
-        }
-        HxMatrix {
-            e1: format!("{:.6}", f64::from(w) / f64::from(self.original.0)),
-            e2: "0".to_string(),
-            e3: "0".to_string(),
-            e4: "0".to_string(),
-            e5: format!("{:.6}", f64::from(h) / f64::from(self.original.1)),
-            e6: "0".to_string(),
-        }
+        Self { original: plan.original_size(), scale: plan.scale(), clip, extent }
     }
 }
 

@@ -476,3 +476,101 @@ fn a_point_shape_stretched_past_the_range_is_dropped() {
         other => panic!("{other:?}"),
     }
 }
+
+// ── S20 frame emission plan ─────────────────────────────────────
+
+fn framed_line(end: (i32, i32), size: (i32, i32), original: (i32, i32)) -> Control {
+    let mut c = Control::Line {
+        start: ShapePoint { x: 0, y: 0 },
+        end: ShapePoint { x: end.0, y: end.1 },
+        width: unit(size.0),
+        height: unit(size.1),
+        frame: crate::frame::ObjectFrame::new(),
+        placement: None,
+        caption: None,
+        style: None,
+    };
+    c.frame_mut().unwrap().original_size =
+        Some(hwpforge_foundation::Size::new(unit(original.0), unit(original.1)));
+    c
+}
+
+/// The extreme ratio of §19.23.11 H3: shown 49 wide from an original box of
+/// 100,000,000 the six-decimal scale is `0.000000` — the end would land 49
+/// off. The plan falls back to the displayed box (end at 49, scale 1) and
+/// is exact again.
+/// 이것을 실패시키는 것: fallback 을 지우기(배율 0 으로 끝점 0) / 원래 상자 =
+/// 표시 상자일 때도 fallback 으로 보기(아래 두 번째 단언).
+#[test]
+fn extreme_ratio_falls_back() {
+    let line = framed_line((100_000_000, 0), (49, 0), (100_000_000, 0));
+    let plan = frame_plan(&line, &HWPX_LIKE).unwrap();
+    assert!(plan.is_fallback());
+    assert_eq!((plan.original_size(), plan.scale()), ((49, 0), (1.0, 1.0)));
+    assert_eq!(plan.points()[1], ShapePoint { x: 49, y: 0 });
+    assert!(plan.loss().is_none());
+    assert!(close(plan.stored_positions()[5], (49.0, 0.0), 1e-9));
+    // A frame that is the displayed box never falls back, even when the
+    // policy misses (a turn of 30.4° on a large box).
+    let turned = rect(10_000, 1_000, Some(30.4), None);
+    let plan = frame_plan(&turned, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    assert_eq!(plan.loss().map(FoldLoss::kind), Some(FoldLossKind::Residual));
+}
+
+/// The plan keeps a frame the policy stores within 2: the r6 circle
+/// (original 560, shown 850) stores its centre at 280 and the scale
+/// 850 / 560, and lands exactly where Core draws it (centre at 425).
+/// 이것을 실패시키는 것: 점을 현재 상자로 옮겨 쓰기 / 배율을 1 로.
+#[test]
+fn frame_plan_keeps_a_storable_frame() {
+    let mut circle = Control::ellipse(unit(560), unit(560));
+    assert!(circle.resize(unit(850), unit(850)));
+    let plan = frame_plan(&circle, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    assert_eq!(plan.original_size(), (560, 560));
+    assert_eq!(plan.points()[0], ShapePoint { x: 280, y: 280 });
+    assert!((plan.scale().0 - 850.0 / 560.0).abs() < 1e-12);
+    // corners 0..3, then centre, axis 1, axis 2
+    assert!(close(plan.stored_positions()[4], (425.0, 425.0), 1e-3));
+    assert!(close(plan.stored_positions()[2], (850.0, 850.0), 1e-3));
+}
+
+/// Dropping the original box keeps the drawing: the points move into the
+/// displayed box. A TextArt keeps its displayed size as the original box,
+/// since its default is the 14173 design box.
+/// 이것을 실패시키는 것: 점을 옮기지 않기 / 글맵시도 `None` 으로 두기.
+#[test]
+fn drop_original_size_keeps_the_drawing() {
+    let mut circle = Control::ellipse(unit(560), unit(560));
+    circle.resize(unit(850), unit(1700));
+    assert!(drop_original_size(&mut circle));
+    let Control::Ellipse { center, axis2, frame, .. } = &circle else { unreachable!() };
+    // axis 2 sits at (280, 560) in the original box: 280 × 850/560, 560 × 1700/560.
+    assert_eq!((*center, *axis2), (ShapePoint { x: 425, y: 850 }, ShapePoint { x: 425, y: 1700 }));
+    assert!(frame.original_size.is_none());
+    assert!(!drop_original_size(&mut circle));
+
+    let mut art = Control::TextArt {
+        text: "가".into(),
+        shape: "WAVE2".into(),
+        font_name: String::new(),
+        font_style: String::new(),
+        align: "LEFT".into(),
+        line_spacing: 120,
+        char_spacing: 100,
+        width: unit(5000),
+        height: unit(3000),
+        frame: crate::frame::ObjectFrame::new(),
+        placement: None,
+        fill_color: None,
+        inst_id: None,
+    };
+    art.frame_mut().unwrap().original_size =
+        Some(hwpforge_foundation::Size::new(unit(20_000), unit(10_000)));
+    assert!(drop_original_size(&mut art));
+    assert_eq!(
+        art.frame().unwrap().original_size,
+        Some(hwpforge_foundation::Size::new(unit(5000), unit(3000)))
+    );
+}

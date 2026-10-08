@@ -94,6 +94,20 @@ pub(crate) fn wire_chain(ri: &HxRenderingInfo) -> Option<Affine> {
     Some(m)
 }
 
+/// The linear part of a `<hp:renderingInfo>` without its translation:
+/// `R1 · S1 · … · Rn · Sn`, or only the scale matrices when `with_rotation`
+/// is false. `None` when a matrix element does not parse.
+pub(crate) fn pair_chain(ri: &HxRenderingInfo, with_rotation: bool) -> Option<Affine> {
+    let mut m = Affine::IDENTITY;
+    for (sca, rot) in ri.pairs() {
+        if with_rotation {
+            m = m.then_after(Affine::from_hx(rot)?);
+        }
+        m = m.then_after(Affine::from_hx(sca)?);
+    }
+    Some(m)
+}
+
 /// Axis-aligned bounds `(min_x, min_y, max_x, max_y)` of a point list.
 pub(crate) fn bounds(points: &[(f64, f64)]) -> Option<(f64, f64, f64, f64)> {
     let (first, rest) = points.split_first()?;

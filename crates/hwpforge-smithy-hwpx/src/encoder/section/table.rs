@@ -104,7 +104,9 @@ pub(super) fn build_table(
             width_rel_to: "ABSOLUTE".to_string(),
             height: 0,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            // S20: the table's size lock (`Table::frame`).
+            // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
+            protect: u32::from(table.frame.size_protect),
         }),
         pos: Some(HxTablePos {
             treat_as_char: u32::from(placement.treat_as_char),

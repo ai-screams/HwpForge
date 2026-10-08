@@ -1120,6 +1120,9 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     if let Some(placement) = decode_table_placement(hx, ctx) {
         table = table.with_placement(placement);
     }
+    // S20: the size lock. 이것을 실패시키는 것: 읽지 않기
+    // (`picture_and_table_protect_round_trip`).
+    table.frame.size_protect = hx.sz.as_ref().is_some_and(|sz| sz.protect != 0);
     Ok(table)
 }
 
@@ -1378,6 +1381,7 @@ pub(crate) fn convert_picture(
     }
     image.hyperlink = decode_object_hyperlink(&hx.href, ctx);
     decode_picture_frame(hx, &mut image, ctx);
+    super::shapes::settle_picture_frame(&mut image, hx, ctx);
     Ok(Some(image))
 }
 

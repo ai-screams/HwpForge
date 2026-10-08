@@ -21,6 +21,259 @@ use crate::wire_xml::textart_text_from_wire;
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color, DecodeCtx};
 
+/// Largest translation-free distance between two lists of positions taken
+/// in the same order, anchored at their first entry (the original box's
+/// top-left corner).
+fn anchored_residual(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+    let (Some(a0), Some(b0)) = (a.first(), b.first()) else { return 0.0 };
+    if a.len() != b.len() {
+        return f64::INFINITY;
+    }
+    a.iter()
+        .zip(b)
+        .map(|(p, q)| ((p.0 - a0.0) - (q.0 - b0.0)).hypot((p.1 - a0.1) - (q.1 - b0.1)))
+        .fold(0.0, f64::max)
+}
+
+/// The source's map of an object's stored box: its `(sca, rot)` pairs
+/// without the translation (the object is placed by `<hp:pos>`). An object
+/// whose Core kind has no rotation or mirror (`with_rotation` false) is
+/// judged on the scale's size only: a mirror kept in a negative scale is a
+/// separate loss, not a frame residual (§19.23.20). No `<hp:renderingInfo>`
+/// is the identity.
+fn source_map(
+    ri: Option<&crate::schema::section::HxRenderingInfo>,
+    with_rotation: bool,
+) -> Option<super::group_geometry::Affine> {
+    use super::group_geometry::{pair_chain, Affine};
+    let Some(ri) = ri else { return Some(Affine::IDENTITY) };
+    let m = pair_chain(ri, with_rotation)?;
+    Some(if with_rotation { m } else { Affine { a: m.a.abs(), e: m.e.abs(), c: 0.0, f: 0.0, ..m } })
+}
+
+/// Why an `<hp:orgSz>` cannot become a frame value, if it cannot: a negative
+/// side (no reading of one by Hancom is known — §19.23.15), an axis of 0 under
+/// a displayed axis that is not (`validate` would refuse it), or a side out
+/// of the HWPUNIT range.
+fn unusable_original(org: (i32, i32), displayed: (i32, i32)) -> Option<String> {
+    let (ow, oh) = org;
+    if ow < 0 || oh < 0 {
+        return Some(format!("negative orgSz {ow}x{oh} is not carried"));
+    }
+    if (ow == 0 && displayed.0 != 0) || (oh == 0 && displayed.1 != 0) {
+        return Some(format!(
+            "orgSz {ow}x{oh} has an axis of 0 under the displayed {}x{}",
+            displayed.0, displayed.1
+        ));
+    }
+    if HwpUnit::new(ow).is_err() || HwpUnit::new(oh).is_err() {
+        return Some(format!("orgSz {ow}x{oh} is out of range"));
+    }
+    None
+}
+
+/// What the re-encode of an object with this frame lands against the source:
+/// the decoder keeps the frame when the writer's plan reproduces the source
+/// within 2 HWPUNIT; otherwise it tries the object without its original box.
+///
+/// - The plan without it is within 2: the original size is dropped and
+///   reported (`object_original_size`).
+/// - Neither is within 2 (the source draws a size other than its layout size,
+///   §19.23.13 H1): reported as `shape_drawn_extent`. **The frame is kept**
+///   (§19.23.20, decision pending): the drawn result is the same either way
+///   (both write the layout size), and dropping it would lose `orgSz` values
+///   the decoder carried before — design §19.23.17 drops it.
+enum FrameCheck {
+    Kept,
+    Dropped(String),
+    DrawnExtent(String),
+}
+
+fn check_frame(
+    kept: &[(f64, f64)],
+    dropped: &[(f64, f64)],
+    source: &[(f64, f64)],
+    extent: (f64, f64),
+    displayed: (i32, i32),
+    org: (i32, i32),
+) -> FrameCheck {
+    use super::group_geometry::EXACT_TOLERANCE;
+    let with = anchored_residual(kept, source);
+    // 이것을 실패시키는 것: 계획 대신 Core 정확값과 비교하기(2.49 반례가 frame 을
+    // 둔 채 1000 으로 써진다 — `accumulated_rounding_drops_the_frame`).
+    if with <= EXACT_TOLERANCE {
+        return FrameCheck::Kept;
+    }
+    let without = anchored_residual(dropped, source);
+    if without <= EXACT_TOLERANCE {
+        return FrameCheck::Dropped(format!(
+            "orgSz {}x{} is dropped: with it the re-encode lands {with:.2} from the source, \
+             without it {without:.2}",
+            org.0, org.1
+        ));
+    }
+    FrameCheck::DrawnExtent(format!(
+        "matrix extent {:.0}x{:.0} differs from layout size {}x{} by {without:.2}",
+        extent.0, extent.1, displayed.0, displayed.1
+    ))
+}
+
+/// The displayed width and height of a control with a frame.
+fn displayed_size(control: &Control) -> Option<(i32, i32)> {
+    match control {
+        Control::TextBox { width, height, .. }
+        | Control::Line { width, height, .. }
+        | Control::Ellipse { width, height, .. }
+        | Control::Rect { width, height, .. }
+        | Control::Polygon { width, height, .. }
+        | Control::Arc { width, height, .. }
+        | Control::Curve { width, height, .. }
+        | Control::ConnectLine { width, height, .. }
+        | Control::Group { width, height, .. }
+        | Control::TextArt { width, height, .. } => Some((width.as_i32(), height.as_i32())),
+        _ => None,
+    }
+}
+
+/// S20: a top-level shape's original box and size lock from the wire
+/// (`<hp:orgSz>`, `<hp:sz protect>`), checked against what the writer will
+/// store ([`FrameCheck`]). Its defining points stay as read: they are
+/// coordinates in the original box. A group's direct children take their
+/// frame with the group, not here.
+///
+/// 이것을 실패시키는 것: 이 호출을 지우기(`r6_circle_keeps_its_original_box`) /
+/// 잠금을 읽지 않기(같은 테스트) / frame 을 버릴 때 잠금까지 지우기
+/// (`dropping_the_original_box_keeps_the_lock`).
+pub(crate) fn settle_shape_frame(
+    control: &mut Control,
+    org: Option<&crate::schema::section::HxSizeAttr>,
+    sz: Option<&crate::schema::section::HxTableSz>,
+    ri: Option<&crate::schema::section::HxRenderingInfo>,
+    ctx: &mut DecodeCtx,
+) {
+    use crate::encoder::shapes::HWPX_POLICY;
+    use hwpforge_core::control::geometry::{defining_points, drop_original_size, frame_plan};
+    if ctx.is_direct_group_child() {
+        return;
+    }
+    let Some(displayed) = displayed_size(control) else { return };
+    let Some(frame) = control.frame_mut() else { return };
+    frame.size_protect = sz.is_some_and(|s| s.protect != 0);
+    let Some(org) = org.map(|o| (o.width, o.height)) else { return };
+    if let Some(reason) = unusable_original(org, displayed) {
+        ctx.content_lost("object_original_size", reason);
+        return;
+    }
+    let unit = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
+    let original = hwpforge_foundation::Size::new(unit(org.0), unit(org.1));
+    frame.original_size = Some(original);
+    let default = match control {
+        Control::TextArt { .. } => {
+            (hwpforge_core::frame::TEXT_ART_DESIGN_SIDE, hwpforge_core::frame::TEXT_ART_DESIGN_SIDE)
+        }
+        _ => displayed,
+    };
+    if org == default {
+        if let Some(frame) = control.frame_mut() {
+            frame.original_size = None;
+        }
+        return;
+    }
+    let turns = !matches!(control, Control::TextArt { .. } | Control::Group { .. });
+    let Some(map) = source_map(ri, turns) else { return };
+    let source: Vec<(f64, f64)> = [(0.0, 0.0), (f64::from(org.0), 0.0)]
+        .into_iter()
+        .chain([(f64::from(org.0), f64::from(org.1)), (0.0, f64::from(org.1))])
+        .chain(defining_points(control).iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+        .map(|p| map.apply(p))
+        .collect();
+    let mut dropped = control.clone();
+    drop_original_size(&mut dropped);
+    let (Some(kept_plan), Some(dropped_plan)) =
+        (frame_plan(control, &HWPX_POLICY), frame_plan(&dropped, &HWPX_POLICY))
+    else {
+        return;
+    };
+    let extent = (
+        (map.a * f64::from(org.0)).hypot(map.d * f64::from(org.0)),
+        (map.b * f64::from(org.1)).hypot(map.e * f64::from(org.1)),
+    );
+    match check_frame(
+        kept_plan.stored_positions(),
+        dropped_plan.stored_positions(),
+        &source,
+        extent,
+        displayed,
+        org,
+    ) {
+        FrameCheck::Kept => {}
+        FrameCheck::Dropped(reason) => {
+            *control = dropped;
+            ctx.content_lost("object_original_size", reason);
+        }
+        FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
+    }
+}
+
+/// S20: a top-level picture's size lock, and its original box checked
+/// against what the writer will store, as [`settle_shape_frame`] does for a
+/// shape (a picture has no points, no rotation or mirror Core can hold: the
+/// source is judged on its scale's size). `convert_picture` has set the
+/// original box from `<hp:orgSz>` already. A group's pictures are decoded by
+/// the group.
+///
+/// 이것을 실패시키는 것: 이 호출을 지우기(`picture_and_table_protect_round_trip`) /
+/// 음수 원래 크기 보고를 지우기(`negative_original_size_is_reported`).
+pub(crate) fn settle_picture_frame(
+    image: &mut hwpforge_core::image::Image,
+    pic: &crate::schema::section::HxPic,
+    ctx: &mut DecodeCtx,
+) {
+    use crate::encoder::shapes::HWPX_POLICY;
+    use hwpforge_core::control::geometry::picture_frame_plan;
+    if ctx.is_direct_group_child() {
+        return;
+    }
+    image.frame.size_protect = pic.sz.as_ref().is_some_and(|s| s.protect != 0);
+    let displayed = (image.width.as_i32(), image.height.as_i32());
+    let Some(org) = pic.org_sz.as_ref().map(|o| (o.width, o.height)) else { return };
+    if let Some(reason) = unusable_original(org, displayed) {
+        ctx.content_lost("object_original_size", reason);
+        return;
+    }
+    if image.frame.original_size.is_none() {
+        return;
+    }
+    let Some(map) = source_map(pic.rendering_info.as_ref(), false) else { return };
+    let source: Vec<(f64, f64)> = [
+        (0.0, 0.0),
+        (f64::from(org.0), 0.0),
+        (f64::from(org.0), f64::from(org.1)),
+        (0.0, f64::from(org.1)),
+    ]
+    .into_iter()
+    .map(|p| map.apply(p))
+    .collect();
+    let mut dropped = image.clone();
+    dropped.frame.original_size = None;
+    let extent = (map.a * f64::from(org.0), map.e * f64::from(org.1));
+    match check_frame(
+        picture_frame_plan(image, &HWPX_POLICY).stored_positions(),
+        picture_frame_plan(&dropped, &HWPX_POLICY).stored_positions(),
+        &source,
+        extent,
+        displayed,
+        org,
+    ) {
+        FrameCheck::Kept => {}
+        FrameCheck::Dropped(reason) => {
+            *image = dropped;
+            ctx.content_lost("object_original_size", reason);
+        }
+        FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
+    }
+}
+
 /// Builds an [`ObjectPlacement`] from a shape's `<hp:pos>` block plus the shape
 /// element's `textWrap`/`textFlow` attributes, collapsing a plain-inline
 /// placement back to `None`.
@@ -218,6 +471,14 @@ pub(crate) fn decode_textbox(
         },
     };
 
+    let mut control = control;
+    settle_shape_frame(
+        &mut control,
+        rect.org_sz.as_ref(),
+        rect.sz.as_ref(),
+        rect.rendering_info.as_ref(),
+        ctx,
+    );
     Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
 }
 
@@ -259,27 +520,32 @@ pub(crate) fn decode_line(
         line.out_margin.as_ref(),
     )?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Line {
-            frame: hwpforge_core::ObjectFrame::new(),
-            start,
-            end,
-            width,
-            height,
-            placement,
-            caption,
-            style: decode_shape_style(
-                &line.line_shape,
-                &line.fill_brush,
-                false,
-                line.rotation_info.as_ref(),
-                line.flip.as_ref(),
-                &line.dropcap_style,
-                ctx,
-            ),
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::Line {
+        frame: hwpforge_core::ObjectFrame::new(),
+        start,
+        end,
+        width,
+        height,
+        placement,
+        caption,
+        style: decode_shape_style(
+            &line.line_shape,
+            &line.fill_brush,
+            false,
+            line.rotation_info.as_ref(),
+            line.flip.as_ref(),
+            &line.dropcap_style,
+            ctx,
+        ),
+    };
+    settle_shape_frame(
+        &mut control,
+        line.org_sz.as_ref(),
+        line.sz.as_ref(),
+        line.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Decodes an `HxEllipse` into a Core `Run` with `Control::Ellipse`.
@@ -337,30 +603,35 @@ pub(crate) fn decode_ellipse(
         ellipse.out_margin.as_ref(),
     )?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Ellipse {
-            frame: hwpforge_core::ObjectFrame::new(),
-            center,
-            axis1,
-            axis2,
-            width,
-            height,
-            placement,
-            paragraphs,
-            caption,
-            style: decode_shape_style(
-                &ellipse.line_shape,
-                &ellipse.fill_brush,
-                true,
-                ellipse.rotation_info.as_ref(),
-                ellipse.flip.as_ref(),
-                &ellipse.dropcap_style,
-                ctx,
-            ),
-            text_vertical_align,
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::Ellipse {
+        frame: hwpforge_core::ObjectFrame::new(),
+        center,
+        axis1,
+        axis2,
+        width,
+        height,
+        placement,
+        paragraphs,
+        caption,
+        style: decode_shape_style(
+            &ellipse.line_shape,
+            &ellipse.fill_brush,
+            true,
+            ellipse.rotation_info.as_ref(),
+            ellipse.flip.as_ref(),
+            &ellipse.dropcap_style,
+            ctx,
+        ),
+        text_vertical_align,
+    };
+    settle_shape_frame(
+        &mut control,
+        ellipse.org_sz.as_ref(),
+        ellipse.sz.as_ref(),
+        ellipse.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Decodes an `HxPolygon` into a Core `Run` with `Control::Polygon`.
@@ -405,28 +676,33 @@ pub(crate) fn decode_polygon(
         polygon.out_margin.as_ref(),
     )?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Polygon {
-            frame: hwpforge_core::ObjectFrame::new(),
-            vertices,
-            width,
-            height,
-            placement,
-            paragraphs,
-            caption,
-            style: decode_shape_style(
-                &polygon.line_shape,
-                &polygon.fill_brush,
-                true,
-                polygon.rotation_info.as_ref(),
-                polygon.flip.as_ref(),
-                &polygon.dropcap_style,
-                ctx,
-            ),
-            text_vertical_align,
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::Polygon {
+        frame: hwpforge_core::ObjectFrame::new(),
+        vertices,
+        width,
+        height,
+        placement,
+        paragraphs,
+        caption,
+        style: decode_shape_style(
+            &polygon.line_shape,
+            &polygon.fill_brush,
+            true,
+            polygon.rotation_info.as_ref(),
+            polygon.flip.as_ref(),
+            &polygon.dropcap_style,
+            ctx,
+        ),
+        text_vertical_align,
+    };
+    settle_shape_frame(
+        &mut control,
+        polygon.org_sz.as_ref(),
+        polygon.sz.as_ref(),
+        polygon.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// [`decode_shape_style_full`] for a shape the decoder places in Core, plus
@@ -717,33 +993,38 @@ pub(crate) fn decode_arc(
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Arc {
-            frame: hwpforge_core::ObjectFrame::new(),
-            arc_type,
-            center,
-            axis1,
-            axis2,
-            start1,
-            end1,
-            start2,
-            end2,
-            width,
-            height,
-            placement,
-            caption,
-            style: decode_shape_style(
-                &ellipse.line_shape,
-                &ellipse.fill_brush,
-                true,
-                ellipse.rotation_info.as_ref(),
-                ellipse.flip.as_ref(),
-                &ellipse.dropcap_style,
-                ctx,
-            ),
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::Arc {
+        frame: hwpforge_core::ObjectFrame::new(),
+        arc_type,
+        center,
+        axis1,
+        axis2,
+        start1,
+        end1,
+        start2,
+        end2,
+        width,
+        height,
+        placement,
+        caption,
+        style: decode_shape_style(
+            &ellipse.line_shape,
+            &ellipse.fill_brush,
+            true,
+            ellipse.rotation_info.as_ref(),
+            ellipse.flip.as_ref(),
+            &ellipse.dropcap_style,
+            ctx,
+        ),
+    };
+    settle_shape_frame(
+        &mut control,
+        ellipse.org_sz.as_ref(),
+        ellipse.sz.as_ref(),
+        ellipse.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Decodes an `HxCurve` into a Core `Run` with `Control::Curve`.
@@ -793,27 +1074,32 @@ pub(crate) fn decode_curve(
     )?;
     let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Curve {
-            frame: hwpforge_core::ObjectFrame::new(),
-            points,
-            segment_types,
-            width,
-            height,
-            placement,
-            caption,
-            style: decode_shape_style(
-                &curve.line_shape,
-                &curve.fill_brush,
-                true,
-                curve.rotation_info.as_ref(),
-                curve.flip.as_ref(),
-                &curve.dropcap_style,
-                ctx,
-            ),
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::Curve {
+        frame: hwpforge_core::ObjectFrame::new(),
+        points,
+        segment_types,
+        width,
+        height,
+        placement,
+        caption,
+        style: decode_shape_style(
+            &curve.line_shape,
+            &curve.fill_brush,
+            true,
+            curve.rotation_info.as_ref(),
+            curve.flip.as_ref(),
+            &curve.dropcap_style,
+            ctx,
+        ),
+    };
+    settle_shape_frame(
+        &mut control,
+        curve.org_sz.as_ref(),
+        curve.sz.as_ref(),
+        curve.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Decodes an `HxTextArt` (`<hp:textart>`) into a Core `Run` with
@@ -854,27 +1140,32 @@ pub(crate) fn decode_textart(
     let shape = if pr.text_shape.is_empty() { "RECTANGLE".to_string() } else { pr.text_shape };
     let align = if pr.align.is_empty() { "LEFT".to_string() } else { pr.align };
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::TextArt {
-            frame: hwpforge_core::ObjectFrame::new(),
-            text: textart_text_from_wire(&text_art.text),
-            shape,
-            font_name: pr.font_name,
-            font_style: pr.font_style,
-            align,
-            line_spacing,
-            char_spacing,
-            width,
-            height,
-            placement,
-            fill_color: {
-                report_textart_style(text_art, ctx);
-                textart_fill_color(text_art.fill_brush.as_ref(), ctx)
-            },
-            inst_id,
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::TextArt {
+        frame: hwpforge_core::ObjectFrame::new(),
+        text: textart_text_from_wire(&text_art.text),
+        shape,
+        font_name: pr.font_name,
+        font_style: pr.font_style,
+        align,
+        line_spacing,
+        char_spacing,
+        width,
+        height,
+        placement,
+        fill_color: {
+            report_textart_style(text_art, ctx);
+            textart_fill_color(text_art.fill_brush.as_ref(), ctx)
+        },
+        inst_id,
+    };
+    settle_shape_frame(
+        &mut control,
+        text_art.org_sz.as_ref(),
+        text_art.sz.as_ref(),
+        text_art.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Reports the TextArt styling Core `TextArt` has no field for: a visible
@@ -998,29 +1289,34 @@ pub(crate) fn decode_connect_line(
     )?;
     let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::ConnectLine {
-            frame: hwpforge_core::ObjectFrame::new(),
-            start,
-            end,
-            control_points,
-            connect_type: cl.connect_type.clone(),
-            width,
-            height,
-            placement,
-            caption,
-            style: decode_shape_style(
-                &cl.line_shape,
-                &cl.fill_brush,
-                false,
-                cl.rotation_info.as_ref(),
-                cl.flip.as_ref(),
-                &cl.dropcap_style,
-                ctx,
-            ),
-        })),
-        char_shape_id,
-    })
+    let mut control = Control::ConnectLine {
+        frame: hwpforge_core::ObjectFrame::new(),
+        start,
+        end,
+        control_points,
+        connect_type: cl.connect_type.clone(),
+        width,
+        height,
+        placement,
+        caption,
+        style: decode_shape_style(
+            &cl.line_shape,
+            &cl.fill_brush,
+            false,
+            cl.rotation_info.as_ref(),
+            cl.flip.as_ref(),
+            &cl.dropcap_style,
+            ctx,
+        ),
+    };
+    settle_shape_frame(
+        &mut control,
+        cl.org_sz.as_ref(),
+        cl.sz.as_ref(),
+        cl.rendering_info.as_ref(),
+        ctx,
+    );
+    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 /// Decodes a top-level `<hp:container>` (group / 묶음 객체) into a Core `Run`
@@ -3383,7 +3679,12 @@ mod group_tests {
         };
         let o = offset_of(placement);
         let rot = Affine::from_hx(
-            &crate::encoder::shapes::build_shape_common(c).rendering_info.rot_matrix,
+            &crate::encoder::shapes::build_shape_common(
+                c,
+                &crate::encoder::shapes::shape_frame_plan(c).unwrap(),
+            )
+            .rendering_info
+            .rot_matrix,
         )
         .unwrap();
         let map = Affine::translate(base.0 + o.0, base.1 + o.1).then_after(rot);
@@ -3494,7 +3795,25 @@ mod group_tests {
     #[test]
     fn f9_turned_and_mirrored_group_matches_hancom_ungroup() {
         let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
-        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+        // D and E, outside the group, are turned 30° and mirrored: Hancom's
+        // `<hp:sz>` for them is the turned bounding box (12654 × 10579), not
+        // the box `orgSz` 11339 × 5669 their matrices draw — the layout size
+        // Core keeps does not draw them (S20 reports it; §19.23.20).
+        assert_eq!(
+            lost_kinds(&doc.warnings),
+            ["shape_drawn_extent", "shape_drawn_extent"],
+            "{:?}",
+            doc.warnings
+        );
+        assert!(
+            doc.warnings.iter().all(|w| matches!(
+                w,
+                crate::DecodeWarning::ContentLost { path, .. }
+                    if path.0.contains(&crate::decoder::PathSeg::BodyParagraph(1))
+            )),
+            "{:?}",
+            doc.warnings
+        );
         assert_leaves_match("rotflip-group.hwpx", "rotflip-group-ungrouped.hwpx", 2, &[]);
     }
 
@@ -4496,10 +4815,13 @@ mod group_tests {
         ));
         assert_eq!(lost_kinds(&w), ["group_nested_switch"]);
 
-        // A text box that is not in a group: no warning.
+        // A text box that is not in a group: no group warning. (This one is
+        // written without `<hp:sz>`, so its `orgSz` 1000 × 400 cannot be
+        // drawn at the 0 × 0 it decodes to — reported as `shape_drawn_extent`,
+        // S20.)
         let free = text_box(SWITCH, 0);
         let (_, w) = decode(&free);
-        assert!(lost_kinds(&w).is_empty(), "{w:?}");
+        assert_eq!(lost_kinds(&w), ["shape_drawn_extent"], "{w:?}");
     }
 
     /// A polygon filled with a picture: Core has no picture fill for shapes,
@@ -5804,5 +6126,368 @@ mod group_tests {
         }
         let doc = HwpxDecoder::decode(&out.finish().unwrap().into_inner()).unwrap();
         assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    }
+}
+
+/// S20: an object's original box and size lock through HWPX decode and
+/// encode (design §19.23, implementation log §19.23.20).
+#[cfg(test)]
+mod frame_tests {
+    use hwpforge_core::control::geometry::frame_plan;
+    use hwpforge_core::control::{Control, ShapePoint};
+    use hwpforge_core::image::{Image, ImageFormat};
+    use hwpforge_core::run::RunContent;
+    use hwpforge_core::{PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, Size};
+
+    use crate::encoder::shapes::HWPX_POLICY;
+
+    const POS: &str = r#"<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>"#;
+
+    fn u(v: i32) -> HwpUnit {
+        HwpUnit::new(v).unwrap()
+    }
+
+    fn size(w: i32, h: i32) -> Size {
+        Size::new(u(w), u(h))
+    }
+
+    /// A top-level shape element: `orgSz`, `curSz`, one `(sca, rot)` pair,
+    /// `sz` with `protect`, then `tail` (its own points).
+    fn shape(
+        tag: &str,
+        org: (i64, i64),
+        sz: (i32, i32),
+        sca: (&str, &str),
+        protect: u32,
+        tail: &str,
+    ) -> String {
+        format!(
+            r##"<hp:{tag} id="1" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="7" hasArcPr="0" arcType="NORMAL"><hp:offset x="0" y="0"/><hp:orgSz width="{ow}" height="{oh}"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{cx}" centerY="{cy}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sx}" e2="0" e3="0" e4="0" e5="{sy}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="33" style="SOLID" endCap="FLAT" headStyle="NORMAL" tailStyle="NORMAL" headfill="1" tailfill="1" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" outlineStyle="NORMAL" alpha="0"/><hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="{protect}"/>{POS}{tail}</hp:{tag}>"##,
+            ow = org.0,
+            oh = org.1,
+            w = sz.0,
+            h = sz.1,
+            cx = sz.0 / 2,
+            cy = sz.1 / 2,
+            sx = sca.0,
+            sy = sca.1,
+        )
+    }
+
+    fn section(run_inner: &str) -> String {
+        format!(
+            r#"<hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{run_inner}</hp:run></hp:p></hs:sec>"#
+        )
+    }
+
+    /// The first object of one decoded section, and the warnings' kinds.
+    fn decode(run_inner: &str) -> (RunContent, Vec<String>) {
+        let r = crate::decoder::section::parse_section(
+            &section(run_inner),
+            0,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        let content = r.paragraphs[0].runs[0].content.clone();
+        let kinds = r
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                crate::DecodeWarning::ContentLost { kind, .. } => Some(kind.clone()),
+                _ => None,
+            })
+            .collect();
+        (content, kinds)
+    }
+
+    fn control(content: RunContent) -> Control {
+        match content {
+            RunContent::Control(c) => *c,
+            other => panic!("not a control: {other:?}"),
+        }
+    }
+
+    /// The section XML this crate writes for `content`.
+    fn encode(content: RunContent) -> String {
+        let run = Run { content, char_shape_id: CharShapeIndex::new(0) };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        );
+        crate::encoder::section::encode_section(
+            &section,
+            0,
+            0,
+            0,
+            0,
+            crate::encoder::EncodeOptions::default(),
+        )
+        .unwrap()
+        .xml
+    }
+
+    const R6_POINTS: &str = r#"<hc:center x="280" y="280"/><hc:ax1 x="280" y="0"/><hc:ax2 x="560" y="280"/><hc:start1 x="0" y="0"/><hc:end1 x="0" y="0"/><hc:start2 x="0" y="0"/><hc:end2 x="0" y="0"/>"#;
+
+    /// FR-T1/T2: the ministry's r6 bullet — original 560, shown 850, scale
+    /// 1.517943, defining points in the original box, size locked — decodes
+    /// to its frame with the points as stored, and writes them back.
+    ///
+    /// 이것을 실패시키는 것: 디코더의 frame 호출을 지우기 / 잠금을 읽지 않기 /
+    /// 인코더가 `orgSz` 를 현재 크기로 쓰기 / 점을 현재 상자로 옮겨 쓰기.
+    #[test]
+    fn r6_circle_keeps_its_original_box() {
+        let xml = shape("ellipse", (560, 560), (850, 850), ("1.517943", "1.517943"), 1, R6_POINTS);
+        let (content, lost) = decode(&xml);
+        assert!(lost.is_empty(), "{lost:?}");
+        let circle = control(content.clone());
+        let Control::Ellipse { center, axis2, frame, .. } = &circle else { panic!("{circle:?}") };
+        assert_eq!(frame.original_size, Some(size(560, 560)));
+        assert!(frame.size_protect);
+        assert_eq!(
+            (*center, *axis2),
+            (ShapePoint { x: 280, y: 280 }, ShapePoint { x: 560, y: 280 })
+        );
+        let out = encode(content);
+        assert!(out.contains(r#"<hp:orgSz width="560" height="560"/>"#), "{out}");
+        assert!(
+            out.contains(
+                r#"<hc:scaMatrix e1="1.517857" e2="0" e3="0" e4="0" e5="1.517857" e6="0"/>"#
+            ),
+            "{out}"
+        );
+        assert!(out.contains(r#"<hc:center x="280" y="280"/>"#), "{out}");
+        assert!(out.contains(r#"protect="1""#), "{out}");
+    }
+
+    /// Hancom often stores a translation in the scale matrix itself
+    /// (`e3`/`e6`, 11,973 objects in the corpus) — the object is placed by
+    /// `<hp:pos>`, so it is no residual.
+    /// 이것을 실패시키는 것: 원점 모서리 기준 비교를 지우기(이동 성분이
+    /// `shape_drawn_extent` 로 보고된다).
+    #[test]
+    fn scale_translation_is_not_a_residual() {
+        let xml = shape("ellipse", (560, 560), (850, 850), ("1.517943", "1.517943"), 0, R6_POINTS)
+            .replace(r#"e5="1.517943" e6="0"/>"#, r#"e5="1.517943" e6="-613"/>"#)
+            .replace(
+                r#"<hc:scaMatrix e1="1.517943" e2="0" e3="0""#,
+                r#"<hc:scaMatrix e1="1.517943" e2="0" e3="907""#,
+            );
+        assert!(xml.contains(r#"e3="907""#) && xml.contains(r#"e6="-613""#), "{xml}");
+        let (content, lost) = decode(&xml);
+        assert!(lost.is_empty(), "{lost:?}");
+        assert_eq!(control(content).frame().unwrap().original_size, Some(size(560, 560)));
+    }
+
+    /// A picture mirrored by a negative scale (`scaMatrix e5 < 0`, 115 in the
+    /// corpus) keeps its original box: Core holds no mirror for a picture, so
+    /// the frame is judged on the scale's size, and the mirror is no frame
+    /// residual.
+    /// 이것을 실패시키는 것: 그림 원본 배율을 절댓값으로 보지 않기(`orgSz` 를
+    /// 잃고 `shape_drawn_extent`).
+    #[test]
+    fn mirrored_picture_keeps_its_original_box() {
+        let pic = r#"<hp:pic id="1" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="2" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="57600" height="43500"/><hp:curSz width="4369" height="4294963997"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="2184" centerY="1649" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="-38151" e4="0" e5="1" e6="3299"/><hc:scaMatrix e1="0.075851" e2="0" e3="38151" e4="0" e5="-0.075839" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="57600" y="0"/><hc:pt2 x="57600" y="43500"/><hc:pt3 x="0" y="43500"/></hp:imgRect><hp:imgClip left="0" right="57600" top="0" bottom="43500"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="57600" dimheight="43500"/><hp:sz width="4369" widthRelTo="ABSOLUTE" height="3299" heightRelTo="ABSOLUTE" protect="0"/>"#.to_string() + POS + "</hp:pic>";
+        let (content, lost) = decode(&pic);
+        assert!(lost.is_empty(), "{lost:?}");
+        let RunContent::Image(image) = &content else { panic!("{content:?}") };
+        assert_eq!(image.frame.original_size, Some(size(57_600, 43_500)));
+
+        // A picture whose `orgSz` is its displayed size has no frame value,
+        // so nothing is judged, whatever its matrices say (the model of
+        // §19.23.20 leaves these 8 objects alone).
+        // 이것을 실패시키는 것: frame 없는 그림도 판정하기(`shape_drawn_extent`).
+        let plain = pic.replace(
+            r#"<hp:orgSz width="57600" height="43500"/>"#,
+            r#"<hp:orgSz width="4369" height="3299"/>"#,
+        );
+        let (_, lost) = decode(&plain);
+        assert!(lost.is_empty(), "{lost:?}");
+    }
+
+    /// §19.23.15 M3: original 5,000,000, scale 0.000200498 — the source end
+    /// lands at 1002.49, Core shows 1002, and the plan with the frame would
+    /// write `0.000200` (1000): 2.49 from the source although each step is
+    /// within 2. The decoder drops the original box (reported), keeping the
+    /// lock, and the writer stores 1002 unscaled.
+    ///
+    /// 이것을 실패시키는 것: 디코드 판정을 Core 정확값과 하기(또는 판정을 지우기 —
+    /// frame 이 남아 1000 으로 써진다) / frame 을 버릴 때 잠금까지 지우기.
+    #[test]
+    fn accumulated_rounding_drops_the_frame() {
+        let xml = shape("rect", (5_000_000, 1000), (1002, 1000), ("0.000200498", "1"), 1, "");
+        let (content, lost) = decode(&xml);
+        assert_eq!(lost, ["object_original_size"]);
+        let rect = control(content.clone());
+        let frame = rect.frame().unwrap();
+        assert_eq!(frame.original_size, None);
+        assert!(frame.size_protect, "dropping the original box keeps the lock");
+        let out = encode(content);
+        assert!(out.contains(r#"<hp:orgSz width="1002" height="1000"/>"#), "{out}");
+        assert!(out.contains(r#"protect="1""#), "{out}");
+    }
+
+    /// §19.23.17 M2: original 10,000,000, shown 1004, scale 0.000100 — the
+    /// source end is 1000. The writer's plan cannot store 1004 / 10,000,000
+    /// within 2 (it would write 1000) and falls back to the displayed box;
+    /// the decoder, measuring that same plan, finds the source 4 away with or
+    /// without the original box: `shape_drawn_extent`. What the plan says is
+    /// what the writer writes.
+    ///
+    /// 이것을 실패시키는 것: 계획의 fallback 을 지우기 / 인코더가 계획 대신
+    /// 원래 크기를 직접 쓰기 (둘 다 `orgSz` 10000000 이 써진다).
+    #[test]
+    fn drawn_extent_writes_what_the_plan_says() {
+        let xml = shape("rect", (10_000_000, 1000), (1004, 1000), ("0.000100", "1"), 0, "");
+        let (content, lost) = decode(&xml);
+        assert_eq!(lost, ["shape_drawn_extent"]);
+        let rect = control(content.clone());
+        let plan = frame_plan(&rect, &HWPX_POLICY).unwrap();
+        assert!(plan.is_fallback());
+        assert_eq!(plan.original_size(), (1004, 1000));
+        let out = encode(content);
+        assert!(out.contains(r#"<hp:orgSz width="1004" height="1000"/>"#), "{out}");
+        assert!(
+            out.contains(r#"<hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#),
+            "{out}"
+        );
+    }
+
+    /// §19.23.15: a negative `orgSz` (an unsigned wrap) is reported and not
+    /// carried; Core holding one is refused by the writer rather than written
+    /// wrapped.
+    ///
+    /// 이것을 실패시키는 것: 디코드 보고를 지우기 / 인코더 거부를 지우기
+    /// (`orgSz="4294967295"` 가 써진다).
+    #[test]
+    fn negative_original_size_is_not_written() {
+        let xml = shape("ellipse", (4_294_967_295, 560), (850, 850), ("1", "1"), 0, R6_POINTS);
+        let (content, lost) = decode(&xml);
+        assert_eq!(lost, ["object_original_size"]);
+        assert_eq!(control(content.clone()).frame().unwrap().original_size, None);
+        assert!(!encode(content).contains("4294967295"));
+
+        let mut circle = Control::ellipse(u(850), u(850));
+        circle.frame_mut().unwrap().original_size = Some(Size::new(u(-1), u(560)));
+        assert!(crate::encoder::shapes::shape_frame_plan(&circle).is_err());
+        let mut picture = Image::new("BinData/a.png", u(850), u(850), ImageFormat::Png);
+        picture.frame.original_size = Some(Size::new(u(560), u(-1)));
+        let err = crate::encoder::section::build_picture(
+            &picture,
+            0,
+            &mut Vec::new(),
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        );
+        assert!(err.is_err());
+    }
+
+    /// An `orgSz` that cannot be a frame value is reported, not carried: an
+    /// axis of 0 under a displayed axis that is not, a side outside the
+    /// HWPUNIT range. One equal to the kind's default (the displayed size, a
+    /// TextArt's 14173 design box) is no frame value at all (FR-T5).
+    /// 이것을 실패시키는 것: 0 축 보고를 지우기 / 범위 밖 보고를 지우기 /
+    /// 기본값과 같은 원래 크기를 접지 않기.
+    #[test]
+    fn unusable_and_default_original_sizes() {
+        let (content, lost) =
+            decode(&shape("ellipse", (0, 560), (850, 850), ("1", "1"), 0, R6_POINTS));
+        assert_eq!(lost, ["object_original_size"]);
+        assert!(control(content).frame().unwrap().original_size.is_none());
+        let (content, lost) =
+            decode(&shape("ellipse", (200_000_000, 560), (850, 850), ("1", "1"), 0, R6_POINTS));
+        assert_eq!(lost, ["object_original_size"]);
+        assert!(control(content).frame().unwrap().original_size.is_none());
+        let (content, lost) =
+            decode(&shape("ellipse", (850, 850), (850, 850), ("1", "1"), 0, R6_POINTS));
+        assert!(lost.is_empty(), "{lost:?}");
+        assert!(control(content).frame().unwrap().is_unset());
+    }
+
+    /// FR-T6: a shape resized through Core keeps its original box on the
+    /// wire with the scale between (850 → 1700: scale 2, centre at 425).
+    /// 이것을 실패시키는 것: 인코더가 `orgSz` 를 현재 크기로 쓰기.
+    #[test]
+    fn resized_shape_writes_its_original_box() {
+        let mut circle = Control::ellipse(u(850), u(850));
+        assert!(circle.resize(u(1700), u(1700)));
+        let out = encode(RunContent::Control(Box::new(circle)));
+        assert!(out.contains(r#"<hp:orgSz width="850" height="850"/>"#), "{out}");
+        assert!(
+            out.contains(
+                r#"<hc:scaMatrix e1="2.000000" e2="0" e3="0" e4="0" e5="2.000000" e6="0"/>"#
+            ),
+            "{out}"
+        );
+        assert!(out.contains(r#"<hc:center x="425" y="425"/>"#), "{out}");
+    }
+
+    /// The extreme ratio written: a line 49 wide from an original box of
+    /// 100,000,000 falls back to the displayed box, its end written at 49.
+    /// 이것을 실패시키는 것: 인코더가 계획의 점 대신 Core 점을 쓰기(끝점
+    /// 100000000).
+    #[test]
+    fn extreme_ratio_line_falls_back() {
+        let mut line = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 100_000_000, y: 0 },
+            width: u(49),
+            height: u(0),
+            frame: hwpforge_core::ObjectFrame::new(),
+            placement: None,
+            caption: None,
+            style: None,
+        };
+        line.frame_mut().unwrap().original_size = Some(size(100_000_000, 0));
+        let out = encode(RunContent::Control(Box::new(line)));
+        assert!(out.contains(r#"<hc:endPt x="49" y="0"/>"#), "{out}");
+        assert!(out.contains(r#"<hp:orgSz width="49" height="0"/>"#), "{out}");
+    }
+
+    /// A TextArt's original box other than its 14173 design box is carried
+    /// and written back with the scale between.
+    /// 이것을 실패시키는 것: 인코더를 14173 상수로 되돌리기.
+    #[test]
+    fn textart_frame_round_trips() {
+        let mut art = Control::TextArt {
+            text: "가".into(),
+            shape: "WAVE2".into(),
+            font_name: "함초롬바탕".into(),
+            font_style: "보통".into(),
+            align: "LEFT".into(),
+            line_spacing: 120,
+            char_spacing: 100,
+            width: u(10_000),
+            height: u(5000),
+            frame: hwpforge_core::ObjectFrame::new(),
+            placement: None,
+            fill_color: None,
+            inst_id: None,
+        };
+        art.frame_mut().unwrap().original_size = Some(size(20_000, 10_000));
+        let out = encode(RunContent::Control(Box::new(art)));
+        assert!(out.contains(r#"<hp:orgSz width="20000" height="10000"/>"#), "{out}");
+        assert!(out.contains(r#"e1="0.500000""#) && out.contains(r#"e5="0.500000""#), "{out}");
+        assert!(out.contains(r#"<hc:pt2 x="20000" y="10000"/>"#), "{out}");
+    }
+
+    /// A picture's and a table's size lock round-trip.
+    /// 이것을 실패시키는 것: 그림·표의 `protect` 를 읽지 않거나 상수 0 으로 쓰기.
+    #[test]
+    fn picture_and_table_protect_round_trip() {
+        let pic = r#"<hp:pic id="1" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="2" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="1000" height="500"/><hp:curSz width="2000" height="1000"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="1000" centerY="500" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="2" e2="0" e3="0" e4="0" e5="2" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="1000" y="0"/><hc:pt2 x="1000" y="500"/><hc:pt3 x="0" y="500"/></hp:imgRect><hp:imgClip left="0" right="1000" top="0" bottom="500"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="1000" dimheight="500"/><hp:sz width="2000" widthRelTo="ABSOLUTE" height="1000" heightRelTo="ABSOLUTE" protect="1"/>"#.to_string() + POS + "</hp:pic>";
+        let (content, lost) = decode(&pic);
+        assert!(lost.is_empty(), "{lost:?}");
+        let RunContent::Image(image) = &content else { panic!("{content:?}") };
+        assert!(image.frame.size_protect);
+        assert_eq!(image.frame.original_size, Some(size(1000, 500)));
+        assert!(encode(content).contains(r#"protect="1""#));
+
+        let tbl = r#"<hp:tbl id="3" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="1" noAdjust="0"><hp:sz width="1000" widthRelTo="ABSOLUTE" height="500" heightRelTo="ABSOLUTE" protect="1"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:tr><hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="1"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="500"/><hp:cellMargin left="0" right="0" top="0" bottom="0"/></hp:tc></hp:tr></hp:tbl>"#;
+        let (content, _) = decode(tbl);
+        let RunContent::Table(table) = &content else { panic!("{content:?}") };
+        assert!(table.frame.size_protect);
+        let out = encode(content);
+        assert!(out.contains(r#"heightRelTo="ABSOLUTE" protect="1""#), "{out}");
     }
 }

@@ -5,7 +5,7 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::geometry::{
-    emission_residual, local_transform, AngleRounding, CoefficientRounding, EmissionPolicy,
+    frame_plan, local_transform, AngleRounding, CoefficientRounding, EmissionPolicy, FramePlan,
 };
 use hwpforge_core::control::{Control, Fill, GroupChild, ShapeStyle};
 use hwpforge_core::placement::ObjectPlacement;
@@ -166,21 +166,70 @@ fn shape_parts(ctrl: &Control) -> (i32, i32, Option<&ShapeStyle>) {
     }
 }
 
-/// Reports a shape whose stored transform ([`HWPX_POLICY`]) lands more than
+/// Reports a shape whose stored values ([`HWPX_POLICY`]) land more than
 /// 2 HWPUNIT from its exact Core position as
 /// [`EncodeWarning::ContentLost`](super::EncodeWarning::ContentLost)
 /// (`shape_emission`) — a large box turned by a fraction of a degree, say,
-/// once its angle is rounded to whole degrees.
-pub(crate) fn report_shape_emission(ctrl: &Control, sink: &mut EncodeSink) {
-    if let Some(loss) = emission_residual(ctrl, &HWPX_POLICY).loss() {
+/// once its angle is rounded to whole degrees, or an original box so much
+/// larger than the shape that even the displayed box misses.
+pub(crate) fn report_shape_emission(plan: &FramePlan, sink: &mut EncodeSink) {
+    if let Some(loss) = plan.loss() {
         sink.content_lost("shape_emission", loss.detail().to_string());
     }
+}
+
+/// The emission plan of a shape control under [`HWPX_POLICY`]
+/// ([`frame_plan`]): what its `<hp:orgSz>`, `scaMatrix` and points store.
+///
+/// A negative original size has no place on the wire (Hancom's readings of
+/// one are unknown) and is refused rather than written wrapped, also when the
+/// Core value never went through `validate`.
+/// 이것을 실패시키는 것: 이 거부를 지우기(`negative_original_size_is_not_written`
+/// — `orgSz` 가 감싼 값 `4294967295` 로 써진다).
+pub(crate) fn shape_frame_plan(ctrl: &Control) -> HwpxResult<FramePlan> {
+    if let Some(o) = ctrl.frame().and_then(|f| f.original_size) {
+        if o.width.as_i32() < 0 || o.height.as_i32() < 0 {
+            return Err(crate::error::HwpxError::InvalidStructure {
+                detail: format!(
+                    "{} has a negative original size {}x{}",
+                    ctrl.kind_name(),
+                    o.width.as_i32(),
+                    o.height.as_i32()
+                ),
+            });
+        }
+    }
+    frame_plan(ctrl, &HWPX_POLICY).ok_or_else(|| crate::error::HwpxError::InvalidStructure {
+        detail: format!("{} has no shape box", ctrl.kind_name()),
+    })
+}
+
+/// `scaMatrix` for a plan's scale: the identity Hancom writes for an
+/// unscaled object, else the two ratios with six decimals.
+pub(crate) fn scale_matrix(scale: (f64, f64)) -> HxMatrix {
+    if scale == (1.0, 1.0) {
+        return HxMatrix::identity();
+    }
+    HxMatrix {
+        e1: format!("{:.6}", scale.0),
+        e2: "0".to_string(),
+        e3: "0".to_string(),
+        e4: "0".to_string(),
+        e5: format!("{:.6}", scale.1),
+        e6: "0".to_string(),
+    }
+}
+
+/// `<hp:sz protect>` of an object: its frame's size lock.
+pub(crate) fn size_protect(ctrl: &Control) -> u32 {
+    u32::from(ctrl.frame().is_some_and(|f| f.size_protect))
 }
 
 /// Builds the shape-common block for a drawing object.
 ///
 /// Defaults match 한글's output for a newly created shape:
-/// - zero offset, orgSz = curSz = the control's dimensions
+/// - zero offset, orgSz = the plan's original box, curSz = the control's
+///   dimensions, `scaMatrix` = the plan's scale
 /// - identity rotation/rendering matrices
 /// - solid black border, white fill, no shadow
 ///
@@ -188,7 +237,7 @@ pub(crate) fn report_shape_emission(ctrl: &Control, sink: &mut EncodeSink) {
 /// overrides, they are applied to the common block instead of identity
 /// values. The rotation matrix is the Core local transform under
 /// [`HWPX_POLICY`].
-pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
+pub(crate) fn build_shape_common(ctrl: &Control, plan: &FramePlan) -> ShapeCommon {
     let (width, height, style) = shape_parts(ctrl);
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
@@ -371,12 +420,15 @@ pub(crate) fn build_shape_common(ctrl: &Control) -> ShapeCommon {
             e6: format!("{:.6}", m[5]),
         }
     };
-    let sca_matrix = HxMatrix::identity();
+    // S20: the original box and the scale to the displayed one.
+    // 이것을 실패시키는 것: `orgSz` 를 현재 크기로 되돌리기(`r6_circle_keeps_its_original_box`).
+    let sca_matrix = scale_matrix(plan.scale());
     let trans_matrix = HxMatrix::identity();
+    let (org_w, org_h) = plan.original_size();
 
     ShapeCommon {
         offset: HxOffset { x: 0, y: 0 },
-        org_sz: HxSizeAttr { width, height },
+        org_sz: HxSizeAttr { width: org_w, height: org_h },
         cur_sz: HxSizeAttr { width, height },
         flip: hx_flip,
         rotation_info: HxRotationInfo {
@@ -450,8 +502,9 @@ pub(crate) fn encode_textbox_to_rect(
     );
     sink.leave();
     let sub_list = sub_list_result?;
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     Ok(HxRect {
         id: generate_instid(),
@@ -481,7 +534,7 @@ pub(crate) fn encode_textbox_to_rect(
             width_rel_to: "ABSOLUTE".to_string(),
             height: height_hwp,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
 
         pos: Some(shape_position(placement.as_ref())),
@@ -512,9 +565,9 @@ pub(crate) fn encode_textbox_to_rect(
         }),
 
         pt0: Some(HxPoint { x: 0, y: 0 }),
-        pt1: Some(HxPoint { x: width_hwp, y: 0 }),
-        pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
-        pt3: Some(HxPoint { x: 0, y: height_hwp }),
+        pt1: Some(HxPoint { x: plan.original_size().0, y: 0 }),
+        pt2: Some(HxPoint { x: plan.original_size().0, y: plan.original_size().1 }),
+        pt3: Some(HxPoint { x: 0, y: plan.original_size().1 }),
         shape_comment: Some(HxShapeComment { text: "사각형입니다.".to_string() }),
     })
 }
@@ -539,8 +592,9 @@ pub(crate) fn encode_rect_to_hx(
 
     let width_hwp = width.as_i32();
     let height_hwp = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     Ok(HxRect {
         id: generate_instid(),
@@ -570,7 +624,7 @@ pub(crate) fn encode_rect_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: height_hwp,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -581,9 +635,9 @@ pub(crate) fn encode_rect_to_hx(
         // Pure rect: no embedded text content.
         draw_text: None,
         pt0: Some(HxPoint { x: 0, y: 0 }),
-        pt1: Some(HxPoint { x: width_hwp, y: 0 }),
-        pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
-        pt3: Some(HxPoint { x: 0, y: height_hwp }),
+        pt1: Some(HxPoint { x: plan.original_size().0, y: 0 }),
+        pt2: Some(HxPoint { x: plan.original_size().0, y: plan.original_size().1 }),
+        pt3: Some(HxPoint { x: 0, y: plan.original_size().1 }),
         shape_comment: Some(HxShapeComment { text: "사각형입니다.".to_string() }),
     })
 }
@@ -596,7 +650,7 @@ pub(crate) fn encode_line_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxLine> {
-    let (start, end, width, height, placement, caption, style) = match ctrl {
+    let (_, _, width, height, placement, caption, style) = match ctrl {
         Control::Line { frame: _, start, end, width, height, placement, caption, style } => {
             (start, end, *width, *height, placement, caption, style)
         }
@@ -605,8 +659,10 @@ pub(crate) fn encode_line_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
+    let stored = plan.points();
 
     Ok(HxLine {
         id: generate_instid(),
@@ -634,7 +690,7 @@ pub(crate) fn encode_line_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -643,8 +699,11 @@ pub(crate) fn encode_line_to_hx(
             .as_ref()
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
             .transpose()?,
-        start_pt: Some(HxPoint { x: start.x, y: start.y }),
-        end_pt: Some(HxPoint { x: end.x, y: end.y }),
+        // The points as the plan stores them: in the original box.
+        // 이것을 실패시키는 것: Core 점을 그대로 쓰기(fallback 한 극단 비율 선이
+        // 원래 상자 좌표 그대로 남는다 — `extreme_ratio_line_falls_back`).
+        start_pt: Some(HxPoint { x: stored[0].x, y: stored[0].y }),
+        end_pt: Some(HxPoint { x: stored[1].x, y: stored[1].y }),
     })
 }
 
@@ -657,9 +716,9 @@ pub(crate) fn encode_ellipse_to_hx(
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxEllipse> {
     let (
-        center,
-        axis1,
-        axis2,
+        _center,
+        _axis1,
+        _axis2,
         width,
         height,
         placement,
@@ -697,8 +756,9 @@ pub(crate) fn encode_ellipse_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -751,7 +811,7 @@ pub(crate) fn encode_ellipse_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -761,9 +821,9 @@ pub(crate) fn encode_ellipse_to_hx(
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
             .transpose()?,
         draw_text,
-        center: Some(HxPoint { x: center.x, y: center.y }),
-        ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
-        ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
+        center: Some(HxPoint { x: plan.points()[0].x, y: plan.points()[0].y }),
+        ax1: Some(HxPoint { x: plan.points()[1].x, y: plan.points()[1].y }),
+        ax2: Some(HxPoint { x: plan.points()[2].x, y: plan.points()[2].y }),
         start1: Some(HxPoint { x: 0, y: 0 }),
         end1: Some(HxPoint { x: 0, y: 0 }),
         start2: Some(HxPoint { x: 0, y: 0 }),
@@ -779,7 +839,7 @@ pub(crate) fn encode_polygon_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, placement, paragraphs, caption, style, text_vertical_align) =
+    let (_vertices, width, height, placement, paragraphs, caption, style, text_vertical_align) =
         match ctrl {
             Control::Polygon {
                 frame: _,
@@ -806,8 +866,9 @@ pub(crate) fn encode_polygon_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -832,7 +893,7 @@ pub(crate) fn encode_polygon_to_hx(
         })
     };
 
-    let points = vertices.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
+    let points = plan.points().iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
 
     Ok(HxPolygon {
         id: generate_instid(),
@@ -859,7 +920,7 @@ pub(crate) fn encode_polygon_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -885,13 +946,13 @@ pub(crate) fn encode_arc_to_hx(
 ) -> HwpxResult<HxEllipse> {
     let (
         arc_type,
-        center,
-        axis1,
-        axis2,
-        start1,
-        end1,
-        start2,
-        end2,
+        _center,
+        _axis1,
+        _axis2,
+        _start1,
+        _end1,
+        _start2,
+        _end2,
         width,
         height,
         placement,
@@ -922,8 +983,10 @@ pub(crate) fn encode_arc_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
+    let arc = plan.points();
 
     Ok(HxEllipse {
         id: generate_instid(),
@@ -953,7 +1016,7 @@ pub(crate) fn encode_arc_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -963,13 +1026,13 @@ pub(crate) fn encode_arc_to_hx(
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
             .transpose()?,
         draw_text: None,
-        center: Some(HxPoint { x: center.x, y: center.y }),
-        ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
-        ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
-        start1: Some(HxPoint { x: start1.x, y: start1.y }),
-        end1: Some(HxPoint { x: end1.x, y: end1.y }),
-        start2: Some(HxPoint { x: start2.x, y: start2.y }),
-        end2: Some(HxPoint { x: end2.x, y: end2.y }),
+        center: Some(HxPoint { x: arc[0].x, y: arc[0].y }),
+        ax1: Some(HxPoint { x: arc[1].x, y: arc[1].y }),
+        ax2: Some(HxPoint { x: arc[2].x, y: arc[2].y }),
+        start1: Some(HxPoint { x: arc[3].x, y: arc[3].y }),
+        end1: Some(HxPoint { x: arc[4].x, y: arc[4].y }),
+        start2: Some(HxPoint { x: arc[5].x, y: arc[5].y }),
+        end2: Some(HxPoint { x: arc[6].x, y: arc[6].y }),
     })
 }
 
@@ -981,7 +1044,7 @@ pub(crate) fn encode_curve_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxCurve> {
-    let (points, segment_types, width, height, placement, caption, style) = match ctrl {
+    let (_points, segment_types, width, height, placement, caption, style) = match ctrl {
         Control::Curve {
             frame: _,
             points,
@@ -997,11 +1060,13 @@ pub(crate) fn encode_curve_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     // Per KS X 6101 표 269: each <hp:seg> has x1/y1 (start) + x2/y2 (end).
     // Points array encodes control vertices; segments connect adjacent pairs.
+    let points = plan.points();
     let segments: Vec<HxCurveSegment> = if points.len() >= 2 {
         points
             .windows(2)
@@ -1043,7 +1108,7 @@ pub(crate) fn encode_curve_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -1065,7 +1130,7 @@ pub(crate) fn encode_connect_line_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxConnectLine> {
-    let (start, end, control_points, connect_type, width, height, placement, caption, style) =
+    let (_start, _end, _control_points, connect_type, width, height, placement, caption, style) =
         match ctrl {
             Control::ConnectLine {
                 frame: _,
@@ -1094,11 +1159,15 @@ pub(crate) fn encode_connect_line_to_hx(
 
     let w = width.as_i32();
     let h = height.as_i32();
-    let sc = build_shape_common(ctrl);
-    report_shape_emission(ctrl, sink);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
+    report_shape_emission(&plan, sink);
 
     // Per golden fixture: controlPoints wrapper contains ALL points
     // (start type=3, intermediates type=2, end type=26).
+    // The plan's points: start, end, then the control points.
+    let stored = plan.points();
+    let (start, end, control_points) = (&stored[0], &stored[1], &stored[2..]);
     let mut all_points = Vec::with_capacity(control_points.len() + 2);
     all_points.push(HxControlPoint { x: start.x, y: start.y, point_type: "3".to_string() });
     for p in control_points {
@@ -1145,7 +1214,7 @@ pub(crate) fn encode_connect_line_to_hx(
             width_rel_to: "ABSOLUTE".to_string(),
             height: h,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         }),
         pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(object_out_margin(placement.as_ref())),
@@ -1275,9 +1344,14 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     let id = generate_instid();
     let instid = inst.map_or_else(generate_instid, |v| v.to_string());
     let face_color = fill.map_or_else(|| "#0000FF".to_string(), |c| c.to_hex_rgb());
-    // scaMatrix maps the 14173-HWPUNIT design box onto the rendered size.
-    let sca_x = format!("{:.6}", f64::from(w) / 14173.0);
-    let sca_y = format!("{:.6}", f64::from(h) / 14173.0);
+    // scaMatrix maps the original box (the 14173-HWPUNIT design box unless
+    // the frame holds another) onto the rendered size.
+    // 이것을 실패시키는 것: 14173 상수로 되돌리기(`textart_frame_round_trips`).
+    let plan = shape_frame_plan(ctrl)?;
+    let (org_w, org_h) = plan.original_size();
+    let sca_x = format!("{:.6}", plan.scale().0);
+    let sca_y = format!("{:.6}", plan.scale().1);
+    let protect = size_protect(ctrl);
     let center_x = w / 2;
     let center_y = h / 2;
     let text_esc = escape_xml(&textart_text_to_wire(text));
@@ -1295,13 +1369,13 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         format!(
             r#"{sz}<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>"#,
             sz = format_args!(
-                r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#
+                r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="{protect}"/>"#
             ),
         )
     };
 
     Ok(format!(
-        r##"<hp:textart id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{cur_w}" height="{cur_h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
+        r##"<hp:textart id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="{org_w}" height="{org_h}"/><hp:curSz width="{cur_w}" height="{cur_h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="{org_w}" y="0"/><hc:pt2 x="{org_w}" y="{org_h}"/><hc:pt3 x="0" y="{org_h}"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr>{placement}<hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
         id = id,
         instid = instid,
         text = text_esc,
@@ -1585,7 +1659,8 @@ fn encode_group_at(
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
 
-    let sc = build_shape_common(ctrl);
+    let plan = shape_frame_plan(ctrl)?;
+    let sc = build_shape_common(ctrl, &plan);
 
     // Shape-common block (serialized via the same Hx* sub-structs the per-shape
     // encoders use, so the element shape matches native exactly).
@@ -1827,7 +1902,7 @@ mod tests {
         if let Control::Rect { style: s, .. } = &mut ctrl {
             *s = style.cloned();
         }
-        build_shape_common(&ctrl)
+        build_shape_common(&ctrl, &shape_frame_plan(&ctrl).unwrap())
     }
 
     #[test]
