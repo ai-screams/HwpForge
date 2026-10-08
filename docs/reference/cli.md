@@ -130,6 +130,14 @@ hwpforge to-json [OPTIONS] --output <OUTPUT> <FILE>
 
 `--section` 없이 내보낸 **문서 전체 JSON은** `from-json`이, `--section N`으로 내보낸 **섹션 JSON은** `patch`가 읽습니다. 두 JSON은 서로 다른 형식입니다.
 
+스타일 글자 모양의 그림자는 0.17.0 부터 `shadow` 객체로 나옵니다(이전 키 `shadow_type` 은 종류만 담았습니다).
+
+```json
+"shadow": { "kind": "Continuous", "color": "#123456", "offset_x": -3, "offset_y": 4 }
+```
+
+`color` 는 `"#RRGGBB"` 또는 `"none"` 입니다. 이전 판이 쓴 `"shadow_type": "Drop"` JSON 도 `from-json` 이 읽고, 이때 색·간격은 기본값 `#C0C0C0`·10·10 이 됩니다(이전 출력 `#B2B2B2` 보다 밝음).
+
 ### from-json
 
 JSON을 HWPX로 되돌립니다.
