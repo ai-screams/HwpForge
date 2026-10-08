@@ -1366,6 +1366,132 @@ pub(crate) fn decode_container(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
+    // A group in a group child's text is decoded on its own: keep the outer
+    // group's state.
+    let saved_sources = std::mem::take(&mut ctx.group_sources);
+    let saved_frames = ctx.group_frames;
+    ctx.group_frames = true;
+    let mark = ctx.warnings.len();
+    let result =
+        decode_container_once(container, char_shape_id, depth, ctx).and_then(|run| match run {
+            Some(run) => settle_group_frames(container, run, char_shape_id, depth, mark, ctx),
+            None => Ok(None),
+        });
+    ctx.group_sources = saved_sources;
+    ctx.group_frames = saved_frames;
+    result
+}
+
+/// S20 (§19.23.17 M2, §19.23.20): a group decoded with its original boxes is
+/// checked as one — the writer's [`group_plan`] against the source, for every
+/// node that keeps an original box and the group's own box. Over 2 HWPUNIT
+/// anywhere: decoded again without original boxes (as before S20); if that
+/// plan lands within 2 of the source, the boxes are dropped and reported
+/// (`object_original_size`). Otherwise the source draws a size its layout
+/// does not hold: `shape_drawn_extent`, and the boxes are kept (the drawn
+/// result is the same).
+///
+/// 이것을 실패시키는 것: 이 판정을 지우기(`sibling_fallback_is_predicted` 가
+/// 계획과 원본의 차이를 놓친다).
+///
+/// [`group_plan`]: hwpforge_core::control::geometry::group_plan
+fn settle_group_frames(
+    container: &crate::schema::section::HxContainer,
+    run: Run,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    mark: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Run>> {
+    use super::group_geometry::EXACT_TOLERANCE;
+    let sources = std::mem::take(&mut ctx.group_sources);
+    let RunContent::Control(group) = &run.content else { return Ok(Some(run)) };
+    // The group's own box is judged when it keeps an original box — then
+    // also without it, for the same source.
+    let judge_own = group.frame().is_some_and(|f| f.original_size.is_some());
+    let with = group_residual(group, &sources, container, judge_own);
+    if with <= EXACT_TOLERANCE {
+        return Ok(Some(run));
+    }
+    let first_warnings = ctx.warnings.split_off(mark);
+    ctx.group_frames = false;
+    let plain = decode_container_once(container, char_shape_id, depth, ctx)?;
+    ctx.group_sources.clear();
+    let without = match plain.as_ref().map(|r| &r.content) {
+        Some(RunContent::Control(g)) => group_residual(g, &sources, container, judge_own),
+        _ => f64::INFINITY,
+    };
+    if without <= EXACT_TOLERANCE {
+        ctx.content_lost(
+            "object_original_size",
+            format!(
+                "the group's original boxes are dropped: with them the re-encode lands \
+                 {with:.2} from the source, without them {without:.2}"
+            ),
+        );
+        return Ok(plain);
+    }
+    ctx.warnings.truncate(mark);
+    ctx.warnings.extend(first_warnings);
+    ctx.content_lost(
+        "shape_drawn_extent",
+        format!("a group's shapes land {with:.2} from where its matrices draw them"),
+    );
+    Ok(Some(run))
+}
+
+/// How far the writer's plan of `group` puts the judged nodes from the
+/// source (`sources`, preorder; `None` = not judged), and the group's own
+/// box when it keeps an original box (its scale's size only, from its
+/// origin corner).
+fn group_residual(
+    group: &Control,
+    sources: &[Option<Vec<(f64, f64)>>],
+    container: &crate::schema::section::HxContainer,
+    judge_own: bool,
+) -> f64 {
+    use crate::encoder::shapes::HWPX_POLICY;
+    use hwpforge_core::control::geometry::group_plan;
+    let Some(plan) = group_plan(group, &HWPX_POLICY) else { return 0.0 };
+    if plan.nodes().len() != sources.len() {
+        // The plan and the decode disagree on the nodes: judged as off (a
+        // report, not a silent pass).
+        // 이것을 실패시키는 것: 버린 중첩 묶음의 자리 되돌리기를 지우기
+        // (`nested_group_without_matrices_or_shapes_is_reported` 에 경고가 더해진다).
+        return f64::INFINITY;
+    }
+    let mut worst = 0.0_f64;
+    for (node, source) in plan.nodes().iter().zip(sources) {
+        let Some(source) = source else { continue };
+        let stored = node.stored_positions();
+        if stored.len() != source.len() {
+            return f64::INFINITY;
+        }
+        for (a, b) in stored.iter().zip(source) {
+            worst = worst.max((a.0 - b.0).hypot(a.1 - b.1));
+        }
+    }
+    let org = container.org_sz.as_ref().or(container.cur_sz.as_ref());
+    if let (true, Some(org)) = (judge_own, org) {
+        if let Some(map) = source_map(container.rendering_info.as_ref(), false) {
+            let (ow, oh) = (f64::from(org.width), f64::from(org.height));
+            let source: Vec<(f64, f64)> = [(0.0, 0.0), (ow, 0.0), (ow, oh), (0.0, oh)]
+                .into_iter()
+                .map(|p| map.apply(p))
+                .collect();
+            worst = worst.max(anchored_residual(plan.own().stored_positions(), &source));
+        }
+    }
+    worst
+}
+
+/// One decode of a top-level group ([`decode_container`]).
+fn decode_container_once(
+    container: &crate::schema::section::HxContainer,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Option<Run>> {
     use super::group_geometry::{bounds, corners, wire_chain, Affine, EXACT_TOLERANCE};
 
     let (org_w, org_h) = container_org_size(container);
@@ -1429,7 +1555,7 @@ pub(crate) fn decode_container(
     )?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Group {
-            frame: hwpforge_core::ObjectFrame::new(),
+            frame: group_frame(container, (width, height), true, ctx),
             children,
             width: HwpUnit::new(width).unwrap_or(HwpUnit::ZERO),
             height: HwpUnit::new(height).unwrap_or(HwpUnit::ZERO),
@@ -1516,6 +1642,71 @@ struct WireChild {
     /// The wire shape has a picture fill (`<hc:imgBrush>`), which Core
     /// cannot carry.
     picture_fill: bool,
+    /// `<hp:flip>` sets a mirror (S20: such a leaf is not axis-aligned).
+    flipped: bool,
+}
+
+/// Whether `<hp:flip>` mirrors the object.
+fn flipped(flip: Option<&crate::schema::section::HxFlip>) -> bool {
+    flip.is_some_and(|f| f.horizontal != 0 || f.vertical != 0)
+}
+
+/// S20 (§19.23.13): a group leaf is axis-aligned when its whole chain is
+/// `x' = a·x + c`, `y' = e·y + f` with `a, e > 0` and `<hp:flip>` mirrors
+/// nothing — the leaves that keep their original box.
+fn wire_aligned(map: Option<super::group_geometry::Affine>, flipped: bool) -> bool {
+    map.is_some_and(|m| m.b.abs() < 1e-9 && m.d.abs() < 1e-9 && m.a > 0.0 && m.e > 0.0) && !flipped
+}
+
+/// Whether every leaf under `container`, nested groups included, is
+/// axis-aligned ([`wire_aligned`]) — the groups that keep their original box
+/// (§19.23.13). An OLE object counts as a leaf that is not.
+/// 이것을 실패시키는 것: 중첩 묶음을 보지 않기 / 잎 하나만 보기
+/// (`mixed_group_keeps_aligned_leaves_only`).
+fn all_aligned(container: &crate::schema::section::HxContainer) -> bool {
+    use crate::schema::section::HxContainerChildKind as K;
+    let leaf = |ri: Option<&crate::schema::section::HxRenderingInfo>,
+                offset: Option<&crate::schema::section::HxOffset>,
+                flip: Option<&crate::schema::section::HxFlip>| {
+        wire_aligned(child_chain(ri, offset), flipped(flip))
+    };
+    container.child_order.iter().all(|&(kind, idx)| match kind {
+        K::Rect => {
+            let s = &container.rects[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::Line => {
+            let s = &container.lines[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::Ellipse => {
+            let s = &container.ellipses[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::Polygon => {
+            let s = &container.polygons[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::Curve => {
+            let s = &container.curves[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::ConnectLine => {
+            let s = &container.connect_lines[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::TextArt => {
+            // HxTextArt keeps no `<hp:flip>`: the chain alone decides.
+            let s = &container.textarts[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), None)
+        }
+        K::Picture => {
+            let s = &container.pics[idx];
+            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+        }
+        K::Container => all_aligned(&container.containers[idx]),
+        K::Unsupported(name) => name != "ole",
+    })
 }
 
 fn has_picture_fill(fill: Option<&HxFillBrush>) -> bool {
@@ -1607,6 +1798,7 @@ fn decode_group_child(
                 map: child_chain(r.rendering_info.as_ref(), r.offset.as_ref()),
                 org: org_size(r.org_sz.as_ref(), r.cur_sz.as_ref()),
                 picture_fill: has_picture_fill(r.fill_brush.as_ref()),
+                flipped: flipped(r.flip.as_ref()),
             })
         }
         K::Line => {
@@ -1616,6 +1808,7 @@ fn decode_group_child(
                 map: child_chain(l.rendering_info.as_ref(), l.offset.as_ref()),
                 org: org_size(l.org_sz.as_ref(), l.cur_sz.as_ref()),
                 picture_fill: has_picture_fill(l.fill_brush.as_ref()),
+                flipped: flipped(l.flip.as_ref()),
             })
         }
         K::Ellipse => {
@@ -1630,6 +1823,7 @@ fn decode_group_child(
                 map: child_chain(e.rendering_info.as_ref(), e.offset.as_ref()),
                 org: org_size(e.org_sz.as_ref(), e.cur_sz.as_ref()),
                 picture_fill: has_picture_fill(e.fill_brush.as_ref()),
+                flipped: flipped(e.flip.as_ref()),
             })
         }
         K::Polygon => {
@@ -1639,6 +1833,7 @@ fn decode_group_child(
                 map: child_chain(p.rendering_info.as_ref(), p.offset.as_ref()),
                 org: org_size(p.org_sz.as_ref(), p.cur_sz.as_ref()),
                 picture_fill: has_picture_fill(p.fill_brush.as_ref()),
+                flipped: flipped(p.flip.as_ref()),
             })
         }
         K::Curve => {
@@ -1648,6 +1843,7 @@ fn decode_group_child(
                 map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
                 org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
                 picture_fill: has_picture_fill(c.fill_brush.as_ref()),
+                flipped: flipped(c.flip.as_ref()),
             })
         }
         K::ConnectLine => {
@@ -1658,6 +1854,7 @@ fn decode_group_child(
                     map: child_chain(c.rendering_info.as_ref(), c.offset.as_ref()),
                     org: org_size(c.org_sz.as_ref(), c.cur_sz.as_ref()),
                     picture_fill: has_picture_fill(c.fill_brush.as_ref()),
+                    flipped: flipped(c.flip.as_ref()),
                 }
             })
         }
@@ -1669,20 +1866,27 @@ fn decode_group_child(
                 org: org_size(t.org_sz.as_ref(), t.cur_sz.as_ref()),
                 // Its fill is judged (and reported) by `decode_textart`.
                 picture_fill: false,
+                flipped: false,
             })
         }
         K::Picture => {
             return decode_group_picture(&container.pics[idx], origin, depth, ctx);
         }
         K::Container => {
-            return Ok(decode_nested_container(
+            // The nested group's node comes before its children's (preorder).
+            let mark = ctx.group_sources.len();
+            ctx.group_sources.push(None);
+            let nested = decode_nested_container(
                 &container.containers[idx],
                 origin,
                 char_shape_id,
                 depth + 1,
                 ctx,
-            )?
-            .map(GroupChild::Shape));
+            )?;
+            if nested.is_none() {
+                ctx.group_sources.truncate(mark);
+            }
+            return Ok(nested.map(GroupChild::Shape));
         }
         K::Unsupported(_) => return Ok(None),
     };
@@ -1750,12 +1954,21 @@ fn decode_group_picture(
     // — 원래 크기 `None`, 재인코드 `orgSz` 가 표시 크기로) / 표시 크기와 같은
     // 원래 크기를 접지 않기(같은 테스트의 둘째 그림).
     let display = (fold.width(), fold.height());
-    image.frame.original_size =
-        pic.org_sz.as_ref().map(|s| (s.width, s.height)).filter(|&o| o != display).and_then(
-            |(w, h)| {
-                Some(hwpforge_foundation::Size::new(HwpUnit::new(w).ok()?, HwpUnit::new(h).ok()?))
-            },
-        );
+    image.frame.original_size = pic
+        .org_sz
+        .as_ref()
+        .map(|s| (s.width, s.height))
+        .filter(|&o| ctx.group_frames && o != display)
+        .and_then(|(w, h)| {
+            Some(hwpforge_foundation::Size::new(HwpUnit::new(w).ok()?, HwpUnit::new(h).ok()?))
+        });
+    // The frame check judges a picture with an original box (S20).
+    ctx.group_sources.push(image.frame.original_size.map(|_| {
+        [(0.0, 0.0), (org.0, 0.0), (org.0, org.1), (0.0, org.1)]
+            .into_iter()
+            .map(|p| map.apply(p))
+            .collect()
+    }));
     Ok(Some(GroupChild::Picture(image)))
 }
 
@@ -1859,13 +2072,56 @@ fn decode_nested_container(
         return Ok(None);
     }
     Ok(Some(Control::Group {
-        frame: hwpforge_core::ObjectFrame::new(),
+        frame: group_frame(nested, (w, h), false, ctx),
         children,
         width: HwpUnit::new(w).unwrap_or(HwpUnit::ZERO),
         height: HwpUnit::new(h).unwrap_or(HwpUnit::ZERO),
         placement: group_child_placement(x, y),
         inst_id: container_inst_id(nested),
     }))
+}
+
+/// S20 (§19.23.13): a group's original box — its `orgSz` (or `curSz`) when
+/// every leaf under it is axis-aligned ([`all_aligned`]) and the box can be a
+/// frame value — and, for a top-level group, its size lock. A group that is
+/// not all aligned keeps no original box (its turned leaves are folded into
+/// the displayed space).
+/// 이것을 실패시키는 것: 정렬 판정을 지우기(혼합 묶음에 원래 크기가 생긴다 —
+/// `mixed_group_keeps_aligned_leaves_only`) / 잠금을 읽지 않기
+/// (`group_frame_round_trips`).
+fn group_frame(
+    container: &crate::schema::section::HxContainer,
+    displayed: (i32, i32),
+    top: bool,
+    ctx: &mut DecodeCtx,
+) -> hwpforge_core::ObjectFrame {
+    let mut frame = hwpforge_core::ObjectFrame::new()
+        .with_size_protect(container.sz.as_ref().is_some_and(|s| s.protect != 0));
+    if !ctx.group_frames || !all_aligned(container) {
+        return frame;
+    }
+    // A top-level group written without `<hp:sz>` (not Hancom's form) has a
+    // displayed size taken from its shapes, unrelated to its `orgSz`.
+    // 이것을 실패시키는 것: 이 조건을 지우기(`sz` 없는 합성 묶음마다 원래 크기
+    // 버림 보고가 생긴다 — `ellipse_points_scale_with_the_box`).
+    if top && container.sz.is_none() {
+        return frame;
+    }
+    let Some(org) = container.org_sz.as_ref().or(container.cur_sz.as_ref()) else { return frame };
+    let org = (org.width, org.height);
+    // A displayed size out of range is reported and kept as 0: nothing to
+    // scale to. 이것을 실패시키는 것: 이 조건을 지우기
+    // (`out_of_range_geometry_is_reported` 에 `shape_drawn_extent` 가 더해진다).
+    if org == displayed || !fits_hwpunit(&[displayed.0, displayed.1]) {
+        return frame;
+    }
+    if let Some(reason) = unusable_original(org, displayed) {
+        ctx.content_lost("object_original_size", reason);
+        return frame;
+    }
+    let unit = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
+    frame.original_size = Some(hwpforge_foundation::Size::new(unit(org.0), unit(org.1)));
+    frame
 }
 
 /// Corners of a decoded group child's box, relative to its parent group,
@@ -2026,15 +2282,44 @@ fn normalize_group_child(
     ctx: &mut DecodeCtx,
 ) -> Option<Control> {
     use hwpforge_core::control::geometry::{
-        fold_group_child, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts,
+        fold_aligned_child, fold_group_child, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts,
     };
 
-    let WireChild { control, map, org, picture_fill } = wire;
+    let WireChild { control, map, org, picture_fill, flipped } = wire;
     let Some(m) = map else {
         ctx.content_lost("group_child_transform", "unparseable transform matrix");
         return None;
     };
     let mut control = control;
+    // S20 (§19.23.13): an axis-aligned leaf keeps its points in its original
+    // box; the others fold as before (their original box is not kept).
+    // 이것을 실패시키는 것: 이 갈래를 지우기(`aligned_leaves_keep_their_original_box`).
+    if ctx.group_frames && wire_aligned(Some(m), flipped) {
+        let input = FoldInput::new(m.to_transform(), org, origin);
+        if let Some(outcome) = fold_aligned_child(control.clone(), &input) {
+            let source: Vec<(f64, f64)> = [(0.0, 0.0), (org.0, 0.0), (org.0, org.1), (0.0, org.1)]
+                .into_iter()
+                .chain(
+                    hwpforge_core::control::geometry::defining_points(&control)
+                        .iter()
+                        .map(|p| (f64::from(p.x), f64::from(p.y))),
+                )
+                .map(|p| m.apply(p))
+                .collect();
+            let (kept, losses) = match outcome {
+                FoldOutcome::Kept { control, losses } => (Some(*control), losses),
+                FoldOutcome::Dropped { losses } => (None, losses),
+                _ => (None, Vec::new()),
+            };
+            for loss in losses {
+                ctx.content_lost("group_child_transform", loss.detail().to_string());
+            }
+            if kept.is_some() {
+                ctx.group_sources.push(Some(source));
+            }
+            return kept;
+        }
+    }
     if picture_fill {
         // The picture is not carried; the shape still is, and a picture
         // fill turns with it, so it takes the box rule.
@@ -2060,6 +2345,9 @@ fn normalize_group_child(
             _ => "group_child_transform",
         };
         ctx.content_lost(kind, loss.detail().to_string());
+    }
+    if kept.is_some() {
+        ctx.group_sources.push(None);
     }
     kept
 }
@@ -3688,10 +3976,23 @@ mod group_tests {
         )
         .unwrap();
         let map = Affine::translate(base.0 + o.0, base.1 + o.1).then_after(rot);
+        // S20: points are in the original box, drawn scaled to the displayed one.
+        let o_box = c.effective_original_size().unwrap();
+        let scale = |d: i32, o: hwpforge_foundation::HwpUnit| {
+            if o.as_i32() == 0 {
+                1.0
+            } else {
+                f64::from(d) / f64::from(o.as_i32())
+            }
+        };
+        let (sx, sy) = (scale(w, o_box.width), scale(h, o_box.height));
         out.push(PageShape {
             kind,
             corners: corners(f64::from(w), f64::from(h)).iter().map(|&p| map.apply(p)).collect(),
-            points: pts.iter().map(|p| map.apply((f64::from(p.x), f64::from(p.y)))).collect(),
+            points: pts
+                .iter()
+                .map(|p| map.apply((f64::from(p.x) * sx, f64::from(p.y) * sy)))
+                .collect(),
             angle: style.as_ref().and_then(|s| s.rotation).map_or(0, |r| r.round() as i32),
             flip: style.as_ref().and_then(|s| s.flip) == Some(Flip::Horizontal),
         });
@@ -4171,15 +4472,20 @@ mod group_tests {
     #[test]
     fn ellipse_points_scale_with_the_box() {
         let half = [0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
+        // Turned 180° about its own box (S20: a turned leaf folds by the box
+        // rule; an axis-aligned one keeps its points — next test).
+        let half_turn = [-1.0, 0.0, 2000.0, 0.0, -1.0, 1000.0];
         let (g, w) = decode(&container(
             (2000, 2000),
-            &ellipse((2000, 1000), &ri(ID, &[(half, ID), (ID, ID)])),
+            &ellipse((2000, 1000), &ri(ID, &[(half, ID), (ID, half_turn)])),
         ));
         assert!(w.is_empty(), "{w:?}");
         let g = g.unwrap();
-        let Control::Ellipse { center, axis1, axis2, width, height, .. } = &children(&g)[0] else {
+        let Control::Ellipse { center, axis1, axis2, width, height, style, .. } = &children(&g)[0]
+        else {
             panic!()
         };
+        assert_eq!(style.as_ref().and_then(|s| s.rotation), Some(180.0));
         assert_eq!((width.as_i32(), height.as_i32()), (1000, 500));
         assert_eq!(
             (center.x, center.y, axis1.x, axis1.y, axis2.x, axis2.y),
@@ -4447,8 +4753,12 @@ mod group_tests {
     fn text_art_in_a_nested_group_keeps_its_place() {
         const HALF_QUARTER: [f64; 6] = [0.5, 0.0, 0.0, 0.0, 0.25, 0.0];
         let three = |sca: [f64; 6]| [(sca, ID), (ID, ID), (ID, ID)];
+        // Turned 90° in its own box (x' = 1000 − y, y' = x): a turned point
+        // shape takes the map onto its points (S20 keeps the points of an
+        // axis-aligned one), so the box is the points' extent (200..800).
+        let turned = [(ID, ID), (ID, ID), (ID, [0.0, -1.0, 1000.0, 1.0, 0.0, 0.0])];
         let poly =
-            polygon((1000, 1000), &ri(ID, &three(ID)), &[(200, 200), (800, 200), (500, 800)], "");
+            polygon((1000, 1000), &ri(ID, &turned), &[(200, 200), (800, 200), (500, 800)], "");
         let art = text_art(
             2,
             &ri([1.0, 0.0, 1200.0, 0.0, 1.0, 800.0], &three(HALF_QUARTER)),
@@ -4940,12 +5250,14 @@ mod group_tests {
     fn display_size_that_cuts_off_a_shape_is_content_lost() {
         let leaf = rect((1000, 1000), &ri(ID, &[(ID, ID), (ID, ID)]));
         let own = ri(ID, &[(ID, ID)]);
-        let (g, w) = decode(&container_with((1000, 1000), (800, 1000), &own, &leaf));
+        // (`orgSz` = `sz`, as Hancom writes a group with an identity own
+        // matrix — otherwise the group's own box is judged too, S20.)
+        let (g, w) = decode(&container_with((800, 1000), (800, 1000), &own, &leaf));
         let (width, height, _) = size_and_offset(&g.unwrap());
         assert_eq!((width, height), (800, 1000), "displayed size is `sz`");
         assert_eq!(lost_kinds(&w), ["group_display_size"]);
 
-        let (_, w) = decode(&container_with((1000, 1000), (1500, 1000), &own, &leaf));
+        let (_, w) = decode(&container_with((1500, 1000), (1500, 1000), &own, &leaf));
         assert!(w.is_empty(), "{w:?}");
     }
 
@@ -5175,9 +5487,11 @@ mod group_tests {
     /// 정하는 것 (재디코드 때마다 상자가 8씩 줄어든다).
     #[test]
     fn nested_group_box_is_stable_across_round_trips() {
+        // Turned 180° in its own box (S20: a turned point shape takes the
+        // map onto its points; an axis-aligned one keeps its original box).
         let inset = polygon(
             (1000, 600),
-            &ri(ID, &[(ID, ID), (ID, ID), (ID, ID)]),
+            &ri(ID, &[(ID, ID), (ID, ID), (ID, [-1.0, 0.0, 1000.0, 0.0, -1.0, 600.0])]),
             &[(8, 8), (500, 300), (992, 592)],
             "",
         )
@@ -6126,6 +6440,368 @@ mod group_tests {
         }
         let doc = HwpxDecoder::decode(&out.finish().unwrap().into_inner()).unwrap();
         assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
+    }
+
+    // ── S20: original boxes in groups (§19.23.13–§19.23.17) ─────────
+
+    fn s20_size(w: i32, h: i32) -> hwpforge_foundation::Size {
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        hwpforge_foundation::Size::new(u(w), u(h))
+    }
+
+    /// Our `<hp:container>` for a decoded group.
+    fn group_out(g: &Control) -> String {
+        crate::encoder::shapes::encode_group_to_xml(
+            g,
+            0,
+            0,
+            &mut Vec::new(),
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        )
+        .unwrap()
+    }
+
+    /// (width, height, offset, original size) of a group node.
+    fn framed(c: &Control) -> (i32, i32, (f64, f64), Option<hwpforge_foundation::Size>) {
+        let (w, h, o) = size_and_offset(c);
+        (w, h, o, c.frame().and_then(|f| f.original_size))
+    }
+
+    /// §19.23.13 H2: a group scaled ×2 holding a rect scaled ×3 at
+    /// (100, 40). By hand the rect's box 100 × 50 lands at (100, 40)–(700,
+    /// 340): Core shows it 600 × 300 there and keeps 100 × 50 as its original
+    /// box (the group keeps 350 × 170). The writer stores the group's pair and
+    /// the rect's own after it, as Hancom does, and decoding that gives the
+    /// same Core.
+    ///
+    /// 이것을 실패시키는 것: 축 정렬 잎 갈래를 지우기(원래 상자 `None`) / 묶음의
+    /// 원래 상자 판정을 지우기 / 노드 사슬 쓰기를 지우기(쌍 하나만 써진다).
+    #[test]
+    fn parent_and_child_scales_land_where_hancom_draws() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let three = [3.0, 0.0, 0.0, 0.0, 3.0, 0.0];
+        let leaf =
+            rect((100, 50), &ri([1.0, 0.0, 100.0, 0.0, 1.0, 40.0], &[(two, ID), (three, ID)]));
+        let (g, w) = decode(&container_with((350, 170), (700, 340), &ri(ID, &[(two, ID)]), &leaf));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert_eq!(framed(children(&g)[0]), (600, 300, (100.0, 40.0), Some(s20_size(100, 50))));
+        assert_eq!(g.frame().unwrap().original_size, Some(s20_size(350, 170)));
+        let out = group_out(&g);
+        assert!(out.contains(r#"<hp:orgSz width="350" height="170"/>"#), "{out}");
+        assert!(
+            out.contains(r#"<hc:transMatrix e1="1" e2="0" e3="100" e4="0" e5="1" e6="40"/><hc:scaMatrix e1="2.000000" e2="0" e3="0" e4="0" e5="2.000000" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="3.000000" e2="0" e3="0" e4="0" e5="3.000000" e6="0"/>"#),
+            "{out}"
+        );
+        let (back, w) = decode(&out);
+        assert!(w.is_empty(), "{w:?}");
+        let back = back.unwrap();
+        assert_eq!(framed(children(&back)[0]), framed(children(&g)[0]));
+        assert_eq!(back.frame(), g.frame());
+    }
+
+    /// Three levels, every chain axis-aligned: top ×2, middle ×1.5, inner
+    /// ×1, the rect 100 × 100 at (30, 20) — by hand at (30, 20)–(330, 320).
+    /// Every group and the rect keep their original boxes, and the rect's
+    /// four pairs come back.
+    /// 이것을 실패시키는 것: 중첩 묶음을 정렬 판정에서 빼기 / 조상 쌍 누적을
+    /// 지우기(재디코드 위치가 어긋난다).
+    #[test]
+    fn three_level_aligned_group_keeps_every_box() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let one_half = [1.5, 0.0, 0.0, 0.0, 1.5, 0.0];
+        let t = [1.0, 0.0, 30.0, 0.0, 1.0, 20.0];
+        let leaf = rect((100, 100), &ri(t, &[(two, ID), (one_half, ID), (ID, ID), (ID, ID)]))
+            .replace(r#"groupLevel="1""#, r#"groupLevel="3""#);
+        let inner = nested((100, 100), &ri(t, &[(two, ID), (one_half, ID), (ID, ID)]), &leaf)
+            .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let mid = nested((100, 100), &ri(t, &[(two, ID), (one_half, ID)]), &inner);
+        let (g, w) = decode(&container_with((165, 160), (330, 320), &ri(ID, &[(two, ID)]), &mid));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let mid = children(&g)[0];
+        let inner = children(mid)[0];
+        let leaf = children(inner)[0];
+        assert_eq!(framed(mid), (300, 300, (30.0, 20.0), Some(s20_size(100, 100))));
+        assert_eq!(framed(inner), (300, 300, (0.0, 0.0), Some(s20_size(100, 100))));
+        assert_eq!(framed(leaf), (300, 300, (0.0, 0.0), Some(s20_size(100, 100))));
+        let out = group_out(&g);
+        let (back, w) = decode(&out);
+        assert!(w.is_empty(), "{w:?}");
+        let back = back.unwrap();
+        let leaf2 = children(children(children(&back)[0])[0])[0];
+        assert_eq!(framed(leaf2), framed(leaf));
+        assert_eq!(framed(children(&back)[0]), framed(mid));
+    }
+
+    /// A group with one axis-aligned rect (scaled ×2) and one turned 30°: the
+    /// aligned rect keeps its original box, the turned one folds as before
+    /// (no original box, rotation 30), and the group keeps none — one of its
+    /// leaves is not axis-aligned (§19.23.13 표).
+    /// 이것을 실패시키는 것: 묶음 정렬 판정에서 잎 하나만 보기 / 축 정렬 판정에서
+    /// 돌림을 무시하기.
+    #[test]
+    fn mixed_group_keeps_aligned_leaves_only() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let aligned = rect((100, 50), &ri(ID, &[(ID, ID), (two, ID)]));
+        let turned =
+            rect((100, 50), &ri([1.0, 0.0, 500.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, rot(30.0))]));
+        let (g, w) = decode(&container_with(
+            (1000, 400),
+            (1000, 400),
+            &ri(ID, &[(ID, ID)]),
+            &format!("{aligned}{turned}"),
+        ));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)));
+        let Control::Rect { frame, style, .. } = children(&g)[1] else { panic!() };
+        assert_eq!(frame.original_size, None);
+        assert_eq!(style.as_ref().and_then(|s| s.rotation), Some(30.0));
+        assert!(g.frame().unwrap().original_size.is_none());
+        let flipped = aligned.replace(
+            r#"<hp:flip horizontal="0" vertical="0"/>"#,
+            r#"<hp:flip horizontal="1" vertical="0"/>"#,
+        );
+        let (g, _) =
+            decode(&container_with((1000, 400), (1000, 400), &ri(ID, &[(ID, ID)]), &flipped));
+        assert!(
+            framed(children(&g.unwrap())[0]).3.is_none(),
+            "a mirrored leaf is not axis-aligned"
+        );
+    }
+
+    /// A group of our own (Core) scaled ×2 holding a 30° text box, a 30°
+    /// polygon with text and a 30° polygon with a gradient: none is
+    /// axis-aligned, so each stores `inverse(group pair) · R(30°)` after the
+    /// group's pair — the turn is read from each Core value's `ShapeStyle`,
+    /// whatever the kind (§19.23.17 H1). Decoded again, every shape lands
+    /// where Core draws it.
+    /// 이것을 실패시키는 것: 다각형의 θ 를 종류로 0 으로 정하기 / 자기 쌍에서
+    /// 조상 배율을 빼지 않기.
+    #[test]
+    fn turned_siblings_under_a_scaled_group_keep_their_turn() {
+        use hwpforge_core::control::geometry::{emitted_corners, EmissionPolicy};
+        let (g, _) = decode(&turned_family(""));
+        let mut g = g.unwrap();
+        // Scale the whole group ×2 through its own frame: the box doubles
+        // around its original one.
+        let (gw, gh, _) = size_and_offset(&g);
+        if let Control::Group { frame, .. } = &mut g {
+            frame.original_size = Some(s20_size(gw / 2, gh / 2));
+        }
+        // The pairs store the turns exactly enough: no fallback, two pairs.
+        let plan =
+            hwpforge_core::control::geometry::group_plan(&g, &crate::encoder::shapes::HWPX_POLICY)
+                .unwrap();
+        assert!(!plan.is_fallback());
+        assert!(plan.nodes().iter().all(|n| n.pairs().len() == 2));
+        let out = group_out(&g);
+        let (back, w) = decode(&out);
+        let back = back.unwrap();
+        assert!(w.is_empty(), "{w:?}");
+        for (a, b) in children(&g).iter().zip(children(&back)) {
+            let ca = emitted_corners(a, &EmissionPolicy::exact()).unwrap();
+            let cb = emitted_corners(b, &EmissionPolicy::exact()).unwrap();
+            assert!(dist(&ca, &cb) <= 2.0, "{:?} vs {:?}", ca, cb);
+        }
+    }
+
+    /// The three turned siblings (text box, text polygon, gradient polygon,
+    /// each 30°) plus `extra`, in an unscaled group.
+    fn turned_family(extra: &str) -> String {
+        let at = |x: f64| [1.0, 0.0, x, 0.0, 1.0, 100.0];
+        let text_box = format!(
+            r#"{}<hp:drawText lastWidth="0" name="" editable="0">{}</hp:drawText></hp:rect>"#,
+            shape_head("rect", (1000, 600), &ri(at(500.0), &[(ID, ID), (ID, rot(30.0))])),
+            sublist("<hp:t>글</hp:t>")
+        );
+        let tri = [(0, 600), (500, 0), (1000, 600)];
+        let text_poly = polygon(
+            (1000, 600),
+            &ri(at(2000.0), &[(ID, ID), (ID, rot(30.0))]),
+            &tri,
+            &draw_text("글"),
+        );
+        let gradient = r##"<hc:fillBrush><hc:gradation type="LINEAR" angle="0" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0"><hc:color value="#FF0000"/><hc:color value="#0000FF"/></hc:gradation></hc:fillBrush>"##;
+        let grad_poly =
+            polygon((1000, 600), &ri(at(3500.0), &[(ID, ID), (ID, rot(30.0))]), &tri, "").replacen(
+                "<hc:pt ",
+                &format!("{gradient}<hc:pt "),
+                1,
+            );
+        // No `<hp:sz>`: the displayed size is the shapes' extent.
+        container((5000, 1500), &format!("{text_box}{text_poly}{grad_poly}{extra}"))
+    }
+
+    /// §19.23.15 H1: an axis-aligned leaf whose original box is far too
+    /// large to store its scale (100,000,000 shown 49) makes the whole group
+    /// fall back — but only the original boxes go: the three 30° siblings
+    /// keep their `rotMatrix` 30° and land within 2 of where Core draws them.
+    /// 이것을 실패시키는 것: fallback 이 형제의 회전까지 펴기 / 잎 하나만
+    /// fallback 하기.
+    #[test]
+    fn fallback_keeps_the_siblings_turned() {
+        use hwpforge_core::control::geometry::{emitted_corners, group_plan, EmissionPolicy};
+        let tiny = [0.00000049, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let extreme = rect(
+            (100_000_000, 100),
+            &ri([1.0, 0.0, 5000.0, 0.0, 1.0, 0.0], &[(ID, ID), (tiny, ID)]),
+        );
+        let (g, w) = decode(&turned_family(&extreme));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let plan = group_plan(&g, &crate::encoder::shapes::HWPX_POLICY).unwrap();
+        assert!(plan.is_fallback());
+        let out = group_out(&g);
+        assert_eq!(
+            out.matches(r#"<hc:rotMatrix e1="0.866025" e2="-0.500000""#).count(),
+            3,
+            "{out}"
+        );
+        assert!(out.contains(r#"<hp:orgSz width="49" height="100"/>"#), "{out}");
+        let (back, _) = decode(&out);
+        for (a, b) in children(&g).iter().zip(children(&back.unwrap())).take(3) {
+            let ca = emitted_corners(a, &EmissionPolicy::exact()).unwrap();
+            let cb = emitted_corners(b, &EmissionPolicy::exact()).unwrap();
+            assert!(dist(&ca, &cb) <= 2.0, "{:?} vs {:?}", ca, cb);
+        }
+    }
+
+    /// §19.23.17 M2 (b): an axis-aligned leaf B next to the extreme leaf A.
+    /// The plan falls back for the whole group, so B too is written with its
+    /// displayed box; the decoder measures that same plan against the source
+    /// (no report: it lands within 2), and what is written is the plan.
+    /// 이것을 실패시키는 것: 인코더가 묶음 계획을 무시하기(B 의 `orgSz` 가 원래
+    /// 크기로) / 디코더가 fallback 전 단계까지만 예측하기(원래 상자 버림 보고).
+    #[test]
+    fn sibling_fallback_is_predicted() {
+        use hwpforge_core::control::geometry::group_plan;
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let b = rect((100, 50), &ri(ID, &[(ID, ID), (two, ID)]));
+        let tiny = [0.00000049, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let a = rect(
+            (100_000_000, 100),
+            &ri([1.0, 0.0, 400.0, 0.0, 1.0, 0.0], &[(ID, ID), (tiny, ID)]),
+        );
+        let (g, w) = decode(&container_with(
+            (1000, 400),
+            (1000, 400),
+            &ri(ID, &[(ID, ID)]),
+            &format!("{b}{a}"),
+        ));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)), "Core keeps B's box");
+        let plan = group_plan(&g, &crate::encoder::shapes::HWPX_POLICY).unwrap();
+        assert!(plan.is_fallback());
+        assert_eq!(plan.nodes()[0].original_size(), (200, 100));
+        let out = group_out(&g);
+        assert!(out.contains(r#"<hp:orgSz width="200" height="100"/>"#), "{out}");
+        assert!(!out.contains(r#"<hp:orgSz width="100" height="50"/>"#), "{out}");
+    }
+
+    /// A frameless sibling the writer cannot store exactly (a large box
+    /// turned 30.4°, stored as 30°) does not make the group fall back: the
+    /// frames do not change it, so the aligned rect keeps its original box
+    /// (corpus case: a picture next to a sheared ellipse, §19.23.20).
+    /// 이것을 실패시키는 것: fallback 판정에 frame 없는 노드도 세기.
+    #[test]
+    fn frameless_sibling_does_not_drop_the_boxes() {
+        use hwpforge_core::control::geometry::group_plan;
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let b = rect((100, 50), &ri(ID, &[(ID, ID), (two, ID)]));
+        let c = rect(
+            (10_000, 1000),
+            &ri([1.0, 0.0, 400.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, rot(30.4))]),
+        );
+        let (g, _) = decode(&container_with(
+            (12_000, 6000),
+            (12_000, 6000),
+            &ri(ID, &[(ID, ID)]),
+            &format!("{b}{c}"),
+        ));
+        let g = g.unwrap();
+        let plan = group_plan(&g, &crate::encoder::shapes::HWPX_POLICY).unwrap();
+        assert!(!plan.is_fallback());
+        assert!(group_out(&g).contains(r#"<hp:orgSz width="100" height="50"/>"#));
+    }
+
+    /// A turned leaf in a nested group makes the outer group not
+    /// axis-aligned too: neither group keeps an original box.
+    /// 이것을 실패시키는 것: 묶음 정렬 판정이 중첩 묶음을 보지 않기.
+    #[test]
+    fn nested_turn_unframes_the_outer_group() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let turned = rect(
+            (100, 50),
+            &ri([1.0, 0.0, 500.0, 0.0, 1.0, 0.0], &[(two, ID), (ID, ID), (ID, rot(30.0))]),
+        )
+        .replace(r#"groupLevel="1""#, r#"groupLevel="2""#);
+        let inner = nested(
+            (100, 50),
+            &ri([1.0, 0.0, 500.0, 0.0, 1.0, 0.0], &[(two, ID), (ID, rot(30.0))]),
+            &turned,
+        );
+        let aligned = rect((100, 50), &ri(ID, &[(two, ID), (ID, ID)]));
+        let (g, _) = decode(&container_with(
+            (600, 400),
+            (1200, 800),
+            &ri(ID, &[(two, ID)]),
+            &format!("{aligned}{inner}"),
+        ));
+        let g = g.unwrap();
+        assert!(g.frame().unwrap().original_size.is_none());
+        assert_eq!(framed(children(&g)[0]).3, Some(s20_size(100, 50)));
+    }
+
+    /// §19.23.15 M3 in a group: the leaf's source end is 1002.49 (original
+    /// 5,000,000, scale 0.000200498); with its original box the writer would
+    /// store 1000 — 2.49 away. The decoder drops the group's original boxes
+    /// (reported) and the leaf lands at 1002.
+    /// 이것을 실패시키는 것: 묶음 판정을 지우기(원래 상자가 남아 1000 으로 써진다).
+    #[test]
+    fn group_rounding_drops_the_boxes() {
+        let s = [0.000200498, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let leaf = rect((5_000_000, 100), &ri(ID, &[(ID, ID), (s, ID)]));
+        let (g, w) = decode(&container((2000, 200), &leaf));
+        assert_eq!(lost_kinds(&w), ["object_original_size"]);
+        let g = g.unwrap();
+        assert!(framed(children(&g)[0]).3.is_none());
+        assert!(group_out(&g).contains(r#"<hp:orgSz width="1002" height="100"/>"#));
+    }
+
+    /// A group whose own matrices draw a box other than its layout size
+    /// (`orgSz` 1000 under an identity matrix, `sz` 800): neither its
+    /// original box nor its displayed one is drawn where Hancom draws it —
+    /// `shape_drawn_extent`, the original box kept.
+    /// 이것을 실패시키는 것: 묶음 판정을 지우기(보고가 없다).
+    #[test]
+    fn group_box_its_matrices_do_not_draw_is_reported() {
+        let leaf = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let (g, w) = decode(&container_with((1000, 1000), (800, 800), &ri(ID, &[(ID, ID)]), &leaf));
+        assert_eq!(lost_kinds(&w), ["shape_drawn_extent"]);
+        assert_eq!(g.unwrap().frame().unwrap().original_size, Some(s20_size(1000, 1000)));
+    }
+
+    /// A group's size lock and original box round-trip.
+    /// 이것을 실패시키는 것: 묶음 잠금을 읽지 않거나 0 으로 쓰기.
+    #[test]
+    fn group_frame_round_trips() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let leaf = rect((100, 50), &ri(ID, &[(two, ID), (ID, ID)]));
+        let xml = container_with((100, 50), (200, 100), &ri(ID, &[(two, ID)]), &leaf).replace(
+            r#"heightRelTo="ABSOLUTE" protect="0""#,
+            r#"heightRelTo="ABSOLUTE" protect="1""#,
+        );
+        let (g, w) = decode(&xml);
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        assert!(g.frame().unwrap().size_protect);
+        let out = group_out(&g);
+        assert!(out.contains(r#"heightRelTo="ABSOLUTE" protect="1""#), "{out}");
+        assert!(out.contains(r#"<hp:orgSz width="100" height="50"/>"#), "{out}");
     }
 }
 

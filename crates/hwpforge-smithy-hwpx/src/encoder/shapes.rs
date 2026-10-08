@@ -5,7 +5,8 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::geometry::{
-    frame_plan, local_transform, AngleRounding, CoefficientRounding, EmissionPolicy, FramePlan,
+    drop_original_sizes, frame_plan, group_plan, local_transform, AngleRounding,
+    CoefficientRounding, EmissionPolicy, FramePlan, GroupNodePlan,
 };
 use hwpforge_core::control::{Control, Fill, GroupChild, ShapeStyle};
 use hwpforge_core::placement::ObjectPlacement;
@@ -1478,11 +1479,13 @@ fn group_child_kind(child: &GroupChild) -> &'static str {
 /// the outermost group's space, so a child's `transMatrix`/`<hp:offset>` is
 /// `parent_origin` + the child's own offset (for a top-level group the
 /// origin is `(0, 0)`).
+#[allow(clippy::too_many_arguments)]
 fn encode_group_child_xml(
     child: &GroupChild,
     depth: usize,
     group_level: u32,
     parent_origin: (i32, i32),
+    nodes: &mut std::slice::Iter<'_, GroupNodePlan>,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
@@ -1490,6 +1493,7 @@ fn encode_group_child_xml(
     let child = match child {
         GroupChild::Shape(control) => control,
         GroupChild::Picture(image) => {
+            let node = nodes.next();
             return encode_group_picture_xml(
                 image,
                 depth,
@@ -1499,7 +1503,7 @@ fn encode_group_child_xml(
                 options,
                 sink,
             )
-            .map(Some);
+            .map(|xml| Some(with_node_chain(xml, node)));
         }
         _ => return Ok(None),
     };
@@ -1514,12 +1518,15 @@ fn encode_group_child_xml(
     // `offset`/`transMatrix`/`curSz`, and the children their own `sz`/`pos` (a group child is placed by its
     // matrix, not anchored to the page).
     if let Control::Group { .. } = child {
+        // The nested group's node precedes its children's (preorder).
+        let node = nodes.next();
         let raw = encode_group_at(
             child,
             depth,
             group_level,
             (x, y),
             true,
+            nodes,
             hyperlink_entries,
             options,
             sink,
@@ -1527,7 +1534,7 @@ fn encode_group_child_xml(
         let raw = set_group_child_offset(&raw, x, y);
         let raw = set_group_child_translate(&raw, x, y);
         let raw = zero_cur_sz(&raw);
-        return Ok(Some(raw));
+        return Ok(Some(with_node_chain(raw, node)));
     }
     let raw = match child {
         Control::TextBox { .. } => {
@@ -1573,16 +1580,67 @@ fn encode_group_child_xml(
         Control::TextArt { .. } => encode_text_art_to_xml(child, true)?,
         // Anything else (Equation, EmbeddedChart, …) has no container-child
         // form — Hancom will not group an equation — so it is left out
-        // rather than fabricated; `encode_group_at` reports it as lost.
+        // rather than fabricated; `encode_group_at` reports it as lost. (The
+        // group plan has no node for it either.)
         _ => return Ok(None),
     };
+    let node = nodes.next();
     // 한컴 positions a container child by its transform-matrix translation;
     // `<hp:offset>` mirrors it (native carries both). Identity matrices render
     // every child at the group origin (overlap) — verified visually.
     let raw = set_group_child_offset(&raw, x, y);
     let raw = set_group_child_translate(&raw, x, y);
     let raw = zero_cur_sz(&raw);
-    Ok(Some(set_group_level(&raw, group_level)))
+    Ok(Some(with_node_chain(set_group_level(&raw, group_level), node)))
+}
+
+/// A coefficient as the plan stores it: `0` and `1` as Hancom writes them,
+/// any other value with six decimals.
+fn coefficient(v: f64) -> String {
+    if v == 0.0 {
+        "0".to_string()
+    } else if v == 1.0 {
+        "1".to_string()
+    } else {
+        format!("{v:.6}")
+    }
+}
+
+/// `xml` with its own (first) `<hp:renderingInfo>` replaced by the group
+/// plan's chain for this node — the translation, then every enclosing
+/// group's pair and its own (§19.23.13) — when an enclosing group stores a
+/// scale. With one pair the per-shape writer's block already is the plan.
+/// 이것을 실패시키는 것: 이 교체를 지우기(묶음 배율이 있는 잎이 자기 쌍 하나만
+/// 써서 두 번 축소된다 — `parent_and_child_scales_land_where_hancom_draws`).
+fn with_node_chain(xml: String, node: Option<&GroupNodePlan>) -> String {
+    let Some(node) = node.filter(|n| n.pairs().len() > 1) else { return xml };
+    let (Some(start), Some(end)) =
+        (xml.find("<hp:renderingInfo>"), xml.find("</hp:renderingInfo>"))
+    else {
+        return xml;
+    };
+    let m = |tag: &str, c: &[f64; 6]| {
+        format!(
+            r#"<hc:{tag} e1="{}" e2="{}" e3="{}" e4="{}" e5="{}" e6="{}"/>"#,
+            coefficient(c[0]),
+            coefficient(c[1]),
+            coefficient(c[2]),
+            coefficient(c[3]),
+            coefficient(c[4]),
+            coefficient(c[5])
+        )
+    };
+    let (tx, ty) = node.translation();
+    let mut chain = format!(
+        r#"<hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="{tx}" e4="0" e5="1" e6="{ty}"/>"#
+    );
+    for (sca, rot) in node.pairs() {
+        chain.push_str(&m("scaMatrix", sca));
+        chain.push_str(&m("rotMatrix", rot));
+    }
+    chain.push_str("</hp:renderingInfo>");
+    let close = end + "</hp:renderingInfo>".len();
+    format!("{}{chain}{}", &xml[..start], &xml[close..])
 }
 
 /// Encodes a group picture as Hancom writes one: a `<hp:pic>` placed by its
@@ -1632,7 +1690,37 @@ pub(crate) fn encode_group_to_xml(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
-    encode_group_at(ctrl, depth, group_level, (0, 0), false, hyperlink_entries, options, sink)
+    // S20: the group's emission plan, shared with the decoder's check. When
+    // its original boxes do not store within 2 HWPUNIT, the whole group is
+    // written without them (its displayed boxes, as before S20).
+    // 이것을 실패시키는 것: 잎 하나만 fallback 하기 / fallback 뒤 재측정을 지우기
+    // (`sibling_fallback_is_predicted`).
+    let plan = group_plan(ctrl, &HWPX_POLICY).ok_or_else(|| {
+        crate::error::HwpxError::InvalidStructure { detail: "group has no plan".to_string() }
+    })?;
+    if let Some(loss) = plan.loss() {
+        sink.content_lost("shape_emission", loss.detail().to_string());
+    }
+    let stripped;
+    let target = if plan.is_fallback() {
+        let mut plain = ctrl.clone();
+        drop_original_sizes(&mut plain);
+        stripped = plain;
+        &stripped
+    } else {
+        ctrl
+    };
+    encode_group_at(
+        target,
+        depth,
+        group_level,
+        (0, 0),
+        false,
+        &mut plan.nodes().iter(),
+        hyperlink_entries,
+        options,
+        sink,
+    )
 }
 
 /// [`encode_group_to_xml`] for a group whose box starts at `origin` in the
@@ -1648,6 +1736,7 @@ fn encode_group_at(
     group_level: u32,
     origin: (i32, i32),
     as_child: bool,
+    nodes: &mut std::slice::Iter<'_, GroupNodePlan>,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
     sink: &mut EncodeSink,
@@ -1686,6 +1775,7 @@ fn encode_group_at(
             depth,
             group_level + 1,
             origin,
+            nodes,
             hyperlink_entries,
             options,
             sink,
@@ -1715,7 +1805,7 @@ fn encode_group_at(
             width_rel_to: "ABSOLUTE".to_string(),
             height,
             height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
+            protect: size_protect(ctrl),
         },
         "hp:sz",
     )?;

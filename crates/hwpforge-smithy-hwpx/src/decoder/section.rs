@@ -313,6 +313,15 @@ pub(crate) struct DecodeCtx {
     /// ([`lift_header_footers`]). run 변환이 이 밖의 머리말·꼬리말을 만나면
     /// 손실로 보고한다.
     lifted_header_footers: std::collections::HashSet<usize>,
+    /// S20: whether a group's axis-aligned leaves keep their original box
+    /// (the first decode of a group); `false` decodes the group as before
+    /// S20, when its original boxes do not re-encode near the source.
+    pub(crate) group_frames: bool,
+    /// S20: the source positions (outermost group space) of each node of
+    /// the group being decoded, in the preorder of its Core nodes — `None`
+    /// for a node the frame check does not judge (a nested group, a leaf
+    /// without an original box).
+    pub(crate) group_sources: Vec<Option<Vec<(f64, f64)>>>,
 }
 
 impl DecodeCtx {
@@ -326,6 +335,8 @@ impl DecodeCtx {
             image_pixels: HashMap::new(),
             in_master_page: false,
             lifted_header_footers: std::collections::HashSet::new(),
+            group_frames: true,
+            group_sources: Vec::new(),
         }
     }
 
@@ -341,6 +352,8 @@ impl DecodeCtx {
             image_pixels: HashMap::new(),
             in_master_page: true,
             lifted_header_footers: std::collections::HashSet::new(),
+            group_frames: true,
+            group_sources: Vec::new(),
         }
     }
 

@@ -748,6 +748,309 @@ fn plan_box(
     }
 }
 
+// ── Group emission plan ────────────────────────────────────────
+
+/// One stored `(sca, rot)` pair, exact coefficients `[a, b, c, d, e, f]`;
+/// a writer prints them with its policy's digits.
+pub type MatrixPair = ([f64; 6], [f64; 6]);
+
+const IDENTITY_M: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+/// What a writer stores for one node under a group (§19.23.13–§19.23.17):
+/// its original box, the `(sca, rot)` pairs of its matrix chain after the
+/// translation, its points, and where they land in the outermost group's
+/// space.
+///
+/// A node's written pairs are its enclosing groups' own pairs (outermost
+/// first) followed by its own; each own pair is `inverse(ancestors) · L`,
+/// `L` = the node's own rotation and mirror (`ShapeStyle`) times
+/// `diag(width / O.width, height / O.height)`. When every enclosing pair is
+/// the identity only the node's own pair is written — the form groups were
+/// written in before S20.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct GroupNodePlan {
+    translation: (i32, i32),
+    original: (i32, i32),
+    pairs: Vec<MatrixPair>,
+    points: Vec<ShapePoint>,
+    stored: Vec<(f64, f64)>,
+}
+
+impl GroupNodePlan {
+    /// Where the node's box starts in the outermost group's space (its
+    /// `transMatrix` translation).
+    pub fn translation(&self) -> (i32, i32) {
+        self.translation
+    }
+
+    /// The original size to store.
+    pub fn original_size(&self) -> (i32, i32) {
+        self.original
+    }
+
+    /// The pairs to store after the translation, outermost first.
+    pub fn pairs(&self) -> &[MatrixPair] {
+        &self.pairs
+    }
+
+    /// The defining points to store (in the original box).
+    pub fn points(&self) -> &[ShapePoint] {
+        &self.points
+    }
+
+    /// Where the stored chain puts the original box's corners and then the
+    /// points, in the outermost group's space.
+    pub fn stored_positions(&self) -> &[(f64, f64)] {
+        &self.stored
+    }
+}
+
+/// The emission plan of a top-level group: its own box ([`FramePlan`]) and
+/// every node under it in preorder — a nested group before its children,
+/// pictures included, controls without a group form skipped.
+///
+/// Built with the frames first; a node the frames change — one with an
+/// original box of its own, or under a group that stores a scale — more than
+/// 2 HWPUNIT from its exact Core place (or whose own box falls back) makes
+/// the whole group fall back (§19.23.13 H3, §19.23.15 H1): every original box
+/// becomes the displayed box and every enclosing pair the identity — the
+/// leaves keep their own rotation and mirror — and it is measured again.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct GroupPlan {
+    own: FramePlan,
+    nodes: Vec<GroupNodePlan>,
+    fallback: bool,
+    loss: Option<FoldLoss>,
+}
+
+impl GroupPlan {
+    /// The group's own box.
+    pub fn own(&self) -> &FramePlan {
+        &self.own
+    }
+
+    /// The nodes in preorder.
+    pub fn nodes(&self) -> &[GroupNodePlan] {
+        &self.nodes
+    }
+
+    /// The frames did not survive and the plan stores displayed boxes.
+    pub fn is_fallback(&self) -> bool {
+        self.fallback
+    }
+
+    /// What the stored values still miss after the fallback.
+    pub fn loss(&self) -> Option<&FoldLoss> {
+        self.loss.as_ref()
+    }
+}
+
+fn diag_scale(m: &[f64; 6]) -> (f64, f64) {
+    (m[0], m[4])
+}
+
+fn quantize_pair(p: &MatrixPair, rounding: CoefficientRounding) -> MatrixPair {
+    let q = |m: [f64; 6]| m.map(|v| quantize(v, rounding));
+    (q(p.0), q(p.1))
+}
+
+/// The emission plan of a top-level `group` under `policy`; `None` for a
+/// control that is not a group.
+pub fn group_plan(group: &Control, policy: &EmissionPolicy) -> Option<GroupPlan> {
+    let Control::Group { children, .. } = group else { return None };
+    let own = frame_plan(group, policy)?;
+    let mut nodes = Vec::new();
+    let mut worst = 0.0_f64;
+    let q = |v: f64| quantize(v, policy.coefficients);
+    let top_scale =
+        if own.is_fallback() { (1.0, 1.0) } else { (q(own.scale().0), q(own.scale().1)) };
+    plan_children(children, (0, 0), &[top_scale], true, policy, &mut nodes, &mut worst);
+    if !(exceeds_tolerance(worst) || own.is_fallback() || own.loss().is_some()) {
+        return Some(GroupPlan { own, nodes, fallback: false, loss: None });
+    }
+    let mut plain = group.clone();
+    drop_original_sizes(&mut plain);
+    let own = frame_plan(&plain, policy)?;
+    let Control::Group { children, .. } = &plain else { return None };
+    let mut nodes = Vec::new();
+    let mut worst = 0.0_f64;
+    plan_children(children, (0, 0), &[(1.0, 1.0)], false, policy, &mut nodes, &mut worst);
+    let loss = residual_loss(worst);
+    Some(GroupPlan { own, nodes, fallback: true, loss })
+}
+
+/// Drops the original box of `control` and, for a group, of every node under
+/// it ([`drop_original_size`] on each; a picture's original box is cleared):
+/// what a group's fallback writes ([`GroupPlan::is_fallback`]).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::drop_original_sizes;
+/// use hwpforge_core::control::Control;
+/// use hwpforge_foundation::HwpUnit;
+///
+/// let u = |v| HwpUnit::new(v).unwrap();
+/// let mut circle = Control::ellipse(u(560), u(560));
+/// circle.resize(u(850), u(850));
+/// drop_original_sizes(&mut circle);
+/// assert!(circle.frame().unwrap().is_unset());
+/// ```
+pub fn drop_original_sizes(control: &mut Control) {
+    drop_original_size(control);
+    if let Control::Group { children, .. } = control {
+        for child in children {
+            match child {
+                super::GroupChild::Shape(shape) => drop_original_sizes(shape),
+                super::GroupChild::Picture(image) => image.frame.original_size = None,
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_children(
+    children: &[super::GroupChild],
+    parent_origin: (i32, i32),
+    ancestors: &[(f64, f64)],
+    frames: bool,
+    policy: &EmissionPolicy,
+    nodes: &mut Vec<GroupNodePlan>,
+    worst: &mut f64,
+) {
+    let (ax, ay) = ancestors.iter().fold((1.0, 1.0), |a, s| (a.0 * s.0, a.1 * s.1));
+    let scaled = ancestors.iter().any(|s| *s != (1.0, 1.0));
+    let ancestor_pairs: Vec<MatrixPair> = if scaled {
+        ancestors.iter().map(|&(sx, sy)| ([sx, 0.0, 0.0, 0.0, sy, 0.0], IDENTITY_M)).collect()
+    } else {
+        Vec::new()
+    };
+    for child in children {
+        match child {
+            super::GroupChild::Picture(image) => {
+                let (dx, dy) = placement_offset(image.placement.as_ref());
+                let t = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
+                let o = image.effective_original_size();
+                let (ow, oh) = (o.width.as_i32(), o.height.as_i32());
+                let (w, h) = (image.width.as_i32(), image.height.as_i32());
+                let lin = (axis_scale(w, ow), axis_scale(h, oh));
+                let node = node_plan(
+                    t,
+                    (ow, oh),
+                    (w, h),
+                    lin,
+                    (ax, ay),
+                    None,
+                    None,
+                    Vec::new(),
+                    &ancestor_pairs,
+                    policy,
+                );
+                if (ow, oh) != (w, h) || scaled {
+                    *worst = worst.max(node.1);
+                }
+                if frames && picture_frame_plan(image, policy).is_fallback() {
+                    *worst = f64::INFINITY;
+                }
+                nodes.push(node.0);
+            }
+            super::GroupChild::Shape(control) => {
+                let Some(b) = shape_box(control) else { continue };
+                if matches!(control, Control::Equation { .. } | Control::EmbeddedChart { .. }) {
+                    // No group form: the writer leaves it out.
+                    continue;
+                }
+                let t = (
+                    parent_origin.0.saturating_add(b.offset.0),
+                    parent_origin.1.saturating_add(b.offset.1),
+                );
+                let Some(o) = control.effective_original_size() else { continue };
+                let (ow, oh) = (o.width.as_i32(), o.height.as_i32());
+                let lin = (axis_scale(b.width, ow), axis_scale(b.height, oh));
+                let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
+                let node = node_plan(
+                    t,
+                    (ow, oh),
+                    (b.width, b.height),
+                    lin,
+                    (ax, ay),
+                    rotation,
+                    flip,
+                    defining_points(control),
+                    &ancestor_pairs,
+                    policy,
+                );
+                // Only a node the frames change counts — one with an original
+                // box of its own or under a scaled group; a frameless node's
+                // own miss (a rotation rounded to whole degrees) is the same
+                // with or without them and is reported by the shape's writer.
+                // 이것을 실패시키는 것: 모든 노드를 세기(비스듬한 형제 하나 때문에
+                // 그림의 원래 상자를 잃는다 — `frameless_sibling_does_not_drop_the_boxes`).
+                if (ow, oh) != (b.width, b.height) || scaled {
+                    *worst = worst.max(node.1);
+                }
+                if frames && frame_plan(control, policy).is_some_and(|p| p.is_fallback()) {
+                    *worst = f64::INFINITY;
+                }
+                let own = diag_scale(&node.0.pairs.last().map_or(IDENTITY_M, |p| p.0));
+                let own_written =
+                    (quantize(own.0, policy.coefficients), quantize(own.1, policy.coefficients));
+                nodes.push(node.0);
+                if let Control::Group { children, .. } = control {
+                    let mut next = ancestors.to_vec();
+                    next.push(own_written);
+                    plan_children(children, t, &next, frames, policy, nodes, worst);
+                }
+            }
+        }
+    }
+}
+
+/// One node: its own pair `inverse(A) · L` after the ancestors' pairs, its
+/// stored and exact positions, and the distance between them.
+#[allow(clippy::too_many_arguments)]
+fn node_plan(
+    t: (i32, i32),
+    (ow, oh): (i32, i32),
+    (w, h): (i32, i32),
+    (sx, sy): (f64, f64),
+    (ax, ay): (f64, f64),
+    rotation: Option<f32>,
+    flip: Option<Flip>,
+    points: Vec<ShapePoint>,
+    ancestor_pairs: &[MatrixPair],
+    policy: &EmissionPolicy,
+) -> (GroupNodePlan, f64) {
+    let (wf, hf) = (f64::from(w), f64::from(h));
+    let (exact_l, _) = local_affine(wf, hf, rotation, flip, &EmissionPolicy::exact());
+    let (stored_l, _) = local_affine(wf, hf, rotation, flip, policy);
+    let inv_a = ShapeTransform::from_matrix([1.0 / ax, 0.0, 0.0, 0.0, 1.0 / ay, 0.0]);
+    let a = ShapeTransform::from_matrix([ax, 0.0, 0.0, 0.0, ay, 0.0]);
+    let own_rot = if (ax, ay) == (1.0, 1.0) { stored_l } else { inv_a.then(stored_l).then(a) };
+    let own_sca = [sx / ax, 0.0, 0.0, 0.0, sy / ay, 0.0];
+    let own: MatrixPair = (own_sca, own_rot.matrix());
+    let mut pairs = ancestor_pairs.to_vec();
+    pairs.push(own);
+    // The chain as stored: translation, then each pair `rot · sca` (quantized).
+    let chain =
+        pairs.iter().fold(ShapeTransform::translate(f64::from(t.0), f64::from(t.1)), |m, p| {
+            let (s, r) = quantize_pair(p, policy.coefficients);
+            m.then(ShapeTransform::from_matrix(r)).then(ShapeTransform::from_matrix(s))
+        });
+    let exact_map = ShapeTransform::translate(f64::from(t.0), f64::from(t.1)).then(exact_l);
+    let q: Vec<(f64, f64)> = box_corners(f64::from(ow), f64::from(oh))
+        .into_iter()
+        .chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+        .collect();
+    let stored: Vec<(f64, f64)> = q.iter().map(|&p| chain.apply(p)).collect();
+    let exact: Vec<(f64, f64)> =
+        q.iter().map(|&(x, y)| exact_map.apply((x * sx, y * sy))).collect();
+    let residual = max_residual(&exact, &stored);
+    (GroupNodePlan { translation: t, original: (ow, oh), pairs, points, stored }, residual)
+}
+
 // ── Folding ────────────────────────────────────────────────────
 
 /// Facts about a shape that decide how its transform folds, which Core may
@@ -1357,6 +1660,100 @@ pub fn fold_group_child(mut control: Control, input: &FoldInput) -> FoldOutcome 
             |losses| FoldOutcome::Kept { control: Box::new(control), losses },
         )
     }
+}
+
+/// Folds a group child whose map is axis-aligned — `x' = a·x + c`,
+/// `y' = e·y + f` with `a, e > 0`: no turn, mirror or shear — keeping its
+/// defining points where they are, in its original box (§19.23.13): the
+/// original box is the map's input box (`FoldInput`'s original size), the
+/// displayed size is that box scaled (`round(a · width)`, `round(e ·
+/// height)`), the offset is where the map puts the box's origin. A child
+/// drawn so draws where the map puts it, up to the rounding of its size and
+/// offset (reported above 2 HWPUNIT as [`FoldLossKind::Residual`]).
+///
+/// `None` when the map is not axis-aligned, the control has no frame (a
+/// chart, an equation) or is a group, or a box would collapse to zero along
+/// an axis (lines, curves and connectors may be flat): fold it with
+/// [`fold_group_child`] instead.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::geometry::{fold_aligned_child, FoldInput, FoldOutcome, ShapeTransform};
+/// use hwpforge_core::control::Control;
+/// use hwpforge_foundation::{HwpUnit, Size};
+///
+/// let u = |v| HwpUnit::new(v).unwrap();
+/// let circle = Control::ellipse(u(560), u(560));
+/// let map = ShapeTransform::from_matrix([1.5, 0.0, 300.0, 0.0, 1.5, 40.0]);
+/// let Some(FoldOutcome::Kept { control, losses }) =
+///     fold_aligned_child(circle, &FoldInput::new(map, (560.0, 560.0), (0.0, 0.0)))
+/// else {
+///     unreachable!()
+/// };
+/// assert!(losses.is_empty());
+/// let Control::Ellipse { width, center, frame, .. } = *control else { unreachable!() };
+/// assert_eq!((width.as_i32(), center.x), (840, 280));
+/// assert_eq!(frame.original_size, Some(Size::new(u(560), u(560))));
+/// ```
+pub fn fold_aligned_child(mut control: Control, input: &FoldInput) -> Option<FoldOutcome> {
+    let m = &input.map;
+    // 이것을 실패시키는 것: 비스듬함·돌림을 축 정렬로 보기(`aligned_fold_refuses_a_turn`).
+    let aligned = m.b.abs() < 1e-9 && m.d.abs() < 1e-9 && m.a > 0.0 && m.e > 0.0;
+    if !aligned || matches!(control, Control::Group { .. }) || control.frame().is_none() {
+        return None;
+    }
+    if finite_input(0.0, 0.0, input).is_err() {
+        return None;
+    }
+    let (ow, oh) = input.original_size;
+    let w = round_i32(m.a * ow);
+    let h = round_i32(m.e * oh);
+    let flat_ok = matches!(
+        control,
+        Control::Line { .. } | Control::Curve { .. } | Control::ConnectLine { .. }
+    );
+    if (w == 0 || h == 0) && !flat_ok {
+        return None;
+    }
+    let x = round_i32(m.c - input.parent_origin.0);
+    let y = round_i32(m.f - input.parent_origin.1);
+    let (oiw, oih) = (round_i32(ow), round_i32(oh));
+    if !fits_hwpunit(&[w, h, x, y, oiw, oih]) {
+        return Some(FoldOutcome::Dropped { losses: vec![out_of_range()] });
+    }
+    set_box(&mut control, w, h, (x, y));
+    set_rotation_and_flip(&mut control, None, None);
+    let original = hwpforge_foundation::Size::new(
+        HwpUnit::new(oiw).unwrap_or(HwpUnit::ZERO),
+        HwpUnit::new(oih).unwrap_or(HwpUnit::ZERO),
+    );
+    if let Some(frame) = control.frame_mut() {
+        frame.original_size = Some(original);
+    }
+    // The kind's default is no frame value (§19.23.11 M6).
+    let default = match control {
+        Control::TextArt { .. } => {
+            (crate::frame::TEXT_ART_DESIGN_SIDE, crate::frame::TEXT_ART_DESIGN_SIDE)
+        }
+        _ => (w, h),
+    };
+    if (oiw, oih) == default {
+        if let Some(frame) = control.frame_mut() {
+            frame.original_size = None;
+        }
+    }
+    let (sx, sy) = (axis_scale(w, oiw), axis_scale(h, oih));
+    let origin = (input.parent_origin.0 + f64::from(x), input.parent_origin.1 + f64::from(y));
+    let source: Vec<(f64, f64)> = box_corners(ow, oh)
+        .into_iter()
+        .chain(defining_points(&control).iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+        .collect();
+    let wire: Vec<(f64, f64)> = source.iter().map(|&p| m.apply(p)).collect();
+    let ours: Vec<(f64, f64)> =
+        source.iter().map(|&(px, py)| (origin.0 + px * sx, origin.1 + py * sy)).collect();
+    let losses = residual_loss(max_residual(&wire, &ours)).into_iter().collect();
+    Some(FoldOutcome::Kept { control: Box::new(control), losses })
 }
 
 /// The point rule: the whole map goes onto the points.

@@ -574,3 +574,33 @@ fn drop_original_size_keeps_the_drawing() {
         Some(hwpforge_foundation::Size::new(unit(5000), unit(3000)))
     );
 }
+
+/// An axis-aligned map keeps the points and records the original box; a
+/// turned one is not folded here; an original box equal to the displayed
+/// one is no frame value.
+/// 이것을 실패시키는 것: 비스듬함·돌림 판정을 지우기 / 기본값 접기를 지우기 /
+/// 상자형 0 축을 받아들이기.
+#[test]
+fn aligned_fold_refuses_a_turn() {
+    let circle = Control::ellipse(unit(560), unit(560));
+    let input =
+        |m: [f64; 6]| FoldInput::new(ShapeTransform::from_matrix(m), (560.0, 560.0), (0.0, 0.0));
+    let turned = [0.0, -1.0, 560.0, 1.0, 0.0, 0.0];
+    assert!(fold_aligned_child(circle.clone(), &input(turned)).is_none());
+    let sheared = [1.0, 0.5, 0.0, 0.0, 1.0, 0.0];
+    assert!(fold_aligned_child(circle.clone(), &input(sheared)).is_none());
+    let Some(FoldOutcome::Kept { control, losses }) =
+        fold_aligned_child(circle.clone(), &input([1.0, 0.0, 30.0, 0.0, 1.0, 20.0]))
+    else {
+        panic!()
+    };
+    assert!(losses.is_empty());
+    assert!(control.frame().unwrap().is_unset(), "unscaled: no frame value");
+    // A box whose original box is flat along an axis would be shown flat.
+    let flat = FoldInput::new(
+        ShapeTransform::from_matrix([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        (0.0, 560.0),
+        (0.0, 0.0),
+    );
+    assert!(fold_aligned_child(circle, &flat).is_none(), "a box may not be flat");
+}

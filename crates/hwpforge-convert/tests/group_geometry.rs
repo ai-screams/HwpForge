@@ -727,7 +727,20 @@ fn core_leaves(c: &Control, base: (i64, i64), out: &mut Vec<CoreLeaf>) {
     };
     let (kind, pts) = leaf_points(c);
     let mut ints = vec![i64::from(w), i64::from(h), at.0, at.1];
-    ints.extend(pts.iter().flat_map(|p| [i64::from(p.x), i64::from(p.y)]));
+    // Points as drawn: S20 keeps an axis-aligned leaf's points in its
+    // original box, scaled to the displayed one.
+    let o = c.effective_original_size().unwrap();
+    let scale = |d: i32, o: hwpforge_foundation::HwpUnit| {
+        if o.as_i32() == 0 {
+            1.0
+        } else {
+            f64::from(d) / f64::from(o.as_i32())
+        }
+    };
+    let (sx, sy) = (scale(w, o.width), scale(h, o.height));
+    ints.extend(pts.iter().flat_map(|p| {
+        [(f64::from(p.x) * sx).round() as i64, (f64::from(p.y) * sy).round() as i64]
+    }));
     out.push(CoreLeaf {
         kind,
         ints,
