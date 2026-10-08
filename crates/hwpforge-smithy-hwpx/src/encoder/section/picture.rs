@@ -121,8 +121,9 @@ pub(crate) fn build_picture(
 struct PictureFrame {
     /// `orgSz` (and the `imgRect` corners).
     original: (i32, i32),
-    /// Whether `original` came from [`Image::original_size`]; the scale
-    /// matrix is then display / original.
+    /// Whether `original` came from the picture's frame
+    /// ([`ObjectFrame::original_size`](hwpforge_core::frame::ObjectFrame::original_size));
+    /// the scale matrix is then display / original.
     scaled: bool,
     /// `imgClip`.
     clip: HxImgClip,
@@ -136,7 +137,11 @@ impl PictureFrame {
         let display = (img.width.as_i32(), img.height.as_i32());
         let pair = |(a, b): (HwpUnit, HwpUnit)| (a.as_i32(), b.as_i32());
         // A non-positive original box cannot scale to the display size.
-        let original = img.original_size.map(pair).filter(|&(ow, oh)| ow > 0 && oh > 0);
+        let original = img
+            .frame
+            .original_size
+            .map(|s| pair((s.width, s.height)))
+            .filter(|&(ow, oh)| ow > 0 && oh > 0);
         let extent = img.image_extent.map(pair);
         let clip = match img.crop {
             Some(c) => HxImgClip {

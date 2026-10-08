@@ -1387,7 +1387,8 @@ const HWPUNIT_PER_PIXEL: i64 = 75;
 
 /// A picture's crop (`imgClip`), the extent it is measured in (`imgDim`)
 /// and its original box (`orgSz`) → [`Image::crop`], [`Image::image_extent`],
-/// [`Image::original_size`]. A value equal to what the encoder writes when
+/// the frame's [`original_size`](hwpforge_core::frame::ObjectFrame::original_size).
+/// A value equal to what the encoder writes when
 /// the field is `None` is folded to `None`, so a re-encode writes the same
 /// bytes.
 ///
@@ -1404,7 +1405,9 @@ fn decode_picture_frame(hx: &HxPic, image: &mut Image, ctx: &mut DecodeCtx) {
     if let Some(org) = hx.org_sz.as_ref().map(|s| (s.width, s.height)) {
         if org.0 > 0 && org.1 > 0 && org != display {
             match units(org) {
-                Some(value) => image.original_size = Some(value),
+                Some((w, h)) => {
+                    image.frame.original_size = Some(hwpforge_foundation::Size::new(w, h));
+                }
                 None => ctx.content_lost(
                     "picture_original_size",
                     format!("orgSz {}x{} is out of range", org.0, org.1),

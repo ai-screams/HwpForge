@@ -40,9 +40,9 @@ fn hwp5_crop_matches_the_hancom_hwpx_twin() {
     assert_eq!(a.len(), 2);
     for (x, y) in a.iter().zip(&b) {
         assert_eq!(
-            (x.crop, x.image_extent, x.original_size),
-            (y.crop, y.image_extent, y.original_size)
+            (x.crop, x.image_extent, x.frame.original_size),
+            (y.crop, y.image_extent, y.frame.original_size)
         );
     }
-    assert!(a[1].crop.is_some() && a[0].original_size.is_some(), "{a:?}");
+    assert!(a[1].crop.is_some() && a[0].frame.original_size.is_some(), "{a:?}");
 }

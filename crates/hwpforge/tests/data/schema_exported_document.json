@@ -1236,7 +1236,7 @@
           ]
         },
         "crop": {
-          "description": "The part of the image the picture shows, in the image's own\ncoordinates ([`Self::image_extent`]). `None` = the whole image.\n\nThe cropped part fills the picture's original box\n([`Self::original_size`]), which is then scaled to the display size\n(`width` × `height`).",
+          "description": "The part of the image the picture shows, in the image's own\ncoordinates ([`Self::image_extent`]). `None` = the whole image.\n\nThe cropped part fills the picture's original box\n([`Self::effective_original_size`]), which is then scaled to the\ndisplay size (`width` × `height`).",
           "anyOf": [
             {
               "$ref": "#/$defs/ImageCrop"
@@ -1263,25 +1263,8 @@
           "minItems": 2,
           "maxItems": 2
         },
-        "original_size": {
-          "description": "The picture's original (unscaled) box (HWPX `<hp:orgSz>`); the\ndisplay size is this box scaled. `None` = the display size.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "prefixItems": [
-            {
-              "$ref": "#/$defs/HwpUnit"
-            },
-            {
-              "$ref": "#/$defs/HwpUnit"
-            }
-          ],
-          "minItems": 2,
-          "maxItems": 2
-        },
         "frame": {
-          "description": "The picture's original box and size lock (see\n[`ObjectFrame`](crate::frame::ObjectFrame)). Default = none.",
+          "description": "The picture's original box (HWPX `<hp:orgSz>`, HWP 5.0 shape\ncomponent initial size; the display size is this box scaled) and its\nsize lock — see [`ObjectFrame`](crate::frame::ObjectFrame). Default =\nnone: the original box is the display size. It is the object's box,\nnot the image's own coordinates ([`Self::image_extent`]).",
           "$ref": "#/$defs/ObjectFrame"
         }
       },
@@ -1369,7 +1352,7 @@
       ]
     },
     "Control": {
-      "description": "An inline control element.\n\nControls are non-text elements that appear within a Run.\nEach variant carries its own data; the enum is `#[non_exhaustive]`\nfor forward compatibility.\n\n# Examples\n\n```\nuse hwpforge_core::control::Control;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};\n\nlet text_box = Control::TextBox {\n    paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    height: HwpUnit::from_mm(40.0).unwrap(),\n    placement: None,\n    caption: None,\n    style: None,\n    text_vertical_align: VerticalAlign::Top,\n    text_margin: None,\n};\nassert!(text_box.is_text_box());\nassert!(!text_box.is_hyperlink());\n```",
+      "description": "An inline control element.\n\nControls are non-text elements that appear within a Run.\nEach variant carries its own data; the enum is `#[non_exhaustive]`\nfor forward compatibility.\n\n# Examples\n\n```\nuse hwpforge_core::control::Control;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};\n\nlet text_box = Control::TextBox {\n    paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    height: HwpUnit::from_mm(40.0).unwrap(),\n    frame: hwpforge_core::ObjectFrame::new(),\n    placement: None,\n    caption: None,\n    style: None,\n    text_vertical_align: VerticalAlign::Top,\n    text_margin: None,\n};\nassert!(text_box.is_text_box());\nassert!(!text_box.is_hyperlink());\n```",
       "oneOf": [
         {
           "description": "An inline text box with its own paragraph content.\nMaps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).",

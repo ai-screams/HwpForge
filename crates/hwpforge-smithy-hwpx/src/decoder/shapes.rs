@@ -1445,6 +1445,21 @@ fn decode_group_picture(
     image.width = HwpUnit::new(fold.width()).unwrap_or(HwpUnit::ZERO);
     image.height = HwpUnit::new(fold.height()).unwrap_or(HwpUnit::ZERO);
     image.placement = group_child_placement(fold.offset().0, fold.offset().1);
+    // S20 (§19.23.13 M5): the original box is judged against the FINAL
+    // displayed size, once the chain has scaled the picture. `convert_picture`
+    // judged it against a provisional size (`orgSz` itself when there is no
+    // `sz` and `curSz` is 0) and folded it away. (A picture has no points,
+    // so its original box changes nothing drawn, turned or not.)
+    // 이것을 실패시키는 것: 이 재판정을 지우기(`group_picture_keeps_its_original_box`
+    // — 원래 크기 `None`, 재인코드 `orgSz` 가 표시 크기로) / 표시 크기와 같은
+    // 원래 크기를 접지 않기(같은 테스트의 둘째 그림).
+    let display = (fold.width(), fold.height());
+    image.frame.original_size =
+        pic.org_sz.as_ref().map(|s| (s.width, s.height)).filter(|&o| o != display).and_then(
+            |(w, h)| {
+                Some(hwpforge_foundation::Size::new(HwpUnit::new(w).ok()?, HwpUnit::new(h).ok()?))
+            },
+        );
     Ok(Some(GroupChild::Picture(image)))
 }
 
@@ -5212,6 +5227,59 @@ mod group_tests {
                 ("BinData/image3".to_string(), 200, 200, (310.0, 0.0)),
             ]
         );
+    }
+
+    /// A group picture with no `<hp:sz>` and `curSz` 0, scaled by its chain
+    /// (×2 × ×0.5): its original box `orgSz` 1000 × 600 survives the fold,
+    /// and the writer puts it back with the scale between.
+    ///
+    /// 이것을 실패시키는 것: 접기 뒤 재판정을 지우기(`convert_picture` 의 임시
+    /// 표시 크기 판정으로 `None` 이 되어 `orgSz` 가 2000 × 300 으로 써진다).
+    #[test]
+    fn group_picture_keeps_its_original_box() {
+        let children = [
+            pic(
+                (1000, 600),
+                &ri(
+                    [1.0, 0.0, 100.0, 0.0, 1.0, 50.0],
+                    &[([2.0, 0.0, 0.0, 0.0, 0.5, 0.0], ID), (ID, ID)],
+                ),
+                "image1",
+                "",
+            ),
+            pic(
+                (400, 400),
+                &ri([1.0, 0.0, 1000.0, 0.0, 1.0, 0.0], &[(ID, ID), (ID, ID)]),
+                "image2",
+                "",
+            ),
+        ]
+        .concat();
+        let (g, w) = decode(&container((3000, 3000), &children));
+        assert!(w.is_empty(), "{w:?}");
+        let g = g.unwrap();
+        let Control::Group { children, .. } = &g else { unreachable!() };
+        // Not scaled: the original box is the displayed one, no frame.
+        let GroupChild::Picture(plain) = &children[1] else { panic!("{children:?}") };
+        assert!(plain.frame.is_unset(), "{:?}", plain.frame);
+        let GroupChild::Picture(image) = &children[0] else { panic!("{children:?}") };
+        assert_eq!((image.width.as_i32(), image.height.as_i32()), (2000, 300));
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        assert_eq!(
+            image.frame.original_size,
+            Some(hwpforge_foundation::Size::new(u(1000), u(600)))
+        );
+        let xml = crate::encoder::shapes::encode_group_to_xml(
+            &g,
+            0,
+            0,
+            &mut Vec::new(),
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        )
+        .unwrap();
+        assert!(xml.contains(r#"<hp:orgSz width="1000" height="600"/>"#), "{xml}");
+        assert!(xml.contains(r#"e1="2.000000""#) && xml.contains(r#"e5="0.500000""#), "{xml}");
     }
 
     /// Hancom's F3a (three logos grouped) decodes to its three pictures in

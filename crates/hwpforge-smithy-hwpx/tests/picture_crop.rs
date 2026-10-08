@@ -11,7 +11,7 @@ use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings, Paragraph};
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, Size};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
@@ -78,7 +78,7 @@ fn u(v: i32) -> HwpUnit {
 /// `imgClip`, `imgDim` and scale, and decode to the crop in the image's
 /// own coordinates.
 ///
-/// 이것을 실패시키는 것: 디코더가 `crop`·`image_extent`·`original_size` 중 하나를
+/// 이것을 실패시키는 것: 디코더가 `crop`·`image_extent`·`frame.original_size` 중 하나를
 /// 버리는 것 / 인코더가 표시 크기로 되돌려 쓰는 것 / 배율 행렬을 항등으로 두는 것.
 #[test]
 fn hancom_crop_and_original_box_round_trip() {
@@ -96,7 +96,7 @@ fn hancom_crop_and_original_box_round_trip() {
     assert_eq!(images.len(), 2);
     assert_eq!(images[0].crop, None);
     assert_eq!(images[0].image_extent, Some((u(206_400), u(115_200))));
-    assert_eq!(images[0].original_size, Some((u(275_220), u(153_600))));
+    assert_eq!(images[0].frame.original_size, Some(Size::new(u(275_220), u(153_600))));
     assert_eq!(
         images[1].crop,
         Some(ImageCrop { left: u(54_464), top: u(21_128), right: u(151_936), bottom: u(115_200) })
@@ -173,7 +173,7 @@ fn encoder_writes_each_frame_state() {
     assert_eq!(f.2, "-");
 
     let mut scaled = picture();
-    scaled.original_size = Some((u(84_180), u(59_580)));
+    scaled.frame.original_size = Some(Size::new(u(84_180), u(59_580)));
     let xml = encode_picture(scaled);
     let f = &frames(&xml)[0];
     assert_eq!(f.0, r#"<hp:orgSz width="84180" height="59580"/>"#);

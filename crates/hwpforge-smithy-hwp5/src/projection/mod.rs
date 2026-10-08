@@ -665,7 +665,8 @@ impl<'a> ProjectionImageState<'a> {
             .original_size
             .and_then(|(w, h)| Some((i32::try_from(w).ok()?, i32::try_from(h).ok()?)));
         if let Some(original) = original.filter(|&(w, h)| w > 0 && h > 0 && (w, h) != display) {
-            core_image.original_size = units(original);
+            core_image.frame.original_size =
+                units(original).map(|(w, h)| hwpforge_foundation::Size::new(w, h));
         }
         Some(core_image)
     }
