@@ -225,6 +225,12 @@ pub struct Table {
     /// every one of those matches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<crate::placement::ObjectPlacement>,
+    /// The table's size lock (HWPX `<hp:sz protect>`, HWP 5.0 object common
+    /// property bit 20). A table has no original box: its
+    /// [`original_size`](crate::frame::ObjectFrame::original_size) must stay
+    /// `None` (`validate` rejects one).
+    #[serde(default, skip_serializing_if = "crate::frame::ObjectFrame::is_unset")]
+    pub frame: crate::frame::ObjectFrame,
 }
 
 impl Table {
@@ -253,6 +259,7 @@ impl Table {
             in_margin: None,
             layout_cache: None,
             placement: None,
+            frame: crate::frame::ObjectFrame::new(),
         }
     }
 

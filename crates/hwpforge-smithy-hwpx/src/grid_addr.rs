@@ -487,6 +487,7 @@ mod tests {
         // GRID_ADDR_PROJECTION_FAILED 로 죽는다 — 컨트롤 컨테이너 내 표의
         // 실제 JSON 항법을 end-to-end 로 잠근다.
         let textbox = hwpforge_core::Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
             text_margin: None,
             paragraphs: vec![{
                 let mut p = Paragraph::new(ParaShapeIndex::new(0));

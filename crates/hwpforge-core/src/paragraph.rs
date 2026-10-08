@@ -212,6 +212,7 @@ impl Paragraph {
     ///     children: vec![GroupChild::Picture(pic("BinData/logo.png"))],
     ///     width: w,
     ///     height: w,
+    ///     frame: hwpforge_core::ObjectFrame::new(),
     ///     placement: None,
     ///     inst_id: None,
     /// };
@@ -778,6 +779,7 @@ mod tests {
             w,
         );
         let nested = Control::Group {
+            frame: crate::frame::ObjectFrame::new(),
             children: vec![GroupChild::Picture(pic("nested"))],
             width: w,
             height: w,
@@ -785,6 +787,7 @@ mod tests {
             inst_id: None,
         };
         let group = Control::Group {
+            frame: crate::frame::ObjectFrame::new(),
             children: vec![
                 GroupChild::Picture(pic("first")),
                 GroupChild::Shape(nested),

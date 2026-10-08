@@ -87,6 +87,7 @@ pub mod column;
 pub mod control;
 pub mod document;
 pub mod error;
+pub mod frame;
 pub mod image;
 pub mod inline;
 pub mod layout;
@@ -117,6 +118,7 @@ pub use control::{
 };
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
+pub use frame::ObjectFrame;
 pub use image::{Image, ImageCrop, ImageFormat, ImageStore};
 pub use inline::{InlineSegment, InlineTabAttr, InlineText};
 pub use metadata::Metadata;

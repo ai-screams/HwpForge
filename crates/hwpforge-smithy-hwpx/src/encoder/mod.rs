@@ -1835,6 +1835,7 @@ mod attr_control_whitespace_call_site_tests {
             // not by the section serializer.
             Run::control(
                 Control::Group {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     children: vec![
                         hwpforge_core::control::GroupChild::Shape(connect),
                         hwpforge_core::control::GroupChild::Shape(plain_line),

@@ -410,6 +410,7 @@ pub(crate) fn encode_textbox_to_rect(
     let (paragraphs, width, height, placement, caption, style, text_vertical_align, text_margin) =
         match ctrl {
             Control::TextBox {
+                frame: _,
                 text_margin,
                 paragraphs,
                 width,
@@ -530,7 +531,7 @@ pub(crate) fn encode_rect_to_hx(
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxRect> {
     let (width, height, placement, caption, style) = match ctrl {
-        Control::Rect { width, height, placement, caption, style } => {
+        Control::Rect { frame: _, width, height, placement, caption, style } => {
             (*width, *height, placement, caption, style)
         }
         _ => unreachable!("encode_rect_to_hx called with non-Rect"),
@@ -596,7 +597,7 @@ pub(crate) fn encode_line_to_hx(
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxLine> {
     let (start, end, width, height, placement, caption, style) = match ctrl {
-        Control::Line { start, end, width, height, placement, caption, style } => {
+        Control::Line { frame: _, start, end, width, height, placement, caption, style } => {
             (start, end, *width, *height, placement, caption, style)
         }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
@@ -668,6 +669,7 @@ pub(crate) fn encode_ellipse_to_hx(
         text_vertical_align,
     ) = match ctrl {
         Control::Ellipse {
+            frame: _,
             center,
             axis1,
             axis2,
@@ -780,6 +782,7 @@ pub(crate) fn encode_polygon_to_hx(
     let (vertices, width, height, placement, paragraphs, caption, style, text_vertical_align) =
         match ctrl {
             Control::Polygon {
+                frame: _,
                 vertices,
                 width,
                 height,
@@ -896,6 +899,7 @@ pub(crate) fn encode_arc_to_hx(
         style,
     ) = match ctrl {
         Control::Arc {
+            frame: _,
             arc_type,
             center,
             axis1,
@@ -978,9 +982,16 @@ pub(crate) fn encode_curve_to_hx(
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxCurve> {
     let (points, segment_types, width, height, placement, caption, style) = match ctrl {
-        Control::Curve { points, segment_types, width, height, placement, caption, style } => {
-            (points, segment_types, *width, *height, placement, caption, style)
-        }
+        Control::Curve {
+            frame: _,
+            points,
+            segment_types,
+            width,
+            height,
+            placement,
+            caption,
+            style,
+        } => (points, segment_types, *width, *height, placement, caption, style),
         _ => unreachable!("encode_curve_to_hx called with non-Curve"),
     };
 
@@ -1057,6 +1068,7 @@ pub(crate) fn encode_connect_line_to_hx(
     let (start, end, control_points, connect_type, width, height, placement, caption, style) =
         match ctrl {
             Control::ConnectLine {
+                frame: _,
                 start,
                 end,
                 control_points,
@@ -1218,6 +1230,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
         inst,
     ) = match ctrl {
         Control::TextArt {
+            frame: _,
             text,
             shape,
             font_name,
@@ -1566,7 +1579,7 @@ fn encode_group_at(
     sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
     let (children, width, height, placement, inst_id) = match ctrl {
-        Control::Group { children, width, height, placement, inst_id } => {
+        Control::Group { frame: _, children, width, height, placement, inst_id } => {
             (children, width.as_i32(), height.as_i32(), placement.as_ref(), *inst_id)
         }
         _ => unreachable!("encode_group_to_xml called with non-Group"),
@@ -1853,6 +1866,7 @@ mod tests {
         // A group with two rects at distinct offsets (0,1365) + (17360,0),
         // mirroring the placement in native `sample-gso-group`.
         let child = |w, h, hx, vy| Control::Rect {
+            frame: hwpforge_core::ObjectFrame::new(),
             width: hu(w),
             height: hu(h),
             placement: Some(
@@ -1864,6 +1878,7 @@ mod tests {
             style: None,
         };
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
                 hwpforge_core::control::GroupChild::Shape(child(14_922, 7780, 0, 1365)),
                 hwpforge_core::control::GroupChild::Shape(child(6998, 12_426, 17_360, 0)),
@@ -1910,6 +1925,7 @@ mod tests {
         use hwpforge_foundation::HwpUnit;
         let hu = |v: i32| HwpUnit::new(v).unwrap();
         let ta = Control::TextArt {
+            frame: hwpforge_core::ObjectFrame::new(),
             text: "글맵시".to_string(),
             shape: "WAVE2".to_string(),
             font_name: "함초롬바탕".to_string(),
@@ -1944,6 +1960,7 @@ mod tests {
     fn text_art_wire_text(text: &str) -> String {
         use hwpforge_foundation::HwpUnit;
         let ta = Control::TextArt {
+            frame: hwpforge_core::ObjectFrame::new(),
             text: text.to_string(),
             shape: "WAVE2".to_string(),
             font_name: "함초롬바탕".to_string(),
@@ -2002,6 +2019,7 @@ mod tests {
         // outer group = { inner group { rect, ellipse }, line }, mirroring the
         // native `sample-gso-group-nested` layout: a $con nested inside a $con.
         let rect = Control::Rect {
+            frame: hwpforge_core::ObjectFrame::new(),
             width: hu(12_440),
             height: hu(6000),
             placement: None,
@@ -2009,6 +2027,7 @@ mod tests {
             style: None,
         };
         let ellipse = Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(5116, 3000),
             axis1: ShapePoint::new(10_232, 3000),
             axis2: ShapePoint::new(5116, 6000),
@@ -2025,6 +2044,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let inner = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
                 hwpforge_core::control::GroupChild::Shape(rect),
                 hwpforge_core::control::GroupChild::Shape(ellipse),
@@ -2035,6 +2055,7 @@ mod tests {
             inst_id: None,
         };
         let line = Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(20_000, 0),
             width: hu(20_000),
@@ -2048,6 +2069,7 @@ mod tests {
             style: None,
         };
         let outer = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
                 hwpforge_core::control::GroupChild::Shape(inner),
                 hwpforge_core::control::GroupChild::Shape(line),
@@ -2141,6 +2163,7 @@ mod tests {
 
     fn group_of(children: Vec<Control>) -> Control {
         Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: children.into_iter().map(GroupChild::Shape).collect(),
             width: HwpUnit::new(45_000).unwrap(),
             height: HwpUnit::new(56_000).unwrap(),
@@ -2366,6 +2389,7 @@ mod tests {
 
     fn text_art_at(x: i32, y: i32) -> Control {
         Control::TextArt {
+            frame: hwpforge_core::ObjectFrame::new(),
             text: "묶음글맵시".to_string(),
             shape: "WAVE2".to_string(),
             font_name: "함초롬바탕".to_string(),
@@ -2426,6 +2450,7 @@ mod tests {
     #[test]
     fn nested_grouped_text_art_adds_its_parent_origin() {
         let inner = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![hwpforge_core::control::GroupChild::Shape(text_art_at(1200, 800))],
             width: HwpUnit::new(9000).unwrap(),
             height: HwpUnit::new(5000).unwrap(),
@@ -2689,6 +2714,7 @@ mod tests {
     #[test]
     fn encode_arc_has_arc_pr_flag_set() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(500, 0),
@@ -2713,6 +2739,7 @@ mod tests {
     #[test]
     fn encode_arc_type_pie_encoded() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Pie,
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(100, 0),
@@ -2737,6 +2764,7 @@ mod tests {
     #[test]
     fn encode_arc_geometry_points_preserved() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(100, 200),
             axis1: ShapePoint::new(300, 200),
@@ -2768,6 +2796,7 @@ mod tests {
     #[test]
     fn encode_arc_size_preserved() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(0, 0),
@@ -2801,6 +2830,7 @@ mod tests {
     #[test]
     fn encode_arc_shape_comment_is_ho() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(0, 0),
@@ -2825,6 +2855,7 @@ mod tests {
     #[test]
     fn encode_arc_draw_text_is_none() {
         let ctrl = Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(0, 0),
@@ -2851,6 +2882,7 @@ mod tests {
     #[test]
     fn encode_curve_empty_points_gives_empty_segments() {
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![],
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
@@ -2875,6 +2907,7 @@ mod tests {
     #[test]
     fn encode_curve_segments_created_from_points() {
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(100, 50),
@@ -2914,6 +2947,7 @@ mod tests {
     #[test]
     fn encode_curve_single_point_gives_no_segments() {
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![ShapePoint::new(50, 50)],
             segment_types: vec![],
             width: HwpUnit::new(500).unwrap(),
@@ -2938,6 +2972,7 @@ mod tests {
     fn encode_curve_segment_type_repeats_when_fewer_types_than_segments() {
         // More points than segment_types → extra segments repeat Curve type
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(100, 0),
@@ -2970,6 +3005,7 @@ mod tests {
     #[test]
     fn encode_curve_shape_comment_is_curve() {
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![],
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
@@ -2993,6 +3029,7 @@ mod tests {
     #[test]
     fn encode_curve_inline_offset_zero_gives_treat_as_char_1() {
         let ctrl = Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![],
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
@@ -3018,6 +3055,7 @@ mod tests {
     #[test]
     fn encode_connect_line_control_points_wrapped_with_start_end() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(10, 20),
             end: ShapePoint::new(500, 600),
             control_points: vec![ShapePoint::new(200, 300)],
@@ -3051,6 +3089,7 @@ mod tests {
     #[test]
     fn encode_connect_line_no_intermediate_points() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 100),
             control_points: vec![],
@@ -3080,6 +3119,7 @@ mod tests {
     #[test]
     fn encode_connect_line_connect_type_preserved() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 100),
             control_points: vec![],
@@ -3106,6 +3146,7 @@ mod tests {
     fn encode_connect_line_fill_brush_is_none() {
         // Connect lines have no fill brush (same as regular lines per golden)
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 100),
             control_points: vec![],
@@ -3135,6 +3176,7 @@ mod tests {
         // inline PARA/TOP_AND_BOTTOM defaults this encoder used to hardcode,
         // which mis-placed 한컴-sourced connectors.
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(14000, 0),
             control_points: vec![],
@@ -3166,6 +3208,7 @@ mod tests {
     fn encode_connect_line_inline_offset_zero_keeps_para_relative_positioning() {
         // Inline connectors (zero offset) keep treat-as-char PARA positioning.
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 100),
             control_points: vec![],
@@ -3195,6 +3238,7 @@ mod tests {
     #[test]
     fn encode_connect_line_start_end_points_set() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(111, 222),
             end: ShapePoint::new(333, 444),
             control_points: vec![],
@@ -3223,6 +3267,7 @@ mod tests {
     #[test]
     fn encode_connect_line_shape_comment_is_yeongyeolseon() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 0),
             control_points: vec![],
@@ -3248,6 +3293,7 @@ mod tests {
     #[test]
     fn encode_connect_line_non_zero_offset_gives_treat_as_char_0() {
         let ctrl = Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 0),
             control_points: vec![],
@@ -3275,6 +3321,7 @@ mod tests {
     #[test]
     fn encode_line_fill_brush_is_none() {
         let ctrl = Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
@@ -3293,6 +3340,7 @@ mod tests {
     #[test]
     fn encode_line_shape_comment_is_seon() {
         let ctrl = Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
@@ -3311,6 +3359,7 @@ mod tests {
     #[test]
     fn encode_line_endpoints_preserved() {
         let ctrl = Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(50, 100),
             end: ShapePoint::new(500, 200),
             width: HwpUnit::new(5000).unwrap(),
@@ -3332,6 +3381,7 @@ mod tests {
     #[test]
     fn encode_line_non_zero_offset_uses_floating_shape_defaults() {
         let ctrl = Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
@@ -3358,6 +3408,7 @@ mod tests {
     #[test]
     fn encode_ellipse_shape_comment_is_taewon() {
         let ctrl = Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(100, 0),
             axis2: ShapePoint::new(0, 50),
@@ -3384,6 +3435,7 @@ mod tests {
     #[test]
     fn encode_ellipse_has_arc_pr_zero() {
         let ctrl = Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(100, 0),
             axis2: ShapePoint::new(0, 50),
@@ -3410,6 +3462,7 @@ mod tests {
     #[test]
     fn encode_ellipse_empty_paragraphs_gives_no_draw_text() {
         let ctrl = Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(100, 0),
             axis2: ShapePoint::new(0, 50),
@@ -3437,6 +3490,7 @@ mod tests {
         use hwpforge_core::paragraph::Paragraph;
         use hwpforge_foundation::ParaShapeIndex;
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(0, 0),
             axis1: ShapePoint::new(100, 0),
             axis2: ShapePoint::new(0, 50),
@@ -3511,6 +3565,7 @@ mod tests {
             ShapePoint::new(0, 100), // closed
         ];
         let ctrl = Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vertices.clone(),
             width: HwpUnit::new(2000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
@@ -3539,6 +3594,7 @@ mod tests {
     #[test]
     fn encode_polygon_shape_comment_is_dagakbyeong() {
         let ctrl = Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(100, 0),
@@ -3568,6 +3624,7 @@ mod tests {
     #[test]
     fn encode_polygon_non_zero_offset_uses_floating_shape_defaults() {
         let ctrl = Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(100, 0),
@@ -3633,6 +3690,7 @@ mod tests {
     #[test]
     fn encode_textbox_non_zero_offset_uses_floating_shape_defaults() {
         let ctrl = Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
             text_margin: None,
             paragraphs: vec![],
             width: HwpUnit::new(1000).unwrap(),

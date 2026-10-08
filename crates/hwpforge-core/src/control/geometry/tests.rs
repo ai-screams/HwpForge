@@ -258,6 +258,7 @@ fn geometry_facts_send_a_point_shape_to_the_box_rule() {
 #[test]
 fn variants_without_fields_report_unstorable() {
     let art = Control::TextArt {
+        frame: crate::frame::ObjectFrame::new(),
         text: "x".into(),
         shape: "WAVE2".into(),
         font_name: String::new(),

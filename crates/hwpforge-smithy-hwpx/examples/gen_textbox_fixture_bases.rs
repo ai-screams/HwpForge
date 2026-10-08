@@ -31,6 +31,7 @@ fn textbox_para(
     Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: inner,
                 width: HwpUnit::from_mm(width_mm).expect("width"),
@@ -149,6 +150,7 @@ fn main() {
             Paragraph::with_runs(
                 vec![Run::control(
                     Control::TextBox {
+                        frame: hwpforge_core::ObjectFrame::new(),
                         text_margin: None,
                         paragraphs: vec![text_para("파란 테두리, 연노랑 채움.")],
                         width: HwpUnit::from_mm(70.0).expect("width"),
@@ -400,6 +402,7 @@ fn main() {
         let borderless_box = Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![mixed("G(무테박스·3mm)", cs0)],
                     width: HwpUnit::from_mm(80.0).expect("width"),

@@ -98,6 +98,7 @@ fn main() {
     let styled_box = |title_line: &str, body: &str, h_mm: f64| {
         para(vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![text(title_line, cs0), text(body, cs0)],
                 width: HwpUnit::from_mm(120.0).expect("width"),
@@ -204,6 +205,7 @@ fn main() {
         text("아키텍처 — 대장간 은유", cs_h2),
         para(vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![para(vec![
                     Run::text("기초 자재 ", cs0),

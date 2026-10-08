@@ -215,6 +215,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![
                         text_para("글상자 제목", 1, 1),
@@ -239,6 +240,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Line {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint::new(0, 0),
                     end: ShapePoint::new(14000, 0),
                     width: HwpUnit::new(14000).unwrap(),
@@ -255,6 +257,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(5000, 5000),
                     axis1: ShapePoint::new(10000, 5000),
                     axis2: ShapePoint::new(5000, 8000),
@@ -274,6 +277,7 @@ fn build_section2() -> Section {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Polygon {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     vertices: vec![
                         ShapePoint::new(5000, 0),
                         ShapePoint::new(10000, 8000),

@@ -652,6 +652,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![textbox_paragraph],
                     width: HwpUnit::from_mm(50.0).unwrap(),
@@ -801,6 +802,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Line {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint::new(0, 0),
                     end: ShapePoint::new(1000, 500),
                     width: HwpUnit::from_mm(50.0).unwrap(),
@@ -828,6 +830,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),
                     axis2: ShapePoint::new(500, 600),
@@ -861,6 +864,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),
                     axis2: ShapePoint::new(500, 600),
@@ -889,6 +893,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Polygon {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     vertices,
                     width: HwpUnit::from_mm(30.0).unwrap(),
                     height: HwpUnit::from_mm(30.0).unwrap(),
@@ -1012,6 +1017,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Arc {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     arc_type: ArcType::Pie,
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),

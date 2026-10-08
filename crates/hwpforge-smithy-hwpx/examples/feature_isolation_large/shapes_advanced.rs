@@ -91,6 +91,7 @@ fn append_arc_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             label,
             Control::Arc {
+                frame: hwpforge_core::ObjectFrame::new(),
                 arc_type,
                 center: ShapePoint::new(4000, 4000),
                 axis1: ShapePoint::new(8000, 4000),
@@ -129,6 +130,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 베지어 S-곡선 (보라색, 두께 50)",
         Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![
                 ShapePoint::new(0, 4000),
                 ShapePoint::new(2000, 0),
@@ -156,6 +158,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 파동 곡선 (6개 제어점, 청록색, 두께 40)",
         Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![
                 ShapePoint::new(0, 4000),
                 ShapePoint::new(1600, 0),
@@ -187,6 +190,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 혼합 세그먼트 (Line → Curve → Line, 주황색)",
         Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points: vec![
                 ShapePoint::new(0, 6000),
                 ShapePoint::new(3000, 6000),
@@ -215,6 +219,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ ConnectLine (STRAIGHT, 양방향 화살표)",
         Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(10000, 4000),
             control_points: vec![ShapePoint::new(5000, 0), ShapePoint::new(5000, 4000)],
@@ -265,6 +270,7 @@ fn append_line_style_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             &format!("▸ {label}"),
             Control::Line {
+                frame: hwpforge_core::ObjectFrame::new(),
                 start: ShapePoint::new(0, 500),
                 end: ShapePoint::new(14000, 500),
                 width: sizes.width_14k,
@@ -286,6 +292,7 @@ fn append_line_style_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
     for (line_width, label) in widths {
         paras.push(p(&format!("  {label}:"), CS_SMALL, PS_LEFT));
         paras.push(shape_paragraph(Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 500),
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
@@ -326,6 +333,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             &format!("▸ {label}"),
             Control::Line {
+                frame: hwpforge_core::ObjectFrame::new(),
                 start: ShapePoint::new(0, 500),
                 end: ShapePoint::new(14000, 500),
                 width: sizes.width_14k,
@@ -352,6 +360,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
     for (arrow_size, label) in arrow_sizes {
         paras.push(p(&format!("  {label}:"), CS_SMALL, PS_LEFT));
         paras.push(shape_paragraph(Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 500),
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
@@ -380,6 +389,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 양방향 화살표 (head: Diamond 비움, tail: Arrow 채움)",
         Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 500),
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
@@ -432,6 +442,7 @@ fn append_rotation_examples(paras: &mut Vec<Paragraph>) {
             paras,
             &format!("▸ 다각형 회전 {angle:.0}°"),
             Control::Polygon {
+                frame: hwpforge_core::ObjectFrame::new(),
                 vertices: rotation_vertices.clone(),
                 width: HwpUnit::new(6000).unwrap(),
                 height: HwpUnit::new(8000).unwrap(),
@@ -487,6 +498,7 @@ fn append_flip_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             &format!("▸ {label}"),
             Control::Polygon {
+                frame: hwpforge_core::ObjectFrame::new(),
                 vertices: flip_vertices.clone(),
                 width: sizes.width_8k,
                 height: sizes.width_8k,
@@ -532,6 +544,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Linear 90° — 좌→우 (빨강→파랑)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(4000, 4000),
             axis1: ShapePoint::new(8000, 4000),
             axis2: ShapePoint::new(4000, 8000),
@@ -563,6 +576,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Linear 0° — 위→아래 (노랑→초록)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(4000, 4000),
             axis1: ShapePoint::new(8000, 4000),
             axis2: ShapePoint::new(4000, 8000),
@@ -594,6 +608,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Linear 45° — 대각선 (빨→파, 사각형)",
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(8000, 0),
@@ -629,6 +644,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Radial — 방사형 (중심에서 바깥으로, 흰→보라)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(4000, 4000),
             axis1: ShapePoint::new(8000, 4000),
             axis2: ShapePoint::new(4000, 8000),
@@ -660,6 +676,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Square — 사각형 그라데이션 (중심→모서리, 흰→남색)",
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(0, 0),
                 ShapePoint::new(8000, 0),
@@ -695,6 +712,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Conical — 원뿔형 (빨→파, 2색)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(4000, 4000),
             axis1: ShapePoint::new(8000, 4000),
             axis2: ShapePoint::new(4000, 8000),
@@ -749,6 +767,7 @@ fn append_pattern_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             &format!("▸ {label}"),
             Control::Polygon {
+                frame: hwpforge_core::ObjectFrame::new(),
                 vertices: vec![
                     ShapePoint::new(4000, 0),
                     ShapePoint::new(8000, 4000),
@@ -789,6 +808,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Fill::Solid — 단색 채우기 (주황색 타원)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(4000, 4000),
             axis1: ShapePoint::new(8000, 4000),
             axis2: ShapePoint::new(4000, 8000),
@@ -811,6 +831,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 그라데이션 + 회전 60° (Linear, 보라→청록 + 60° 회전)",
         Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(5000, 3000),
             axis1: ShapePoint::new(10000, 3000),
             axis2: ShapePoint::new(5000, 6000),
@@ -843,6 +864,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 패턴(CrossDiagonal) + 수직 반전 (오각형)",
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(4000, 0),
                 ShapePoint::new(8000, 3000),
@@ -883,6 +905,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ 파선(DashDot) + 양방향 화살표 (head: Oval, tail: Concave)",
         Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start: ShapePoint::new(0, 500),
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
@@ -918,6 +941,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
         paras,
         "▸ Radial 그라데이션 + 파선 테두리 + 두꺼운 선 (별 모양 다각형)",
         Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint::new(5000, 0),
                 ShapePoint::new(6200, 3500),

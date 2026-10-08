@@ -97,6 +97,10 @@ pub struct Image {
     /// display size is this box scaled. `None` = the display size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_size: Option<(HwpUnit, HwpUnit)>,
+    /// The picture's original box and size lock (see
+    /// [`ObjectFrame`](crate::frame::ObjectFrame)). Default = none.
+    #[serde(default, skip_serializing_if = "crate::frame::ObjectFrame::is_unset")]
+    pub frame: crate::frame::ObjectFrame,
 }
 
 /// The part of an image a picture shows: a rectangle in the image's own
@@ -164,6 +168,7 @@ impl Image {
             crop: None,
             image_extent: None,
             original_size: None,
+            frame: crate::frame::ObjectFrame::new(),
         }
     }
 
@@ -206,6 +211,7 @@ impl Image {
             crop: None,
             image_extent: None,
             original_size: None,
+            frame: crate::frame::ObjectFrame::new(),
         }
     }
 
@@ -214,6 +220,53 @@ impl Image {
     pub fn with_caption(mut self, caption: Caption) -> Self {
         self.caption = Some(caption);
         self
+    }
+
+    /// The original box: the frame's
+    /// [`original_size`](crate::frame::ObjectFrame::original_size), or the
+    /// displayed size when that is `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let w = HwpUnit::new(1000).unwrap();
+    /// let img = Image::new("BinData/a.png", w, w, ImageFormat::Png);
+    /// assert_eq!(img.effective_original_size(), Size::new(w, w));
+    /// ```
+    #[must_use]
+    pub fn effective_original_size(&self) -> hwpforge_foundation::Size {
+        self.frame
+            .original_size
+            .unwrap_or_else(|| hwpforge_foundation::Size::new(self.width, self.height))
+    }
+
+    /// Changes the displayed size the way Hancom's editor resizes a picture:
+    /// the original box stays (the box "original size" returns to), only the
+    /// scale changes. A picture without an original size first takes its
+    /// displayed size before the change.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_foundation::{HwpUnit, Size};
+    ///
+    /// let u = |v| HwpUnit::new(v).unwrap();
+    /// let mut img = Image::new("BinData/a.png", u(1000), u(500), ImageFormat::Png);
+    /// img.resize(u(2000), u(1000));
+    /// assert_eq!(img.frame.original_size, Some(Size::new(u(1000), u(500))));
+    /// ```
+    pub fn resize(&mut self, width: HwpUnit, height: HwpUnit) {
+        let before = self.effective_original_size();
+        self.width = width;
+        self.height = height;
+        // 이것을 실패시키는 것: 비교를 바꾸기 전 크기와 하기(원래 크기가
+        // 사라진다 — `picture_resize_keeps_the_original_box`).
+        self.frame.original_size =
+            (before != hwpforge_foundation::Size::new(width, height)).then_some(before);
     }
 
     /// Attaches placement metadata while preserving the existing constructor API.

@@ -540,6 +540,7 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         inst_id: None,
     };
     let text_box = Control::TextBox {
+        frame: hwpforge_core::ObjectFrame::new(),
         text_margin: None,
         paragraphs: vec![boxed_para],
         width: HwpUnit::new(2000).unwrap(),
@@ -550,6 +551,7 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
         text_vertical_align: Default::default(),
     };
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         // Source order: the dropped Equation comes first, then the cached
         // text box — the whole point of this test is that the encoder's
         // emitted-index counter does not shift with it.
@@ -621,6 +623,7 @@ fn from_json_group_child_path_counts_a_group_picture() {
     boxed_para.layout_cache = Some(LayoutCache::new(vec![line]));
     let w = HwpUnit::new(2000).unwrap();
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children: vec![
             GroupChild::Picture(Image::new("BinData/image1.png", w, w, ImageFormat::Png)),
             GroupChild::Shape(Control::text_box(vec![boxed_para], w, w)),
@@ -684,6 +687,7 @@ fn from_json_finds_a_cache_in_a_group_picture_caption() {
     let picture = Image::new("BinData/image1.png", w, w, ImageFormat::Png)
         .with_caption(Caption::new(vec![cached], CaptionSide::Bottom));
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children: vec![GroupChild::Picture(picture)],
         width: w,
         height: w,

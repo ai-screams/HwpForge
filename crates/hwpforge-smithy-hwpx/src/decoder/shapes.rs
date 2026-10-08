@@ -195,6 +195,7 @@ pub(crate) fn decode_textbox(
             let paragraphs = result?;
             let text_vertical_align = decode_shape_vert_align(&draw_text.sub_list.vert_align);
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 // §19.22 D4: the wire value, also when it is 283 everywhere.
                 // 이것을 실패시키는 것: 읽지 않기(`shape_text_margins_round_trip`).
                 text_margin: draw_text_margin(draw_text.text_margin.as_ref())?,
@@ -207,7 +208,14 @@ pub(crate) fn decode_textbox(
                 text_vertical_align,
             }
         }
-        None => Control::Rect { width, height, placement, caption, style },
+        None => Control::Rect {
+            frame: hwpforge_core::ObjectFrame::new(),
+            width,
+            height,
+            placement,
+            caption,
+            style,
+        },
     };
 
     Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
@@ -253,6 +261,7 @@ pub(crate) fn decode_line(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
+            frame: hwpforge_core::ObjectFrame::new(),
             start,
             end,
             width,
@@ -330,6 +339,7 @@ pub(crate) fn decode_ellipse(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center,
             axis1,
             axis2,
@@ -397,6 +407,7 @@ pub(crate) fn decode_polygon(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
+            frame: hwpforge_core::ObjectFrame::new(),
             vertices,
             width,
             height,
@@ -708,6 +719,7 @@ pub(crate) fn decode_arc(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Arc {
+            frame: hwpforge_core::ObjectFrame::new(),
             arc_type,
             center,
             axis1,
@@ -783,6 +795,7 @@ pub(crate) fn decode_curve(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Curve {
+            frame: hwpforge_core::ObjectFrame::new(),
             points,
             segment_types,
             width,
@@ -843,6 +856,7 @@ pub(crate) fn decode_textart(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::TextArt {
+            frame: hwpforge_core::ObjectFrame::new(),
             text: textart_text_from_wire(&text_art.text),
             shape,
             font_name: pr.font_name,
@@ -986,6 +1000,7 @@ pub(crate) fn decode_connect_line(
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::ConnectLine {
+            frame: hwpforge_core::ObjectFrame::new(),
             start,
             end,
             control_points,
@@ -1118,6 +1133,7 @@ pub(crate) fn decode_container(
     )?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children,
             width: HwpUnit::new(width).unwrap_or(HwpUnit::ZERO),
             height: HwpUnit::new(height).unwrap_or(HwpUnit::ZERO),
@@ -1532,6 +1548,7 @@ fn decode_nested_container(
         return Ok(None);
     }
     Ok(Some(Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children,
         width: HwpUnit::new(w).unwrap_or(HwpUnit::ZERO),
         height: HwpUnit::new(h).unwrap_or(HwpUnit::ZERO),
@@ -2920,6 +2937,7 @@ mod tests {
         // Build a Core ellipse with CENTER-aligned text, encode it to the HWPX
         // shape model, then decode it back. The new field must survive.
         let ctrl = Control::Ellipse {
+            frame: hwpforge_core::ObjectFrame::new(),
             center: ShapePoint::new(100, 50),
             axis1: ShapePoint::new(200, 50),
             axis2: ShapePoint::new(100, 100),
@@ -4112,6 +4130,7 @@ mod group_tests {
         let at = placement.as_ref().map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
         assert_eq!(at, Some((200, 200)));
         let (size, art_at, _) = text_art_geometry(&Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![hwpforge_core::control::GroupChild::Shape(
                 children(children(&g)[0])[1].clone(),
             )],
@@ -4743,6 +4762,7 @@ mod group_tests {
         use hwpforge_foundation::HwpUnit;
         let at = |x, y| super::group_child_placement(x, y);
         let rect = |w, h, placement| Control::Rect {
+            frame: hwpforge_core::ObjectFrame::new(),
             width: HwpUnit::new(w).unwrap(),
             height: HwpUnit::new(h).unwrap(),
             placement,
@@ -4752,9 +4772,11 @@ mod group_tests {
         let mut doc = HwpxDecoder::decode(&fixture("group-f1-g1-scaled.hwpx")).unwrap();
         let Control::Group { placement, inst_id, .. } = first_group(&doc) else { unreachable!() };
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
                 hwpforge_core::control::GroupChild::Shape(rect(1000, 500, at(100, 50))),
                 hwpforge_core::control::GroupChild::Shape(Control::Group {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     children: vec![hwpforge_core::control::GroupChild::Shape(rect(800, 600, None))],
                     width: HwpUnit::new(800).unwrap(),
                     height: HwpUnit::new(600).unwrap(),

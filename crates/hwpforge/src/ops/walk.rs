@@ -666,6 +666,7 @@ mod tests {
         let mut para = text_para("host");
         para.add_run(Run::control(
             Control::Rect {
+                frame: hwpforge_core::ObjectFrame::new(),
                 width: HwpUnit::new(1000).unwrap(),
                 height: HwpUnit::new(1000).unwrap(),
                 placement: None,
@@ -676,6 +677,7 @@ mod tests {
         ));
         para.add_run(Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![text_para("inside box")],
                 width: HwpUnit::new(1000).unwrap(),
@@ -740,6 +742,7 @@ mod tests {
         let captioned = Image::new("BinData/a.png", w, w, ImageFormat::Png)
             .with_caption(Caption::new(vec![caption_para], CaptionSide::Bottom));
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
                 GroupChild::Picture(captioned),
                 GroupChild::Picture(Image::new("BinData/b.png", w, w, ImageFormat::Png)),

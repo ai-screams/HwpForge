@@ -492,6 +492,10 @@
               "type": "null"
             }
           ]
+        },
+        "frame": {
+          "description": "The table's size lock (HWPX `<hp:sz protect>`, HWP 5.0 object common\nproperty bit 20). A table has no original box: its\n[`original_size`](crate::frame::ObjectFrame::original_size) must stay\n`None` (`validate` rejects one).",
+          "$ref": "#/$defs/ObjectFrame"
         }
       },
       "required": [
@@ -1118,6 +1122,46 @@
         }
       ]
     },
+    "ObjectFrame": {
+      "description": "An object's original (unscaled) box and its size lock.\n\nThe default — no original size, not locked — is what every object had\nbefore this type existed, and what JSON without a `frame` reads as.\n\nThe struct is `#[non_exhaustive]`: build one with [`ObjectFrame::new`] and\nthe `with_*` builders; fields stay public for reading and in-place edits.\n\n# Examples\n\n```\nuse hwpforge_core::frame::ObjectFrame;\n\nlet locked = ObjectFrame::new().with_size_protect(true);\nassert!(locked.size_protect);\nassert!(!locked.is_unset());\n```",
+      "type": "object",
+      "properties": {
+        "original_size": {
+          "description": "The object's original box (HWPX `<hp:orgSz>`, HWP 5.0 shape component\ninitial width and height). A shape's defining points are coordinates\nin this box. `None` = the kind's default: the displayed size, or for a\nTextArt its 14173 × 14173 design box.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size_protect": {
+          "description": "The size is locked against resizing in Hancom's editor (HWPX\n`<hp:sz protect=\"1\">`, HWP 5.0 object common property bit 20). Core\nedits are not restricted by it; it is carried as is.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "Size": {
+      "description": "A 2-dimensional size (width x height) in [`HwpUnit`].\n\n# Examples\n\n```\nuse hwpforge_foundation::{HwpUnit, Size};\n\nlet a4 = Size::A4;\nassert!(a4.width.as_i32() > 0);\nassert!(a4.height.as_i32() > 0);\n```",
+      "type": "object",
+      "properties": {
+        "width": {
+          "description": "Horizontal extent.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "height": {
+          "description": "Vertical extent.",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ]
+    },
     "Image": {
       "description": "An image reference within the document.\n\nContains the path to the image resource (relative to the document\npackage root), its display dimensions, and format hint.\n\n# No Binary Data\n\nCore deliberately holds no image bytes. The Smithy crate resolves\n`path` into actual binary data during encode/decode.\n\n# Examples\n\n```\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet img = Image::new(\n    \"BinData/logo.jpeg\",\n    HwpUnit::from_mm(80.0).unwrap(),\n    HwpUnit::from_mm(40.0).unwrap(),\n    ImageFormat::Jpeg,\n);\nassert_eq!(img.format, ImageFormat::Jpeg);\n```",
       "type": "object",
@@ -1222,6 +1266,10 @@
           ],
           "minItems": 2,
           "maxItems": 2
+        },
+        "frame": {
+          "description": "The picture's original box and size lock (see\n[`ObjectFrame`](crate::frame::ObjectFrame)). Default = none.",
+          "$ref": "#/$defs/ObjectFrame"
         }
       },
       "required": [
@@ -1331,6 +1379,10 @@
                 "height": {
                   "description": "Box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
+                },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
                 },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
@@ -1516,6 +1568,10 @@
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
                 },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
+                },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
                   "anyOf": [
@@ -1589,6 +1645,10 @@
                 "height": {
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
+                },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
                 },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
@@ -1720,6 +1780,10 @@
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
                 },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
+                },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
                   "anyOf": [
@@ -1786,6 +1850,10 @@
                 "height": {
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
+                },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
                 },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
@@ -2189,6 +2257,10 @@
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
                 },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
+                },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
                   "anyOf": [
@@ -2271,6 +2343,10 @@
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
                 },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
+                },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
                   "anyOf": [
@@ -2352,6 +2428,10 @@
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
                 },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
+                },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
                   "anyOf": [
@@ -2422,6 +2502,10 @@
                 "height": {
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
+                },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
                 },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
@@ -2504,6 +2588,10 @@
                 "height": {
                   "description": "Bounding box height (HWPUNIT).",
                   "$ref": "#/$defs/HwpUnit"
+                },
+                "frame": {
+                  "description": "Original box and size lock (see [`ObjectFrame`]). Defining points\nare coordinates in the original box. Default = none: the points\nare in the displayed box.",
+                  "$ref": "#/$defs/ObjectFrame"
                 },
                 "placement": {
                   "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",

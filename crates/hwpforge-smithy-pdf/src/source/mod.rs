@@ -2930,6 +2930,7 @@ mod tests {
         use hwpforge_core::control::Control;
         Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: inner,
                 width: HwpUnit::new(width).unwrap(),
@@ -3498,6 +3499,7 @@ mod tests {
         placement.treat_as_char = false;
         let run = Run {
             content: RunContent::Control(Box::new(Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![tb_inner(vec![seg(0, 0)], "가")],
                 width: HwpUnit::new(17008).unwrap(),
@@ -5525,6 +5527,7 @@ mod tests {
         use hwpforge_core::image::{Image, ImageFormat};
         let w = hwpforge_foundation::HwpUnit::new(1000).unwrap();
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![GroupChild::Picture(Image::new(
                 "BinData/a.png",
                 w,

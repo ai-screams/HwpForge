@@ -795,6 +795,7 @@ mod tests {
         let mut controls = Paragraph::new(ParaShapeIndex::new(0));
         controls.add_run(Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![text_para("글상자 (  )")],
                 width,
@@ -819,6 +820,7 @@ mod tests {
         ));
         controls.add_run(Run::control(
             Control::Rect {
+                frame: hwpforge_core::ObjectFrame::new(),
                 width,
                 height: width,
                 placement: None,

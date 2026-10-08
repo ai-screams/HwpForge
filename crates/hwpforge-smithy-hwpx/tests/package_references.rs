@@ -249,6 +249,7 @@ fn a_group_picture_without_its_asset_is_reported_in_its_section() {
         *style = Some(ShapeStyle::default());
     }
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children: vec![GroupChild::Picture(picture), GroupChild::Shape(rect)],
         width: size(1000),
         height: size(1000),
@@ -381,6 +382,7 @@ fn a_group_picture_whose_href_names_another_assets_entry_is_unresolved() {
         *style = Some(ShapeStyle::default());
     }
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children: vec![GroupChild::Picture(picture), GroupChild::Shape(rect)],
         width: size(1000),
         height: size(1000),

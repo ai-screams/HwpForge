@@ -477,6 +477,7 @@ fn attach_closed_node(
                 stack,
                 Run::control(
                     Control::TextBox {
+                        frame: hwpforge_core::ObjectFrame::new(),
                         text_margin: None,
                         paragraphs,
                         width: text_box.width,

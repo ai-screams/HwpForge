@@ -284,7 +284,9 @@ impl Div<i32> for HwpUnit {
 /// assert!(a4.width.as_i32() > 0);
 /// assert!(a4.height.as_i32() > 0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct Size {
     /// Horizontal extent.
     pub width: HwpUnit,

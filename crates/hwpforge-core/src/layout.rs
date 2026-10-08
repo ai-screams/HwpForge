@@ -240,6 +240,7 @@ mod tests {
                 CaptionSide::Bottom,
             ));
             let group = Control::Group {
+                frame: crate::frame::ObjectFrame::new(),
                 children: vec![GroupChild::Shape(child), GroupChild::Picture(picture)],
                 width: HwpUnit::from_pt(10.0).unwrap(),
                 height: HwpUnit::from_pt(10.0).unwrap(),

@@ -362,6 +362,7 @@ fn a_memo_reports_controls_in_its_parameters() {
 fn a_text_art_reports_controls_in_its_text() {
     // 이것을 실패시키는 것: `escape_xml` 에 U+0001 을 지우는 갈래를 되살리는 것.
     let art = Control::TextArt {
+        frame: hwpforge_core::ObjectFrame::new(),
         text: "T\u{1}1".to_string(),
         shape: "WAVE2".to_string(),
         font_name: String::new(),

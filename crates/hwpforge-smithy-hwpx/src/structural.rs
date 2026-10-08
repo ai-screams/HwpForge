@@ -1098,6 +1098,7 @@ mod tests {
         // cannot cause a miss here.
         let inner = Control::footnote_with_id(7, vec![para()]);
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![hwpforge_core::control::GroupChild::Shape(inner)],
             inst_id: None,
             width: HwpUnit::ZERO,

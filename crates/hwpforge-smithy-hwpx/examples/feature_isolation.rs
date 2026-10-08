@@ -798,7 +798,7 @@ fn gen_06_textbox() {
     paras.push(p("\u{ae30}\u{bcf8} \u{ae00}\u{c0c1}\u{c790}:", CS_BOLD, PS_LEFT));
     paras.push(Paragraph::with_runs(
         vec![Run::control(
-            Control::TextBox {
+            Control::TextBox { frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![p(
                     "\u{ae30}\u{bcf8} \u{ae00}\u{c0c1}\u{c790} \u{b0b4}\u{c6a9}\u{c785}\u{b2c8}\u{b2e4}.",
@@ -823,6 +823,7 @@ fn gen_06_textbox() {
     paras.push(Paragraph::with_runs(
         vec![Run::control(
             Control::TextBox {
+                frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![p("This is a TextBox with a caption.", CS_NORMAL, PS_LEFT)],
                 width: HwpUnit::from_mm(80.0).unwrap(),
@@ -849,7 +850,7 @@ fn gen_06_textbox() {
     ));
     paras.push(Paragraph::with_runs(
         vec![Run::control(
-            Control::TextBox {
+            Control::TextBox { frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![p(
                     "\u{d30c}\u{b780} \u{d14c}\u{b450}\u{b9ac} + \u{c5f0}\u{d55c} \u{d30c}\u{b780} \u{bc30}\u{acbd}",
@@ -882,7 +883,7 @@ fn gen_06_textbox() {
     ));
     paras.push(Paragraph::with_runs(
         vec![Run::control(
-            Control::TextBox {
+            Control::TextBox { frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![p(
                     "\u{be68}\u{ac04} \u{b450}\u{ae4c}\u{c6b4} \u{d14c}\u{b450}\u{b9ac} \u{ae00}\u{c0c1}\u{c790}",
@@ -914,6 +915,7 @@ fn gen_06_textbox() {
         paras.push(Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![p(label, CS_NORMAL, PS_CENTER)],
                     width: HwpUnit::from_mm(w).unwrap(),
@@ -934,7 +936,7 @@ fn gen_06_textbox() {
     paras.push(p("\u{c5ec}\u{b7ec} \u{bb38}\u{b2e8} \u{ae00}\u{c0c1}\u{c790}:", CS_BOLD, PS_LEFT));
     paras.push(Paragraph::with_runs(
         vec![Run::control(
-            Control::TextBox {
+            Control::TextBox { frame: hwpforge_core::ObjectFrame::new(),
                 text_margin: None,
                 paragraphs: vec![
                     p(
@@ -987,6 +989,7 @@ fn gen_07_line() {
             Paragraph::with_runs(
                 vec![Run::control(
                     Control::Line {
+                        frame: hwpforge_core::ObjectFrame::new(),
                         start: ShapePoint::new(sx, sy),
                         end: ShapePoint::new(ex, ey),
                         width: HwpUnit::new(w).unwrap(),
@@ -1096,6 +1099,7 @@ fn gen_08_ellipse() {
         Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(w / 2, h / 2),
                     axis1: ShapePoint::new(w, h / 2),
                     axis2: ShapePoint::new(w / 2, h),
@@ -1210,6 +1214,7 @@ fn gen_09_polygon() {
             Paragraph::with_runs(
                 vec![Run::control(
                     Control::Polygon {
+                        frame: hwpforge_core::ObjectFrame::new(),
                         vertices: verts,
                         width: HwpUnit::new(w).unwrap(),
                         height: HwpUnit::new(h).unwrap(),

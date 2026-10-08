@@ -112,6 +112,7 @@ fn section_positioning() -> Section {
     // Line with absolute offset
     paras.push(p("아래 선은 절대 위치 (horz_offset=5000, vert_offset=2000):"));
     let line_abs: Control = Control::Line {
+        frame: hwpforge_core::ObjectFrame::new(),
         start: ShapePoint::new(0, 0),
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::from_pt(140.0).unwrap(),
@@ -152,6 +153,7 @@ fn section_positioning() -> Section {
     // Polygon with absolute offset (diamond)
     paras.push(p("아래 마름모는 절대 위치 (horz_offset=8000, vert_offset=1000):"));
     let diamond: Control = Control::Polygon {
+        frame: hwpforge_core::ObjectFrame::new(),
         vertices: vec![
             ShapePoint::new(5000, 0),
             ShapePoint::new(10000, 5000),

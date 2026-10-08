@@ -106,6 +106,28 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
+        // S20: an object frame is checked in the same places as the corner
+        // ratio. 이것을 실패시키는 것: 이 순회를 지우기(`object_frame_is_checked_in_nested_places`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    if let Some((kind, field, reason)) = run_frame_error(run) {
+                        return Err(ValidationError::InvalidObjectFrame {
+                            section_index: si,
+                            paragraph_index: pi,
+                            run_index: ri,
+                            kind,
+                            field,
+                            reason,
+                        });
+                    }
+                }
+            }
+        }
+
         // 이것을 실패시키는 것: 이 검사를 지우기, 또는 `Both` 비교를 빼고
         // `special` 만 보기 (`master_page_special_scope_*` 두 테스트).
         for (mi, master) in section.master_pages.iter().flatten().enumerate() {
@@ -162,6 +184,94 @@ fn run_corner_ratio_over_50(run: &crate::run::Run) -> Option<u8> {
     run.walk_paragraphs(&mut |nested| {
         if found.is_none() {
             found = nested.runs.iter().find_map(own_ratio);
+        }
+    });
+    found
+}
+
+/// What makes an original box unwritable for a `width × height` object:
+/// a negative axis, or an axis of zero whose displayed axis is not (the
+/// points on it cannot stretch). An axis of zero under a displayed zero is a
+/// straight line and fine; a displayed zero under a positive original axis is
+/// the existing size rule's concern.
+///
+/// 이것을 실패시키는 것: 음수 검사를 지우기(`negative_original_size_is_rejected`)
+/// / 0 축을 한 축만 보기 / 0 × 0 을 오류로(`original_axis_rules`).
+fn original_size_error(
+    original: hwpforge_foundation::Size,
+    width: hwpforge_foundation::HwpUnit,
+    height: hwpforge_foundation::HwpUnit,
+) -> Option<&'static str> {
+    let (ow, oh) = (original.width.as_i32(), original.height.as_i32());
+    if ow < 0 || oh < 0 {
+        return Some("negative original size");
+    }
+    if (ow == 0 && width.as_i32() != 0) || (oh == 0 && height.as_i32() != 0) {
+        return Some("original axis of zero under a displayed axis that is not");
+    }
+    None
+}
+
+/// The first unwritable object frame in `run` — its own object, a group's
+/// shapes and pictures, a table, and every paragraph nested in it (picture
+/// captions included), as [`run_corner_ratio_over_50`] walks.
+fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
+    fn image_error(
+        image: &crate::image::Image,
+    ) -> Option<(&'static str, &'static str, &'static str)> {
+        if let Some(o) = image.frame.original_size {
+            if let Some(reason) = original_size_error(o, image.width, image.height) {
+                return Some(("picture", "original_size", reason));
+            }
+        }
+        image.caption.as_ref()?.paragraphs.iter().flat_map(|p| &p.runs).find_map(run_frame_error)
+    }
+    fn control_error(control: &Control) -> Option<(&'static str, &'static str, &'static str)> {
+        if let (Some(frame), Some(size)) = (control.frame(), control.effective_original_size()) {
+            let current = match control {
+                Control::TextBox { width, height, .. }
+                | Control::Line { width, height, .. }
+                | Control::Ellipse { width, height, .. }
+                | Control::Rect { width, height, .. }
+                | Control::Polygon { width, height, .. }
+                | Control::Arc { width, height, .. }
+                | Control::Curve { width, height, .. }
+                | Control::ConnectLine { width, height, .. }
+                | Control::Group { width, height, .. }
+                | Control::TextArt { width, height, .. } => Some((*width, *height)),
+                _ => None,
+            };
+            if let (Some(_), Some((w, h))) = (frame.original_size, current) {
+                if let Some(reason) = original_size_error(size, w, h) {
+                    return Some((control.kind_name(), "original_size", reason));
+                }
+            }
+        }
+        match control {
+            Control::Group { children, .. } => children.iter().find_map(|child| match child {
+                GroupChild::Shape(shape) => control_error(shape),
+                GroupChild::Picture(image) => image_error(image),
+            }),
+            _ => None,
+        }
+    }
+    fn own_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
+        match &run.content {
+            RunContent::Control(control) => control_error(control),
+            RunContent::Image(image) => image_error(image),
+            // 이것을 실패시키는 것: 표 검사를 지우기(`table_original_size_is_rejected`).
+            RunContent::Table(table) => table.frame.original_size.is_some().then_some((
+                "table",
+                "original_size",
+                "a table has no original box",
+            )),
+            _ => None,
+        }
+    }
+    let mut found = own_error(run);
+    run.walk_paragraphs(&mut |nested| {
+        if found.is_none() {
+            found = nested.runs.iter().find_map(own_error);
         }
     });
     found
@@ -582,6 +692,7 @@ fn validate_equation_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::control::ShapePoint;
     use crate::object_id::ObjectId;
     use crate::page::PageSettings;
     use crate::paragraph::Paragraph;
@@ -700,6 +811,137 @@ mod tests {
         )
     }
 
+    // === S20: object frame ===
+
+    fn size(w: i32, h: i32) -> hwpforge_foundation::Size {
+        hwpforge_foundation::Size::new(HwpUnit::new(w).unwrap(), HwpUnit::new(h).unwrap())
+    }
+
+    fn section_with(run: Run) -> Section {
+        Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )
+    }
+
+    fn framed(mut control: Control, original: hwpforge_foundation::Size) -> Run {
+        control.frame_mut().unwrap().original_size = Some(original);
+        Run::control(control, CharShapeIndex::new(0))
+    }
+
+    fn frame_err(section: Section) -> Option<(&'static str, &'static str)> {
+        match validate_sections(&[section]) {
+            Err(ValidationError::InvalidObjectFrame { kind, reason, .. }) => Some((kind, reason)),
+            Ok(()) => None,
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    /// 이것을 실패시키는 것: 음수 검사를 지우기(음수 원래 크기가 통과해 인코더가
+    /// 감싼 값을 쓴다).
+    #[test]
+    fn negative_original_size_is_rejected() {
+        let w = HwpUnit::new(850).unwrap();
+        let err = validate_sections(&[section_with(framed(Control::ellipse(w, w), size(-1, 560)))])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ValidationError::InvalidObjectFrame { kind: "ellipse", field: "original_size", .. }
+        ));
+        assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidShapeDimension);
+        assert!(frame_err(section_with(framed(Control::ellipse(w, w), size(560, -1)))).is_some());
+        assert!(frame_err(section_with(framed(Control::ellipse(w, w), size(560, 560)))).is_none());
+    }
+
+    /// The axis rules (§19.23.11 H4): 0 under 0 is a straight line, 0 under a
+    /// displayed length cannot stretch, a positive original under a displayed
+    /// 0 is the existing size rule's business.
+    /// 이것을 실패시키는 것: 0 축을 한 축만 보기 / 0 × 0 을 오류로.
+    #[test]
+    fn original_axis_rules() {
+        // A line whose displayed box is exactly its end point's extent.
+        let line = |end: (i32, i32)| Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: end.0, y: end.1 },
+            width: HwpUnit::new(end.0).unwrap(),
+            height: HwpUnit::new(end.1).unwrap(),
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            caption: None,
+            style: None,
+        };
+        // A horizontal line: original 1000 × 0, shown 2000 × 0.
+        let mut flat = line((2000, 0));
+        flat.frame_mut().unwrap().original_size = Some(size(1000, 0));
+        assert!(frame_err(section_with(Run::control(flat, CharShapeIndex::new(0)))).is_none());
+        // A vertical one, the other axis.
+        let mut upright = line((0, 2000));
+        upright.frame_mut().unwrap().original_size = Some(size(0, 1000));
+        assert!(frame_err(section_with(Run::control(upright, CharShapeIndex::new(0)))).is_none());
+        // Original 0 wide but shown 2000 wide.
+        let mut stretched = line((2000, 0));
+        stretched.frame_mut().unwrap().original_size = Some(size(0, 0));
+        assert!(frame_err(section_with(Run::control(stretched, CharShapeIndex::new(0)))).is_some());
+        let mut tall = line((0, 2000));
+        tall.frame_mut().unwrap().original_size = Some(size(1000, 0));
+        assert!(frame_err(section_with(Run::control(tall, CharShapeIndex::new(0)))).is_some());
+    }
+
+    /// A table has no original box (§19.23.11 M6); its lock is fine.
+    /// 이것을 실패시키는 것: 표 검사를 지우기.
+    #[test]
+    fn table_original_size_is_rejected() {
+        let mut table = Table::new(vec![TableRow::new(vec![simple_cell()])]);
+        table.frame.size_protect = true;
+        assert!(
+            frame_err(section_with(Run::table(table.clone(), CharShapeIndex::new(0)))).is_none()
+        );
+        table.frame.original_size = Some(size(100, 100));
+        assert_eq!(
+            frame_err(section_with(Run::table(table, CharShapeIndex::new(0)))),
+            Some(("table", "a table has no original box"))
+        );
+    }
+
+    /// Checked wherever the writer writes an object: a table cell, a group's
+    /// picture, a header.
+    /// 이것을 실패시키는 것: 중첩 순회를 지우기 / 묶음 그림을 건너뛰기.
+    #[test]
+    fn object_frame_is_checked_in_nested_places() {
+        let w = HwpUnit::new(850).unwrap();
+        let bad = || framed(Control::ellipse(w, w), size(-5, 5));
+        // In a table cell.
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(vec![bad()], ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(50.0).unwrap(),
+        );
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
+        assert!(frame_err(section_with(Run::table(table, CharShapeIndex::new(0)))).is_some());
+        // A group's picture.
+        let mut picture =
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png);
+        picture.frame.original_size = Some(size(0, 850));
+        let group = Control::Group {
+            children: vec![GroupChild::Picture(picture)],
+            width: w,
+            height: w,
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        assert_eq!(
+            frame_err(section_with(Run::control(group, CharShapeIndex::new(0)))).map(|e| e.0),
+            Some("picture")
+        );
+        // A header.
+        let mut section = simple_section();
+        section.headers.push(crate::section::HeaderFooter::new(
+            vec![Paragraph::with_runs(vec![bad()], ParaShapeIndex::new(0))],
+            ApplyPageType::Both,
+        ));
+        assert!(frame_err(section).is_some());
+    }
+
     #[test]
     fn corner_ratio_above_50_rejected() {
         let err = validate_sections(&[section_with_rect_ratio(51)]).unwrap_err();
@@ -765,6 +1007,7 @@ mod tests {
                 Box::new(move |r| {
                     let RunContent::Control(rect) = rect_run(r).content else { unreachable!() };
                     let group = Control::Group {
+                        frame: crate::frame::ObjectFrame::new(),
                         children: vec![GroupChild::Shape(*rect)],
                         width: unit,
                         height: unit,
@@ -832,6 +1075,7 @@ mod tests {
                 "caption of a group picture",
                 Box::new(move |r| {
                     let group = Control::Group {
+                        frame: crate::frame::ObjectFrame::new(),
                         children: vec![GroupChild::Picture(captioned(r))],
                         width: unit,
                         height: unit,
@@ -1093,6 +1337,7 @@ mod tests {
     #[test]
     fn empty_text_box_rejected() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
             text_margin: None,
             paragraphs: vec![],
             width: HwpUnit::from_mm(80.0).unwrap(),
@@ -1141,6 +1386,7 @@ mod tests {
     #[test]
     fn valid_text_box_accepted() {
         let ctrl = Control::TextBox {
+            frame: crate::frame::ObjectFrame::new(),
             text_margin: None,
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
@@ -1274,6 +1520,7 @@ mod tests {
     #[test]
     fn polygon_zero_vertices_rejected() {
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
@@ -1296,6 +1543,7 @@ mod tests {
     fn polygon_two_vertices_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 100 }],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
@@ -1318,6 +1566,7 @@ mod tests {
     fn polygon_three_vertices_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -1345,6 +1594,7 @@ mod tests {
     fn ellipse_zero_width_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -1372,6 +1622,7 @@ mod tests {
     fn ellipse_zero_height_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -1399,6 +1650,7 @@ mod tests {
     fn polygon_zero_width_rejected() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -1429,6 +1681,7 @@ mod tests {
         use crate::control::ShapePoint;
         // Lines can have zero height (horizontal line)
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 1000, y: 0 },
             width: HwpUnit::from_mm(50.0).unwrap(),
@@ -1450,6 +1703,7 @@ mod tests {
         use crate::control::ShapePoint;
         // Lines can have zero width (vertical line)
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 0, y: 1000 },
             width: HwpUnit::new(0).unwrap(), // valid for lines
@@ -1470,6 +1724,7 @@ mod tests {
     fn valid_line_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Line {
+            frame: crate::frame::ObjectFrame::new(),
             start: ShapePoint { x: 0, y: 0 },
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
@@ -1490,6 +1745,7 @@ mod tests {
     fn valid_ellipse_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Ellipse {
+            frame: crate::frame::ObjectFrame::new(),
             center: ShapePoint { x: 500, y: 500 },
             axis1: ShapePoint { x: 1000, y: 500 },
             axis2: ShapePoint { x: 500, y: 1000 },
@@ -1513,6 +1769,7 @@ mod tests {
     fn valid_polygon_accepted() {
         use crate::control::ShapePoint;
         let ctrl = Control::Polygon {
+            frame: crate::frame::ObjectFrame::new(),
             vertices: vec![
                 ShapePoint { x: 0, y: 0 },
                 ShapePoint { x: 1000, y: 0 },
@@ -1743,8 +2000,14 @@ mod tests {
 
     fn group_doc(children: Vec<GroupChild>) -> Vec<Section> {
         let w = HwpUnit::new(1000).unwrap();
-        let group =
-            Control::Group { children, width: w, height: w, placement: None, inst_id: None };
+        let group = Control::Group {
+            frame: crate::frame::ObjectFrame::new(),
+            children,
+            width: w,
+            height: w,
+            placement: None,
+            inst_id: None,
+        };
         let para = Paragraph::with_runs(
             vec![Run::control(group, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),

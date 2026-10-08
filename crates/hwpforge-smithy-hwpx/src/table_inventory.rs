@@ -358,6 +358,7 @@ mod tests {
         host.add_run(Run::table(caption_host, CharShapeIndex::new(0)));
 
         let textbox = Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
             text_margin: None,
             paragraphs: vec![{
                 let mut p = Paragraph::new(ParaShapeIndex::new(0));
@@ -454,6 +455,7 @@ mod tests {
         ));
         controls.add_run(Run::control(
             Control::Rect {
+                frame: hwpforge_core::ObjectFrame::new(),
                 width,
                 height: width,
                 placement: None,

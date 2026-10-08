@@ -1516,6 +1516,7 @@ mod tests {
                 *placement = Some(at(child_x));
             }
             let group = Control::Group {
+                frame: hwpforge_core::ObjectFrame::new(),
                 children: vec![hwpforge_core::control::GroupChild::Shape(rect)],
                 width: unit(1200),
                 height: unit(700),
@@ -1565,6 +1566,7 @@ mod tests {
             *style = Some(ShapeStyle { rotation: Some(30.0), ..ShapeStyle::default() });
         }
         let group = Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children: vec![hwpforge_core::control::GroupChild::Shape(rect)],
             width: unit(1_740_000),
             height: unit(1_010_000),

@@ -307,6 +307,7 @@ fn group_child_negative_y_round_trips_wrapped() {
 #[test]
 fn text_art_negative_size_writes_wrapped_cur_sz() {
     let art = Control::TextArt {
+        frame: hwpforge_core::ObjectFrame::new(),
         text: "글".to_string(),
         shape: "WAVE2".to_string(),
         font_name: "함초롬바탕".to_string(),

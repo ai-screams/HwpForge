@@ -218,6 +218,7 @@ fn group_text_box_tab_is_emitted() {
         hu(4000),
     );
     let group = Control::Group {
+        frame: hwpforge_core::ObjectFrame::new(),
         children: vec![hwpforge_core::control::GroupChild::Shape(text_box)],
         width: hu(8000),
         height: hu(4000),

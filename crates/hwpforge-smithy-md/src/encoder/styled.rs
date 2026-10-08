@@ -1880,6 +1880,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![textbox_body],
                     width: HwpUnit::from_mm(80.0).unwrap(),
@@ -1962,6 +1963,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Line {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint::new(0, 0),
                     end: ShapePoint::new(1000, 0),
                     width: HwpUnit::from_mm(50.0).unwrap(),
@@ -1989,6 +1991,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),
                     axis2: ShapePoint::new(500, 600),
@@ -2019,6 +2022,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Polygon {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     vertices: vec![
                         ShapePoint::new(0, 1000),
                         ShapePoint::new(500, 0),
@@ -2701,6 +2705,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Arc {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     arc_type: hwpforge_foundation::ArcType::Normal,
                     center: ShapePoint { x: 500, y: 300 },
                     axis1: ShapePoint { x: 1000, y: 300 },
@@ -2730,6 +2735,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Curve {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     points: vec![
                         ShapePoint { x: 0, y: 0 },
                         ShapePoint { x: 500, y: 200 },
@@ -2760,6 +2766,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::ConnectLine {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint { x: 0, y: 0 },
                     end: ShapePoint { x: 1000, y: 500 },
                     control_points: vec![],

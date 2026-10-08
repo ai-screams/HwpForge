@@ -3810,6 +3810,7 @@ fn project_textbox_run(
     );
     Run::control(
         Control::TextBox {
+            frame: hwpforge_core::ObjectFrame::new(),
             text_margin: text_box_margin(textbox.text_margin),
             paragraphs,
             width: hwp_unit_from_u32(textbox.geometry.width),
@@ -3978,6 +3979,7 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
     let inst_id =
         (text_art.instance_id != 0).then_some(ObjectId::new(u64::from(text_art.instance_id)));
     let control = Control::TextArt {
+        frame: hwpforge_core::ObjectFrame::new(),
         text: ta.text.clone(),
         shape: shape.to_string(),
         font_name: ta.font_name.clone(),

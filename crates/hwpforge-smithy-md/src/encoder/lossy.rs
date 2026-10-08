@@ -679,6 +679,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::TextBox {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     text_margin: None,
                     paragraphs: vec![textbox_body],
                     width: hwpforge_foundation::HwpUnit::from_mm(80.0).unwrap(),
@@ -717,6 +718,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::Line {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     start: ShapePoint::new(0, 0),
                     end: ShapePoint::new(1000, 0),
                     width: hwpforge_foundation::HwpUnit::from_mm(50.0).unwrap(),
@@ -745,6 +747,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),
                     axis2: ShapePoint::new(500, 600),
@@ -771,6 +774,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::Ellipse {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     center: ShapePoint::new(500, 300),
                     axis1: ShapePoint::new(1000, 300),
                     axis2: ShapePoint::new(500, 600),
@@ -801,6 +805,7 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
                 Control::Polygon {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     vertices: vec![
                         ShapePoint::new(0, 1000),
                         ShapePoint::new(500, 0),

@@ -337,6 +337,29 @@ pub enum ValidationError {
         ratio: u8,
     },
 
+    /// An object's [`ObjectFrame`](crate::frame::ObjectFrame) cannot be
+    /// written: a negative original size, an original axis of zero under a
+    /// displayed axis that is not, or an original size on a table (which
+    /// has no original box). Anywhere in the section, like
+    /// [`Self::InvalidCornerRatio`]. Its code is
+    /// [`CoreErrorCode::InvalidShapeDimension`].
+    #[error("Invalid {field} of {kind}: {reason} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidObjectFrame {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based index of the paragraph holding the object (as for
+        /// [`Self::InvalidCornerRatio`]).
+        paragraph_index: usize,
+        /// Zero-based index of that paragraph's run holding the object.
+        run_index: usize,
+        /// The object's kind (`"ellipse"`, `"picture"`, `"table"`, …).
+        kind: &'static str,
+        /// The frame field (`"original_size"`).
+        field: &'static str,
+        /// Why it cannot be written.
+        reason: &'static str,
+    },
+
     /// A header or footer is anchored to a paragraph the section does not
     /// have ([`HeaderFooter::anchor_paragraph`](crate::section::HeaderFooter::anchor_paragraph)
     /// is past the last body paragraph).
@@ -455,6 +478,8 @@ impl ValidationError {
             // (review r1 — a new `CoreErrorCode` variant is a breaking
             // change outside the approved API).
             Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
+            // Same reason: no new `CoreErrorCode` variant.
+            Self::InvalidObjectFrame { .. } => CoreErrorCode::InvalidShapeDimension,
             Self::HeaderFooterAnchorOutOfRange { .. } => {
                 CoreErrorCode::HeaderFooterAnchorOutOfRange
             }

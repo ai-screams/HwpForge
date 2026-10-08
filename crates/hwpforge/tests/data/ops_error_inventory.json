@@ -1013,6 +1013,12 @@
           "discriminant": null
         },
         {
+          "name": "InvalidObjectFrame",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "HeaderFooterAnchorOutOfRange",
           "shape": "struct",
           "cfg": [],

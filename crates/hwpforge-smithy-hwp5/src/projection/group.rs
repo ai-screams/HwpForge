@@ -732,6 +732,7 @@ pub(super) fn project_group_run(
     let inst_id = (group.instance_id != 0).then_some(ObjectId::new(u64::from(group.instance_id)));
     Some(Run::control(
         Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children,
             width: hwp_unit_from_u32(group.geometry.width),
             height: hwp_unit_from_u32(group.geometry.height),
@@ -770,6 +771,7 @@ fn emit(
             Outcome::Nested { plan, offset, size } => {
                 let children = emit(plan, place, state);
                 Some(Control::Group {
+                    frame: hwpforge_core::ObjectFrame::new(),
                     children,
                     width: HwpUnit::new(size.0).unwrap_or(HwpUnit::ZERO),
                     height: HwpUnit::new(size.1).unwrap_or(HwpUnit::ZERO),

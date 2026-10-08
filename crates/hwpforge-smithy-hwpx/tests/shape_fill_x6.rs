@@ -110,6 +110,7 @@ fn gradient_doc(gradient_type: GradientType) -> Vec<u8> {
         ..ShapeStyle::default()
     };
     let rect = Control::Rect {
+        frame: hwpforge_core::ObjectFrame::new(),
         width: HwpUnit::new(1000).unwrap(),
         height: HwpUnit::new(1000).unwrap(),
         placement: None,

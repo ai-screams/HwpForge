@@ -241,6 +241,7 @@ fn build_section_1() -> Section {
         // Apply style
         let styled_line: Control = match line_ctrl {
             Control::Line { start, end, width, height, placement, caption, .. } => Control::Line {
+                frame: hwpforge_core::ObjectFrame::new(),
                 start,
                 end,
                 width,

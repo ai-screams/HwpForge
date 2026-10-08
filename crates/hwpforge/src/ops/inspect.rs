@@ -524,6 +524,7 @@ mod tests {
         let w = HwpUnit::new(1000).unwrap();
         let pic = || GroupChild::Picture(Image::new("BinData/a.png", w, w, ImageFormat::Png));
         let group = |children| Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
             children,
             width: w,
             height: w,
