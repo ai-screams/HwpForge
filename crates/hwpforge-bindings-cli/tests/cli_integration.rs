@@ -6250,3 +6250,187 @@ fn convert_hwp5_fifo_over_the_size_cap_reports_hwp5_decode_failed() {
     assert_eq!(val["code"], "HWP5_DECODE_FAILED", "{val}");
     assert!(!out.exists());
 }
+
+// ─── S20: the object frame answer key ───
+
+/// `(kind, orgSz, sz protect)` of every object that has its own `<hp:pos>`
+/// (the objects Hancom places), in document order across sections.
+fn frame_answer(path: &Path) -> Vec<(String, Option<(u32, u32)>, Option<String>)> {
+    use quick_xml::events::Event;
+    const KINDS: [&str; 11] = [
+        "rect",
+        "ellipse",
+        "arc",
+        "polygon",
+        "curve",
+        "line",
+        "connectLine",
+        "pic",
+        "container",
+        "textart",
+        "ole",
+    ];
+    let mut out = Vec::new();
+    for index in 0.. {
+        let entry = format!("Contents/section{index}.xml");
+        if !hwpx_has_entry(path, &entry) {
+            break;
+        }
+        let xml = read_hwpx_entry(path, &entry);
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        // Open elements: (local name, slot in `found` when it is an object).
+        let mut stack: Vec<(String, Option<usize>)> = Vec::new();
+        let mut found: Vec<(String, Option<(u32, u32)>, Option<String>, bool)> = Vec::new();
+        loop {
+            let event = reader.read_event().expect("section xml");
+            let (start, empty) = match &event {
+                Event::Start(s) => (Some(s.clone()), false),
+                Event::Empty(s) => (Some(s.clone()), true),
+                Event::End(_) => {
+                    stack.pop();
+                    continue;
+                }
+                Event::Eof => break,
+                _ => continue,
+            };
+            let start = start.unwrap();
+            let name = start.local_name().as_ref().to_owned();
+            let attr = |key: &str| {
+                start
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.local_name().as_ref() == key)
+                    .map(|a| a.value.to_string())
+            };
+            if let Some(&(_, Some(slot))) = stack.last() {
+                let record = &mut found[slot];
+                match name.as_str() {
+                    "orgSz" => {
+                        let n = |k| attr(k).and_then(|v| v.parse().ok()).unwrap_or(0);
+                        record.1 = Some((n("width"), n("height")));
+                    }
+                    "sz" => record.2 = attr("protect"),
+                    "pos" => record.3 = true,
+                    _ => {}
+                }
+            }
+            let slot = KINDS.contains(&name.as_str()).then(|| {
+                found.push((name.clone(), None, None, false));
+                found.len() - 1
+            });
+            if !empty {
+                stack.push((name, slot));
+            }
+        }
+        out.extend(found.into_iter().filter(|r| r.3).map(|r| (r.0, r.1, r.2)));
+    }
+    out
+}
+
+/// Hancom twins carrying original sizes other than the displayed ones:
+/// plain shapes, a text-art, group boxes (scaled, nested, mirrored) and
+/// pictures (cropped, resized, in a cell, beside a text box).
+const FRAME_TWINS: [&str; 11] = [
+    "shapes/line_simple",
+    "shapes/polygon_simple",
+    "shapes/textart_multiline",
+    "shapes/group-f1-g1-scaled",
+    "shapes/group-f1-g4-nested",
+    "shapes/group-f8-poly-margin",
+    "images/img_04_images_with_crop_or_resize",
+    "images/real_crop_vs_original_two_objects",
+    "tables/table_07_image_in_merged_cell",
+    "mixed/mixed_02b_textbox_with_image_real",
+    "user_samples/sample-gso-connectline-native",
+];
+
+/// S20 answer key (§19.23.19 gates 2·3): an HWP 5.0 file converted carries
+/// the original size and size lock Hancom writes in its own HWPX twin, and
+/// the twin read and written again keeps them.
+/// 이것을 실패시키는 것: HWP5 초기 크기를 버리기(convert 쪽) / 인코더가 orgSz 를
+/// 표시 크기로 쓰기(재인코드 쪽) / 같은 파일끼리 비교하는 측정 오류(개수 0 단언).
+#[test]
+fn frame_answer_key_matches_hancom() {
+    let tmp = test_tmp();
+    for (i, stem) in FRAME_TWINS.iter().enumerate() {
+        let twin = fixture(&format!("{stem}.hwpx"));
+        let answer = frame_answer(&twin);
+        assert!(
+            answer.iter().any(|r| r.1.is_some()),
+            "{stem}: the answer key holds no original size"
+        );
+
+        let converted = tmp.join(format!("c{i}.hwpx"));
+        let source = fixture(&format!("{stem}.hwp"));
+        let (_, stderr, code) =
+            run(&["convert-hwp5", source.to_str().unwrap(), "-o", converted.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        assert_eq!(frame_answer(&converted), answer, "{stem}: converted");
+
+        let json = tmp.join(format!("r{i}.json"));
+        let rewritten = tmp.join(format!("r{i}.hwpx"));
+        let (_, stderr, code) =
+            run(&["to-json", twin.to_str().unwrap(), "-o", json.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        let (_, stderr, code) =
+            run(&["from-json", json.to_str().unwrap(), "-o", rewritten.to_str().unwrap()]);
+        assert_eq!(code, 0, "{stem}: {stderr}");
+        assert_eq!(frame_answer(&rewritten), answer, "{stem}: re-encoded");
+    }
+
+    // A group whose leaves are turned keeps no original box (§19.23.13): its
+    // `orgSz` is its shown size, 61801 x 10579, where Hancom writes 41203 x
+    // 10579 — the one known exception, from both readers.
+    // 이것을 실패시키는 것: HWP5 투영이 돌린 잎 묶음에 원래 상자를 두고 인코더 묶음
+    // fallback 도 끄기(둘 중 하나만이면 다른 쪽이 막는다 — 각각 단위 테스트가 지킨다).
+    let stem = "shapes/group-f10-rot-then-scale";
+    let shown = vec![("container".to_string(), Some((61801, 10579)), Some("0".to_string()))];
+    assert_eq!(frame_answer(&fixture(&format!("{stem}.hwpx")))[0].1, Some((41203, 10579)));
+    let converted = tmp.join("f10.hwpx");
+    let source = fixture(&format!("{stem}.hwp"));
+    let (_, stderr, code) =
+        run(&["convert-hwp5", source.to_str().unwrap(), "-o", converted.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(frame_answer(&converted), shown, "{stem}: converted");
+}
+
+/// A size lock (`<hp:sz protect="1">`) on a Hancom shape survives reading and
+/// writing (§19.23.19 gate 3: no `protect` exception).
+/// 이것을 실패시키는 것: 디코더가 protect 를 읽지 않기 / 인코더가 0 을 쓰기.
+#[test]
+fn size_lock_round_trips_through_json() {
+    use zip::write::SimpleFileOptions;
+    let tmp = test_tmp();
+    let source = fixture("shapes/x6-fill.hwpx");
+    let locked = tmp.join("locked.hwpx");
+    {
+        let mut archive = ZipArchive::new(std::fs::File::open(&source).unwrap()).unwrap();
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&locked).unwrap());
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let name = file.name().to_string();
+            if name == "Contents/section0.xml" {
+                let mut xml = String::new();
+                file.read_to_string(&mut xml).unwrap();
+                let xml = xml.replace("protect=\"0\"", "protect=\"1\"");
+                writer.start_file(name, SimpleFileOptions::default()).unwrap();
+                writer.write_all(xml.as_bytes()).unwrap();
+            } else {
+                writer.raw_copy_file(file).unwrap();
+            }
+        }
+        writer.finish().unwrap();
+    }
+    let answer = frame_answer(&locked);
+    assert!(answer.len() >= 2 && answer.iter().all(|r| r.2.as_deref() == Some("1")), "{answer:?}");
+
+    let json = tmp.join("locked.json");
+    let rewritten = tmp.join("rewritten.hwpx");
+    let (_, stderr, code) =
+        run(&["to-json", locked.to_str().unwrap(), "-o", json.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    let (_, stderr, code) =
+        run(&["from-json", json.to_str().unwrap(), "-o", rewritten.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(frame_answer(&rewritten), answer);
+}
