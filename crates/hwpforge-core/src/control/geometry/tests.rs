@@ -518,6 +518,52 @@ fn extreme_ratio_falls_back() {
     assert_eq!(plan.loss().map(FoldLoss::kind), Some(FoldLossKind::Residual));
 }
 
+/// A group the sibling sends to its fallback measures every framed node
+/// against its exact Core place, not against the copy rounded into the
+/// displayed box: a line with original box 1500, shown 1000, turned 0.15°
+/// (stored as 0°) and ending at 1499 lands at (999, 0) instead of
+/// (1000.6406, 1.3090) — off by 2.099, a loss the writer reports.
+/// 이것을 실패시키는 것: fallback 을 반올림한 사본 기준으로 다시 재기.
+#[test]
+fn fallback_measures_against_the_original_points() {
+    let mut line = framed_line((1499, 0), (1000, 1000), (1500, 1500));
+    set_rotation_and_flip(&mut line, Some(0.15), None);
+    let trigger = with_offset(framed_line((100_000_000, 0), (49, 0), (100_000_000, 0)), 1200, 0);
+    let group = Control::Group {
+        children: vec![
+            super::super::GroupChild::Shape(line),
+            super::super::GroupChild::Shape(trigger),
+        ],
+        width: unit(2000),
+        height: unit(1000),
+        frame: crate::frame::ObjectFrame::new(),
+        placement: None,
+        inst_id: None,
+    };
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(plan.is_fallback());
+    assert_eq!(plan.nodes()[0].points()[1], ShapePoint { x: 999, y: 0 });
+    assert_eq!(plan.loss().map(FoldLoss::kind), Some(FoldLossKind::Residual), "{plan:?}");
+    // Unturned, the same rounding moves the end by a third: no loss.
+    let mut line = framed_line((1499, 0), (1000, 1000), (1500, 1500));
+    set_rotation_and_flip(&mut line, None, None);
+    let trigger = with_offset(framed_line((100_000_000, 0), (49, 0), (100_000_000, 0)), 1200, 0);
+    let group = Control::Group {
+        children: vec![
+            super::super::GroupChild::Shape(line),
+            super::super::GroupChild::Shape(trigger),
+        ],
+        width: unit(2000),
+        height: unit(1000),
+        frame: crate::frame::ObjectFrame::new(),
+        placement: None,
+        inst_id: None,
+    };
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(plan.is_fallback());
+    assert!(plan.loss().is_none(), "{plan:?}");
+}
+
 /// The plan keeps a frame the policy stores within 2: the r6 circle
 /// (original 560, shown 850) stores its centre at 280 and the scale
 /// 850 / 560, and lands exactly where Core draws it (centre at 425).

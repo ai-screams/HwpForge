@@ -2337,6 +2337,53 @@ mod tests {
         }
     }
 
+    /// A line with an original box, its two ends, displayed size and turn.
+    fn framed_line(
+        end: (i32, i32),
+        size: (i32, i32),
+        original: (i32, i32),
+        rotation: Option<f32>,
+    ) -> Control {
+        let hu = |v| HwpUnit::new(v).unwrap();
+        Control::Line {
+            start: hwpforge_core::control::ShapePoint { x: 0, y: 0 },
+            end: hwpforge_core::control::ShapePoint { x: end.0, y: end.1 },
+            width: hu(size.0),
+            height: hu(size.1),
+            frame: hwpforge_core::ObjectFrame::new()
+                .with_original_size(hwpforge_foundation::Size::new(hu(original.0), hu(original.1))),
+            placement: None,
+            caption: None,
+            style: rotation.map(|r| hwpforge_core::control::ShapeStyle {
+                rotation: Some(r),
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// S20 review r1 (HIGH): in a group a sibling sends to its fallback, a
+    /// framed line turned 0.15° (stored as 0°) whose end moves from 1499 in
+    /// its original box 1500 to 999 in its shown box 1000 lands 2.099 from
+    /// where Core draws it — the writer reports it.
+    /// 이것을 실패시키는 것: 묶음 fallback 재측정을 반올림한 사본 기준으로 하기.
+    #[test]
+    fn group_fallback_reports_a_rounding_miss() {
+        let line = framed_line((1499, 0), (1000, 1000), (1500, 1500), Some(0.15));
+        let trigger = framed_line((100_000_000, 0), (49, 0), (100_000_000, 0), None);
+        let (xml, sink) = encode_group(&group_of(vec![line, trigger]));
+        assert!(xml.contains(r#"<hc:endPt x="999" y="0"/>"#), "{xml}");
+        use crate::encoder::EncodeWarning;
+        let kinds: Vec<&str> = sink
+            .warnings
+            .iter()
+            .filter_map(|w| match w {
+                EncodeWarning::ContentLost { kind, .. } => Some(kind.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(kinds.contains(&"shape_emission"), "{:?}", sink.warnings);
+    }
+
     fn encode_group(group: &Control) -> (String, EncodeSink) {
         let mut sink = EncodeSink::new(0);
         let xml =

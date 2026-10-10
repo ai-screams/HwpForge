@@ -866,7 +866,8 @@ pub fn group_plan(group: &Control, policy: &EmissionPolicy) -> Option<GroupPlan>
     let q = |v: f64| quantize(v, policy.coefficients);
     let top_scale =
         if own.is_fallback() { (1.0, 1.0) } else { (q(own.scale().0), q(own.scale().1)) };
-    plan_children(children, (0, 0), &[top_scale], true, policy, &mut nodes, &mut worst);
+    let mut exact = Vec::new();
+    plan_children(children, (0, 0), &[top_scale], true, policy, &mut nodes, &mut worst, &mut exact);
     if !(exceeds_tolerance(worst) || own.is_fallback() || own.loss().is_some()) {
         return Some(GroupPlan { own, nodes, fallback: false, loss: None });
     }
@@ -875,8 +876,31 @@ pub fn group_plan(group: &Control, policy: &EmissionPolicy) -> Option<GroupPlan>
     let own = frame_plan(&plain, policy)?;
     let Control::Group { children, .. } = &plain else { return None };
     let mut nodes = Vec::new();
-    let mut worst = 0.0_f64;
-    plan_children(children, (0, 0), &[(1.0, 1.0)], false, policy, &mut nodes, &mut worst);
+    let mut unused = 0.0_f64;
+    plan_children(
+        children,
+        (0, 0),
+        &[(1.0, 1.0)],
+        false,
+        policy,
+        &mut nodes,
+        &mut unused,
+        &mut Vec::new(),
+    );
+    // The fallback is measured against the exact Core places of the group as
+    // given, not against the copy whose points were rounded into the
+    // displayed boxes (§19.23.13): a point that moved more than 2 in that
+    // rounding, or saturated, is a loss the writer must report.
+    // 이것을 실패시키는 것: 반올림한 사본을 정답으로 다시 재기
+    // (`fallback_measures_against_the_original_points`).
+    let worst = if nodes.len() == exact.len() {
+        nodes
+            .iter()
+            .zip(&exact)
+            .fold(0.0_f64, |w, (n, e)| e.as_ref().map_or(w, |e| w.max(max_residual(e, &n.stored))))
+    } else {
+        f64::INFINITY
+    };
     let loss = residual_loss(worst);
     Some(GroupPlan { own, nodes, fallback: true, loss })
 }
@@ -919,6 +943,7 @@ fn plan_children(
     policy: &EmissionPolicy,
     nodes: &mut Vec<GroupNodePlan>,
     worst: &mut f64,
+    exact: &mut Vec<Option<Vec<(f64, f64)>>>,
 ) {
     let (ax, ay) = ancestors.iter().fold((1.0, 1.0), |a, s| (a.0 * s.0, a.1 * s.1));
     let scaled = ancestors.iter().any(|s| *s != (1.0, 1.0));
@@ -948,9 +973,11 @@ fn plan_children(
                     &ancestor_pairs,
                     policy,
                 );
-                if (ow, oh) != (w, h) || scaled {
+                let counted = (ow, oh) != (w, h) || scaled;
+                if counted {
                     *worst = worst.max(node.1);
                 }
+                exact.push(counted.then_some(node.2));
                 if frames && picture_frame_plan(image, policy).is_fallback() {
                     *worst = f64::INFINITY;
                 }
@@ -988,9 +1015,11 @@ fn plan_children(
                 // with or without them and is reported by the shape's writer.
                 // 이것을 실패시키는 것: 모든 노드를 세기(비스듬한 형제 하나 때문에
                 // 그림의 원래 상자를 잃는다 — `frameless_sibling_does_not_drop_the_boxes`).
-                if (ow, oh) != (b.width, b.height) || scaled {
+                let counted = (ow, oh) != (b.width, b.height) || scaled;
+                if counted {
                     *worst = worst.max(node.1);
                 }
+                exact.push(counted.then_some(node.2));
                 if frames && frame_plan(control, policy).is_some_and(|p| p.is_fallback()) {
                     *worst = f64::INFINITY;
                 }
@@ -1001,7 +1030,7 @@ fn plan_children(
                 if let Control::Group { children, .. } = control {
                     let mut next = ancestors.to_vec();
                     next.push(own_written);
-                    plan_children(children, t, &next, frames, policy, nodes, worst);
+                    plan_children(children, t, &next, frames, policy, nodes, worst, exact);
                 }
             }
         }
@@ -1022,7 +1051,7 @@ fn node_plan(
     points: Vec<ShapePoint>,
     ancestor_pairs: &[MatrixPair],
     policy: &EmissionPolicy,
-) -> (GroupNodePlan, f64) {
+) -> (GroupNodePlan, f64, Vec<(f64, f64)>) {
     let (wf, hf) = (f64::from(w), f64::from(h));
     let (exact_l, _) = local_affine(wf, hf, rotation, flip, &EmissionPolicy::exact());
     let (stored_l, _) = local_affine(wf, hf, rotation, flip, policy);
@@ -1048,7 +1077,7 @@ fn node_plan(
     let exact: Vec<(f64, f64)> =
         q.iter().map(|&(x, y)| exact_map.apply((x * sx, y * sy))).collect();
     let residual = max_residual(&exact, &stored);
-    (GroupNodePlan { translation: t, original: (ow, oh), pairs, points, stored }, residual)
+    (GroupNodePlan { translation: t, original: (ow, oh), pairs, points, stored }, residual, exact)
 }
 
 // ── Folding ────────────────────────────────────────────────────
