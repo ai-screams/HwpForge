@@ -621,6 +621,25 @@ fn drop_original_size_keeps_the_drawing() {
     );
 }
 
+/// An original box that cannot be a frame value — a negative axis (a
+/// wrapped `orgSz`) or one beyond the HWPUNIT range — is not folded here:
+/// the caller reports it and folds the child without one.
+#[test]
+fn unusable_original_box_is_not_folded() {
+    let circle = Control::ellipse(unit(200), unit(100));
+    let two = ShapeTransform::from_matrix([2.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
+    for original in [(-1.0, 50.0), (100.0, -50.0), (1e12, 50.0)] {
+        let input = FoldInput::new(two, original, (0.0, 0.0));
+        assert!(fold_aligned_child(circle.clone(), &input).is_none(), "{original:?}");
+    }
+    let input = FoldInput::new(two, (100.0, 50.0), (0.0, 0.0));
+    let (control, _) = kept(fold_aligned_child(circle, &input).unwrap());
+    assert_eq!(
+        control.frame().unwrap().original_size,
+        Some(hwpforge_foundation::Size::new(unit(100), unit(50)))
+    );
+}
+
 /// An axis-aligned map keeps the points and records the original box; a
 /// turned one is not folded here; an original box equal to the displayed
 /// one is no frame value.

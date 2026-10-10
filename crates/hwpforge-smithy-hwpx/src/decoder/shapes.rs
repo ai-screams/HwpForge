@@ -2294,7 +2294,20 @@ fn normalize_group_child(
     // S20 (§19.23.13): an axis-aligned leaf keeps its points in its original
     // box; the others fold as before (their original box is not kept).
     // 이것을 실패시키는 것: 이 갈래를 지우기(`aligned_leaves_keep_their_original_box`).
-    if ctx.group_frames && wire_aligned(Some(m), flipped) {
+    // An aligned leaf whose `orgSz` cannot be a frame value is reported as
+    // at the top level (§19.23.15) and folds without an original box.
+    // 이것을 실패시키는 것: 이 보고를 지우기(`negative_original_size_in_a_group_is_reported`).
+    let usable = org.0 >= 0.0
+        && org.1 >= 0.0
+        && HwpUnit::new(round_i32(org.0)).is_ok()
+        && HwpUnit::new(round_i32(org.1)).is_ok();
+    if ctx.group_frames && wire_aligned(Some(m), flipped) && !usable {
+        ctx.content_lost(
+            "object_original_size",
+            format!("orgSz {}x{} cannot be an original size; not carried", org.0, org.1),
+        );
+    }
+    if ctx.group_frames && wire_aligned(Some(m), flipped) && usable {
         let input = FoldInput::new(m.to_transform(), org, origin);
         if let Some(outcome) = fold_aligned_child(control.clone(), &input) {
             let source: Vec<(f64, f64)> = [(0.0, 0.0), (org.0, 0.0), (org.0, org.1), (0.0, org.1)]
@@ -6666,6 +6679,27 @@ mod group_tests {
             let ca = emitted_corners(a, &EmissionPolicy::exact()).unwrap();
             let cb = emitted_corners(b, &EmissionPolicy::exact()).unwrap();
             assert!(dist(&ca, &cb) <= 2.0, "{:?} vs {:?}", ca, cb);
+        }
+    }
+
+    /// S20 review r1: an aligned group leaf whose `orgSz` is wrapped
+    /// (4294967295) is reported and kept without an original box — no
+    /// negative frame value reaches Core.
+    #[test]
+    fn negative_original_size_in_a_group_is_reported() {
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let leaf = rect((100, 50), &ri(ID, &[(ID, ID), (two, ID)])).replace(
+            r#"<hp:orgSz width="100" height="50"/>"#,
+            r#"<hp:orgSz width="4294967295" height="50"/>"#,
+        );
+        let (g, w) = decode(&container_with((1000, 400), (1000, 400), &ri(ID, &[(ID, ID)]), &leaf));
+        assert!(lost_kinds(&w).iter().any(|k| k == "object_original_size"), "{w:?}");
+        let g = g.unwrap();
+        for c in children(&g) {
+            assert!(
+                c.frame().and_then(|f| f.original_size).is_none_or(|o| o.width.as_i32() >= 0),
+                "{c:?}"
+            );
         }
     }
 

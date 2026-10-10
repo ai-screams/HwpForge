@@ -1736,6 +1736,15 @@ pub fn fold_aligned_child(mut control: Control, input: &FoldInput) -> Option<Fol
         return None;
     }
     let (ow, oh) = input.original_size;
+    // An original box that cannot be a frame value — a negative axis (a
+    // wrapped `orgSz`) or one out of the HWPUNIT range — is not this path:
+    // the caller reports it and folds the child without one (§19.23.15).
+    // 이것을 실패시키는 것: 이 검사를 지우기(음수 원래 크기가 frame 에 남는다 —
+    // `unusable_original_box_is_not_folded`).
+    let (oiw, oih) = (round_i32(ow), round_i32(oh));
+    if oiw < 0 || oih < 0 || !fits_hwpunit(&[oiw, oih]) {
+        return None;
+    }
     let w = round_i32(m.a * ow);
     let h = round_i32(m.e * oh);
     let flat_ok = matches!(
@@ -1747,8 +1756,7 @@ pub fn fold_aligned_child(mut control: Control, input: &FoldInput) -> Option<Fol
     }
     let x = round_i32(m.c - input.parent_origin.0);
     let y = round_i32(m.f - input.parent_origin.1);
-    let (oiw, oih) = (round_i32(ow), round_i32(oh));
-    if !fits_hwpunit(&[w, h, x, y, oiw, oih]) {
+    if !fits_hwpunit(&[w, h, x, y]) {
         return Some(FoldOutcome::Dropped { losses: vec![out_of_range()] });
     }
     set_box(&mut control, w, h, (x, y));
