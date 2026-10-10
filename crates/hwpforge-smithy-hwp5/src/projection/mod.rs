@@ -3992,8 +3992,24 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
     let height = hwp_unit_from_u32(text_art.geometry.height);
     let inst_id =
         (text_art.instance_id != 0).then_some(ObjectId::new(u64::from(text_art.instance_id)));
+    // S20 review r1: the initial box and size lock, folded against the
+    // TextArt's own default (the 14173 design box).
+    // 이것을 실패시키는 것: frame 을 두지 않기 / 표시 크기와 비교해 접기
+    // (`text_art_keeps_its_frame`).
+    let design = hwpforge_core::frame::TEXT_ART_DESIGN_SIDE;
+    let frame = hwpforge_core::ObjectFrame::new()
+        .with_size_protect(text_art.ctrl_properties & shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0);
+    let frame = match shapes::framed_initial(
+        text_art.original_size,
+        (width.as_i32(), height.as_i32()),
+        (design, design),
+        warnings,
+    ) {
+        Some(o) => frame.with_original_size(o),
+        None => frame,
+    };
     let control = Control::TextArt {
-        frame: hwpforge_core::ObjectFrame::new(),
+        frame,
         text: ta.text.clone(),
         shape: shape.to_string(),
         font_name: ta.font_name.clone(),
@@ -4566,6 +4582,49 @@ mod tests {
             }
             other => panic!("expected Control::TextBox, got {other:?}"),
         }
+    }
+
+    /// S20 review r1: a top-level TextArt keeps its initial box against its
+    /// own default, the 14173 design box — 7000 x 8000 is kept, the design
+    /// box itself is no frame value, the displayed size (5000 x 3000) as the
+    /// initial box is kept — and its size lock.
+    #[test]
+    fn text_art_keeps_its_frame() {
+        let art = |original: Option<(u32, u32)>, properties: u32| Hwp5TextArtControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
+                x: 0,
+                y: 0,
+                width: 5000,
+                height: 3000,
+            },
+            text_art: crate::schema::section::Hwp5ShapeTextArt {
+                points: [crate::schema::section::Hwp5ShapePoint { x: 0, y: 0 }; 4],
+                text: "글".into(),
+                font_name: String::new(),
+                font_style: String::new(),
+                font_type: 0,
+                text_shape: 0,
+                line_spacing: 120,
+                char_spacing: 100,
+                align: 0,
+            },
+            instance_id: 0,
+            original_size: original,
+            ctrl_properties: properties,
+        };
+        let frame = |a: &Hwp5TextArtControl| {
+            let run = project_text_art_run(a, &mut Vec::new());
+            *run.content.as_control().unwrap().frame().unwrap()
+        };
+        let u = |v| HwpUnit::new(v).unwrap();
+        let size = |w, h| Some(hwpforge_foundation::Size::new(u(w), u(h)));
+        assert_eq!(frame(&art(Some((7000, 8000)), 0)).original_size, size(7000, 8000));
+        assert_eq!(frame(&art(Some((14173, 14173)), 0)).original_size, None);
+        assert_eq!(frame(&art(Some((5000, 3000)), 0)).original_size, size(5000, 3000));
+        assert!(frame(&art(None, 1 << 20)).size_protect);
+        assert!(!frame(&art(None, 0)).size_protect);
     }
 
     /// S20: a text box keeps its initial box (4,000 × 3,000, shown 8,000 ×

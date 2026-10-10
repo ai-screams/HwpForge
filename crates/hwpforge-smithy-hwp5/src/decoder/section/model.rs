@@ -340,6 +340,10 @@ pub(crate) struct Hwp5TextArtControl {
     pub text_art: Hwp5ShapeTextArt,
     /// gso CtrlHeader trailer instance ID (mirror `Hwp5ImageControl.instance_id`).
     pub instance_id: u32,
+    /// `ShapeComponent` initial size (HWPX `orgSz`), when read.
+    pub original_size: Option<(u32, u32)>,
+    /// gso CtrlHeader object properties (bit 20 = size lock).
+    pub ctrl_properties: u32,
 }
 
 /// Parsed arc evidence from a `gso ` scope (a `ShapeComponentEllipse` with arc fields).

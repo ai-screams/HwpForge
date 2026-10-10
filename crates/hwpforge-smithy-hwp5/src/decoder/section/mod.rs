@@ -748,6 +748,8 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 geometry,
                 text_art,
                 instance_id: input.instance_id,
+                original_size: input.original_size,
+                ctrl_properties: input.ctrl_properties,
             });
         }
         return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
@@ -4311,6 +4313,57 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 세 읽기 중 하나의 여백 읽기 / 오프셋 / 왼·오, 위·아래
     /// 맞바꿈 / 타원·다각형 보고 / 12 바이트 보고.
+    /// S20 review r1: a top-level TextArt's initial size (7000 x 8000) and
+    /// size lock reach its model and its Core frame.
+    /// 이것을 실패시키는 것: 글맵시 모델에 초기 크기·속성을 넘기지 않기.
+    #[test]
+    fn text_art_initial_size_and_lock_are_read() {
+        let mut art = Vec::new();
+        for (x, y) in [(0i32, 0i32), (14173, 0), (14173, 14173), (0, 14173)] {
+            art.extend_from_slice(&x.to_le_bytes());
+            art.extend_from_slice(&y.to_le_bytes());
+        }
+        for text in ["A", "F", "S"] {
+            art.extend_from_slice(&1u16.to_le_bytes());
+            art.extend_from_slice(&u16::from(text.as_bytes()[0]).to_le_bytes());
+        }
+        for v in [1u32, 17, 120, 100, 0] {
+            art.extend_from_slice(&v.to_le_bytes());
+        }
+        art.extend_from_slice(&[0u8; 20]);
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            0,
+            &gso_ctrl_header_data_with_properties(0, 0, 5000, 3000, 1 << 20),
+        ));
+        stream.extend(make_record(
+            TagId::ShapeComponent,
+            1,
+            &shape_component_render_data(&SHAPE_COMPONENT_TYPE_TEXTART, true, 0, (7000, 8000), 0.0),
+        ));
+        stream.extend(make_record(TagId::ShapeTextArt, 2, &art));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Some(Hwp5Control::TextArt(model)) = result.paragraphs[0].controls.first() else {
+            panic!("{:?}", result.paragraphs[0].controls);
+        };
+        assert_eq!(
+            (model.original_size, model.ctrl_properties & (1 << 20)),
+            (Some((7000, 8000)), 1 << 20)
+        );
+        let (doc, _) = crate::projection::project_to_core(vec![result]).expect("project");
+        let frame = doc.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| r.content.as_control())
+            .and_then(|c| c.frame().copied())
+            .unwrap();
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        assert_eq!(frame.original_size, Some(hwpforge_foundation::Size::new(u(7000), u(8000))));
+        assert!(frame.size_protect);
+    }
+
     /// S20 review r1: a group's `CtrlHeader` size lock (bit 20) reaches the
     /// group model and the Core group — a control in the paragraph's text, a
     /// bare control header, and a group in a table cell (the inline context).

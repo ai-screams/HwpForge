@@ -1566,6 +1566,8 @@ mod tests {
                 align: 0,
             },
             instance_id: 0,
+            original_size: None,
+            ctrl_properties: 0,
         });
         let top = group(
             geo(0, 0, 3000, 3000),

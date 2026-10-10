@@ -140,6 +140,17 @@ pub(super) fn original_box(
     displayed: (i32, i32),
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<hwpforge_foundation::Size> {
+    framed_initial(initial, displayed, displayed, warnings)
+}
+
+/// [`original_box`] against a kind's own default box (`default`): a
+/// TextArt's default is its 14173 design box, not its displayed size.
+pub(super) fn framed_initial(
+    initial: Option<(u32, u32)>,
+    displayed: (i32, i32),
+    default: (i32, i32),
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<hwpforge_foundation::Size> {
     let (w, h) = initial?;
     let (Ok(ow), Ok(oh)) = (i32::try_from(w), i32::try_from(h)) else {
         super::push_projection_fallback(
@@ -161,7 +172,7 @@ pub(super) fn original_box(
         return None;
     }
     let (Ok(uw), Ok(uh)) = (HwpUnit::new(ow), HwpUnit::new(oh)) else { return None };
-    ((ow, oh) != displayed).then(|| hwpforge_foundation::Size::new(uw, uh))
+    ((ow, oh) != default).then(|| hwpforge_foundation::Size::new(uw, uh))
 }
 
 /// The frame of a top-level shape: [`original_box`] and the size lock.
