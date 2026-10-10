@@ -248,9 +248,29 @@ fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str,
             }
         }
         match control {
-            Control::Group { children, .. } => children.iter().find_map(|child| match child {
-                GroupChild::Shape(shape) => control_error(shape),
-                GroupChild::Picture(image) => image_error(image),
+            Control::Group { children, .. } => children.iter().find_map(|child| {
+                // S20 review r1: a group child has no size of its own to lock
+                // (no `<hp:sz>` in HWPX, no CtrlHeader in HWP 5.0); a lock
+                // there would be dropped on writing, so it is refused.
+                // 이것을 실패시키는 것: 이 검사를 지우기 / 그림 자식만 또는 도형
+                // 자식만 보기(`group_child_size_lock_is_rejected`).
+                let (kind, locked) = match child {
+                    GroupChild::Shape(shape) => {
+                        (shape.kind_name(), shape.frame().is_some_and(|f| f.size_protect))
+                    }
+                    GroupChild::Picture(image) => ("picture", image.frame.size_protect),
+                };
+                if locked {
+                    return Some((
+                        kind,
+                        "size_protect",
+                        "a group child has no size lock of its own",
+                    ));
+                }
+                match child {
+                    GroupChild::Shape(shape) => control_error(shape),
+                    GroupChild::Picture(image) => image_error(image),
+                }
             }),
             _ => None,
         }
@@ -940,6 +960,44 @@ mod tests {
             ApplyPageType::Both,
         ));
         assert!(frame_err(section).is_some());
+    }
+
+    /// A size lock on a group child (shape, picture, nested group) is
+    /// refused; on the group itself it is kept.
+    #[test]
+    fn group_child_size_lock_is_rejected() {
+        let w = HwpUnit::new(850).unwrap();
+        let locked = crate::frame::ObjectFrame::new().with_size_protect(true);
+        let group = |children: Vec<GroupChild>, frame| Control::Group {
+            children,
+            width: w,
+            height: w,
+            frame,
+            placement: None,
+            inst_id: None,
+        };
+        let mut ellipse = Control::ellipse(w, w);
+        *ellipse.frame_mut().unwrap() = locked;
+        let mut picture =
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png);
+        picture.frame = locked;
+        let nested = group(vec![GroupChild::Shape(Control::ellipse(w, w))], locked);
+        for (child, kind) in [
+            (GroupChild::Shape(ellipse), "ellipse"),
+            (GroupChild::Picture(picture), "picture"),
+            (GroupChild::Shape(nested), "group"),
+        ] {
+            let run = Run::control(
+                group(vec![child], crate::frame::ObjectFrame::new()),
+                CharShapeIndex::new(0),
+            );
+            assert_eq!(
+                frame_err(section_with(run)),
+                Some((kind, "a group child has no size lock of its own"))
+            );
+        }
+        let top = group(vec![GroupChild::Shape(Control::ellipse(w, w))], locked);
+        assert_eq!(frame_err(section_with(Run::control(top, CharShapeIndex::new(0)))), None);
     }
 
     #[test]
