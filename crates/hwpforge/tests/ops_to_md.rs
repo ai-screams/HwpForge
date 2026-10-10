@@ -39,9 +39,19 @@ fn only_styled_extracts_images() {
     let styled = export("SimplePicture.hwpx", MdMode::Styled);
     assert!(!styled.images.is_empty(), "the picture fixture must yield an image");
 
-    for mode in [MdMode::Lossy, MdMode::Lossless] {
-        assert!(export("SimplePicture.hwpx", mode).images.is_empty(), "{}", mode.as_str());
-    }
+    assert!(export("SimplePicture.hwpx", MdMode::Lossy).images.is_empty(), "lossy");
+    // The lossless grammar has no place for a picture's original size yet
+    // (S20, P5b): this picture (original 17664 x 5975, shown 25942 x 8775)
+    // is refused rather than written at another scale.
+    let lossless = to_md(
+        &fixture("SimplePicture.hwpx"),
+        &MdExportOptions::default().with_mode(MdMode::Lossless),
+    );
+    assert!(
+        lossless.as_ref().is_err_and(|e| e.to_string().contains("original size")),
+        "{:?}",
+        lossless.map(|o| o.images.len())
+    );
 }
 
 #[test]
