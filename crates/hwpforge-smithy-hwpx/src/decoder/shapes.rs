@@ -173,11 +173,15 @@ pub(crate) fn settle_shape_frame(
         }
         _ => displayed,
     };
+    // The kind's default is no frame value; the object is still judged
+    // against the source below (a default box drawn at another scale is a
+    // drawn-extent loss, not a frame question).
+    // 이것을 실패시키는 것: 기본값일 때 검사 전에 돌아가기
+    // (`default_frame_still_reports_the_drawn_extent`).
     if org == default {
         if let Some(frame) = control.frame_mut() {
             frame.original_size = None;
         }
-        return;
     }
     let turns = !matches!(control, Control::TextArt { .. } | Control::Group { .. });
     let Some(map) = source_map(ri, turns) else { return };
@@ -241,9 +245,10 @@ pub(crate) fn settle_picture_frame(
         ctx.content_lost("object_original_size", reason);
         return;
     }
-    if image.frame.original_size.is_none() {
-        return;
-    }
+    // A picture whose original box is its displayed one (no frame value) is
+    // still judged against the source: kept and dropped are then the same.
+    // 이것을 실패시키는 것: 원래 상자가 없을 때 검사 전에 돌아가기
+    // (`mirrored_picture_keeps_its_original_box` 의 둘째 단언).
     let Some(map) = source_map(pic.rendering_info.as_ref(), false) else { return };
     let source: Vec<(f64, f64)> = [
         (0.0, 0.0),
@@ -4691,6 +4696,11 @@ mod group_tests {
         )
     }
 
+    /// The scale that draws the 14173 design box at a body TextArt's layout
+    /// size of 7000 x 3000 (Hancom's form; an identity scale would draw it
+    /// 14173 wide — a drawn-extent loss).
+    const BODY_ART_SCALE: [f64; 6] = [7000.0 / 14173.0, 0.0, 0.0, 0.0, 3000.0 / 14173.0, 0.0];
+
     fn text_art(level: u32, ri: &str, brush: &str, tail: &str) -> String {
         format!(
             r##"<hp:textart id="5" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="{level}" instid="55" text="묶음글맵시"><hp:offset x="0" y="0"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="0" height="0"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>{ri}<hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/>{brush}<hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="함초롬바탕" fontStyle="보통" fontType="TTF" textShape="WAVE2" lineSpacing="120" charSpacing="100" align="LEFT"/>{tail}</hp:textart>"##
@@ -5003,7 +5013,7 @@ mod group_tests {
         }
         // The same outline on a TextArt outside groups.
         let sz = r#"<hp:sz width="7000" widthRelTo="ABSOLUTE" height="3000" heightRelTo="ABSOLUTE" protect="0"/>"#;
-        let body = text_art(0, &ri(ID, &[(ID, ID)]), &solid_brush("#00FF00"), sz)
+        let body = text_art(0, &ri(ID, &[(BODY_ART_SCALE, ID)]), &solid_brush("#00FF00"), sz)
             .replace(r#"width="0" style="NONE""#, r#"width="33" style="SOLID""#);
         let r = crate::decoder::section::parse_section(
             &section(&body),
@@ -5077,7 +5087,8 @@ mod group_tests {
     #[test]
     fn body_text_art_keeps_its_colour() {
         let sz = r#"<hp:sz width="7000" widthRelTo="ABSOLUTE" height="3000" heightRelTo="ABSOLUTE" protect="0"/>"#;
-        let ri = ri(ID, &[(ID, ID)]);
+        // Hancom scales the 14173 design box to the layout size.
+        let ri = ri(ID, &[(BODY_ART_SCALE, ID)]);
         let r = crate::decoder::section::parse_section(
             &section(&text_art(0, &ri, &solid_brush("#00FF00"), sz)),
             0,
@@ -7004,14 +7015,39 @@ mod frame_tests {
         assert_eq!(image.frame.original_size, Some(size(57_600, 43_500)));
 
         // A picture whose `orgSz` is its displayed size has no frame value,
-        // so nothing is judged, whatever its matrices say (the model of
-        // §19.23.20 leaves these 8 objects alone).
-        // 이것을 실패시키는 것: frame 없는 그림도 판정하기(`shape_drawn_extent`).
+        // but is still judged (S20 review r1): its matrices draw it at
+        // 331 x 250, not its layout size — a drawn-extent loss
+        // (`default_frame_still_reports_the_drawn_extent`).
         let plain = pic.replace(
             r#"<hp:orgSz width="57600" height="43500"/>"#,
             r#"<hp:orgSz width="4369" height="3299"/>"#,
         );
-        let (_, lost) = decode(&plain);
+        let (content, lost) = decode(&plain);
+        assert_eq!(lost, ["shape_drawn_extent"]);
+        let RunContent::Image(image) = &content else { panic!("{content:?}") };
+        assert!(image.frame.original_size.is_none());
+    }
+
+    /// S20 review r1: an object whose `orgSz` is its default (no frame value)
+    /// is still judged against the source — a rect `orgSz = sz = 1000²`
+    /// drawn at scale 2 is written 1000 wide where Hancom draws 2000, and
+    /// that is reported; at scale 1 nothing is.
+    #[test]
+    fn default_frame_still_reports_the_drawn_extent() {
+        let rect = |sca: &str| {
+            shape(
+                "rect",
+                (1000, 1000),
+                (1000, 1000),
+                (sca, sca),
+                0,
+                r#"<hc:pt0 x="0" y="0"/><hc:pt1 x="1000" y="0"/><hc:pt2 x="1000" y="1000"/><hc:pt3 x="0" y="1000"/>"#,
+            )
+        };
+        let (content, lost) = decode(&rect("2"));
+        assert_eq!(lost, ["shape_drawn_extent"]);
+        assert!(control(content).frame().unwrap().original_size.is_none());
+        let (_, lost) = decode(&rect("1"));
         assert!(lost.is_empty(), "{lost:?}");
     }
 
