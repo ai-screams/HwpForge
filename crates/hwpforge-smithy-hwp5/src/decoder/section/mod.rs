@@ -1461,13 +1461,14 @@ impl BodyTextParserState {
     ) -> bool {
         // Read the gso scope shape (ctrl_id / depth / geometry / group flag)
         // without holding a mutable borrow across the `self.warnings` writes.
-        let Some((is_gso, ctrl_depth, geometry, instance_id, group_active)) =
+        let Some((is_gso, ctrl_depth, geometry, instance_id, properties, group_active)) =
             self.subtree_ctx.as_ref().map(|ctx| {
                 (
                     ctx.ctrl_id == CTRL_ID_GSO,
                     ctx.ctrl_depth,
                     ctx.geometry.clone(),
                     ctx.instance_id,
+                    ctx.properties_raw,
                     ctx.group.is_some(),
                 )
             })
@@ -1501,7 +1502,8 @@ impl BodyTextParserState {
             let render = crate::schema::section::Hwp5ShapeRender::parse(&record.data, true)
                 .map_err(|e| e.to_string());
             if let Some(ctx) = self.subtree_ctx.as_mut() {
-                ctx.group = Some(GsoGroupBuilder::new(level, geometry, instance_id, render));
+                ctx.group =
+                    Some(GsoGroupBuilder::new(level, geometry, instance_id, properties, render));
             }
             // The `$con` record itself opens the group scope; it carries no
             // child payload, so nothing further to route for this record.
@@ -4309,6 +4311,93 @@ mod tests {
     ///
     /// 이것을 실패시키는 것: 세 읽기 중 하나의 여백 읽기 / 오프셋 / 왼·오, 위·아래
     /// 맞바꿈 / 타원·다각형 보고 / 12 바이트 보고.
+    /// S20 review r1: a group's `CtrlHeader` size lock (bit 20) reaches the
+    /// group model and the Core group — a control in the paragraph's text, a
+    /// bare control header, and a group in a table cell (the inline context).
+    /// 이것을 실패시키는 것: 묶음 모델에 속성을 넘기지 않기(세 경로 중 하나라도).
+    #[test]
+    fn group_size_lock_is_read() {
+        let group = |stream: &mut Vec<u8>, level: u16, properties: u32| {
+            stream.extend(make_record(
+                TagId::CtrlHeader,
+                level,
+                &gso_ctrl_header_data_with_properties(0, 0, 3000, 1000, properties),
+            ));
+            stream.extend(make_record(
+                TagId::ShapeComponent,
+                level + 1,
+                &shape_component_render_data(
+                    &SHAPE_COMPONENT_TYPE_GROUP,
+                    true,
+                    0,
+                    (3000, 1000),
+                    0.0,
+                ),
+            ));
+            for x in [0.0, 2000.0] {
+                stream.extend(make_record(
+                    TagId::ShapeComponent,
+                    level + 2,
+                    &shape_component_render_data(b"cer$", false, 1, (1000, 1000), x),
+                ));
+                stream.extend(make_record(TagId::ShapeComponentRect, level + 3, &[0u8; 9]));
+            }
+        };
+        let mut stream = Vec::new();
+        for properties in [1 << 20, 0] {
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 1, &para_text_with_control_ref("", "")));
+            group(&mut stream, 1, properties);
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            group(&mut stream, 0, properties);
+        }
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let (doc, _) = crate::projection::project_to_core(vec![result]).expect("project");
+        let locks: Vec<bool> = doc.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.runs)
+            .filter_map(|r| r.content.as_control())
+            .filter(|c| matches!(c, hwpforge_core::control::Control::Group { .. }))
+            .map(|c| c.frame().unwrap().size_protect)
+            .collect();
+        assert_eq!(locks, [true, true, false, false]);
+
+        // A group in a table cell (the inline gso context).
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0x20,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 9000,
+                height: 3000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: Some(7),
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        group(&mut stream, 2, 1 << 20);
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(1, 0)));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let Hwp5Control::Table(table) = &result.paragraphs[0].controls[0] else { panic!() };
+        let [Hwp5Control::Group(cell_group)] = &table.cells[0].paragraphs[0].controls[..] else {
+            panic!()
+        };
+        assert_eq!(cell_group.ctrl_properties, 1 << 20);
+    }
+
     #[test]
     fn text_margins_are_read() {
         let odd = [850i16, 700, 566, 400];

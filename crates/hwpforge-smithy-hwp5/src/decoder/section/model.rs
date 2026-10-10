@@ -542,6 +542,9 @@ pub(crate) struct Hwp5GroupControl {
     /// The group carries a hyperlink (a `CtrlData` record of its own), which
     /// a Core group cannot hold.
     pub has_link: bool,
+    /// Object common properties of the owning `gso ` `CtrlHeader` (bit 20 =
+    /// size lock); `0` for a nested group, which has no `CtrlHeader`.
+    pub ctrl_properties: u32,
 }
 
 /// One child of a [`Hwp5GroupControl`]: a shape control plus any `drawText`

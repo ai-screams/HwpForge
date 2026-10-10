@@ -125,7 +125,12 @@ fn group_frame(
     displayed: (i32, i32),
     warnings: &mut Vec<crate::decoder::Hwp5Warning>,
 ) -> hwpforge_core::ObjectFrame {
-    let frame = hwpforge_core::ObjectFrame::new();
+    // The size lock (bit 20) is kept whether or not the box is.
+    // 이것을 실패시키는 것: 잠금을 읽지 않기 / 정렬 판정 뒤에서만 읽기
+    // (`hwp5_group_size_lock_is_kept`).
+    let frame = hwpforge_core::ObjectFrame::new().with_size_protect(
+        group.ctrl_properties & super::shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0,
+    );
     let Ok(render) = &group.render else { return frame };
     if !all_aligned(&group.children) {
         return frame;
@@ -1108,6 +1113,7 @@ mod tests {
             render,
             instance_id: 0,
             has_link: false,
+            ctrl_properties: 0,
         }
     }
 
@@ -1380,6 +1386,27 @@ mod tests {
             group(geo(0, 0, 1000, 600), Ok(render((500, 300), ID, (two, ID))), vec![leaf, turned]);
         let (g, _) = project(&top);
         assert!(g.unwrap().frame().unwrap().original_size.is_none());
+    }
+
+    /// S20 review r1: the group's size lock is kept with or without its
+    /// original box — a turned leaf (no box) or an unreadable render.
+    #[test]
+    fn hwp5_group_size_lock_is_kept() {
+        let turned = child(rect(), Ok(render((100, 50), tr(500.0, 0.0), (ID, rot(30.0)))));
+        let mut top =
+            group(geo(0, 0, 1000, 600), Ok(render((500, 300), ID, (ID, ID))), vec![turned]);
+        top.ctrl_properties = 1 << 20;
+        let (g, _) = project(&top);
+        let frame = *g.unwrap().frame().unwrap();
+        assert!(frame.size_protect && frame.original_size.is_none(), "{frame:?}");
+        let mut top = group(
+            geo(0, 0, 1000, 600),
+            Err("unreadable".to_string()),
+            vec![child(rect(), at(100, 50, 0.0, 0.0))],
+        );
+        top.ctrl_properties = 1 << 20;
+        let (g, _) = project(&top);
+        assert!(g.unwrap().frame().unwrap().size_protect);
     }
 
     /// Polygon points are taken as stored — outside the stored box and inside

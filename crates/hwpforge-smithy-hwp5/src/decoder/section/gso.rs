@@ -285,6 +285,8 @@ pub(super) struct GsoGroupBuilder {
     depth: u16,
     geometry: Hwp5ShapeComponentGeometry,
     instance_id: u32,
+    /// `CtrlHeader` object properties (top group only; `0` when nested).
+    ctrl_properties: u32,
     children: Vec<Hwp5GroupChild>,
     current_child: Option<GsoActiveChild>,
     render: Result<Hwp5ShapeRender, String>,
@@ -340,6 +342,7 @@ impl GsoGroupBuilder {
         comp_depth: u16,
         geometry: Hwp5ShapeComponentGeometry,
         instance_id: u32,
+        ctrl_properties: u32,
         render: Result<Hwp5ShapeRender, String>,
     ) -> Self {
         Self {
@@ -347,6 +350,7 @@ impl GsoGroupBuilder {
             depth: 1,
             geometry,
             instance_id,
+            ctrl_properties,
             children: Vec::new(),
             current_child: None,
             render,
@@ -417,7 +421,7 @@ impl GsoGroupBuilder {
                     // (fall back to the parent bbox if unrecoverable); it has
                     // no per-child CtrlHeader so instance_id = 0.
                     let bbox = geometry.unwrap_or_else(|| self.geometry.clone());
-                    let mut nested = GsoGroupBuilder::new(level, bbox, 0, render);
+                    let mut nested = GsoGroupBuilder::new(level, bbox, 0, 0, render);
                     nested.depth = self.depth.saturating_add(1);
                     self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
                 }
@@ -589,6 +593,7 @@ impl GsoGroupBuilder {
             instance_id: self.instance_id,
             render: self.render,
             has_link: self.has_link,
+            ctrl_properties: self.ctrl_properties,
         })
     }
 }
@@ -845,8 +850,13 @@ impl InlineGsoContext {
         let render = Hwp5ShapeRender::parse(&record.data, true).map_err(|e| e.to_string());
         self.saw_shape_component = true;
         self.shape_component_kind = Some(SHAPE_COMPONENT_TYPE_GROUP);
-        self.group =
-            Some(Box::new(GsoGroupBuilder::new(level, geometry, self.instance_id, render)));
+        self.group = Some(Box::new(GsoGroupBuilder::new(
+            level,
+            geometry,
+            self.instance_id,
+            self.ctrl_properties,
+            render,
+        )));
         true
     }
 
