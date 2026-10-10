@@ -31,8 +31,8 @@
 //! a group left with nothing.
 
 use hwpforge_core::control::geometry::{
-    emitted_corners, fold_box, fold_group_child, group_bounds, Bounds, EmissionPolicy, FoldInput,
-    FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
+    emitted_corners, fold_aligned_child, fold_box, fold_group_child, group_bounds, Bounds,
+    EmissionPolicy, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
 };
 use hwpforge_core::control::{Control, GroupChild, ShapePoint};
 use hwpforge_core::run::{Run, RunContent};
@@ -97,6 +97,43 @@ fn chain(render: &Hwp5ShapeRender) -> ShapeTransform {
         .pairs
         .iter()
         .fold(matrix(&render.trans), |m, (sca, rot)| m.then(matrix(rot)).then(matrix(sca)))
+}
+
+/// S20 (§19.23.13): a chain with no turn, mirror or shear —
+/// `x' = a·x + c`, `y' = e·y + f`, `a, e > 0`.
+fn aligned(render: &Hwp5ShapeRender) -> bool {
+    let m = chain(render).matrix();
+    m[1].abs() < 1e-9 && m[3].abs() < 1e-9 && m[0] > 0.0 && m[4] > 0.0
+}
+
+/// Whether every leaf under `children` (nested groups included) has an
+/// axis-aligned chain — the groups that keep their original box. A child
+/// without a readable chain, or a kind Core groups do not hold, is not.
+/// 이것을 실패시키는 것: 중첩 묶음을 보지 않기(`hwp5_group_keeps_its_original_box`).
+fn all_aligned(children: &[Hwp5GroupChild]) -> bool {
+    children.iter().all(|c| match &c.control {
+        Hwp5Control::Group(g) => all_aligned(&g.children),
+        other if unsupported_kind(other).is_some() => false,
+        _ => c.render.as_ref().is_ok_and(aligned),
+    })
+}
+
+/// The original box of a group: its render's initial size when every leaf
+/// under it is axis-aligned and the box can be a frame value.
+fn group_frame(
+    group: &Hwp5GroupControl,
+    displayed: (i32, i32),
+    warnings: &mut Vec<crate::decoder::Hwp5Warning>,
+) -> hwpforge_core::ObjectFrame {
+    let frame = hwpforge_core::ObjectFrame::new();
+    let Ok(render) = &group.render else { return frame };
+    if !all_aligned(&group.children) {
+        return frame;
+    }
+    match super::shapes::original_box(Some(render.initial), displayed, warnings) {
+        Some(o) => frame.with_original_size(o),
+        None => frame,
+    }
 }
 
 fn initial_size(render: &Hwp5ShapeRender) -> (f64, f64) {
@@ -200,6 +237,7 @@ enum Outcome<'a> {
         plan: GroupPlan<'a>,
         offset: (i32, i32),
         size: (i32, i32),
+        group: &'a Hwp5GroupControl,
     },
     /// A picture stays, as an unturned box at `offset` in its group.
     Picture {
@@ -207,6 +245,8 @@ enum Outcome<'a> {
         size: (i32, i32),
         offset: (i32, i32),
         hyperlink: Option<String>,
+        /// The picture's initial box (S20: its original box).
+        original: (u32, u32),
     },
     Dropped,
     /// A nested group that cannot be placed: nothing of it is written, but
@@ -301,6 +341,39 @@ fn plan_child<'a>(
             turns = true;
         }
     }
+    // S20 (§19.23.13): an axis-aligned leaf keeps its stored points, in its
+    // initial box. A line or connector takes its stored ends as they are.
+    // 이것을 실패시키는 것: 이 갈래를 지우기(`hwp5_group_keeps_its_original_box`).
+    if aligned(render) {
+        let raw = match &child.control {
+            Hwp5Control::Line(l) => super::shapes::wire_line(l.start, l.end, false),
+            Hwp5Control::ConnectLine(l) => super::shapes::wire_line(l.start, l.end, true),
+            _ => control.clone(),
+        };
+        let input = FoldInput::new(chain(render), initial_size(render), origin);
+        if let Some(outcome) = fold_aligned_child(raw, &input) {
+            let kept = match outcome {
+                FoldOutcome::Kept { control, losses } => {
+                    for loss in losses {
+                        after.push(note("group_child_transform", loss.detail().to_string()));
+                    }
+                    Some(control)
+                }
+                FoldOutcome::Dropped { losses } => {
+                    for loss in losses {
+                        after.push(note("group_child_transform", loss.detail().to_string()));
+                    }
+                    None
+                }
+                _ => None,
+            };
+            let outcome = match kept {
+                Some(control) => Outcome::Kept { control, keeps_text },
+                None => Outcome::Dropped,
+            };
+            return ChildPlan { child, before: Vec::new(), outcome, after };
+        }
+    }
     let input = FoldInput::new(chain(render), initial_size(render), origin)
         .with_geometry_facts(GeometryFacts::new(turns));
     let (kept, losses) = match fold_group_child(control, &input) {
@@ -390,6 +463,7 @@ fn plan_nested<'a>(
         plan,
         offset: (offset.0 as i32, offset.1 as i32),
         size: (size.0 as i32, size.1 as i32),
+        group: nested,
     };
     ChildPlan { child, before, outcome, after }
 }
@@ -493,6 +567,7 @@ fn plan_picture<'a>(
         size: (fold.width(), fold.height()),
         offset: fold.offset(),
         hyperlink,
+        original: render.initial,
     };
     ChildPlan { child, before: Vec::new(), outcome, after }
 }
@@ -730,9 +805,13 @@ pub(super) fn project_group_run(
         return None;
     }
     let inst_id = (group.instance_id != 0).then_some(ObjectId::new(u64::from(group.instance_id)));
+    let displayed = (
+        hwp_unit_from_u32(group.geometry.width).as_i32(),
+        hwp_unit_from_u32(group.geometry.height).as_i32(),
+    );
     Some(Run::control(
         Control::Group {
-            frame: hwpforge_core::ObjectFrame::new(),
+            frame: group_frame(group, displayed, &mut state.warnings),
             children,
             width: hwp_unit_from_u32(group.geometry.width),
             height: hwp_unit_from_u32(group.geometry.height),
@@ -768,10 +847,10 @@ fn emit(
         place.path.push(i);
         report(c.before, place, state);
         let control = match c.outcome {
-            Outcome::Nested { plan, offset, size } => {
+            Outcome::Nested { plan, offset, size, group } => {
                 let children = emit(plan, place, state);
                 Some(Control::Group {
-                    frame: hwpforge_core::ObjectFrame::new(),
+                    frame: group_frame(group, size, &mut state.warnings),
                     children,
                     width: HwpUnit::new(size.0).unwrap_or(HwpUnit::ZERO),
                     height: HwpUnit::new(size.1).unwrap_or(HwpUnit::ZERO),
@@ -789,8 +868,15 @@ fn emit(
                 report_only(plan, place, state);
                 None
             }
-            Outcome::Picture { image, size, offset, hyperlink } => {
-                let picture = state.build_group_picture(image, size, offset, hyperlink);
+            Outcome::Picture { image, size, offset, hyperlink, original } => {
+                let mut picture = state.build_group_picture(image, size, offset, hyperlink);
+                // S20: the initial box against the folded size, as the HWPX
+                // decoder judges a group picture's `orgSz`.
+                // 이것을 실패시키는 것: 이 대입을 지우기(`hwp5_group_keeps_its_original_box`).
+                if let Some(p) = picture.as_mut() {
+                    p.frame.original_size =
+                        super::shapes::original_box(Some(original), size, &mut state.warnings);
+                }
                 report(c.after, place, state);
                 out.extend(picture.map(GroupChild::Picture));
                 place.path.pop();
@@ -930,6 +1016,7 @@ mod tests {
 
     fn rect() -> Hwp5Control {
         Hwp5Control::Rect(Hwp5RectControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             geometry: geo(0, 0, 0, 0),
@@ -939,6 +1026,7 @@ mod tests {
 
     fn polygon(points: &[(i32, i32)]) -> Hwp5Control {
         Hwp5Control::Polygon(Hwp5PolygonControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             paragraphs: Vec::new(),
@@ -1223,6 +1311,7 @@ mod tests {
             end2: pt(0, 0),
         };
         let ellipse = Hwp5Control::Ellipse(Hwp5EllipseControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             paragraphs: Vec::new(),
@@ -1233,29 +1322,70 @@ mod tests {
             shape,
         });
         let half = [0.5, 0.0, 0.0, 0.0, 0.5, 0.0];
+        // Turned 180° about the scaled box (S20: a turned leaf folds by the
+        // box rule; an axis-aligned one keeps its points in its initial box).
+        let half_turn = [-1.0, 0.0, 500.0, 0.0, -1.0, 300.0];
         let top = group(
             geo(0, 0, 500, 300),
             at(500, 300, 0.0, 0.0),
-            vec![child(ellipse, Ok(render((1000, 600), ID, (half, ID))))],
+            vec![child(ellipse, Ok(render((1000, 600), ID, (half, half_turn))))],
         );
         let (g, lost) = project(&top);
         assert!(lost.is_empty(), "{lost:?}");
         let g = g.unwrap();
-        let Control::Ellipse { width, height, center, axis1, axis2, .. } = &children(&g)[0] else {
+        let Control::Ellipse { width, height, center, axis1, axis2, style, .. } = &children(&g)[0]
+        else {
             panic!()
         };
+        assert_eq!(style.as_ref().and_then(|s| s.rotation), Some(180.0));
         assert_eq!((width.as_i32(), height.as_i32()), (500, 300));
         assert_eq!((center.x, center.y), (150, 150));
         assert_eq!((axis1.x, axis1.y), (400, 150));
         assert_eq!((axis2.x, axis2.y), (150, 300));
     }
 
+    /// S20 (§19.23.13): an axis-aligned leaf (a rect stored 100 × 50, scaled
+    /// ×4) keeps its stored box as its original box, shown 400 × 200; the
+    /// group (initial 500 × 300, shown 1000 × 600) keeps its own. A turned
+    /// leaf in a nested group makes the outer group keep none.
+    /// 이것을 실패시키는 것: 축 정렬 갈래를 지우기 / 묶음 frame 을 두지 않기 /
+    /// 중첩 묶음을 정렬 판정에서 빼기.
+    #[test]
+    fn hwp5_group_keeps_its_original_box() {
+        let four = [4.0, 0.0, 0.0, 0.0, 4.0, 0.0];
+        let two = [2.0, 0.0, 0.0, 0.0, 2.0, 0.0];
+        let u = |v| HwpUnit::new(v).unwrap();
+        let size = |w, h| hwpforge_foundation::Size::new(u(w), u(h));
+        let leaf = child(rect(), Ok(render((100, 50), ID, (four, ID))));
+        let pic = child(picture(), Ok(render((100, 50), tr(0.0, 50.0), (four, ID))));
+        let top =
+            group(geo(0, 0, 1000, 600), Ok(render((500, 300), ID, (two, ID))), vec![leaf, pic]);
+        let (g, lost) = project(&top);
+        assert!(lost.is_empty(), "{lost:?}");
+        let g = g.unwrap();
+        assert_eq!(g.frame().unwrap().original_size, Some(size(500, 300)));
+        let Control::Group { children: kids, .. } = &g else { panic!() };
+        let GroupChild::Shape(Control::Rect { width, frame, .. }) = &kids[0] else { panic!() };
+        assert_eq!(width.as_i32(), 400);
+        assert_eq!(frame.original_size, Some(size(100, 50)));
+        let GroupChild::Picture(p) = &kids[1] else { panic!("{kids:?}") };
+        assert_eq!(p.frame.original_size, Some(size(100, 50)));
+
+        let leaf = child(rect(), Ok(render((100, 50), ID, (four, ID))));
+        let turned = nested(
+            at(1000, 600, 0.0, 0.0),
+            vec![child(rect(), Ok(render((100, 50), tr(500.0, 0.0), (ID, rot(30.0)))))],
+        );
+        let top =
+            group(geo(0, 0, 1000, 600), Ok(render((500, 300), ID, (two, ID))), vec![leaf, turned]);
+        let (g, _) = project(&top);
+        assert!(g.unwrap().frame().unwrap().original_size.is_none());
+    }
+
     /// Polygon points are taken as stored — outside the stored box and inside
-    /// it — not rescaled onto the box. Points (−1000, 0), (2000, −500),
-    /// (3000, 3000), (1000, 1000) of a 4000 × 3000 box moved by (1000, 2000)
-    /// land at (0, 2000), (3000, 1500), (4000, 5000), (2000, 3000): offset
-    /// (0, 1500), local points (0, 500), (3000, 0), (4000, 3500),
-    /// (2000, 1500), size 4000 × 3500.
+    /// it — not rescaled onto the box. The polygon is axis-aligned (moved by
+    /// (1000, 2000) only), so S20 keeps them in its 4000 × 3000 initial box:
+    /// the box at (1000, 2000), the points as stored.
     ///
     /// 이것을 실패시키는 것: 묶음 경로에서 점을 상자에 맞춰 늘리는 것
     /// (`scale_polygon_points`).
@@ -1274,9 +1404,9 @@ mod tests {
             panic!()
         };
         let pts: Vec<(i32, i32)> = vertices.iter().map(|p| (p.x, p.y)).collect();
-        assert_eq!(pts, [(0, 500), (3000, 0), (4000, 3500), (2000, 1500)]);
-        assert_eq!((width.as_i32(), height.as_i32()), (4000, 3500));
-        assert_eq!(offset(children(&g.unwrap())[0]), (0, 1500));
+        assert_eq!(pts, [(-1000, 0), (2000, -500), (3000, 3000), (1000, 1000)]);
+        assert_eq!((width.as_i32(), height.as_i32()), (4000, 3000));
+        assert_eq!(offset(children(&g.unwrap())[0]), (1000, 2000));
     }
 
     /// Pictures are group children: a picture beside a rect and a group of
@@ -1666,9 +1796,9 @@ mod tests {
     }
 
     /// A nested group's Core box is the bounds of its children as written,
-    /// not of their stored boxes: a polygon whose points fill only the lower
-    /// right of its 1000 × 1000 box at (2000, 0) puts the group at
-    /// (2500, 500) and the polygon at the group's corner.
+    /// not of their stored boxes: a mirrored polygon whose points fill only
+    /// the lower left of its 1000 × 1000 box at (2000, 0) puts the group at
+    /// (2000, 500) and the polygon at the group's corner.
     ///
     /// 이것을 실패시키는 것: 최종 경계로 자식 도형을 옮기지 않는 것(다각형 offset 이
     /// (500, 500) 으로 남아 두 번 옮겨진다), 안쪽 묶음 offset 을 옮기지 않는 것.
@@ -1678,14 +1808,16 @@ mod tests {
             at(1000, 1000, 2000.0, 0.0),
             vec![child(
                 polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
-                at(1000, 1000, 2000.0, 0.0),
+                // Mirrored left-right (S20: an axis-aligned polygon keeps its
+                // initial box; a mirrored one takes the map onto its points).
+                Ok(render((1000, 1000), tr(2000.0, 0.0), (ID, [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0]))),
             )],
         );
         let top = group(geo(0, 0, 3000, 1000), at(3000, 1000, 0.0, 0.0), vec![n]);
         let (g, _) = project(&top);
         let g = g.unwrap();
         let [n] = children(&g)[..] else { panic!() };
-        assert_eq!(offset(n), (2500, 500));
+        assert_eq!(offset(n), (2000, 500));
         assert_eq!(offset(children(n)[0]), (0, 0));
 
         // The same one level deeper: the inner group moves with its parent.
@@ -1693,7 +1825,9 @@ mod tests {
             at(1000, 1000, 2000.0, 0.0),
             vec![child(
                 polygon(&[(500, 500), (1000, 500), (1000, 1000)]),
-                at(1000, 1000, 2000.0, 0.0),
+                // Mirrored left-right (S20: an axis-aligned polygon keeps its
+                // initial box; a mirrored one takes the map onto its points).
+                Ok(render((1000, 1000), tr(2000.0, 0.0), (ID, [-1.0, 0.0, 1000.0, 0.0, 1.0, 0.0]))),
             )],
         );
         let outer = nested(at(1000, 1000, 2000.0, 0.0), vec![inner]);
@@ -1701,7 +1835,7 @@ mod tests {
         let (g, _) = project(&top);
         let g = g.unwrap();
         let [outer] = children(&g)[..] else { panic!() };
-        assert_eq!(offset(outer), (2500, 500));
+        assert_eq!(offset(outer), (2000, 500));
         let [inner] = children(outer)[..] else { panic!() };
         assert_eq!(offset(inner), (0, 0));
     }

@@ -227,6 +227,11 @@ pub(crate) struct Hwp5LineControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed pure rectangle evidence from a `gso ` scope.
@@ -244,6 +249,11 @@ pub(crate) struct Hwp5RectControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed polygon evidence from a `gso ` scope.
@@ -270,6 +280,11 @@ pub(crate) struct Hwp5PolygonControl {
     /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
     pub list_header_properties: Option<u32>,
     pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
@@ -300,6 +315,11 @@ pub(crate) struct Hwp5EllipseControl {
     /// `속성` word of that `LIST_HEADER` (bits 5–6 = text vertical align).
     pub list_header_properties: Option<u32>,
     pub text_margin: Option<crate::decoder::section::Hwp5TableCellMargin>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -345,6 +365,11 @@ pub(crate) struct Hwp5ArcControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed connect-line evidence from a `gso ` scope.
@@ -371,6 +396,11 @@ pub(crate) struct Hwp5ConnectLineControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
@@ -435,6 +465,11 @@ pub(crate) struct Hwp5CurveControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
@@ -460,6 +495,11 @@ pub(crate) struct Hwp5TextBoxControl {
     /// The shape's outline and fill (§19.5 1b); `None` for a group child
     /// (the group projection reports its fill) or when unreadable.
     pub look: Option<crate::schema::section::Hwp5ShapeLook>,
+    /// Initial box of the shape's `ShapeComponent` (bytes 20–28 of the
+    /// record, HWPX `orgSz`) — the box its points are stored in; `None`
+    /// for a group child (the group projection reads it from the render
+    /// chain) or when unreadable.
+    pub original_size: Option<(u32, u32)>,
 }
 
 /// Parsed OLE-backed object evidence from a `gso ` scope.

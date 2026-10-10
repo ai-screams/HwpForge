@@ -668,6 +668,10 @@ impl<'a> ProjectionImageState<'a> {
             core_image.frame.original_size =
                 units(original).map(|(w, h)| hwpforge_foundation::Size::new(w, h));
         }
+        // S20: the size lock (object common property bit 20).
+        // 이것을 실패시키는 것: 읽지 않기(`size_lock_is_carried`).
+        core_image.frame.size_protect =
+            image.ctrl_properties & shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0;
         Some(core_image)
     }
 
@@ -3809,9 +3813,18 @@ fn project_textbox_run(
         projection_images,
         ImageProjectionContext::TextBox,
     );
+    let frame = shapes::object_frame(
+        textbox.original_size,
+        (
+            hwp_unit_from_u32(textbox.geometry.width).as_i32(),
+            hwp_unit_from_u32(textbox.geometry.height).as_i32(),
+        ),
+        textbox.ctrl_properties,
+        &mut projection_images.warnings,
+    );
     Run::control(
         Control::TextBox {
-            frame: hwpforge_core::ObjectFrame::new(),
+            frame,
             text_margin: text_box_margin(textbox.text_margin),
             paragraphs,
             width: hwp_unit_from_u32(textbox.geometry.width),
@@ -4276,6 +4289,10 @@ fn apply_table_projection_metadata(
     if let Some(ctrl) = &table.ctrl {
         let wire = parse_object_placement_wire(ctrl.properties, ctrl.geometry.x, ctrl.geometry.y);
         core_table.placement = table_placement_from_wire(&wire, warnings);
+        // S20: the size lock (bit 20). 이것을 실패시키는 것: 읽지 않기
+        // (`size_lock_is_carried`).
+        core_table.frame.size_protect =
+            ctrl.properties & shapes::CTRL_PROPERTY_SIZE_PROTECT_BIT != 0;
     }
     // Wave 12p Step 3: HWP5 Table CtrlHeader trailer instance ID 통과.
     // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
@@ -4525,6 +4542,7 @@ mod tests {
         // 한컴 stores the textbox 세로 정렬 in the ListHeader 속성 bits 5~6.
         // A CENTER (code 1) textbox must project to Core with Center align.
         let textbox = Hwp5TextBoxControl {
+            original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -4550,9 +4568,40 @@ mod tests {
         }
     }
 
+    /// S20: a text box keeps its initial box (4,000 × 3,000, shown 8,000 ×
+    /// 6,000) and its size lock as its frame.
+    /// 이것을 실패시키는 것: 글상자 frame 을 두지 않기.
+    #[test]
+    fn project_textbox_carries_its_frame() {
+        let textbox = Hwp5TextBoxControl {
+            original_size: Some((4_000, 3_000)),
+            look: None,
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                outer_margin: [0; 4],
+                x: 0,
+                y: 0,
+                width: 8_000,
+                height: 6_000,
+            },
+            paragraphs: vec![make_paragraph("틀", 0, 0)],
+            list_header_properties: None,
+            text_margin: None,
+            ctrl_properties: 1 << 20,
+        };
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        let run = project_textbox_run(&textbox, &mut images);
+        let frame = *run.content.as_control().unwrap().frame().unwrap();
+        let u = |v| HwpUnit::new(v).unwrap();
+        assert_eq!(frame.original_size, Some(hwpforge_foundation::Size::new(u(4_000), u(3_000))));
+        assert!(frame.size_protect);
+    }
+
     #[test]
     fn project_textbox_defaults_top_when_list_header_absent() {
         let textbox = Hwp5TextBoxControl {
+            original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -5336,6 +5385,7 @@ mod tests {
             link: None,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
+            original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -6044,6 +6094,90 @@ mod tests {
             .expect("table")
             .clone();
         (table.placement, warnings.iter().map(|w| format!("{w:?}")).collect())
+    }
+
+    /// S20: object common property bit 20 is the size lock of a picture and
+    /// of a table (HWP5 ↔ Hancom twins 1,806/1,806).
+    /// 이것을 실패시키는 것: 그림·표 잠금을 읽지 않기.
+    #[test]
+    fn size_lock_is_carried() {
+        let doc_with = |props: u32| {
+            let image = Hwp5Control::Image(Hwp5ImageControl {
+                ctrl_id: 0x6773_6F20,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100,
+                },
+                binary_data_id: 5,
+                original_size: None,
+                instance_id: 0,
+                ctrl_properties: props,
+                picture: Default::default(),
+                link: None,
+            });
+            let section = make_section(
+                vec![Hwp5Paragraph {
+                    end_char_shape: None,
+                    silent_wires: Vec::new(),
+                    page_break: false,
+                    column_break: false,
+                    text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
+                    controls: vec![image],
+                }],
+                None,
+            );
+            let assets = image_plan_with_dimensions(
+                5,
+                "BIN0005.png",
+                Hwp5SemanticImageFormat::Png,
+                None,
+                None,
+                vec![0x89, 0x50, 0x4E, 0x47],
+            );
+            let (document, _, _) = project_to_core_with_images(
+                vec![section],
+                &assets,
+                DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+            )
+            .unwrap();
+            document.sections()[0].paragraphs[0].runs[0].content.as_image().cloned().unwrap()
+        };
+        assert!(doc_with(1 << 20).frame.size_protect);
+        assert!(!doc_with(0).frame.size_protect);
+
+        let para = |props: u32| Hwp5Paragraph {
+            end_char_shape: None,
+            silent_wires: Vec::new(),
+            page_break: false,
+            column_break: false,
+            text: String::new(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(table_with_ctrl(props, 0, 0))],
+        };
+        let lock = |props: u32| {
+            let (doc, _) = project_to_core(vec![make_section(vec![para(props)], None)]).unwrap();
+            doc.sections()[0].paragraphs[0]
+                .runs
+                .iter()
+                .find_map(|r| r.content.as_table())
+                .expect("table")
+                .frame
+                .size_protect
+        };
+        assert!(lock(0x082a_4310 | (1 << 20)));
+        assert!(!lock(0x082a_4310));
     }
 
     /// A-T3 (법무부 실측 속성 word): 본문 표 `0x082a4310` = 떠 있음·PARA/PARA·
@@ -6824,6 +6958,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Line(Hwp5LineControl {
+                original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -6870,6 +7005,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Polygon(Hwp5PolygonControl {
+                original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 paragraphs: Vec::new(),
@@ -6927,6 +7063,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Rect(crate::decoder::section::Hwp5RectControl {
+                original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -7469,6 +7606,7 @@ mod tests {
                 paragraphs: vec![chart_paragraph()],
             }),
             "textbox" => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -7667,6 +7805,7 @@ mod shape_style_tests {
     #[test]
     fn text_box_takes_its_look() {
         let textbox = Hwp5TextBoxControl {
+            original_size: None,
             look: Some(look(0, 1, colour_fill(0x00DC_AF86, Hwp5FillPatternKind::None))),
             ctrl_id: 0,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {

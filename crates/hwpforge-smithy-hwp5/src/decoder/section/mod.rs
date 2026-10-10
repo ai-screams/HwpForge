@@ -703,6 +703,7 @@ impl NestedSubtreeContext {
                     list_header_properties: self.list_header_properties,
                     text_margin: self.text_margin,
                     ctrl_properties: self.properties_raw,
+                    original_size: self.original_size,
                 }),
                 None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id, header_data: Vec::new() },
             },
@@ -775,6 +776,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 geometry,
                 ctrl_properties: input.ctrl_properties,
                 shape: ellipse,
+                original_size: input.original_size,
             }),
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
                 paragraphs: input.paragraphs.clone(),
@@ -785,6 +787,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 geometry,
                 ctrl_properties: input.ctrl_properties,
                 shape: ellipse,
+                original_size: input.original_size,
             }),
             None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
         };
@@ -799,6 +802,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 points: curve.points,
                 segment_types: curve.segment_types,
                 ctrl_properties: input.ctrl_properties,
+                original_size: input.original_size,
             }),
             None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
         };
@@ -818,6 +822,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 start: line.start,
                 end: line.end,
                 ctrl_properties: input.ctrl_properties,
+                original_size: input.original_size,
             });
         }
     }
@@ -849,6 +854,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 ctrl_id: input.ctrl_id,
                 geometry,
                 ctrl_properties: input.ctrl_properties,
+                original_size: input.original_size,
             })
         }
         (Some(geometry), None, None, Some(line), None) => Hwp5Control::Line(Hwp5LineControl {
@@ -858,6 +864,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             start: line.start,
             end: line.end,
             ctrl_properties: input.ctrl_properties,
+            original_size: input.original_size,
         }),
         (Some(geometry), None, None, None, Some(polygon)) if polygon.points.len() >= 3 => {
             Hwp5Control::Polygon(Hwp5PolygonControl {
@@ -869,6 +876,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 geometry,
                 points: polygon.points,
                 ctrl_properties: input.ctrl_properties,
+                original_size: input.original_size,
             })
         }
         _ => Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() },

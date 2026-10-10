@@ -232,6 +232,21 @@ fn offset_of(c: &Control) -> (f64, f64) {
     })
 }
 
+/// Displayed width and height of a leaf.
+fn local_size(c: &Control) -> (i32, i32) {
+    match c {
+        Control::TextBox { width, height, .. }
+        | Control::Rect { width, height, .. }
+        | Control::Ellipse { width, height, .. }
+        | Control::Arc { width, height, .. }
+        | Control::Polygon { width, height, .. }
+        | Control::Curve { width, height, .. }
+        | Control::ConnectLine { width, height, .. }
+        | Control::Line { width, height, .. } => (width.as_i32(), height.as_i32()),
+        _ => (0, 0),
+    }
+}
+
 fn leaf_points(c: &Control) -> (&'static str, Vec<ShapePoint>) {
     match c {
         Control::TextBox { .. } | Control::Rect { .. } => ("rect", vec![]),
@@ -278,13 +293,23 @@ fn collect_leaves(c: &Control, base: (f64, f64), out: &mut Vec<PageShape>) {
     let corners = emitted_corners(c, &exact).expect("a shape box");
     let l = local_transform(c, &exact).expect("a shape transform");
     let (kind, pts) = leaf_points(c);
+    // S20: the points are in the original box, drawn scaled to the shown one.
+    let (w, h) = match emitted_corners(c, &EmissionPolicy::exact()) {
+        Some(_) => {
+            let b = c.effective_original_size().expect("a frame");
+            let corners_box = local_size(c);
+            let s = |d: i32, o: i32| if o == 0 { 1.0 } else { f64::from(d) / f64::from(o) };
+            (s(corners_box.0, b.width.as_i32()), s(corners_box.1, b.height.as_i32()))
+        }
+        None => (1.0, 1.0),
+    };
     out.push(PageShape {
         kind,
         corners: corners.iter().map(|&(x, y)| (x + base.0, y + base.1)).collect(),
         points: pts
             .iter()
             .map(|p| {
-                let (x, y) = l.apply((f64::from(p.x), f64::from(p.y)));
+                let (x, y) = l.apply((f64::from(p.x) * w, f64::from(p.y) * h));
                 (x + base.0 + o.0, y + base.1 + o.1)
             })
             .collect(),

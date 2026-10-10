@@ -124,10 +124,161 @@ pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     )
 }
 
+/// Object common property bit 20 (표 70): the size is locked (HWPX
+/// `<hp:sz protect>`; HWP5 ↔ Hancom twins 1,806/1,806, §19.23.1).
+pub(super) const CTRL_PROPERTY_SIZE_PROTECT_BIT: u32 = 1 << 20;
+
+/// S20: an HWP 5.0 object's original box from its `ShapeComponent` initial
+/// size (bytes 20–28, HWPX `orgSz` — twins 1,806/1,806), `None` when it is
+/// the displayed size or cannot be one: out of the signed range (reported,
+/// §19.23.15), or an axis of 0 under a displayed axis that is not
+/// (reported).
+/// 이것을 실패시키는 것: 이 변환을 지우기(`top_level_shapes_carry_their_frame`) /
+/// 범위 밖·0 축 보고를 지우기(`unusable_initial_size_is_reported`).
+pub(super) fn original_box(
+    initial: Option<(u32, u32)>,
+    displayed: (i32, i32),
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<hwpforge_foundation::Size> {
+    let (w, h) = initial?;
+    let (Ok(ow), Ok(oh)) = (i32::try_from(w), i32::try_from(h)) else {
+        super::push_projection_fallback(
+            warnings,
+            "object.original_size",
+            format!("initial size {w}x{h} is out of the signed range; not carried"),
+        );
+        return None;
+    };
+    if (ow == 0 && displayed.0 != 0) || (oh == 0 && displayed.1 != 0) {
+        super::push_projection_fallback(
+            warnings,
+            "object.original_size",
+            format!(
+                "initial size {ow}x{oh} has an axis of 0 under the displayed {}x{}",
+                displayed.0, displayed.1
+            ),
+        );
+        return None;
+    }
+    let (Ok(uw), Ok(uh)) = (HwpUnit::new(ow), HwpUnit::new(oh)) else { return None };
+    ((ow, oh) != displayed).then(|| hwpforge_foundation::Size::new(uw, uh))
+}
+
+/// The frame of a top-level shape: [`original_box`] and the size lock.
+pub(super) fn object_frame(
+    initial: Option<(u32, u32)>,
+    displayed: (i32, i32),
+    ctrl_properties: u32,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> hwpforge_core::ObjectFrame {
+    let frame = hwpforge_core::ObjectFrame::new()
+        .with_size_protect(ctrl_properties & CTRL_PROPERTY_SIZE_PROTECT_BIT != 0);
+    match original_box(initial, displayed, warnings) {
+        Some(o) => frame.with_original_size(o),
+        None => frame,
+    }
+}
+
+/// The displayed size of a shape from its `CtrlHeader` (the layout size,
+/// HWPX `sz`), when both axes fit.
+fn displayed(geometry: &Hwp5ShapeComponentGeometry) -> Option<(i32, i32)> {
+    let w = i32::try_from(geometry.width).ok()?;
+    let h = i32::try_from(geometry.height).ok()?;
+    (HwpUnit::new(w).is_ok() && HwpUnit::new(h).is_ok()).then_some((w, h))
+}
+
+/// S20 (§19.23.11): a shape whose initial box is known keeps its stored
+/// points (they are coordinates in that box) and is shown at its layout size
+/// with that box as its original box. `control` holds the wire points; this
+/// sets its size and frame. `false` when the initial box is unknown or the
+/// layout size does not fit — the caller keeps the pre-S20 projection.
+fn frame_wire_shape(
+    control: &mut Control,
+    geometry: &Hwp5ShapeComponentGeometry,
+    initial: Option<(u32, u32)>,
+    ctrl_properties: u32,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> bool {
+    let (Some(shown), Some((iw, ih))) = (displayed(geometry), initial) else { return false };
+    let frame = object_frame(initial, shown, ctrl_properties, warnings);
+    // An initial box that cannot be the frame (reported by `original_box`)
+    // leaves the points in a box Core cannot hold: the pre-S20 projection.
+    let same = i64::from(iw) == i64::from(shown.0) && i64::from(ih) == i64::from(shown.1);
+    if frame.original_size.is_none() && !same {
+        return false;
+    }
+    match control {
+        Control::Line { width, height, frame: f, .. }
+        | Control::ConnectLine { width, height, frame: f, .. }
+        | Control::Polygon { width, height, frame: f, .. }
+        | Control::Curve { width, height, frame: f, .. }
+        | Control::Ellipse { width, height, frame: f, .. }
+        | Control::Arc { width, height, frame: f, .. }
+        | Control::Rect { width, height, frame: f, .. } => {
+            *width = HwpUnit::new(shown.0).unwrap_or(HwpUnit::ZERO);
+            *height = HwpUnit::new(shown.1).unwrap_or(HwpUnit::ZERO);
+            *f = frame;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn wire_point(p: Hwp5ShapePoint) -> hwpforge_core::control::ShapePoint {
+    hwpforge_core::control::ShapePoint { x: p.x, y: p.y }
+}
+
+/// A line or connector with its stored ends, before [`frame_wire_shape`].
+pub(super) fn wire_line(start: Hwp5ShapePoint, end: Hwp5ShapePoint, connect: bool) -> Control {
+    let (start, end) = (wire_point(start), wire_point(end));
+    if connect {
+        Control::ConnectLine {
+            start,
+            end,
+            control_points: Vec::new(),
+            connect_type: "STRAIGHT".to_string(),
+            width: HwpUnit::ZERO,
+            height: HwpUnit::ZERO,
+            frame: hwpforge_core::ObjectFrame::new(),
+            placement: None,
+            caption: None,
+            style: None,
+        }
+    } else {
+        Control::Line {
+            start,
+            end,
+            width: HwpUnit::ZERO,
+            height: HwpUnit::ZERO,
+            frame: hwpforge_core::ObjectFrame::new(),
+            placement: None,
+            caption: None,
+            style: None,
+        }
+    }
+}
+
 pub(super) fn project_line_run(
     line: &Hwp5LineControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
+    // S20: the stored ends in the initial box (§19.23.11).
+    // 이것을 실패시키는 것: 이 갈래를 지우기(끝점이 표시 상자로 맞춰지고 원래 상자를 잃는다).
+    let mut control = wire_line(line.start, line.end, false);
+    if line.start != line.end
+        && frame_wire_shape(
+            &mut control,
+            &line.geometry,
+            line.original_size,
+            line.ctrl_properties,
+            warnings,
+        )
+    {
+        if let Control::Line { placement, .. } = &mut control {
+            *placement = shape_placement(&line.geometry, line.ctrl_properties, warnings);
+        }
+        return Some(Run::control(control, CharShapeIndex::new(0)));
+    }
     let projected_start = scale_point_into_geometry(
         line.start,
         line.start.x.min(line.end.x),
@@ -178,8 +329,15 @@ pub(super) fn project_rect_run(
     let width = HwpUnit::new(positive_i32_from_u32(rect.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(rect.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::rect(width, height).ok()?;
-    if let Control::Rect { placement, .. } = &mut control {
+    if let Control::Rect { placement, frame, .. } = &mut control {
         *placement = shape_placement(&rect.geometry, rect.ctrl_properties, warnings);
+        // 이것을 실패시키는 것: frame 을 두지 않기(`top_level_shapes_carry_their_frame`).
+        *frame = object_frame(
+            rect.original_size,
+            (width.as_i32(), height.as_i32()),
+            rect.ctrl_properties,
+            warnings,
+        );
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -188,6 +346,27 @@ pub(super) fn project_polygon_run(
     polygon: &Hwp5PolygonControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
+    // S20: the stored points in the initial box; without one, fitted into
+    // the displayed box as before.
+    let wire = hwpforge_core::control::Control::polygon(
+        polygon.points.iter().copied().map(wire_point).collect(),
+    );
+    if let Ok(mut control) = wire {
+        if displayed(&polygon.geometry).is_some_and(|(w, h)| w > 0 && h > 0)
+            && frame_wire_shape(
+                &mut control,
+                &polygon.geometry,
+                polygon.original_size,
+                polygon.ctrl_properties,
+                warnings,
+            )
+        {
+            if let Control::Polygon { placement, .. } = &mut control {
+                *placement = shape_placement(&polygon.geometry, polygon.ctrl_properties, warnings);
+            }
+            return Some(Run::control(control, CharShapeIndex::new(0)));
+        }
+    }
     let vertices = scale_polygon_points(&polygon.points, &polygon.geometry);
     let mut control = hwpforge_core::control::Control::polygon(vertices).ok()?;
     if let Control::Polygon { placement, .. } = &mut control {
@@ -205,6 +384,23 @@ pub(super) fn project_ellipse_run(
     let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::ellipse(width, height);
+    // S20: with a known initial box the stored centre and axes are kept
+    // (they are in that box — the ministry's bullet: centre 280 in 560).
+    let mut framed = control.clone();
+    if let Control::Ellipse { center, axis1, axis2, .. } = &mut framed {
+        *center = wire_point(ellipse.shape.center);
+        *axis1 = wire_point(ellipse.shape.axis1);
+        *axis2 = wire_point(ellipse.shape.axis2);
+    }
+    if frame_wire_shape(
+        &mut framed,
+        &ellipse.geometry,
+        ellipse.original_size,
+        ellipse.ctrl_properties,
+        warnings,
+    ) {
+        control = framed;
+    }
     if let Control::Ellipse { placement, .. } = &mut control {
         *placement = shape_placement(&ellipse.geometry, ellipse.ctrl_properties, warnings);
     }
@@ -223,6 +419,25 @@ pub(super) fn project_arc_run(
     let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
+    let mut framed = control.clone();
+    if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut framed {
+        *center = wire_point(arc.shape.center);
+        *axis1 = wire_point(arc.shape.axis1);
+        *axis2 = wire_point(arc.shape.axis2);
+        *start1 = wire_point(arc.shape.start1);
+        *end1 = wire_point(arc.shape.end1);
+        *start2 = wire_point(arc.shape.start2);
+        *end2 = wire_point(arc.shape.end2);
+    }
+    if frame_wire_shape(
+        &mut framed,
+        &arc.geometry,
+        arc.original_size,
+        arc.ctrl_properties,
+        warnings,
+    ) {
+        control = framed;
+    }
     if let Control::Arc { placement, .. } = &mut control {
         *placement = shape_placement(&arc.geometry, arc.ctrl_properties, warnings);
     }
@@ -235,8 +450,20 @@ pub(super) fn project_curve_run(
     curve: &Hwp5CurveControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
-    let vertices = scale_polygon_points(&curve.points, &curve.geometry);
-    let mut control = hwpforge_core::control::Control::curve(vertices).ok()?;
+    let mut wired = hwpforge_core::control::Control::curve(
+        curve.points.iter().copied().map(wire_point).collect(),
+    )
+    .ok();
+    let framed = wired.as_mut().is_some_and(|c| {
+        frame_wire_shape(c, &curve.geometry, curve.original_size, curve.ctrl_properties, warnings)
+    });
+    let mut control = match wired {
+        Some(c) if framed => c,
+        _ => {
+            let vertices = scale_polygon_points(&curve.points, &curve.geometry);
+            hwpforge_core::control::Control::curve(vertices).ok()?
+        }
+    };
     if let Control::Curve { placement, segment_types, .. } = &mut control {
         *placement = shape_placement(&curve.geometry, curve.ctrl_properties, warnings);
         let decoded: Vec<CurveSegmentType> = curve
@@ -262,6 +489,22 @@ pub(super) fn project_connectline_run(
     connect_line: &Hwp5ConnectLineControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
+    let mut control = wire_line(connect_line.start, connect_line.end, true);
+    if connect_line.start != connect_line.end
+        && frame_wire_shape(
+            &mut control,
+            &connect_line.geometry,
+            connect_line.original_size,
+            connect_line.ctrl_properties,
+            warnings,
+        )
+    {
+        if let Control::ConnectLine { placement, .. } = &mut control {
+            *placement =
+                shape_placement(&connect_line.geometry, connect_line.ctrl_properties, warnings);
+        }
+        return Some(Run::control(control, CharShapeIndex::new(0)));
+    }
     let min_x = connect_line.start.x.min(connect_line.end.x);
     let max_x = connect_line.start.x.max(connect_line.end.x);
     let min_y = connect_line.start.y.min(connect_line.end.y);
@@ -362,6 +605,7 @@ fn scale_point_into_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoder::section::Hwp5EllipseControl;
 
     fn zero_geometry() -> crate::schema::section::Hwp5ShapeComponentGeometry {
         crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -377,6 +621,119 @@ mod tests {
         crate::schema::section::Hwp5ShapePoint { x, y }
     }
 
+    fn r6_ellipse(original: Option<(u32, u32)>, props: u32) -> Hwp5EllipseControl {
+        let pt = shape_point;
+        Hwp5EllipseControl {
+            original_size: original,
+            look: None,
+            ctrl_id: 0,
+            paragraphs: Vec::new(),
+            list_header_properties: None,
+            text_margin: None,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 850,
+                height: 850,
+                outer_margin: [0; 4],
+            },
+            ctrl_properties: props | 1,
+            shape: crate::schema::section::Hwp5ShapeComponentEllipse {
+                property: 0,
+                center: pt(280, 280),
+                axis1: pt(280, 0),
+                axis2: pt(560, 280),
+                start1: pt(0, 0),
+                end1: pt(0, 0),
+                start2: pt(0, 0),
+                end2: pt(0, 0),
+            },
+        }
+    }
+
+    fn control_of(run: Option<Run>) -> Control {
+        match run.expect("run").content {
+            hwpforge_core::run::RunContent::Control(c) => *c,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// S20 (§19.23.11, FR-T1): the ministry's bullet stored in HWP 5.0 —
+    /// initial box 560, shown 850, size locked — keeps its stored centre
+    /// 280 in its original box 560 instead of a centre rebuilt in the shown
+    /// box. A line keeps its stored ends with its initial box; a rect its box.
+    /// 이것을 실패시키는 것: 초기 크기를 frame 으로 옮기지 않기 / 저장 정의점 대신
+    /// 상자에서 다시 만들기 / bit 20 대신 19 를 읽기.
+    #[test]
+    fn top_level_shapes_carry_their_frame() {
+        let mut w = Vec::new();
+        let c = control_of(project_ellipse_run(&r6_ellipse(Some((560, 560)), 1 << 20), &mut w));
+        assert!(w.is_empty(), "{w:?}");
+        let Control::Ellipse { center, axis1, width, frame, .. } = &c else { panic!("{c:?}") };
+        assert_eq!((center.x, center.y, axis1.x, axis1.y), (280, 280, 280, 0));
+        assert_eq!(width.as_i32(), 850);
+        let u = |v| HwpUnit::new(v).unwrap();
+        assert_eq!(frame.original_size, Some(hwpforge_foundation::Size::new(u(560), u(560))));
+        assert!(frame.size_protect);
+        let c = control_of(project_ellipse_run(&r6_ellipse(Some((560, 560)), 1 << 19), &mut w));
+        assert!(!c.frame().unwrap().size_protect);
+
+        let line = crate::decoder::section::Hwp5LineControl {
+            original_size: Some((1000, 0)),
+            look: None,
+            ctrl_id: 0,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 2000,
+                height: 0,
+                outer_margin: [0; 4],
+            },
+            ctrl_properties: 1,
+            start: shape_point(0, 0),
+            end: shape_point(1000, 0),
+        };
+        let c = control_of(project_line_run(&line, &mut w));
+        let Control::Line { end, width, height, frame, .. } = &c else { panic!() };
+        assert_eq!((end.x, width.as_i32(), height.as_i32()), (1000, 2000, 0));
+        assert_eq!(frame.original_size, Some(hwpforge_foundation::Size::new(u(1000), u(0))));
+
+        let rect = crate::decoder::section::Hwp5RectControl {
+            original_size: Some((100, 50)),
+            look: None,
+            ctrl_id: 0,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 200,
+                height: 100,
+                outer_margin: [0; 4],
+            },
+            ctrl_properties: 1,
+        };
+        let c = control_of(project_rect_run(&rect, &mut w));
+        assert_eq!(
+            c.frame().unwrap().original_size,
+            Some(hwpforge_foundation::Size::new(u(100), u(50)))
+        );
+    }
+
+    /// An initial size that cannot be a frame value is reported and the shape
+    /// projected as before (centre rebuilt in the shown box).
+    /// 이것을 실패시키는 것: 범위 밖·0 축 보고를 지우기 / 쓸 수 없는 초기 상자로도
+    /// 저장 점을 쓰기.
+    #[test]
+    fn unusable_initial_size_is_reported() {
+        for original in [(u32::MAX, 560), (0, 560)] {
+            let mut w = Vec::new();
+            let c = control_of(project_ellipse_run(&r6_ellipse(Some(original), 0), &mut w));
+            assert_eq!(w.len(), 1, "{w:?}");
+            let Control::Ellipse { center, frame, .. } = &c else { panic!() };
+            assert_eq!(center.x, 425);
+            assert!(frame.original_size.is_none());
+        }
+    }
+
     #[test]
     fn project_line_run_returns_none_for_degenerate_start_equals_end() {
         // A degenerate line (start == end) cannot form a valid Core line; the
@@ -384,6 +741,7 @@ mod tests {
         // single point makes the scaled start/end coincide so
         // `Control::line` rejects it.
         let line = crate::decoder::section::Hwp5LineControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
@@ -401,6 +759,7 @@ mod tests {
     fn project_line_run_returns_some_for_valid_line() {
         // Regression: a non-degenerate line still projects successfully.
         let line = crate::decoder::section::Hwp5LineControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             geometry: zero_geometry(),
@@ -420,6 +779,7 @@ mod tests {
         // rejects the shape, so the projection must return None rather than
         // panicking via .expect().
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             paragraphs: Vec::new(),
@@ -439,6 +799,7 @@ mod tests {
     fn project_polygon_run_returns_some_for_valid_polygon() {
         // Regression: a valid 3-vertex polygon still projects successfully.
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            original_size: None,
             look: None,
             ctrl_id: 0,
             paragraphs: Vec::new(),

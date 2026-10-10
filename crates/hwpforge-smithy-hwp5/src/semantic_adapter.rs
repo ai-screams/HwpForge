@@ -1958,6 +1958,7 @@ mod tests {
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
                     controls: vec![Hwp5Control::TextBox(Hwp5TextBoxControl {
+                        original_size: None,
                         look: None,
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {

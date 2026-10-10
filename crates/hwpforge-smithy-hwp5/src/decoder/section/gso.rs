@@ -942,6 +942,7 @@ impl InlineGsoContext {
                     list_header_properties: self.list_header_properties,
                     text_margin: self.text_margin,
                     ctrl_properties: self.ctrl_properties,
+                    original_size: self.original_size,
                 });
             }
         }
