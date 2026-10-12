@@ -9,8 +9,15 @@
 //!   재저장 sz(있을 때) ② 표 다음 문단의 캐시 v == 마지막 조각 종료 +
 //!   outMargin.bottom (rules-pagespan3 실측 62102 = 283+48×1282+283, 0 오차)
 //!
-//! 프로파일 밖(중첩 표·caption·비기본 pos·cellSpacing≠0·분할 경계 교차
-//! rowspan·본문보다 큰 행·셀 캐시 결손·열폭 미유일)은 전부 fail-closed.
+//! 프로파일 밖(중첩 표·위아래가 아닌 caption·캐시 없는 caption·비기본
+//! pos·cellSpacing≠0·분할 경계 교차 rowspan·본문보다 큰 행·셀 캐시 결손·
+//! 열폭 미유일)은 전부 fail-closed.
+//!
+//! 표 캡션(D, 설계 4.2.1): 위·아래 캡션을 캡션 문단 캐시대로 그린다.
+//! `H_c` = 캡션 캐시의 마지막 줄 아래, 위 캡션은 표 테두리를 `H_c + gap`
+//! 만큼 내리고(첫 조각 용량도 그만큼 줄어든다) 캡션 상자 위 = host_v +
+//! om.top, 아래 캡션은 마지막 조각 아래 + gap. 상자 x = 표 테두리 왼쪽
+//! (`fullSz` 면 om.left 만큼 왼쪽). 흐름 = om.top + 표 + gap + H_c + om.bottom.
 
 use hwpforge_core::table::grid::{covered_area, GridCell, TableGrid, MAX_GRID_POSITIONS};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TablePageBreak, TableVerticalAlign};
@@ -18,10 +25,13 @@ use hwpforge_core::{BorderLineKind, FillKind};
 use hwpforge_foundation::Alignment;
 
 use super::{
-    run_utf16_spans, slice_line_runs, validate_textpos, LaidBorder, LaidLine, LaidRect, PageLayout,
+    refuse_caption_number, run_utf16_spans, slice_line_runs, validate_textpos, LaidBorder,
+    LaidLine, LaidRect, PageLayout,
 };
 use crate::text::align::LineBox;
 use crate::{PdfError, PdfInput, PdfResult, PdfWarning};
+use hwpforge_core::caption::{Caption, CaptionSide};
+use hwpforge_core::run::RunContent;
 
 /// 분할 조각 하단 예약 (HWPUNIT) — wire `outMargin.bottom` 에 더해지는
 /// 고정 여유는 실측상 불요 (rules-pagespan3: 예약 = outMargin.bottom 만으로
@@ -104,9 +114,7 @@ pub(crate) fn replay_table(
     };
 
     // ── admission: 검증된 프로파일 밖 = 거부 ─────────────────────
-    if table.caption.is_some() {
-        return reject("table caption");
-    }
+    let caption = table.caption.as_ref().map(|c| admit_caption(c, location)).transpose()?;
     let Some(tlc) = table.layout_cache else {
         return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
     };
@@ -205,7 +213,10 @@ pub(crate) fn replay_table(
     let continuation_top = om_top + if repeat { header_height } else { 0 };
     let mut frags: Vec<Frag> = Vec::new();
     let mut y0 = 0i32;
-    let mut top = host_v + om_top;
+    // D: 위 캡션은 첫 조각 위에 놓여 표를 `H_c + gap` 내린다.
+    // 이것을 실패시키는 것: 이 감산 생략(`top_caption_lowers_the_table`).
+    let top_caption_room = caption.as_ref().filter(|c| c.top).map_or(0, |c| c.height + c.gap);
+    let mut top = host_v + om_top + top_caption_room;
     loop {
         let avail = capacity_end - top;
         if total_height - y0 <= avail {
@@ -283,9 +294,37 @@ pub(crate) fn replay_table(
 
     // ── 방출: 조각 창과 교차하는 앵커를 창-절단으로 그린다 ────────
     let table_x = geom.body_left + host_h + om_left;
+    // D: 캡션 상자 x·폭 검산.
+    let caption_x = caption.as_ref().map(|c| if c.full_size { table_x - om_left } else { table_x });
+    if let Some(c) = caption.as_ref() {
+        let table_width = col_x[col_count];
+        let expected =
+            if c.full_size { table_width + om_left + om.right.as_i32() } else { table_width };
+        let saved = c.last_width.unwrap_or(table_width);
+        if saved != expected {
+            warnings.push(PdfWarning::TableCaptionWidthMismatch {
+                location: location.to_string(),
+                saved,
+                expected,
+            });
+        }
+    }
     for (fi, frag) in frags.iter().enumerate() {
         if fi > 0 {
             new_page(pages);
+        }
+        if fi == 0 {
+            if let (Some(c), Some(x)) = (caption.as_ref().filter(|c| c.top), caption_x) {
+                emit_caption(
+                    input,
+                    c,
+                    x,
+                    geom.body_top + host_v + om_top,
+                    location,
+                    pages,
+                    warnings,
+                )?;
+            }
         }
         let loc = if fi == 0 { location.to_string() } else { format!("{location}/frag{fi}") };
         if fi > 0 && repeat {
@@ -341,7 +380,22 @@ pub(crate) fn replay_table(
     let last = frags.last().ok_or_else(|| PdfError::InternalInvariant {
         detail: format!("{location}: table replay produced no fragments"),
     })?;
-    let expected_next_v = last.top_offset + (last.y1 - last.y0) + om_bottom;
+    // D: 아래 캡션은 마지막 조각 아래 gap 뒤. 같은 쪽 본문 끝을 넘으면 한컴
+    // 동작 근거가 없어 거부(다음 쪽으로 몰래 보내지 않는다).
+    // 이것을 실패시키는 것: 거부 삭제(`bottom_caption_past_the_page_end_is_refused`).
+    let bottom_room = match caption.as_ref().filter(|c| !c.top) {
+        Some(c) => {
+            let caption_top = last.top_offset + (last.y1 - last.y0) + c.gap;
+            if caption_top + c.height > geom.body_height {
+                return reject("table caption past page end");
+            }
+            let x = caption_x.unwrap_or(table_x);
+            emit_caption(input, c, x, geom.body_top + caption_top, location, pages, warnings)?;
+            c.gap + c.height
+        }
+        None => 0,
+    };
+    let expected_next_v = last.top_offset + (last.y1 - last.y0) + bottom_room + om_bottom;
     let anchor_slack = (0..row_count)
         .filter(|&ri| row_tops[ri] < last.y1 && row_tops[ri + 1] > last.y0)
         .map(|ri| row_heights[ri])
@@ -354,6 +408,110 @@ pub(crate) fn replay_table(
         split: frags.len() > 1,
         total_height: row_heights.iter().sum(),
     })
+}
+
+/// 표 캡션의 배치 사실 (admission 통과분).
+struct AdmittedCaption<'a> {
+    caption: &'a Caption,
+    /// 위 캡션 (`false` = 아래).
+    top: bool,
+    full_size: bool,
+    /// `H_c` — 캡션 캐시의 마지막 줄 아래.
+    height: i32,
+    gap: i32,
+    last_width: Option<i32>,
+}
+
+/// D: 표 캡션 admission — 위·아래만, 캡션 번호 거부(Q7), 캡션 문단마다 줄
+/// 캐시 필수, 글자 밖 내용 거부. 이것을 실패시키는 것: 측 검사 삭제 · 캐시
+/// 검사 삭제 · 번호 거부 삭제(`unsupported_table_captions_are_refused`).
+fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<AdmittedCaption<'a>> {
+    let top = match caption.side {
+        CaptionSide::Top => true,
+        CaptionSide::Bottom => false,
+        _ => {
+            return Err(PdfError::UnsupportedContent {
+                kind: "table caption side",
+                location: location.to_string(),
+            })
+        }
+    };
+    refuse_caption_number(Some(caption), location)?;
+    let mut height = 0i32;
+    for p in &caption.paragraphs {
+        let Some(cache) = p.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            return Err(PdfError::MissingLayoutCache {
+                count: 1,
+                first: format!("{location}/caption"),
+            });
+        };
+        if p.runs.iter().any(|r| !matches!(r.content, RunContent::Text(_))) {
+            return Err(PdfError::UnsupportedContent {
+                kind: "non-text content in table caption",
+                location: location.to_string(),
+            });
+        }
+        for seg in &cache.lines {
+            height = height.max(seg.vertpos + seg.vertsize);
+        }
+    }
+    Ok(AdmittedCaption {
+        caption,
+        top,
+        full_size: caption.full_size,
+        height,
+        gap: caption.gap.as_i32(),
+        last_width: caption.last_width.map(|w| w.as_i32()),
+    })
+}
+
+/// D: 캡션 문단 줄을 상자 원점 `(x, y)` 기준으로 놓는다 (캐시는 캡션
+/// 목록-상대 — 셀과 같은 재배치).
+fn emit_caption(
+    input: &PdfInput<'_>,
+    caption: &AdmittedCaption<'_>,
+    x: i32,
+    y: i32,
+    location: &str,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<()> {
+    for (pi, para) in caption.caption.paragraphs.iter().enumerate() {
+        let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            continue; // admit_caption 이 이미 거부 — 방어적 스킵.
+        };
+        let utf16: Vec<u16> = para.text_content().encode_utf16().collect();
+        if utf16.is_empty() {
+            continue;
+        }
+        let para_loc = format!("{location}/caption/p{pi}");
+        validate_textpos(cache, utf16.len(), &para_loc)?;
+        let run_spans = run_utf16_spans(para, warnings, &para_loc);
+        let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
+        let line_count = cache.lines.len();
+        for (li, seg) in cache.lines.iter().enumerate() {
+            let start = seg.textpos as usize;
+            let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
+            let atoms = slice_line_runs(&utf16, &run_spans, start, end)
+                .into_iter()
+                .map(crate::source::LineAtom::Text)
+                .collect();
+            let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                detail: format!("{para_loc}: no current page for a table caption"),
+            })?;
+            page.lines.push(LaidLine {
+                location: format!("{para_loc}/l{li}"),
+                atoms,
+                top_y: y + seg.vertpos,
+                baseline_y: y + seg.vertpos + seg.baseline,
+                vertsize: seg.vertsize,
+                line_box: LineBox { horzpos: x + seg.horzpos, horzsize: seg.horzsize },
+                is_last_line: li + 1 == line_count,
+                alignment,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.

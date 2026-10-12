@@ -806,6 +806,11 @@ fn render_warning_parts(warning: &PdfWarning) -> (&'static str, String, Option<S
             "split-table page boundary computed (cache has no signal)".to_string(),
             Some(location.clone()),
         ),
+        PdfWarning::TableCaptionWidthMismatch { location, saved, expected } => (
+            "TABLE_CAPTION_WIDTH_MISMATCH",
+            format!("table caption saved width {saved} differs from the placed width {expected}"),
+            Some(location.clone()),
+        ),
         PdfWarning::TableDeficitDistributed { location } => (
             "TABLE_DEFICIT_DISTRIBUTED",
             "merged-cell height deficit redistributed".to_string(),

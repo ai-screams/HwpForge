@@ -674,6 +674,10 @@ fn every_known_render_warning_has_a_code_and_the_render_stage() {
             "INVALID_IMAGE_GEOMETRY",
         ),
         (PdfWarning::TablePaginationComputed { location: location() }, "TABLE_PAGINATION_COMPUTED"),
+        (
+            PdfWarning::TableCaptionWidthMismatch { location: location(), saved: 1, expected: 2 },
+            "TABLE_CAPTION_WIDTH_MISMATCH",
+        ),
         (PdfWarning::TableDeficitDistributed { location: location() }, "TABLE_DEFICIT_DISTRIBUTED"),
         (
             PdfWarning::UnsupportedTableStyle { location: location(), what: "diagonal" },
@@ -694,7 +698,7 @@ fn every_known_render_warning_has_a_code_and_the_render_stage() {
         (PdfWarning::LineOverflow { location: location(), excess: 120 }, "LINE_OVERFLOW"),
     ];
 
-    assert_eq!(cases.len(), 22, "one case per known PdfWarning variant");
+    assert_eq!(cases.len(), 23, "one case per known PdfWarning variant");
     for (warning, code) in cases {
         let wrapped = ConvertOpsWarning::Render(warning);
         assert_eq!(wrapped.stage(), "render");

@@ -142,6 +142,7 @@ const AUDITED: &[Audited] = &[
             ("NonTextRunDropped", "NON_TEXT_RUN_DROPPED"),
             ("AnchorMarkerOnLineBoundary", "ANCHOR_MARKER_ON_LINE_BOUNDARY"),
             ("TablePaginationComputed", "TABLE_PAGINATION_COMPUTED"),
+            ("TableCaptionWidthMismatch", "TABLE_CAPTION_WIDTH_MISMATCH"),
             ("TableDeficitDistributed", "TABLE_DEFICIT_DISTRIBUTED"),
             ("UnsupportedTableStyle", "UNSUPPORTED_TABLE_STYLE"),
             ("BandOverflow", "BAND_OVERFLOW"),

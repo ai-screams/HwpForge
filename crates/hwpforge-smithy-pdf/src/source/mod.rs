@@ -1758,7 +1758,7 @@ fn refuse_object_out_margin(
 /// refused (§19.16 J, review r1): captions of pictures and text boxes are
 /// not drawn, so the number would vanish from a successful render.
 /// 이것을 실패시키는 것: 이 거부를 지우기(`caption_number_in_a_caption_is_refused`).
-fn refuse_caption_number(
+pub(crate) fn refuse_caption_number(
     caption: Option<&hwpforge_core::caption::Caption>,
     location: &str,
 ) -> PdfResult<()> {

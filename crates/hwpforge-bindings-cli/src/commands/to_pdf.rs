@@ -622,6 +622,12 @@ mod tests {
                 Some("s0/p1/l2"),
             ),
             (
+                PdfWarning::TableCaptionWidthMismatch { location: loc(), saved: 1, expected: 2 },
+                "TABLE_CAPTION_WIDTH_MISMATCH",
+                "table caption saved width 1 differs from the placed width 2",
+                Some("s0/p1/l2"),
+            ),
+            (
                 PdfWarning::TableDeficitDistributed { location: loc() },
                 "TABLE_DEFICIT_DISTRIBUTED",
                 "merged-cell height deficit redistributed",
@@ -696,6 +702,7 @@ mod tests {
                 PdfWarning::NonTextRunDropped { .. } => "NonTextRunDropped",
                 PdfWarning::AnchorMarkerOnLineBoundary { .. } => "AnchorMarkerOnLineBoundary",
                 PdfWarning::TablePaginationComputed { .. } => "TablePaginationComputed",
+                PdfWarning::TableCaptionWidthMismatch { .. } => "TableCaptionWidthMismatch",
                 PdfWarning::TableDeficitDistributed { .. } => "TableDeficitDistributed",
                 PdfWarning::UnsupportedTableStyle { .. } => "UnsupportedTableStyle",
                 PdfWarning::BandOverflow { .. } => "BandOverflow",
