@@ -6027,6 +6027,15 @@ mod tests {
             .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "caption", .. })));
         let plain = parse_body_text(&captioned_table_stream(None), &version()).unwrap();
         assert!(only_table(&plain).caption.is_none());
+        // A caption that declares more paragraphs than it holds ends at the
+        // body record, not at the first cell.
+        let open = parse_body_text(
+            &captioned_table_stream(Some(caption_list_header(2, 3, 0, 0, 0))),
+            &version(),
+        )
+        .unwrap();
+        assert_eq!(only_table(&open).caption.as_ref().map(|c| c.paragraphs.len()), Some(1));
+        assert_eq!(only_table(&open).cells[0].paragraphs[0].text, "칸");
     }
 
     /// E: table property bit 3 is `noAdjust`; bits 0-2 (page break, repeat
