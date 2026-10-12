@@ -2220,7 +2220,10 @@ pub(crate) fn build_hx_caption(
     let sub_list = sub_list_result?;
 
     // parent_width comes from HwpUnit::as_i32(), guaranteed non-negative
-    Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width as u32, sub_list })
+    // D: `fullSz` and a saved `lastWidth` other than the object width.
+    // 이것을 실패시키는 것: 상수 0·부모 폭 복귀(`caption_full_size_and_last_width_round_trip`).
+    let last_width = caption.last_width.map_or(parent_width, HwpUnit::as_i32).max(0) as u32;
+    Ok(HxCaption { side, full_sz: u32::from(caption.full_size), width, gap, last_width, sub_list })
 }
 
 /// Generates a unique object-instance ID string for authored shapes that

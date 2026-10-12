@@ -414,7 +414,11 @@ pub(crate) fn decode_textbox(
         rect.out_margin.as_ref(),
     )?;
 
-    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = rect
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let style = decode_shape_style(
         &rect.line_shape,
@@ -518,7 +522,11 @@ pub(crate) fn decode_line(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = line
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let placement = with_object_out_margin(
         decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow, ctx),
@@ -600,8 +608,11 @@ pub(crate) fn decode_ellipse(
         None => (Vec::new(), VerticalAlign::Top),
     };
 
-    let caption =
-        ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = ellipse
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let placement = with_object_out_margin(
         decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx),
@@ -673,8 +684,11 @@ pub(crate) fn decode_polygon(
         None => (Vec::new(), VerticalAlign::Top),
     };
 
-    let caption =
-        polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = polygon
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let placement = with_object_out_margin(
         decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow, ctx),
@@ -995,8 +1009,11 @@ pub(crate) fn decode_arc(
         decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow, ctx),
         ellipse.out_margin.as_ref(),
     )?;
-    let caption =
-        ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
+    let caption = ellipse
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), _depth, ctx))
+        .transpose()?;
 
     let mut control = Control::Arc {
         frame: hwpforge_core::ObjectFrame::new(),
@@ -1077,7 +1094,11 @@ pub(crate) fn decode_curve(
         decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow, ctx),
         curve.out_margin.as_ref(),
     )?;
-    let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = curve
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let mut control = Control::Curve {
         frame: hwpforge_core::ObjectFrame::new(),
@@ -1292,7 +1313,11 @@ pub(crate) fn decode_connect_line(
         decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow, ctx),
         cl.out_margin.as_ref(),
     )?;
-    let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = cl
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
 
     let mut control = Control::ConnectLine {
         frame: hwpforge_core::ObjectFrame::new(),
@@ -7253,6 +7278,38 @@ mod frame_tests {
             r#"<hp:tbl id="3" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="{rows}" colCnt="{cols}" cellSpacing="0" borderFillIDRef="1" noAdjust="0"><hp:sz width="{}" widthRelTo="ABSOLUTE" height="500" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:inMargin left="0" right="0" top="0" bottom="0"/>{zones}{body}</hp:tbl>"#,
             1000 * cols
         )
+    }
+
+    /// D: a table caption's `fullSz` and `lastWidth` round-trip; a
+    /// `lastWidth` equal to the table width decodes to `None` and writes
+    /// back as that width.
+    /// 이것을 실패시키는 것: `fullSz` 무시 · 정규화 생략/반전 · 인코더 상수 0·부모
+    /// 폭 복귀.
+    #[test]
+    fn caption_full_size_and_last_width_round_trip() {
+        let tbl = |full: u32, last: u32| {
+            let caption = format!(
+                r#"<hp:caption side="BOTTOM" fullSz="{full}" width="8504" gap="850" lastWidth="{last}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="8504" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>c</hp:t></hp:run></hp:p></hp:subList></hp:caption>"#
+            );
+            zone_tbl(1, 2, "").replace("<hp:inMargin", &format!("{caption}<hp:inMargin"))
+        };
+        for (full, last, expect) in
+            [(1u32, 2566u32, Some(2566)), (0, 2000, None), (0, 1999, Some(1999))]
+        {
+            let (content, lost) = decode(&tbl(full, last));
+            assert!(lost.is_empty(), "{lost:?}");
+            let RunContent::Table(table) = &content else { panic!("{content:?}") };
+            let caption = table.caption.as_ref().expect("caption");
+            assert_eq!(caption.full_size, full == 1);
+            assert_eq!(caption.last_width.map(|w| w.as_i32()), expect);
+            let out = encode(content);
+            assert!(
+                out.contains(&format!(
+                    r#"fullSz="{full}" width="8504" gap="850" lastWidth="{last}""#
+                )),
+                "{out}"
+            );
+        }
     }
 
     /// F: cell zones round-trip in order and field by field, written between

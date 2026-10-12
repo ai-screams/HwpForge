@@ -1077,7 +1077,8 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
         });
     }
 
-    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption =
+        hx.caption.as_ref().map(|c| convert_hx_caption(c, None, depth, ctx)).transpose()?;
 
     let page_break: TablePageBreak = decode_table_page_break(&hx.page_break)?;
     let width: Option<HwpUnit> = match hx.sz.as_ref() {
@@ -1141,6 +1142,15 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     // (`table_no_adjust_and_protect_round_trip`).
     table.no_adjust = hx.no_adjust != 0;
     table.cell_zones = decode_cell_zones(hx, &table, ctx);
+    // D: a caption box as wide as the table writes back as the table width.
+    let table_width = table.width.map(HwpUnit::as_i32).unwrap_or_else(|| {
+        table.rows.first().map_or(0, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
+    });
+    if let Some(caption) = table.caption.as_mut() {
+        if caption.last_width.map(HwpUnit::as_i32) == Some(table_width) {
+            caption.last_width = None;
+        }
+    }
     Ok(table)
 }
 
@@ -1415,7 +1425,11 @@ pub(crate) fn convert_picture(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
+    let caption = hx
+        .caption
+        .as_ref()
+        .map(|c| convert_hx_caption(c, Some(width.as_i32()), depth, ctx))
+        .transpose()?;
     let placement = super::shapes::with_object_out_margin(
         decode_image_placement(hx, ctx),
         hx.out_margin.as_ref(),
@@ -2249,8 +2263,12 @@ fn decode_sublist_paragraphs_skipping(
 /// Converts an `HxCaption` into a Core `Caption`.
 ///
 /// Parses side, gap, optional width, and paragraph content from the schema type.
+/// `object_width` is the width the encoder writes as `lastWidth` for this
+/// object; a `lastWidth` equal to it decodes to `None`, any other value is
+/// kept (`None` object width keeps every value — the caller normalizes).
 pub(crate) fn convert_hx_caption(
     hx: &HxCaption,
+    object_width: Option<i32>,
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Caption> {
@@ -2272,7 +2290,15 @@ pub(crate) fn convert_hx_caption(
     ctx.leave();
     let paragraphs = result?;
 
-    let mut caption = Caption::new(paragraphs, side).with_gap(gap);
+    // D: `fullSz` and `lastWidth` (31/31 HWP5 twins). 이것을 실패시키는 것:
+    // `fullSz` 무시 · `lastWidth` 정규화 생략/반전(`caption_full_size_and_last_width_round_trip`).
+    let last_width = (Some(i64::from(hx.last_width)) != object_width.map(i64::from))
+        .then(|| HwpUnit::new(i32::try_from(hx.last_width).unwrap_or(i32::MAX)).ok())
+        .flatten();
+    let mut caption = Caption::new(paragraphs, side)
+        .with_gap(gap)
+        .with_full_size(hx.full_sz != 0)
+        .with_last_width(last_width);
     caption.width = width;
     Ok(caption)
 }
@@ -6153,7 +6179,7 @@ mod tests {
                 paragraphs: vec![],
             },
         };
-        let caption = convert_hx_caption(&hx, 0, &mut DecodeCtx::new(0)).unwrap();
+        let caption = convert_hx_caption(&hx, None, 0, &mut DecodeCtx::new(0)).unwrap();
         use hwpforge_core::caption::CaptionSide;
         assert_eq!(caption.side, CaptionSide::Left);
         assert_eq!(caption.width.unwrap().as_i32(), 5000);
@@ -6183,7 +6209,7 @@ mod tests {
                 paragraphs: vec![],
             },
         };
-        let caption = convert_hx_caption(&hx, 0, &mut DecodeCtx::new(0)).unwrap();
+        let caption = convert_hx_caption(&hx, None, 0, &mut DecodeCtx::new(0)).unwrap();
         use hwpforge_core::caption::CaptionSide;
         assert_eq!(caption.side, CaptionSide::Right);
         assert!(caption.width.is_none(), "zero width must decode as None");
@@ -6215,11 +6241,12 @@ mod tests {
             },
         };
 
-        let top = convert_hx_caption(&make_caption("TOP"), 0, &mut DecodeCtx::new(0)).unwrap();
+        let top =
+            convert_hx_caption(&make_caption("TOP"), None, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(top.side, CaptionSide::Top);
 
         let bottom =
-            convert_hx_caption(&make_caption("BOTTOM"), 0, &mut DecodeCtx::new(0)).unwrap();
+            convert_hx_caption(&make_caption("BOTTOM"), None, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(bottom.side, CaptionSide::Bottom);
     }
 
