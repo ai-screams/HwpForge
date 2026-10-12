@@ -1383,7 +1383,12 @@ mod tests {
     fn minimal_doc_and_store() -> (Document<Validated>, HwpxStyleStore) {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_char_shape(HwpxCharShape {
             font_ref: HwpxFontRef::default(),
@@ -1630,9 +1635,21 @@ mod tests {
     fn rich_styles_roundtrip() {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
-        store.push_font(HwpxFont { id: 0, face_name: "Arial".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "Arial".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
         store.push_char_shape(HwpxCharShape {
             font_ref: HwpxFontRef {
                 hangul: FontIndex::new(0),

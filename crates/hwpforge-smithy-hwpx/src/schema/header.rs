@@ -164,6 +164,13 @@ pub struct HxFont {
     pub font_type: String,
     #[serde(rename = "@isEmbedded", default)]
     pub is_embedded: u32,
+    /// Substitute font (comes before `typeInfo`).
+    #[serde(
+        rename(serialize = "hh:substFont", deserialize = "substFont"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub subst_font: Option<HxSubstFont>,
     /// Font classification metadata.
     #[serde(
         rename(serialize = "hh:typeInfo", deserialize = "typeInfo"),
@@ -171,6 +178,19 @@ pub struct HxFont {
         skip_serializing_if = "Option::is_none"
     )]
     pub type_info: Option<HxTypeInfo>,
+}
+
+/// `<hh:substFont face="…" type="HFT" isEmbedded="0" binaryItemIDRef=""/>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxSubstFont {
+    #[serde(rename = "@face", default)]
+    pub face: String,
+    #[serde(rename = "@type", default)]
+    pub font_type: String,
+    #[serde(rename = "@isEmbedded", default)]
+    pub is_embedded: u32,
+    #[serde(rename = "@binaryItemIDRef", default)]
+    pub binary_item_id_ref: String,
 }
 
 /// `<hh:typeInfo>` — font classification metadata (PANOSE-like).

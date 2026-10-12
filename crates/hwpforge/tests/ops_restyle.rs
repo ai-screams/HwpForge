@@ -510,3 +510,42 @@ fn restyle_writes_an_unset_dormant_cell_margin_unsigned() {
         .count();
     assert_eq!(negative, 0, "{xml}");
 }
+
+/// C: restyling an HFT face with a substitute onto the preset's face writes
+/// the new face as TTF with no substitute and the default classification —
+/// the old face's kind, substitute and classification do not describe it.
+/// 이것을 실패시키는 것: `replace_font` 의 초기화 생략(출력에 `HFT`·`substFont`
+/// 가 남음).
+#[test]
+fn restyle_clears_the_replaced_face_metadata() {
+    use hwpforge::hwpx::style_store::{HwpxFontType, HwpxFontTypeInfo, HwpxSubstFont};
+    let mut store = HwpxStyleStore::new();
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        let mut font = HwpxFont::new(0, "휴먼명조", lang);
+        font.font_type = Some(HwpxFontType::Hft);
+        font.substitute = Some(HwpxSubstFont::new(Some(HwpxFontType::Hft), "한컴바탕"));
+        font.type_info = Some(HwpxFontTypeInfo::new("FCAT_MYUNGJO", [5, 4, 0, 1, 1, 1, 1, 1]));
+        store.push_font(font);
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("글꼴", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let before = HwpxDecoder::decode(&bytes).unwrap();
+    assert_eq!(before.style_store.iter_fonts().next().unwrap().font_type, Some(HwpxFontType::Hft));
+
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern")).expect("restyle");
+    let after = HwpxDecoder::decode(&out.bytes).unwrap();
+    let font = after.style_store.iter_fonts().next().unwrap();
+    assert_eq!(font.face_name, "맑은 고딕");
+    assert_eq!(font.font_type, Some(HwpxFontType::Ttf));
+    assert_eq!(font.substitute, None);
+    assert_eq!(font.type_info.as_ref().unwrap().family_type, "FCAT_GOTHIC");
+}

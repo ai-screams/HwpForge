@@ -18,12 +18,13 @@ use crate::schema::header::{
     HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxBullet, HxBulletParaHead, HxCharPr,
     HxCharProperties, HxFont, HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxLangValues,
     HxLineSpacing, HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList,
-    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo,
-    HxUnderline, HxUnitValue,
+    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSubstFont, HxSwitch, HxSwitchCase, HxSwitchDefault,
+    HxTypeInfo, HxUnderline, HxUnitValue,
 };
 use crate::style_store::{
     ActiveBorderFillBrush, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxDiagonalLine,
-    HwpxFont, HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxFont, HwpxFontType, HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore,
 };
 
 // ── Public entry point ──────────────────────────────────────────
@@ -576,9 +577,31 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
                 .map(|f| HxFont {
                     id: f.id,
                     face: crate::wire_xml::clean_font_name(&f.face_name),
-                    font_type: "TTF".into(),
+                    // C: an unknown kind is TTF, an unknown classification the
+                    // default one. 이것을 실패시키는 것: 상수 TTF·기본 분류
+                    // 복귀 / 대체 글꼴 미방출(`font_metadata_round_trips`).
+                    font_type: f.font_type.unwrap_or(HwpxFontType::Ttf).as_hwpx_str().into(),
                     is_embedded: 0,
-                    type_info: Some(default_type_info()),
+                    subst_font: f.substitute.as_ref().map(|sub| HxSubstFont {
+                        face: crate::wire_xml::clean_font_name(&sub.face_name),
+                        font_type: sub.font_type.unwrap_or(HwpxFontType::Ttf).as_hwpx_str().into(),
+                        is_embedded: 0,
+                        binary_item_id_ref: String::new(),
+                    }),
+                    type_info: Some(f.type_info.as_ref().map_or_else(default_type_info, |ti| {
+                        let [w, p, c, sv, a, l, m, x] = ti.values;
+                        HxTypeInfo {
+                            family_type: ti.family_type.clone(),
+                            weight: w,
+                            proportion: p,
+                            contrast: c,
+                            stroke_variation: sv,
+                            arm_style: a,
+                            letterform: l,
+                            midline: m,
+                            x_height: x,
+                        }
+                    })),
                 })
                 .collect();
             HxFontFaceGroup { lang, font_cnt, fonts: hx_fonts }
@@ -1031,7 +1054,12 @@ mod tests {
     fn minimal_store() -> HwpxStyleStore {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_char_shape(HwpxCharShape {
             height: HwpUnit::new(1000).unwrap(),
@@ -1159,12 +1187,29 @@ mod tests {
     fn test_font_grouping() {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
-            id: 1, face_name: "함초롬바탕".into(), lang: "HANGUL".into()
+            id: 1,
+            face_name: "함초롬바탕".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
-        store.push_font(HwpxFont { id: 0, face_name: "Arial".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "Arial".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
 
         let groups = group_fonts_by_lang(&store);
         assert_eq!(groups.len(), 2);
@@ -1340,6 +1385,47 @@ mod tests {
         assert!(xml.contains("</hh:head>"));
     }
 
+    /// C: a font's kind, substitute and classification round-trip through
+    /// the header; a font that knows none of them writes TTF, no substitute
+    /// and the default classification.
+    /// 이것을 실패시키는 것: 디코더가 셋 중 하나를 읽지 않기 · 인코더 상수
+    /// TTF·기본 분류 복귀 · 대체 글꼴 미방출 · 분류 칸 순서 밀림.
+    #[test]
+    fn font_metadata_round_trips() {
+        let xml = r#"<head version="1.4" secCnt="1"><refList><fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="2"><font id="0" face="휴먼명조" type="HFT" isEmbedded="0"><substFont face="한컴바탕" type="HFT" isEmbedded="0" binaryItemIDRef=""/><typeInfo familyType="FCAT_MYUNGJO" weight="5" proportion="4" contrast="3" strokeVariation="2" armStyle="7" letterform="8" midline="9" xHeight="10"/></font><font id="1" face="돋움" type="TTF" isEmbedded="0"><typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></font></fontface></fontfaces></refList></head>"#;
+        let store = crate::decoder::header::parse_header(xml).unwrap().style_store;
+        let hft = store.font(FontIndex::new(0)).unwrap();
+        assert_eq!(hft.font_type, Some(crate::style_store::HwpxFontType::Hft));
+        assert_eq!(
+            hft.substitute,
+            Some(crate::style_store::HwpxSubstFont::new(
+                Some(crate::style_store::HwpxFontType::Hft),
+                "한컴바탕"
+            ))
+        );
+        assert_eq!(
+            hft.type_info,
+            Some(crate::style_store::HwpxFontTypeInfo::new(
+                "FCAT_MYUNGJO",
+                [5, 4, 3, 2, 7, 8, 9, 10]
+            ))
+        );
+        let out = encode_header(&store, 1, None).unwrap();
+        assert!(
+            out.contains(r#"<hh:font id="0" face="휴먼명조" type="HFT" isEmbedded="0"><hh:substFont face="한컴바탕" type="HFT" isEmbedded="0" binaryItemIDRef=""/><hh:typeInfo familyType="FCAT_MYUNGJO" weight="5" proportion="4" contrast="3" strokeVariation="2" armStyle="7" letterform="8" midline="9" xHeight="10"/></hh:font>"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"<hh:font id="1" face="돋움" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" "#), "{out}");
+
+        let mut unknown = HwpxStyleStore::new();
+        unknown.push_font(HwpxFont::new(0, "A", "HANGUL"));
+        let out = encode_header(&unknown, 1, None).unwrap();
+        assert!(
+            out.contains(r#"<hh:font id="0" face="A" type="TTF" isEmbedded="0"><hh:typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/></hh:font>"#),
+            "{out}"
+        );
+    }
+
     // ── 10. Roundtrip with rich data ────────────────────────────
 
     #[test]
@@ -1348,15 +1434,28 @@ mod tests {
 
         // 2 HANGUL fonts + 1 LATIN font
         store.push_font(HwpxFont {
-            id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
+            id: 0,
+            face_name: "함초롬돋움".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
-            id: 1, face_name: "함초롬바탕".into(), lang: "HANGUL".into()
+            id: 1,
+            face_name: "함초롬바탕".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         store.push_font(HwpxFont {
             id: 0,
             face_name: "Times New Roman".into(),
             lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
 
         // Bold + colored char shape

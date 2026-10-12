@@ -116,5 +116,6 @@ pub use structural::{
 };
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
-    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore, HwpxSubstFont,
 };

@@ -38,12 +38,98 @@ pub struct HwpxFont {
     pub face_name: String,
     /// Language group this font belongs to (e.g. `"HANGUL"`, `"LATIN"`).
     pub lang: String,
+    /// Font kind (`<hh:font type>`). `None` = unknown; the encoder writes
+    /// `TTF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_type: Option<HwpxFontType>,
+    /// Substitute font (`<hh:substFont>`), used when this face is missing.
+    /// `None` = no substitute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substitute: Option<HwpxSubstFont>,
+    /// Classification (`<hh:typeInfo>`, PANOSE-like). `None` = unknown; the
+    /// encoder writes its default classification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_info: Option<HwpxFontTypeInfo>,
 }
 
 impl HwpxFont {
-    /// Creates a new font entry.
+    /// Creates a new font entry with unknown kind, no substitute and unknown
+    /// classification.
     pub fn new(id: u32, face_name: impl Into<String>, lang: impl Into<String>) -> Self {
-        Self { id, face_name: face_name.into(), lang: lang.into() }
+        Self {
+            id,
+            face_name: face_name.into(),
+            lang: lang.into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        }
+    }
+}
+
+/// Font kind of `<hh:font type>` / `<hh:substFont type>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum HwpxFontType {
+    /// TrueType font (`TTF`).
+    Ttf,
+    /// Hangul font (`HFT`).
+    Hft,
+}
+
+impl HwpxFontType {
+    /// The HWPX attribute value.
+    pub fn as_hwpx_str(self) -> &'static str {
+        match self {
+            Self::Ttf => "TTF",
+            Self::Hft => "HFT",
+        }
+    }
+
+    /// Parses an HWPX attribute value; `None` for anything else.
+    pub fn from_hwpx_str(value: &str) -> Option<Self> {
+        match value {
+            "TTF" => Some(Self::Ttf),
+            "HFT" => Some(Self::Hft),
+            _ => None,
+        }
+    }
+}
+
+/// A substitute font (`<hh:substFont face type>`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HwpxSubstFont {
+    /// Font kind. `None` = unknown; the encoder writes `TTF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_type: Option<HwpxFontType>,
+    /// Face name of the substitute.
+    pub face_name: String,
+}
+
+impl HwpxSubstFont {
+    /// Creates a substitute font.
+    pub fn new(font_type: Option<HwpxFontType>, face_name: impl Into<String>) -> Self {
+        Self { font_type, face_name: face_name.into() }
+    }
+}
+
+/// A font's classification (`<hh:typeInfo>`): the family type and the eight
+/// PANOSE-like numbers, as the wire carries them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HwpxFontTypeInfo {
+    /// Family type (`FCAT_UNKNOWN`, `FCAT_MYUNGJO`, `FCAT_GOTHIC` …).
+    pub family_type: String,
+    /// `weight`, `proportion`, `contrast`, `strokeVariation`, `armStyle`,
+    /// `letterform`, `midline`, `xHeight`, in that order.
+    pub values: [u32; 8],
+}
+
+impl HwpxFontTypeInfo {
+    /// Creates a classification from its family type and eight numbers.
+    pub fn new(family_type: impl Into<String>, values: [u32; 8]) -> Self {
+        Self { family_type: family_type.into(), values }
     }
 }
 
@@ -1177,10 +1263,21 @@ impl HwpxStyleStore {
     /// replicated across 7 language groups, so all matching entries are updated.
     ///
     /// Specialty fonts (e.g., D2Coding for code blocks) are preserved because
-    /// they don't match `old_face`.
+    /// they don't match `old_face`. A replaced entry whose name changes loses
+    /// its kind, substitute and classification (they described the old face),
+    /// so the encoder writes its defaults for them.
     pub fn replace_font(&mut self, old_face: &str, new_face: &str) {
         for font in &mut self.fonts {
             if font.face_name == old_face {
+                // The kind, substitute and classification described the old
+                // face; a different face's are not known. 이것을 실패시키는
+                // 것: 초기화 생략(`replace_font_clears_metadata_of_a_new_face`) /
+                // 같은 이름에서도 초기화.
+                if new_face != old_face {
+                    font.font_type = None;
+                    font.substitute = None;
+                    font.type_info = None;
+                }
                 font.face_name = new_face.to_string();
             }
         }
@@ -1414,6 +1511,9 @@ fn build_store_from_registry_with(
                     id: i as u32,
                     face_name: font_id.as_str().to_string(),
                     lang: lang.to_string(),
+                    font_type: None,
+                    substitute: None,
+                    type_info: None,
                 });
             }
         }
@@ -1423,6 +1523,9 @@ fn build_store_from_registry_with(
                 id: 0,
                 face_name: default_font.to_string(),
                 lang: lang.to_string(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
     }
@@ -1892,6 +1995,9 @@ mod tests {
             id: 0,
             face_name: "함초롬돋움".into(),
             lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
         });
         assert_eq!(idx.get(), 0);
         let font = store.font(idx).unwrap();
@@ -1974,6 +2080,9 @@ mod tests {
                 id: i,
                 face_name: format!("Font{i}"),
                 lang: "LATIN".into(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
             assert_eq!(idx.get(), i as usize);
         }
@@ -1988,7 +2097,14 @@ mod tests {
         assert_eq!(store.char_shape_count(), 0);
         assert_eq!(store.para_shape_count(), 0);
 
-        store.push_font(HwpxFont { id: 0, face_name: "A".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "A".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
         store.push_char_shape(HwpxCharShape::default());
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape::default());
@@ -2004,10 +2120,30 @@ mod tests {
         // 이름을 hangul-우선으로 돌려준다 (blank-HPC 실측: 한글=휴먼명조 +
         // 영문=별도 폰트 구성이 국룰).
         let mut store = HwpxStyleStore::new();
-        store
-            .push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANGUL".into() });
-        store.push_font(HwpxFont { id: 0, face_name: "HCI Poppy".into(), lang: "LATIN".into() });
-        store.push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANJA".into() });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "휴먼명조".into(),
+            lang: "HANGUL".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "HCI Poppy".into(),
+            lang: "LATIN".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
+        store.push_font(HwpxFont {
+            id: 0,
+            face_name: "휴먼명조".into(),
+            lang: "HANJA".into(),
+            font_type: None,
+            substitute: None,
+            type_info: None,
+        });
         store.push_char_shape(HwpxCharShape::default()); // 모든 축 = 그룹-로컬 0
         let names = store.char_font_axis_names(CharShapeIndex::new(0));
         assert_eq!(names, vec!["휴먼명조", "HCI Poppy"]);
@@ -2036,6 +2172,9 @@ mod tests {
                 id: i,
                 face_name: format!("Font{i}"),
                 lang: "LATIN".into(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
         let names: Vec<&str> = store.iter_fonts().map(|f| f.face_name.as_str()).collect();
@@ -3095,6 +3234,9 @@ mod tests {
                 id: 1,
                 face_name: "D2Coding".to_string(),
                 lang: lang.to_string(),
+                font_type: None,
+                substitute: None,
+                type_info: None,
             });
         }
         assert_eq!(store.font_count(), 14); // 7 (함초롬돋움) + 7 (D2Coding)
@@ -3111,6 +3253,28 @@ mod tests {
 
         // Total count unchanged
         assert_eq!(store.font_count(), 14);
+    }
+
+    /// C: replacing a face with a different one clears its kind, substitute
+    /// and classification; replacing it with itself keeps them.
+    /// 이것을 실패시키는 것: 초기화 생략 · 같은 이름에서도 초기화.
+    #[test]
+    fn replace_font_clears_metadata_of_a_new_face() {
+        let known = || {
+            let mut font = HwpxFont::new(0, "휴먼명조", "HANGUL");
+            font.font_type = Some(HwpxFontType::Hft);
+            font.substitute = Some(HwpxSubstFont::new(Some(HwpxFontType::Hft), "한컴바탕"));
+            font.type_info = Some(HwpxFontTypeInfo::new("FCAT_MYUNGJO", [5, 4, 0, 1, 1, 1, 1, 1]));
+            font
+        };
+        let mut store = HwpxStyleStore::new();
+        store.push_font(known());
+        store.replace_font("휴먼명조", "휴먼명조");
+        assert_eq!(store.font(FontIndex::new(0)).unwrap(), &known());
+        store.replace_font("휴먼명조", "함초롬바탕");
+        let font = store.font(FontIndex::new(0)).unwrap();
+        assert_eq!(font.face_name, "함초롬바탕");
+        assert_eq!((font.font_type, &font.substitute, &font.type_info), (None, &None, &None));
     }
 
     // ── StyleLookup impl tests ──────────────────────────────────

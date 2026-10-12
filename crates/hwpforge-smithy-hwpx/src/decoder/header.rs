@@ -19,8 +19,8 @@ use crate::schema::header::{
 };
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
-    HwpxDiagonalLine, HwpxFill, HwpxFont, HwpxFontRef, HwpxGradientFill, HwpxImageFill,
-    HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxDiagonalLine, HwpxFill, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo,
+    HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle, HwpxStyleStore, HwpxSubstFont,
 };
 use hwpforge_core::section::BeginNum;
 
@@ -199,6 +199,31 @@ fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
                     // Same cleaning as the encoder, so a no-op round trip stays one.
                     face_name: crate::wire_xml::clean_font_name(&font.face),
                     lang: group.lang.clone(),
+                    // C: kind, substitute and classification round-trip.
+                    // 이것을 실패시키는 것: 셋 중 하나를 읽지 않기
+                    // (`font_metadata_round_trips`).
+                    font_type: HwpxFontType::from_hwpx_str(&font.font_type),
+                    substitute: font.subst_font.as_ref().map(|sub| {
+                        HwpxSubstFont::new(
+                            HwpxFontType::from_hwpx_str(&sub.font_type),
+                            crate::wire_xml::clean_font_name(&sub.face),
+                        )
+                    }),
+                    type_info: font.type_info.as_ref().map(|ti| {
+                        HwpxFontTypeInfo::new(
+                            ti.family_type.clone(),
+                            [
+                                ti.weight,
+                                ti.proportion,
+                                ti.contrast,
+                                ti.stroke_variation,
+                                ti.arm_style,
+                                ti.letterform,
+                                ti.midline,
+                                ti.x_height,
+                            ],
+                        )
+                    }),
                 });
             }
         }
