@@ -1195,6 +1195,16 @@ impl Hwp5RawParaShape {
         self.property2.is_some_and(|property2| property2 & (1 << 5) != 0)
     }
 
+    /// Returns the raw "한 줄로 입력" (single-line input) mode in `property2`
+    /// bits 0-1.
+    ///
+    /// Hancom twins map `0` to `lineWrap="BREAK"` and `1` to `"SQUEEZE"`;
+    /// `2` and `3` do not occur in the corpus. A record without `property2`
+    /// (older than v5.0.1.7) has no such field and reads as `0`.
+    pub fn line_wrap_raw(&self) -> u32 {
+        self.property2.map_or(0, |property2| property2 & 0b11)
+    }
+
     /// Returns the paragraph-level checked-item state (`property2` bit 7).
     ///
     /// User fixtures show checkable bullet items toggling this bit while
@@ -1901,6 +1911,23 @@ mod tests {
         assert_eq!(ps.property1 >> 2 & 0x7, 1); // center
         assert_eq!(ps.left_margin, 500);
         assert!(ps.property2.is_none());
+    }
+
+    /// `property2` bits 0-1 only; bits 2-3 (reserved) and above are not part
+    /// of the value, and a record without `property2` reads as 0.
+    ///
+    /// 이것을 실패시키는 것: `>> 2` 로 읽기(`0x8` → 2) · `& 1` 로 읽기
+    /// (`0x3` → 1) · 비트 무시(`0x1` → 0) · `property2` 없음에서 패닉.
+    #[test]
+    fn line_wrap_raw_reads_property2_bits_0_and_1() {
+        let mut data = vec![0u8; 46];
+        for (property2, expected) in [(0x1u32, 1), (0x0, 0), (0x8, 0), (0x3, 3), (0x31, 1)] {
+            data[42..46].copy_from_slice(&property2.to_le_bytes());
+            let ps = Hwp5RawParaShape::parse(&data).unwrap();
+            assert_eq!(ps.line_wrap_raw(), expected, "property2 {property2:#x}");
+        }
+        let old = Hwp5RawParaShape::parse(&[0u8; 42]).unwrap();
+        assert_eq!(old.line_wrap_raw(), 0);
     }
 
     #[test]
