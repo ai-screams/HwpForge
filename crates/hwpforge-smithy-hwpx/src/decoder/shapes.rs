@@ -7312,6 +7312,40 @@ mod frame_tests {
         }
     }
 
+    /// D: a picture caption's `lastWidth` equal to the picture width decodes
+    /// to `None`; another width stays (the object-width path, not the
+    /// table's).
+    /// 이것을 실패시키는 것: 개체 폭 정규화 생략(같은 폭이 `Some`) · 반전.
+    #[test]
+    fn picture_caption_last_width_normalizes_to_the_picture_width() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        for (last, expect) in [(3000, None), (3283, Some(3283))] {
+            let mut image = Image::new(
+                "BinData/a.png",
+                HwpUnit::new(3000).unwrap(),
+                HwpUnit::new(2000).unwrap(),
+                ImageFormat::Png,
+            );
+            image.caption = Some(
+                Caption::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("c", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    CaptionSide::Bottom,
+                )
+                .with_last_width(Some(HwpUnit::new(last).unwrap())),
+            );
+            let xml = encode(RunContent::Image(image));
+            assert!(xml.contains(&format!(r#"lastWidth="{last}""#)), "{xml}");
+            let parsed =
+                crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                    .unwrap();
+            let RunContent::Image(back) = &parsed.paragraphs[0].runs[0].content else { panic!() };
+            assert_eq!(back.caption.as_ref().unwrap().last_width.map(|w| w.as_i32()), expect);
+        }
+    }
+
     /// F: cell zones round-trip in order and field by field, written between
     /// `inMargin` and the first row; a table without zones writes no list.
     /// 이것을 실패시키는 것: 읽지 않기 · 행·열 뒤바꿈(비대칭 (12,0,31,1)) ·
