@@ -236,6 +236,56 @@ pub struct Table {
     /// size changes. `false` is the default and is not written to JSON.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_adjust: bool,
+    /// Cell zones (HWPX `<hp:cellzoneList>`, HWP 5.0 table "valid zone
+    /// info"): rectangles of cells drawn with one border/fill. Empty for most
+    /// tables and left out of JSON when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_zones: Vec<CellZone>,
+}
+
+/// A rectangle of table cells drawn with one border/fill (HWPX
+/// `<hp:cellzone>`): grid rows `start_row..=end_row`, columns
+/// `start_col..=end_col`.
+///
+/// `validate` refuses a zone whose start is past its end or whose end is
+/// outside the table.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::table::CellZone;
+///
+/// let zone = CellZone::new(0, 0, 1, 2, 5);
+/// assert_eq!((zone.end_row, zone.end_col, zone.border_fill_id), (1, 2, 5));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct CellZone {
+    /// First grid row of the zone.
+    pub start_row: u16,
+    /// First grid column of the zone.
+    pub start_col: u16,
+    /// Last grid row of the zone (inclusive).
+    pub end_row: u16,
+    /// Last grid column of the zone (inclusive).
+    pub end_col: u16,
+    /// The border/fill the zone is drawn with (`borderFillIDRef`).
+    pub border_fill_id: u32,
+}
+
+impl CellZone {
+    /// Creates a zone over rows `start_row..=end_row` and columns
+    /// `start_col..=end_col`.
+    #[must_use]
+    pub fn new(
+        start_row: u16,
+        start_col: u16,
+        end_row: u16,
+        end_col: u16,
+        border_fill_id: u32,
+    ) -> Self {
+        Self { start_row, start_col, end_row, end_col, border_fill_id }
+    }
 }
 
 impl Table {
@@ -266,6 +316,7 @@ impl Table {
             placement: None,
             frame: crate::frame::ObjectFrame::new(),
             no_adjust: false,
+            cell_zones: Vec::new(),
         }
     }
 
@@ -326,6 +377,13 @@ impl Table {
     #[must_use]
     pub fn with_page_break(mut self, page_break: TablePageBreak) -> Self {
         self.page_break = page_break;
+        self
+    }
+
+    /// Sets the cell zones (see [`Table::cell_zones`]).
+    #[must_use]
+    pub fn with_cell_zones(mut self, cell_zones: Vec<CellZone>) -> Self {
+        self.cell_zones = cell_zones;
         self
     }
 
@@ -676,6 +734,26 @@ mod tests {
         let json = serde_json::to_value(&with).unwrap();
         assert_eq!(json["dormant_margin"]["left"], 141);
         assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), with);
+    }
+
+    /// F: `cell_zones` is left out of JSON when empty, read as empty when
+    /// missing, and kept field by field.
+    ///
+    /// 이것을 실패시키는 것: `serde(default)` 삭제 · 빈 목록 생략 삭제 · 칸
+    /// 이름 바꾸기.
+    #[test]
+    fn table_cell_zones_json() {
+        let table = Table::new(vec![]);
+        let json = serde_json::to_value(&table).unwrap();
+        assert!(json.get("cell_zones").is_none(), "{json}");
+        assert!(serde_json::from_value::<Table>(json).unwrap().cell_zones.is_empty());
+        let zoned = table.with_cell_zones(vec![CellZone::new(12, 0, 31, 1, 7)]);
+        let json = serde_json::to_value(&zoned).unwrap();
+        assert_eq!(
+            json["cell_zones"],
+            serde_json::json!([{"start_row": 12, "start_col": 0, "end_row": 31, "end_col": 1, "border_fill_id": 7}])
+        );
+        assert_eq!(serde_json::from_value::<Table>(json).unwrap().cell_zones, zoned.cell_zones);
     }
 
     /// E: `no_adjust` is left out of JSON when false, read as false when

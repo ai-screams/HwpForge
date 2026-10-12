@@ -337,7 +337,39 @@ fn validate_table_run(
     for (row_i, row) in table.rows.iter().enumerate() {
         validate_table_row(row, ctx, row_i, &mut seen_non_header_row, empty_rows_covered)?;
     }
+    validate_cell_zones(table, ctx)
+}
 
+/// Every cell zone starts at or before its end and lies inside the grid.
+/// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로 비교
+/// (`cell_zone_validation`).
+fn validate_cell_zones(
+    table: &crate::table::Table,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if table.cell_zones.is_empty() {
+        return Ok(());
+    }
+    let (rows, cols) = match crate::table::grid::TableGrid::from_table(table) {
+        Ok(grid) => grid.dimensions(),
+        Err(_) => return Ok(()),
+    };
+    for (zone_index, zone) in table.cell_zones.iter().enumerate() {
+        let reason = if zone.start_row > zone.end_row || zone.start_col > zone.end_col {
+            "start past end"
+        } else if u32::from(zone.end_row) >= rows || u32::from(zone.end_col) >= cols {
+            "outside the table"
+        } else {
+            continue;
+        };
+        return Err(ValidationError::InvalidCellZone {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            zone_index,
+            reason,
+        });
+    }
     Ok(())
 }
 
@@ -1350,6 +1382,41 @@ mod tests {
                 cell_index: 0,
             })
         );
+    }
+
+    /// F: a cell zone must start at or before its end and end inside the
+    /// grid; the last row and column are inclusive.
+    /// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로
+    /// 비교(마지막 칸 영역 거부).
+    #[test]
+    fn cell_zone_validation() {
+        use crate::table::CellZone;
+        let check = |zone: CellZone| {
+            let row = || TableRow::new(vec![simple_cell(), simple_cell(), simple_cell()]);
+            let table = Table::new(vec![row(), row()]).with_cell_zones(vec![zone]);
+            validate_sections(&[Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            )])
+        };
+        assert!(check(CellZone::new(0, 0, 1, 2, 3)).is_ok(), "the whole 2x3 grid");
+        assert!(check(CellZone::new(1, 2, 1, 2, 3)).is_ok(), "the last cell");
+        for (zone, reason) in [
+            (CellZone::new(1, 0, 0, 2, 3), "start past end"),
+            (CellZone::new(0, 2, 1, 1, 3), "start past end"),
+            (CellZone::new(0, 0, 2, 2, 3), "outside the table"),
+            (CellZone::new(0, 0, 1, 3, 3), "outside the table"),
+        ] {
+            let err = check(zone).unwrap_err();
+            assert!(
+                matches!(err, ValidationError::InvalidCellZone { zone_index: 0, reason: r, .. } if r == reason),
+                "{zone:?}: {err}"
+            );
+            assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidSpan);
+        }
     }
 
     // === Rule 6: Spans >= 1 ===

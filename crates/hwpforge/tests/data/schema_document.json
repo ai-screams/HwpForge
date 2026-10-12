@@ -500,6 +500,13 @@
         "no_adjust": {
           "description": "Whether the cell sizes are fixed (HWPX `<hp:tbl noAdjust>`, HWP 5.0\ntable property bit 3): Hancom keeps the cell sizes when the table's\nsize changes. `false` is the default and is not written to JSON.",
           "type": "boolean"
+        },
+        "cell_zones": {
+          "description": "Cell zones (HWPX `<hp:cellzoneList>`, HWP 5.0 table \"valid zone\ninfo\"): rectangles of cells drawn with one border/fill. Empty for most\ntables and left out of JSON when empty.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CellZone"
+          }
         }
       },
       "required": [
@@ -1164,6 +1171,53 @@
       "required": [
         "width",
         "height"
+      ]
+    },
+    "CellZone": {
+      "description": "A rectangle of table cells drawn with one border/fill (HWPX\n`<hp:cellzone>`): grid rows `start_row..=end_row`, columns\n`start_col..=end_col`.\n\n`validate` refuses a zone whose start is past its end or whose end is\noutside the table.\n\n# Examples\n\n```\nuse hwpforge_core::table::CellZone;\n\nlet zone = CellZone::new(0, 0, 1, 2, 5);\nassert_eq!((zone.end_row, zone.end_col, zone.border_fill_id), (1, 2, 5));\n```",
+      "type": "object",
+      "properties": {
+        "start_row": {
+          "description": "First grid row of the zone.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "start_col": {
+          "description": "First grid column of the zone.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "end_row": {
+          "description": "Last grid row of the zone (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "end_col": {
+          "description": "Last grid column of the zone (inclusive).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "border_fill_id": {
+          "description": "The border/fill the zone is drawn with (`borderFillIDRef`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start_row",
+        "start_col",
+        "end_row",
+        "end_col",
+        "border_fill_id"
       ]
     },
     "Image": {

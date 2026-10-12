@@ -1019,6 +1019,12 @@
           "discriminant": null
         },
         {
+          "name": "InvalidCellZone",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "HeaderFooterAnchorOutOfRange",
           "shape": "struct",
           "cfg": [],

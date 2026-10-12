@@ -135,4 +135,4 @@ pub use section::{
 };
 pub use style_lookup::{BorderFillLines, BorderLine, BorderLineKind, FillKind, StyleLookup};
 pub use tab::{TabDef, TabStop};
-pub use table::{Table, TableCell, TableRow};
+pub use table::{CellZone, Table, TableCell, TableRow};

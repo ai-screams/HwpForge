@@ -360,6 +360,24 @@ pub enum ValidationError {
         reason: &'static str,
     },
 
+    /// A table cell zone ([`Table::cell_zones`](crate::table::Table::cell_zones))
+    /// starts past its end or ends outside the table grid. Its code is
+    /// [`CoreErrorCode::InvalidSpan`] (no new code).
+    #[error("Invalid cell zone {zone_index}: {reason} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidCellZone {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based index of the paragraph holding the table (as for
+        /// [`Self::InvalidSpan`]).
+        paragraph_index: usize,
+        /// Zero-based index of that paragraph's run holding the table.
+        run_index: usize,
+        /// Zero-based index of the zone in the table's list.
+        zone_index: usize,
+        /// Why it cannot be written (`"start past end"`, `"outside the table"`).
+        reason: &'static str,
+    },
+
     /// A header or footer is anchored to a paragraph the section does not
     /// have ([`HeaderFooter::anchor_paragraph`](crate::section::HeaderFooter::anchor_paragraph)
     /// is past the last body paragraph).
@@ -480,6 +498,8 @@ impl ValidationError {
             Self::InvalidCornerRatio { .. } => CoreErrorCode::InvalidShapeDimension,
             // Same reason: no new `CoreErrorCode` variant.
             Self::InvalidObjectFrame { .. } => CoreErrorCode::InvalidShapeDimension,
+            // A cell-range error like a span: no new `CoreErrorCode` variant.
+            Self::InvalidCellZone { .. } => CoreErrorCode::InvalidSpan,
             Self::HeaderFooterAnchorOutOfRange { .. } => {
                 CoreErrorCode::HeaderFooterAnchorOutOfRange
             }
