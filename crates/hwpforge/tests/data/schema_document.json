@@ -496,6 +496,10 @@
         "frame": {
           "description": "The table's size lock (HWPX `<hp:sz protect>`, HWP 5.0 object common\nproperty bit 20). A table has no original box: its\n[`original_size`](crate::frame::ObjectFrame::original_size) must stay\n`None` (`validate` rejects one).",
           "$ref": "#/$defs/ObjectFrame"
+        },
+        "no_adjust": {
+          "description": "Whether the cell sizes are fixed (HWPX `<hp:tbl noAdjust>`, HWP 5.0\ntable property bit 3): Hancom keeps the cell sizes when the table's\nsize changes. `false` is the default and is not written to JSON.",
+          "type": "boolean"
         }
       },
       "required": [

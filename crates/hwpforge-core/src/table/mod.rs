@@ -231,6 +231,11 @@ pub struct Table {
     /// `None` (`validate` rejects one).
     #[serde(default, skip_serializing_if = "crate::frame::ObjectFrame::is_unset")]
     pub frame: crate::frame::ObjectFrame,
+    /// Whether the cell sizes are fixed (HWPX `<hp:tbl noAdjust>`, HWP 5.0
+    /// table property bit 3): Hancom keeps the cell sizes when the table's
+    /// size changes. `false` is the default and is not written to JSON.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_adjust: bool,
 }
 
 impl Table {
@@ -260,6 +265,7 @@ impl Table {
             layout_cache: None,
             placement: None,
             frame: crate::frame::ObjectFrame::new(),
+            no_adjust: false,
         }
     }
 
@@ -320,6 +326,13 @@ impl Table {
     #[must_use]
     pub fn with_page_break(mut self, page_break: TablePageBreak) -> Self {
         self.page_break = page_break;
+        self
+    }
+
+    /// Sets whether the cell sizes are fixed (see [`Table::no_adjust`]).
+    #[must_use]
+    pub fn with_no_adjust(mut self, no_adjust: bool) -> Self {
+        self.no_adjust = no_adjust;
         self
     }
 
@@ -663,6 +676,24 @@ mod tests {
         let json = serde_json::to_value(&with).unwrap();
         assert_eq!(json["dormant_margin"]["left"], 141);
         assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), with);
+    }
+
+    /// E: `no_adjust` is left out of JSON when false, read as false when
+    /// missing (JSON written before the field), and kept when true.
+    ///
+    /// 이것을 실패시키는 것: `serde(default)` 삭제(옛 JSON 실패) ·
+    /// `skip_serializing_if` 삭제(기본 표 JSON 이 바뀜) · 직렬화에서 값 버리기.
+    #[test]
+    fn table_no_adjust_json() {
+        let table = Table::new(vec![]);
+        let json = serde_json::to_value(&table).unwrap();
+        assert!(json.get("no_adjust").is_none(), "{json}");
+        let back: Table = serde_json::from_value(json).unwrap();
+        assert!(!back.no_adjust);
+        let fixed = table.with_no_adjust(true);
+        let json = serde_json::to_value(&fixed).unwrap();
+        assert_eq!(json["no_adjust"], true);
+        assert!(serde_json::from_value::<Table>(json).unwrap().no_adjust);
     }
 
     /// §19.22 D3: a breaking cell's JSON has no `line_wrap` (old JSON and
