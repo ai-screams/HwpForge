@@ -415,14 +415,14 @@ fn attach_closed_node(
                 core_table = core_table.with_width(width);
             }
             if let Some(text) = table.caption {
-                use hwpforge_core::caption::Caption;
-                core_table = core_table.with_caption(Caption {
-                    paragraphs: vec![Paragraph::with_runs(
+                use hwpforge_core::caption::{Caption, CaptionSide};
+                core_table = core_table.with_caption(Caption::new(
+                    vec![Paragraph::with_runs(
                         vec![Run::text(&text, CharShapeIndex::new(0))],
                         ParaShapeIndex::new(0),
                     )],
-                    ..Caption::default()
-                });
+                    CaptionSide::Bottom,
+                ));
             }
             push_run_to_parent(stack, Run::table(core_table, table.char_shape_id))
         }

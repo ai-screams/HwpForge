@@ -1341,13 +1341,13 @@ mod tests {
             )],
             HwpUnit::from_mm(40.0).unwrap(),
         )])])
-        .with_caption(Caption {
-            paragraphs: vec![Paragraph::with_runs(
+        .with_caption(Caption::new(
+            vec![Paragraph::with_runs(
                 vec![Run::text("My Caption", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
-            ..Caption::default()
-        });
+            hwpforge_core::caption::CaptionSide::Bottom,
+        ));
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],

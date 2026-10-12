@@ -2272,7 +2272,9 @@ pub(crate) fn convert_hx_caption(
     ctx.leave();
     let paragraphs = result?;
 
-    Ok(Caption { side, width, gap, paragraphs })
+    let mut caption = Caption::new(paragraphs, side).with_gap(gap);
+    caption.width = width;
+    Ok(caption)
 }
 
 /// Guesses image format from the file reference name.

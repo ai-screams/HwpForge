@@ -772,6 +772,21 @@
           "items": {
             "$ref": "#/$defs/Paragraph"
           }
+        },
+        "full_size": {
+          "description": "Whether the caption box spans the object's outer margins too\n(HWPX `fullSz`, HWP 5.0 caption property bit 2). Left out of JSON\nwhen false.",
+          "type": "boolean"
+        },
+        "last_width": {
+          "description": "The caption box width the file saved (HWPX `lastWidth`), kept only\nwhen it differs from the object's width; `None` means the object's\nwidth, which encoders write.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
