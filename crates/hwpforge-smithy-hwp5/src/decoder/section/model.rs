@@ -612,6 +612,9 @@ pub(crate) struct Hwp5Table {
     /// top, bottom — §19.22 D1; 5,131/5,131 Hancom twins match `inMargin`).
     /// `None` when the record is too short.
     pub inner_margin: Option<Hwp5TableCellMargin>,
+    /// Whether the cell sizes are fixed: table body record property bit 3
+    /// (HWPX `noAdjust`).
+    pub no_adjust: bool,
 }
 
 /// Placement facts of a table's `CtrlHeader` (표 70 object common header):

@@ -1353,6 +1353,7 @@ mod tests {
                     controls: vec![
                         Hwp5Control::Table(Hwp5Table {
                             inner_margin: None,
+                            no_adjust: false,
                             rows: 1,
                             cols: 1,
                             page_break: Hwp5TablePageBreak::Cell,

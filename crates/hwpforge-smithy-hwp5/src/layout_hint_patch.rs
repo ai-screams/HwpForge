@@ -345,6 +345,7 @@ mod tests {
     fn table_height_hint_is_the_ctrl_header_height() {
         let mut table = Hwp5Table {
             inner_margin: None,
+            no_adjust: false,
             rows: 0,
             cols: 0,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -374,6 +375,7 @@ mod tests {
     fn derive_table_height_uses_line_segments_and_cell_margin() {
         let table = Hwp5Table {
             inner_margin: None,
+            no_adjust: false,
             rows: 1,
             cols: 1,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,

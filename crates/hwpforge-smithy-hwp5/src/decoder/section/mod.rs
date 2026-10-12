@@ -283,6 +283,7 @@ impl TableContext {
             ctrl_depth,
             table: Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 0,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::None,
@@ -1313,6 +1314,7 @@ impl BodyTextParserState {
                     ctx.table.cell_spacing = table_header.cell_spacing;
                     ctx.table.border_fill_id = table_header.border_fill_id;
                     ctx.table.inner_margin = table_header.inner_margin;
+                    ctx.table.no_adjust = table_header.no_adjust;
                     ctx.seen_table_body = true;
                 }
             }
@@ -2706,6 +2708,7 @@ struct ParsedTableHeader {
     cell_spacing: i16,
     border_fill_id: Option<u16>,
     inner_margin: Option<Hwp5TableCellMargin>,
+    no_adjust: bool,
 }
 
 /// Extract minimal table-level fields from a `Table` record data payload.
@@ -2731,6 +2734,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
             cell_spacing: 0,
             border_fill_id: None,
             inner_margin: None,
+            no_adjust: false,
         };
     }
     let properties = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -2756,6 +2760,10 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
     // 이것을 실패시키는 것: 오프셋 ±2 / 안쪽·바깥 맞바꿈
     // (`table_margins_and_cell_margin_flag_are_read`).
     let inner_margin = Hwp5TableCellMargin::read(data, 10);
+    // Property bit 3 is HWPX `noAdjust` (Hancom twins 6,061/6,061; 표 76
+    // lists bits 0-2 only). 이것을 실패시키는 것: bit 2 읽기
+    // (`table_property_bit_3_is_no_adjust`).
+    let no_adjust = properties & 0b1000 != 0;
     ParsedTableHeader {
         rows,
         cols,
@@ -2764,6 +2772,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
         cell_spacing,
         border_fill_id,
         inner_margin,
+        no_adjust,
     }
 }
 
@@ -5727,6 +5736,19 @@ mod tests {
         assert!(header.repeat_header);
         assert_eq!(header.cell_spacing, 120);
         assert_eq!(header.border_fill_id, Some(9));
+    }
+
+    /// E: table property bit 3 is `noAdjust`; bits 0-2 (page break, repeat
+    /// header) do not set it.
+    ///
+    /// 이것을 실패시키는 것: bit 2 읽기(`0x4` 가 참) · bit 3 무시(`0x8` 가 거짓).
+    #[test]
+    fn table_property_bit_3_is_no_adjust() {
+        for (properties, expected) in [(0x8u32, true), (0x7, false), (0xF, true), (0x0, false)] {
+            let mut data = basic_table_data(1, 1);
+            data[0..4].copy_from_slice(&properties.to_le_bytes());
+            assert_eq!(parse_table_header(&data).no_adjust, expected, "{properties:#x}");
+        }
     }
 
     #[test]

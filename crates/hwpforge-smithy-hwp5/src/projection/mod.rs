@@ -4276,6 +4276,7 @@ fn apply_table_projection_metadata(
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     core_table.repeat_header = table.repeat_header;
+    core_table.no_adjust = table.no_adjust;
     core_table.cell_spacing = (table.cell_spacing > 0)
         .then(|| HwpUnit::new(i32::from(table.cell_spacing)))
         .transpose()
@@ -6081,6 +6082,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: true,
                 rows: 2,
                 cols: 3,
                 page_break: Hwp5TablePageBreak::None,
@@ -6104,11 +6106,14 @@ mod tests {
         assert!(!table.repeat_header);
         assert_eq!(table.cell_spacing, Some(HwpUnit::new(120).unwrap()));
         assert_eq!(table.border_fill_id, Some(8));
+        // 이것을 실패시키는 것: 투영에서 `no_adjust` 대입 삭제.
+        assert!(table.no_adjust);
     }
 
     fn table_with_ctrl(properties: u32, x: i32, y: i32) -> Hwp5Table {
         Hwp5Table {
             inner_margin: None,
+            no_adjust: false,
             rows: 1,
             cols: 1,
             page_break: Hwp5TablePageBreak::Cell,
@@ -6339,6 +6344,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows,
                 cols,
                 page_break: Hwp5TablePageBreak::None,
@@ -6419,6 +6425,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6502,6 +6509,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6584,6 +6592,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 1,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6731,6 +6740,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 3,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6827,6 +6837,7 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6906,6 +6917,7 @@ mod tests {
                 line_segments: Vec::new(),
                 controls: vec![Hwp5Control::Table(Hwp5Table {
                     inner_margin: None,
+                    no_adjust: false,
                     rows: 1,
                     cols: 1,
                     page_break: Hwp5TablePageBreak::Cell,
@@ -7189,6 +7201,7 @@ mod tests {
         let t = build_empty_table(
             &Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 3,
                 cols: 4,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -7216,6 +7229,7 @@ mod tests {
         let t = build_empty_table(
             &Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 0,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::None,
@@ -7241,6 +7255,7 @@ mod tests {
         let t = build_empty_table(
             &Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 2,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::Table,
@@ -7265,6 +7280,7 @@ mod tests {
         let t = build_empty_table(
             &Hwp5Table {
                 inner_margin: None,
+                no_adjust: false,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Unknown(3),
