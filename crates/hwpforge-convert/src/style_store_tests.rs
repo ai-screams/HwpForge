@@ -2772,3 +2772,139 @@ fn no_empty_border_fill_without_a_borderless_char_shape() {
     let (out, _) = crate::hwp5_style_store_to_hwpx(&store_with_char_borders(&[Some(1), Some(2)]));
     assert_eq!(out.border_fill_count(), 2);
 }
+
+fn face(property: u8, alternate: Option<u8>, panose: Option<[u8; 10]>) -> Hwp5RawFaceName {
+    Hwp5RawFaceName {
+        property,
+        face_name: format!("F{property:02X}"),
+        alternate_font_type: alternate,
+        alternate_font_name: alternate.map(|_| "대체".to_string()),
+        panose1: panose,
+        default_font_name: None,
+    }
+}
+
+fn faces_to_hwpx(
+    faces: Vec<Hwp5RawFaceName>,
+) -> (Vec<hwpforge_smithy_hwpx::HwpxFont>, Vec<Hwp5Warning>) {
+    let count = faces.len();
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: faces,
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+    let (hwpx, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let fonts = (0..count)
+        .map(|i| hwpx.font(hwpforge_foundation::FontIndex::new(i)).unwrap().clone())
+        .collect();
+    (fonts, warnings)
+}
+
+fn font_warnings(warnings: &[Hwp5Warning]) -> Vec<&'static str> {
+    warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if subject.starts_with("style.font.") =>
+            {
+                Some(*subject)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// C: a face's kind (property bits 0-1), substitute (0x80, type 0/1/2) and
+/// classification (PANOSE byte 0 → family type, bytes 2-9 → the eight
+/// numbers) reach the HWPX font with no warning.
+/// 이것을 실패시키는 것: 하위 비트 대신 0x80 비트 읽기 · 대체 유형 1·2
+/// 뒤바꿈 · PANOSE 바이트 하나 밀림 · 계열 표 한 칸 밀림(3 → BRUSHSCRIPT) ·
+/// 지원값에 경고.
+#[test]
+fn hwp5_face_metadata_maps() {
+    use hwpforge_smithy_hwpx::{HwpxFontType, HwpxSubstFont};
+    let panose = |family: u8| [family, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+    let mut faces = vec![
+        face(0x61, None, Some(panose(2))),
+        face(0x62, None, None),
+        face(0x60, None, None),
+        face(0x81, Some(0), None),
+        face(0x81, Some(1), None),
+        face(0x82, Some(2), None),
+    ];
+    for family in 0..8 {
+        faces.push(face(0x41, None, Some(panose(family))));
+    }
+    let (fonts, warnings) = faces_to_hwpx(faces);
+    assert!(font_warnings(&warnings).is_empty(), "{warnings:?}");
+    let kinds: Vec<_> = fonts[..6].iter().map(|f| f.font_type).collect();
+    assert_eq!(
+        kinds,
+        [
+            Some(HwpxFontType::Ttf),
+            Some(HwpxFontType::Hft),
+            None,
+            Some(HwpxFontType::Ttf),
+            Some(HwpxFontType::Ttf),
+            Some(HwpxFontType::Hft)
+        ]
+    );
+    let info = fonts[0].type_info.as_ref().unwrap();
+    assert_eq!(
+        (info.family_type.as_str(), info.values),
+        ("FCAT_GOTHIC", [10, 11, 12, 13, 14, 15, 16, 17])
+    );
+    assert_eq!(fonts[1].type_info, None);
+    let subs: Vec<_> = fonts[2..6].iter().map(|f| f.substitute.clone()).collect();
+    assert_eq!(
+        subs,
+        [
+            None,
+            Some(HwpxSubstFont::new(None, "대체")),
+            Some(HwpxSubstFont::new(Some(HwpxFontType::Ttf), "대체")),
+            Some(HwpxSubstFont::new(Some(HwpxFontType::Hft), "대체")),
+        ]
+    );
+    let families: Vec<String> =
+        fonts[6..].iter().map(|f| f.type_info.as_ref().unwrap().family_type.clone()).collect();
+    assert_eq!(
+        families,
+        [
+            "FCAT_UNKNOWN",
+            "FCAT_MYUNGJO",
+            "FCAT_GOTHIC",
+            "FCAT_SSERIF",
+            "FCAT_BRUSHSCRIPT",
+            "FCAT_DECORATIVE",
+            "FCAT_NONRECTMJ",
+            "FCAT_NONRECTGT"
+        ]
+    );
+}
+
+/// C: values HWPX cannot carry — kind 3, substitute type 3, PANOSE family
+/// type 8 — each give one warning; the kind is unknown, the substitute is
+/// dropped, the family type is `FCAT_UNKNOWN`. Faces repeat across the seven
+/// language groups but warn once.
+/// 이것을 실패시키는 것: 세 경고 중 하나 삭제 · 언어 무리마다 경고.
+#[test]
+fn hwp5_face_metadata_unsupported_values_warn() {
+    let (fonts, warnings) = faces_to_hwpx(vec![
+        face(0x43, None, Some([8, 0, 1, 1, 1, 1, 1, 1, 1, 1])),
+        face(0x81, Some(3), None),
+    ]);
+    assert_eq!(
+        font_warnings(&warnings),
+        ["style.font.font_type", "style.font.type_info", "style.font.substitute"],
+        "{warnings:?}"
+    );
+    assert_eq!(fonts[0].font_type, None);
+    assert_eq!(fonts[0].type_info.as_ref().unwrap().family_type, "FCAT_UNKNOWN");
+    assert_eq!(fonts[1].substitute, None);
+}

@@ -29,7 +29,7 @@ use crate::style_store_border_fill::{push_hwp5_border_fills, push_required_borde
 use crate::style_store_convert::{
     hwp5_char_shape_to_hwpx_with_counts_and_warnings,
     hwp5_para_shape_to_hwpx_with_tab_id_and_warnings, hwp5_style_to_hwpx, hwp5_tab_def_to_hwpx,
-    push_fonts, resolved_font_group_counts,
+    push_fonts_with_warnings, resolved_font_group_counts,
 };
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_smithy_hwpx::EncodeWarning;
@@ -364,7 +364,7 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
                 out.push_border_fill(empty)
             },
         );
-    push_fonts(&mut out, store);
+    push_fonts_with_warnings(&mut out, store, &mut warnings);
     let font_group_counts = resolved_font_group_counts(store);
     let tab_id_map = Hwp5TabIdMap::from_doc_info(&store.tab_defs);
 

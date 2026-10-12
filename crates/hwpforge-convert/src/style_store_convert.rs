@@ -18,7 +18,8 @@ use hwpforge_smithy_hwp5::schema::header::{
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{
-    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore, HwpxSubstFont,
 };
 
 pub(crate) fn bgr_colorref_to_color(bgr: u32) -> Color {
@@ -39,7 +40,108 @@ pub(crate) fn char_shadow(raw: &Hwp5RawCharShape) -> CharShadow {
         .with_offset(x, y)
 }
 
-pub(crate) fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
+/// PANOSE byte 0 → `<hh:typeInfo familyType>`, in hwpxlib's enumeration
+/// order (Hancom twins: 0 UNKNOWN, 1 MYUNGJO, 2 GOTHIC, 4 BRUSHSCRIPT seen).
+const FONT_FAMILY_TYPES: [&str; 8] = [
+    "FCAT_UNKNOWN",
+    "FCAT_MYUNGJO",
+    "FCAT_GOTHIC",
+    "FCAT_SSERIF",
+    "FCAT_BRUSHSCRIPT",
+    "FCAT_DECORATIVE",
+    "FCAT_NONRECTMJ",
+    "FCAT_NONRECTGT",
+];
+
+/// HWP5 font kind code (FACE_NAME property low two bits, or a substitute's
+/// type byte): 1 TTF, 2 HFT. 0 is "unknown" in the format and maps to `None`
+/// like any other value; [`append_face_name_projection_warnings`] reports
+/// the undefined ones.
+fn hwp5_font_type(code: u8) -> Option<HwpxFontType> {
+    match code {
+        1 => Some(HwpxFontType::Ttf),
+        2 => Some(HwpxFontType::Hft),
+        _ => None,
+    }
+}
+
+/// One HWP5 face as an HWPX font: name, kind (property bits 0-1), the
+/// substitute (property 0x80) and the classification (PANOSE, 0x40 — byte 0
+/// is the family type, bytes 2-9 the eight numbers; Hancom twins match
+/// 36,332/36,332 kinds, 4,492/4,492 substitutes, 32,577/32,755 numbers).
+/// 이것을 실패시키는 것: 하위 비트 대신 0x80 비트 읽기 · 대체 유형 1·2 뒤바꿈 ·
+/// PANOSE 바이트 하나 밀림 · 계열 표 한 칸 밀림(`hwp5_face_metadata_maps`).
+fn hwp5_face_to_hwpx_font(id: u32, face: &Hwp5RawFaceName, lang: &str) -> HwpxFont {
+    let mut font = HwpxFont::new(id, &face.face_name, lang);
+    font.font_type = hwp5_font_type(face.property & 0b11);
+    font.substitute = match (face.alternate_font_type, face.alternate_font_name.as_ref()) {
+        (Some(code @ 0..=2), Some(name)) => Some(HwpxSubstFont::new(hwp5_font_type(code), name)),
+        _ => None,
+    };
+    font.type_info = face.panose1.map(|panose| {
+        let family = FONT_FAMILY_TYPES.get(usize::from(panose[0])).unwrap_or(&FONT_FAMILY_TYPES[0]);
+        let mut values = [0u32; 8];
+        for (value, byte) in values.iter_mut().zip(&panose[2..10]) {
+            *value = u32::from(*byte);
+        }
+        HwpxFontTypeInfo::new(*family, values)
+    });
+    font
+}
+
+/// Reports face-name values HWPX cannot carry: a kind of 3, a substitute
+/// type outside 0-2 (the substitute is dropped) and a PANOSE family type of
+/// 8 or more (written as `FCAT_UNKNOWN`).
+/// 이것을 실패시키는 것: 세 경고 중 하나 삭제 · 지원값에 경고.
+fn append_face_name_projection_warnings(
+    face: &Hwp5RawFaceName,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if face.property & 0b11 == 3 {
+        push_projection_fallback(
+            warnings,
+            "style.font.font_type",
+            format!("face name {raw_id} kind 3 is undefined; written as TTF"),
+        );
+    }
+    if let Some(code @ 3..) = face.alternate_font_type {
+        push_projection_fallback(
+            warnings,
+            "style.font.substitute",
+            format!(
+                "face name {raw_id} substitute font type {code} is undefined; substitute dropped"
+            ),
+        );
+    }
+    if let Some(panose) =
+        face.panose1.filter(|panose| usize::from(panose[0]) >= FONT_FAMILY_TYPES.len())
+    {
+        push_projection_fallback(
+            warnings,
+            "style.font.type_info",
+            format!(
+                "face name {raw_id} PANOSE family type {} is undefined; written as FCAT_UNKNOWN",
+                panose[0]
+            ),
+        );
+    }
+}
+
+/// Pushes the HWP5 faces as HWPX fonts and reports, once per face record,
+/// what HWPX cannot carry.
+pub(crate) fn push_fonts_with_warnings(
+    store: &mut HwpxStyleStore,
+    src: &Hwp5StyleStore,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    for (raw_id, face) in src.fonts.iter().enumerate() {
+        append_face_name_projection_warnings(face, raw_id, warnings);
+    }
+    push_fonts(store, src);
+}
+
+fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
     const FONT_LANGS: [&str; 7] =
         ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
 
@@ -53,7 +155,7 @@ pub(crate) fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
     if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts) {
         for (lang, fonts) in FONT_LANGS.into_iter().zip(groups.into_iter()) {
             for (idx, face) in fonts.iter().enumerate() {
-                store.push_font(HwpxFont::new(idx as u32, &face.face_name, lang));
+                store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
             }
         }
         return;
@@ -61,7 +163,7 @@ pub(crate) fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
 
     for &lang in &FONT_LANGS {
         for (idx, face) in src.fonts.iter().enumerate() {
-            store.push_font(HwpxFont::new(idx as u32, &face.face_name, lang));
+            store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
         }
     }
 }
