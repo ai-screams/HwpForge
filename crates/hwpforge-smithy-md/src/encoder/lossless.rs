@@ -323,6 +323,11 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
     if table.frame.size_protect {
         out.push_str(" data-size-protect=\"true\"");
     }
+    // E: fixed cell sizes, written only when set.
+    // 이것을 실패시키는 것: 방출 삭제(`table_no_adjust_round_trips`).
+    if table.no_adjust {
+        out.push_str(" data-no-adjust=\"true\"");
+    }
     if let Some(width) = table.width {
         out.push_str(&format!(
             " data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
@@ -697,6 +702,52 @@ mod tests {
             let back = round_trip(&frame_doc(vec![Run::table(t, CharShapeIndex::new(0))]));
             let RunContent::Table(t) = first_run(&back) else { panic!() };
             assert_eq!(t.frame.size_protect, lock);
+        }
+    }
+
+    /// E: `no_adjust` round-trips with the size lock in all four
+    /// combinations, at the top level and in a table nested in a cell; a
+    /// table without it writes no `data-no-adjust`.
+    /// 이것을 실패시키는 것: 인코더 방출 삭제 · 디코더 미반영 · 중첩 표에서
+    /// 값 소실 · `false` 에도 방출.
+    #[test]
+    fn table_no_adjust_round_trips() {
+        use hwpforge_core::table::{TableCell, TableRow};
+        let leaf = |no_adjust: bool, lock: bool| {
+            let mut t = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("t", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hu(9000),
+            )])])
+            .with_no_adjust(no_adjust);
+            t.frame = frame_of(None, lock);
+            t
+        };
+        for no_adjust in [false, true] {
+            for lock in [false, true] {
+                let inner = leaf(no_adjust, lock);
+                let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::table(inner, CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    hu(9000),
+                )])])
+                .with_no_adjust(!no_adjust);
+                let doc = frame_doc(vec![Run::table(outer, CharShapeIndex::new(0))]);
+                let md = encode_lossless(&doc).unwrap();
+                assert_eq!(md.matches("data-no-adjust=\"true\"").count(), 1, "{md}");
+                let back = round_trip(&doc);
+                let RunContent::Table(t) = first_run(&back) else { panic!() };
+                assert_eq!(t.no_adjust, !no_adjust);
+                let RunContent::Table(inner) = &t.rows[0].cells[0].paragraphs[0].runs[0].content
+                else {
+                    panic!()
+                };
+                assert_eq!((inner.no_adjust, inner.frame.size_protect), (no_adjust, lock));
+            }
         }
     }
 

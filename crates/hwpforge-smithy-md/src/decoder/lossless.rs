@@ -144,6 +144,7 @@ struct TableNode {
     rows: Vec<TableRow>,
     width: Option<HwpUnit>,
     caption: Option<String>,
+    no_adjust: bool,
 }
 
 #[derive(Debug)]
@@ -406,7 +407,7 @@ fn attach_closed_node(
             } else {
                 table.rows
             };
-            let mut core_table = Table::new(rows);
+            let mut core_table = Table::new(rows).with_no_adjust(table.no_adjust);
             core_table.frame = table.frame;
             if let Some(width) = table.width {
                 core_table = core_table.with_width(width);
@@ -634,7 +635,48 @@ fn parse_table_node(start: &BytesStart<'_>) -> MdResult<TableNode> {
         rows: Vec::new(),
         width: parse_optional_length_attr(start, "table", "data-width-unit", "data-width-mm")?,
         caption: attr_value(start, "data-caption")?,
+        no_adjust: parse_flag_attr(start, "table", "data-no-adjust")?,
     })
+}
+
+/// A `"true"`/`"false"` attribute (the FRAME boolean grammar): missing or
+/// `"false"` is false, a repeated name is refused, any other value
+/// (`"1"`, `"0"` …) is invalid. 이것을 실패시키는 것: 중복 검사 삭제 · `"1"`
+/// 을 참으로 받기 · `"false"` 를 참으로(`table_flag_attribute_errors`).
+fn parse_flag_attr(
+    start: &BytesStart<'_>,
+    element: &'static str,
+    attribute: &'static str,
+) -> MdResult<bool> {
+    let mut found: Option<String> = None;
+    let mut attributes = start.attributes();
+    attributes.with_checks(false);
+    for attr in attributes {
+        let attr = attr.map_err(|err| MdError::LosslessParse {
+            detail: format!("attribute decode error: {err}"),
+        })?;
+        if attr.key.as_ref() != attribute {
+            continue;
+        }
+        if found.is_some() {
+            return Err(MdError::LosslessParse {
+                detail: format!("<{element}> repeats {attribute}"),
+            });
+        }
+        let value = attr.normalized_value(XmlVersion::Explicit1_0).map_err(|err| {
+            MdError::LosslessParse {
+                detail: format!("attribute value decode error ({attribute}): {err}"),
+            }
+        })?;
+        found = Some(value.into_owned());
+    }
+    match found.as_deref() {
+        None | Some("false") => Ok(false),
+        Some("true") => Ok(true),
+        Some(other) => {
+            Err(MdError::LosslessInvalidAttribute { element, attribute, value: other.to_string() })
+        }
+    }
 }
 
 fn parse_image_format(raw: &str) -> ImageFormat {
@@ -990,6 +1032,43 @@ mod tests {
             assert!(matches!(table(&attrs), Err(MdError::LosslessParse { .. })), "{attrs}");
         }
         assert!(table(p).is_ok());
+    }
+
+    /// `data-no-adjust` reads only `"true"`/`"false"`; a repeat is refused.
+    /// 이것을 실패시키는 것: 중복 검사 삭제 · `"1"`·`"0"` 허용 · `"false"` 를
+    /// 참으로.
+    #[test]
+    fn table_flag_attribute_errors() {
+        let table = |attrs: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><table data-char-shape="0" {attrs}><tr><td data-col-span="1" data-row-span="1" data-width-unit="9000"><p data-para-shape="0"><span data-char-shape="0">t</span></p></td></tr></table></p>"#
+            )))
+        };
+        let no_adjust = |attrs: &str| {
+            let sections = table(attrs).unwrap();
+            let RunContent::Table(t) = &sections[0].paragraphs[0].runs[0].content else { panic!() };
+            t.no_adjust
+        };
+        assert!(no_adjust(r#"data-no-adjust="true""#));
+        assert!(!no_adjust(r#"data-no-adjust="false""#));
+        assert!(!no_adjust(""));
+        for value in ["1", "0", "yes"] {
+            assert!(
+                matches!(
+                    table(&format!(r#"data-no-adjust="{value}""#)),
+                    Err(MdError::LosslessInvalidAttribute { attribute: "data-no-adjust", .. })
+                ),
+                "{value}"
+            );
+        }
+        // Every other attribute found before the repeat, so no other lookup
+        // reaches it.
+        assert!(matches!(
+            table(
+                r#"data-width-unit="9000" data-width-mm="31.75" data-caption="c" data-no-adjust="true" data-no-adjust="true""#
+            ),
+            Err(MdError::LosslessParse { .. })
+        ));
     }
 
     /// The meaning stage: a negative axis, or an original axis of 0 under a
