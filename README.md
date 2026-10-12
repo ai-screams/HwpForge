@@ -3,6 +3,8 @@
 > **Rust로 한글(HWP/HWPX) 문서를 프로그래밍 방식으로 제어**
 >
 > [Hancom](https://www.hancom.com/) 한글 파일 읽기, 쓰기, 변환
+>
+> 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 
 <div align="center">
 
@@ -653,7 +655,7 @@ HwpForge/
 
 HwpForge는 거인들의 어깨 위에 서 있습니다.
 
-- [**Hancom**](https://www.hancom.com) — HWPX 포맷의 공개 문서와 [KS X 6101 (OWPML)](https://www.kssn.net/) 국가 표준이 없었다면 이 프로젝트는 시작조차 할 수 없었습니다. 포맷을 공개해 주신 Hancom에 감사드립니다.
+- [**Hancom**](https://www.hancom.com) — HWPX 포맷의 공개 문서와 [KS X 6101 (OWPML)](https://www.kssn.net/) 국가 표준이 없었다면 이 프로젝트는 시작조차 할 수 없었습니다. 포맷을 공개해 주신 Hancom에 감사드립니다. 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다. ([한컴 문서 파일 형식 공개](https://www.hancom.com/etc/hwpDownload.do))
 - [**openhwp**](https://github.com/openhwp/openhwp) — Rust로 HWP/HWPX를 다루는 IR 기반 아키텍처 설계에서 큰 영감을 받았습니다. HwpForge의 Core 레이어가 존재할 수 있었던 것은 openhwp이 먼저 그 길을 걸었기 때문입니다.
 - [**hwpxlib**](https://github.com/neolord0/hwpxlib) — Java로 작성된 가장 성숙한 HWPX 구현체입니다. 스펙과 실제 동작의 차이를 파악하는 데 결정적인 참고가 되었습니다.
 - [**hwp.js**](https://github.com/hahnlee/hwp.js) — HWP5 포맷의 quirks와 edge case를 꼼꼼히 문서화한 프로젝트입니다. 바이너리 포맷의 어두운 구석을 밝혀 준 덕분에 시행착오를 크게 줄일 수 있었습니다.
