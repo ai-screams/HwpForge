@@ -1983,12 +1983,76 @@ fn to_hwpx_style_store_materializes_gradient_fill() {
                 && fill.angle == 90
                 && fill.center_x == 0
                 && fill.center_y == 0
-                && fill.step == 255
+                && fill.step == 0
                 && fill.step_center == 50
                 && fill.alpha == 0
                 && fill.colors == vec![Color::from_raw(0x00FF0000), Color::from_raw(0x0000FF00)]
     ));
     assert!(hwpx_store.border_fill(4).unwrap().fill.is_none());
+}
+
+/// G: the gradation's `blur` is HWPX `step` — 0-255 carried, above 255
+/// clamped to 255 with one warning.
+///
+/// 이것을 실패시키는 것: 255 고정 복귀 · 자르기 없이 300 · 자르기 경고 삭제 ·
+/// 255 에도 경고.
+#[test]
+fn gradient_blur_becomes_step() {
+    let gradation = |blur: u32| Hwp5RawBorderFill {
+        property: 0,
+        three_d: false,
+        shadow: false,
+        slash_diagonal_shape: 0,
+        back_slash_diagonal_shape: 0,
+        center_line: false,
+        left: none_border_line(),
+        right: none_border_line(),
+        top: none_border_line(),
+        bottom: none_border_line(),
+        diagonal: none_border_line(),
+        fill: Hwp5RawBorderFillFill::Gradation(Hwp5RawGradationFill {
+            gradation_type: Hwp5GradationType::Linear,
+            angle: 0,
+            center_x: 0,
+            center_y: 0,
+            blur,
+            colors: vec![0x00FF0000, 0x0000FF00],
+            shape: None,
+            blur_center: Some(50),
+            extra_data: Vec::new(),
+        }),
+    };
+    let blurs = [50u32, 100, 255, 300];
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: blurs
+            .iter()
+            .enumerate()
+            .map(|(i, &blur)| border_fill_slot(i as u32 + 1, gradation(blur)))
+            .collect(),
+    };
+
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let steps: Vec<i32> = (1..=4)
+        .map(|id| hwpx_store.border_fill(id).unwrap().gradient_fill.as_ref().unwrap().step)
+        .collect();
+    assert_eq!(steps, [50, 100, 255, 255]);
+    let step_warnings: Vec<_> = warnings
+        .iter()
+        .filter(|w| {
+            matches!(w, Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.border_fill.gradation_step")
+        })
+        .collect();
+    assert_eq!(step_warnings.len(), 1, "{warnings:?}");
+    assert!(format!("{:?}", step_warnings[0]).contains("300"));
 }
 
 #[test]

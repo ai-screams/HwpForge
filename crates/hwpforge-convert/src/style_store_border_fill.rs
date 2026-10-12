@@ -197,13 +197,28 @@ fn hwp5_fill_to_hwpx(
                     ),
                 );
             }
+            // HWP5 `blur` is HWPX `step` (Hancom twins 144/144). The spec
+            // says 0-100 but Hancom writes 255 too, so 0-255 is carried and a
+            // larger value is clamped to 255 and reported.
+            // 이것을 실패시키는 것: 255 고정 복귀(`gradient_blur_becomes_step`) /
+            // 자르기 없이 300 / 자르기 경고 삭제.
+            if fill.blur > 255 {
+                push_projection_fallback(
+                    warnings,
+                    "style.border_fill.gradation_step",
+                    format!(
+                        "border_fill_id={border_fill_id}, gradation blur {} is above 255; clamped to 255",
+                        fill.blur
+                    ),
+                );
+            }
             BorderFillFillProjection {
                 gradient_fill: Some(HwpxGradientFill {
                     gradient_type: hwp5_gradation_type_to_hwpx(fill.gradation_type),
                     angle: fill.angle as i32,
                     center_x: fill.center_x,
                     center_y: fill.center_y,
-                    step: 255,
+                    step: fill.blur.min(255) as i32,
                     step_center: fill.blur_center.map(i32::from).unwrap_or(50),
                     alpha: 0,
                     colors: fill.colors.iter().copied().map(Color::from_raw).collect(),
