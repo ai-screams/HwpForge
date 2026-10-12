@@ -168,6 +168,15 @@ fn collect_flow_table_layout_hints(
     footer: &mut ScopeLayoutHints,
 ) {
     body.push_table(table);
+    // D: the caption's paragraphs are written inside `<hp:tbl>` before the
+    // rows (`<hp:caption>` precedes `<hp:tr>`), so their hints come first.
+    // 이것을 실패시키는 것: 캡션 hint 를 빼거나 칸 뒤로(캡션 표 변환이
+    // hint 수 부족으로 실패 — `table_caption_converts_with_its_line_cache`).
+    if let Some(caption) = &table.caption {
+        for paragraph in &caption.paragraphs {
+            collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
+        }
+    }
     for cell in &table.cells {
         for paragraph in &cell.paragraphs {
             collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
@@ -347,6 +356,7 @@ mod tests {
             inner_margin: None,
             no_adjust: false,
             cell_zones: Vec::new(),
+            caption: None,
             rows: 0,
             cols: 0,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -378,6 +388,7 @@ mod tests {
             inner_margin: None,
             no_adjust: false,
             cell_zones: Vec::new(),
+            caption: None,
             rows: 1,
             cols: 1,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,

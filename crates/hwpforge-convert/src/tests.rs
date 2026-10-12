@@ -2557,16 +2557,18 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
 
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        // A caption fixture's picture/table caption is reported, not carried
-        // (HWP5 shape captions are not projected), and an equation caption's
-        // number (`atno` kind 5) is reported (§19.16 J, P19) — the only
-        // warnings these fixtures give.
+        // A caption fixture's picture caption is reported, not carried (HWP5
+        // shape captions are not projected); a table caption is carried (D)
+        // and its number (`atno` kind 4), like an equation caption's (kind
+        // 5), is reported (§19.16 J, P19) — the only warnings these fixtures
+        // give.
         let unexpected: Vec<_> = warnings
             .iter()
             .filter(|w| {
                 let text = format!("{w:?}");
                 let expected = text.contains("DroppedControl { control: \"caption\"")
-                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                    || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        || relative.ends_with("sample-table-caption-4-refs.hwp"))
                         && text.contains("control.auto_number"));
                 !expected
             })
@@ -2654,16 +2656,18 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
         let out = unique_temp_path(&format!("crossref-link-{stem}.hwpx"));
         let warnings = hwp5_to_hwpx(&source, &out)
             .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
-        // A caption fixture's picture/table caption is reported, not carried
-        // (HWP5 shape captions are not projected), and an equation caption's
-        // number (`atno` kind 5) is reported (§19.16 J, P19) — the only
-        // warnings these fixtures give.
+        // A caption fixture's picture caption is reported, not carried (HWP5
+        // shape captions are not projected); a table caption is carried (D)
+        // and its number (`atno` kind 4), like an equation caption's (kind
+        // 5), is reported (§19.16 J, P19) — the only warnings these fixtures
+        // give.
         let unexpected: Vec<_> = warnings
             .iter()
             .filter(|w| {
                 let text = format!("{w:?}");
                 let expected = text.contains("DroppedControl { control: \"caption\"")
-                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                    || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        || relative.ends_with("sample-table-caption-4-refs.hwp"))
                         && text.contains("control.auto_number"));
                 !expected
             })

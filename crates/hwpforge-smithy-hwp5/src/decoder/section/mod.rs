@@ -285,6 +285,7 @@ impl TableContext {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 0,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::None,
@@ -342,8 +343,19 @@ impl TableContext {
             cell.expected_paragraphs == 0 || cell.cell.paragraphs.len() >= cell.expected_paragraphs
         });
         if should_finish {
-            if let Some(cell) = self.current_cell.take() {
-                self.table.cells.push(cell.cell);
+            self.finish_active_cell();
+        }
+    }
+
+    /// Closes the open cell (or caption holder) whatever its count says.
+    fn finish_active_cell(&mut self) {
+        if let Some(cell) = self.current_cell.take() {
+            match cell.caption {
+                Some(mut caption) => {
+                    caption.paragraphs = cell.cell.paragraphs;
+                    self.table.caption = Some(caption);
+                }
+                None => self.table.cells.push(cell.cell),
             }
         }
     }
@@ -370,6 +382,37 @@ struct CellHeaderFooter {
 struct ActiveTableCell {
     expected_paragraphs: usize,
     cell: Hwp5TableCell,
+    /// D: this "cell" collects the table caption's paragraphs (the caption
+    /// list header comes before the `TABLE` record); finishing it fills
+    /// [`Hwp5Table::caption`] instead of adding a cell.
+    caption: Option<Hwp5TableCaption>,
+}
+
+impl ActiveTableCell {
+    /// A holder for the caption's paragraphs, reusing the cell paragraph
+    /// machinery (text, char shapes, line cache, inline controls).
+    fn caption(expected_paragraphs: usize, caption: Hwp5TableCaption) -> Self {
+        let margin = Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 };
+        Self {
+            expected_paragraphs,
+            cell: Hwp5TableCell {
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 0,
+                height: 0,
+                margin,
+                vertical_align: Hwp5TableCellVerticalAlign::Top,
+                is_header: false,
+                has_margin: false,
+                line_wrap: 0,
+                border_fill_id: None,
+                paragraphs: Vec::new(),
+            },
+            caption: Some(caption),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1308,6 +1351,11 @@ impl BodyTextParserState {
             TagId::Table => {
                 let table_header = parse_table_header(&record.data);
                 if let Some(ctx) = self.table_stack.last_mut() {
+                    // D: the caption's paragraphs end where the body starts.
+                    if ctx.current_cell.as_ref().is_some_and(|c| c.caption.is_some()) {
+                        ctx.flush_current_cell_paragraph(&mut self.warnings);
+                        ctx.finish_active_cell();
+                    }
                     ctx.table.rows = table_header.rows;
                     ctx.table.cols = table_header.cols;
                     ctx.table.page_break = table_header.page_break;
@@ -1332,7 +1380,29 @@ impl BodyTextParserState {
             }
             TagId::ListHeader => {
                 if let Some(ctx) = self.table_stack.last_mut() {
-                    if ctx.seen_table_body && level == ctx.ctrl_depth.saturating_add(1) {
+                    // D: a list header directly under the table control before
+                    // its body is the caption. 이것을 실패시키는 것:
+                    // `seen_table_body` 조건 반전(칸이 캡션으로) · 오프셋 6 으로 읽기 ·
+                    // 짧은 레코드 경고 삭제(`table_caption_is_read`).
+                    if !ctx.seen_table_body
+                        && level == ctx.ctrl_depth.saturating_add(1)
+                        && ctx.current_cell.is_none()
+                        && ctx.table.caption.is_none()
+                    {
+                        match Hwp5TableCaption::parse_list_header(&record.data) {
+                            Some((paragraph_count, caption)) => {
+                                ctx.current_cell =
+                                    Some(ActiveTableCell::caption(paragraph_count, caption));
+                            }
+                            None => self.warnings.push(Hwp5Warning::DroppedControl {
+                                control: "caption",
+                                reason: format!(
+                                    "table caption list header is {} bytes (needs 22)",
+                                    record.data.len()
+                                ),
+                            }),
+                        }
+                    } else if ctx.seen_table_body && level == ctx.ctrl_depth.saturating_add(1) {
                         ctx.flush_current_cell_paragraph(&mut self.warnings);
                         ctx.finish_active_cell_if_ready();
                         match parse_table_cell(&record.data) {
@@ -1340,6 +1410,7 @@ impl BodyTextParserState {
                                 ctx.current_cell = Some(ActiveTableCell {
                                     expected_paragraphs: paragraph_count,
                                     cell,
+                                    caption: None,
                                 });
                                 ctx.finish_active_cell_if_ready();
                             }
@@ -5850,6 +5921,112 @@ mod tests {
         };
         assert_eq!(warnings(2, &[[12, 0, 31, 1, 7]]), 1);
         assert_eq!(warnings(1, &[[12, 0, 31, 1, 7]]), 0);
+    }
+
+    fn caption_list_header(
+        paragraphs: u16,
+        property: u32,
+        width: u32,
+        gap: i16,
+        last: u32,
+    ) -> Vec<u8> {
+        let mut d = paragraphs.to_le_bytes().to_vec();
+        d.extend_from_slice(&[0u8; 6]);
+        d.extend_from_slice(&property.to_le_bytes());
+        d.extend_from_slice(&width.to_le_bytes());
+        d.extend_from_slice(&gap.to_le_bytes());
+        d.extend_from_slice(&last.to_le_bytes());
+        d
+    }
+
+    /// One table whose control holds `caption` (if any) before the body and
+    /// one 1×1 cell.
+    fn captioned_table_stream(caption: Option<Vec<u8>>) -> Vec<u8> {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        if let Some(caption) = caption {
+            stream.extend(make_record(TagId::ListHeader, 1, &caption));
+            stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 2, &para_text_data("캡션")));
+        }
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 8000,
+                height: 1000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: None,
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("칸")));
+        stream
+    }
+
+    fn only_table(result: &SectionResult) -> &Hwp5Table {
+        match &result.paragraphs[0].controls[0] {
+            Hwp5Control::Table(table) => table,
+            other => panic!("expected Table, got {other:?}"),
+        }
+    }
+
+    /// D: the list header under the table control before the body record is
+    /// the caption — its block at bytes 8..22 (side, `fullSz`, width, gap,
+    /// last width) and its paragraphs, which stay out of the cells. A
+    /// shorter header is reported and drops the caption.
+    /// 이것을 실패시키는 것: `seen_table_body` 조건 반전(칸이 캡션으로) · 오프셋
+    /// 6 으로 읽기 · 측 마스크 오류 · `fullSz` 비트 오류 · 짧은 레코드 경고 삭제 ·
+    /// 본문에서 캡션 닫기 생략(칸 문단이 캡션으로).
+    #[test]
+    fn table_caption_is_read() {
+        let result = parse_body_text(
+            &captioned_table_stream(Some(caption_list_header(1, 0b111, 8504, 850, 45978))),
+            &version(),
+        )
+        .unwrap();
+        let table = only_table(&result);
+        let caption = table.caption.as_ref().expect("caption");
+        assert_eq!(
+            (caption.side, caption.full_size, caption.width, caption.gap, caption.last_width),
+            (3, true, 8504, 850, 45978)
+        );
+        assert_eq!(caption.paragraphs.len(), 1);
+        assert_eq!(caption.paragraphs[0].text, "캡션");
+        assert_eq!(table.cells.len(), 1);
+        assert_eq!(table.cells[0].paragraphs[0].text, "칸");
+        for (property, side) in [(0u32, 0u8), (1, 1), (2, 2)] {
+            let result = parse_body_text(
+                &captioned_table_stream(Some(caption_list_header(1, property, 0, 0, 0))),
+                &version(),
+            )
+            .unwrap();
+            let caption = only_table(&result).caption.as_ref().unwrap();
+            assert_eq!((caption.side, caption.full_size), (side, false));
+        }
+
+        let short = parse_body_text(
+            &captioned_table_stream(Some(vec![1, 0, 0, 0, 0, 0, 0, 0])),
+            &version(),
+        )
+        .unwrap();
+        assert!(only_table(&short).caption.is_none());
+        assert_eq!(only_table(&short).cells[0].paragraphs[0].text, "칸");
+        assert!(short
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "caption", .. })));
+        let plain = parse_body_text(&captioned_table_stream(None), &version()).unwrap();
+        assert!(only_table(&plain).caption.is_none());
     }
 
     /// E: table property bit 3 is `noAdjust`; bits 0-2 (page break, repeat

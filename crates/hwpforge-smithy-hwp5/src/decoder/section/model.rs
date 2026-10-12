@@ -618,6 +618,50 @@ pub(crate) struct Hwp5Table {
     /// Cell zones read from the table body record ("valid zone info"),
     /// complete entries only — not yet checked against the grid.
     pub cell_zones: Vec<Hwp5TableCellZone>,
+    /// The table's caption: a `LIST_HEADER` under the table control that
+    /// comes before the table body record, and its paragraphs.
+    pub caption: Option<Hwp5TableCaption>,
+}
+
+/// A table caption (`LIST_HEADER` before the `TABLE` record, 표 71–73):
+/// the caption property word, width, gap and last width at bytes 8..22 of
+/// the list header (31/31 Hancom twins equal `<hp:caption>` attribute for
+/// attribute), and the caption paragraphs.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5TableCaption {
+    /// Property bits 0-1: 0 left, 1 right, 2 top, 3 bottom.
+    pub side: u8,
+    /// Property bit 2: the box spans the object's outer margins.
+    pub full_size: bool,
+    /// Caption width (used by side captions).
+    pub width: u32,
+    /// Gap between caption and table.
+    pub gap: i16,
+    /// The caption box width the file laid out.
+    pub last_width: u32,
+    /// Caption paragraphs.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl Hwp5TableCaption {
+    /// Reads the caption list header: paragraph count (`u16` at 0) and the
+    /// caption block at 8..22. `None` when the record is shorter.
+    pub(crate) fn parse_list_header(data: &[u8]) -> Option<(usize, Self)> {
+        let b = data.get(..22)?;
+        let u32_at = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        let property = u32_at(8);
+        Some((
+            usize::from(u16::from_le_bytes([b[0], b[1]])),
+            Self {
+                side: (property & 0b11) as u8,
+                full_size: property & 0b100 != 0,
+                width: u32_at(12),
+                gap: i16::from_le_bytes([b[16], b[17]]),
+                last_width: u32_at(18),
+                paragraphs: Vec::new(),
+            },
+        ))
+    }
 }
 
 /// One cell zone of a table body record: 10 bytes, five `u16` in wire

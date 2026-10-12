@@ -13,6 +13,7 @@ mod text;
 
 use std::collections::{BTreeSet, VecDeque};
 
+use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
@@ -4124,6 +4125,12 @@ fn build_empty_table(table: &Hwp5Table, warnings: &mut Vec<Hwp5Warning>) -> Tabl
 
     let mut core_table = Table::new(table_rows);
     apply_table_projection_metadata(table, &mut core_table, warnings);
+    if table.caption.is_some() {
+        warnings.push(Hwp5Warning::DroppedControl {
+            control: "caption",
+            reason: "the caption of a table without cells is not carried".to_string(),
+        });
+    }
     core_table
 }
 
@@ -4173,7 +4180,63 @@ fn build_table_with_images(
 
     let mut core_table = Table::new(rows);
     apply_table_projection_metadata(table, &mut core_table, &mut projection_images.warnings);
+    core_table.caption = project_table_caption(table, &core_table, projection_images);
     core_table
+}
+
+/// D: the table caption as a Core caption. `last_width` is kept only when
+/// it differs from the width the HWPX encoder writes for this table (its
+/// own width, else the first row's), so an unedited conversion writes the
+/// source value back either way.
+/// 이것을 실패시키는 것: 측 대응 밀림 · `fullSz` 무시 · 정규화 생략/반전
+/// (`table_caption_projects_to_core`).
+fn project_table_caption(
+    table: &Hwp5Table,
+    core_table: &Table,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Caption> {
+    let source = table.caption.as_ref()?;
+    let side = match source.side {
+        0 => CaptionSide::Left,
+        1 => CaptionSide::Right,
+        2 => CaptionSide::Top,
+        _ => CaptionSide::Bottom,
+    };
+    let paragraphs = if source.paragraphs.is_empty() {
+        vec![empty_paragraph()]
+    } else {
+        source
+            .paragraphs
+            .iter()
+            .map(|paragraph| {
+                project_paragraph_with_images(
+                    paragraph,
+                    projection_images,
+                    ImageProjectionContext::Flow,
+                    None,
+                )
+                .paragraph
+            })
+            .collect()
+    };
+    let unit = |v: i64| HwpUnit::new(i32::try_from(v).unwrap_or(i32::MAX)).ok();
+    let encoder_width = core_table.width.map(HwpUnit::as_i32).unwrap_or_else(|| {
+        core_table.rows.first().map_or(0, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
+    });
+    let mut caption = Caption::new(paragraphs, side)
+        .with_gap(unit(i64::from(source.gap)).unwrap_or(HwpUnit::ZERO))
+        .with_full_size(source.full_size)
+        .with_last_width(
+            (i64::from(source.last_width) != i64::from(encoder_width))
+                .then(|| unit(i64::from(source.last_width)))
+                .flatten(),
+        );
+    if source.width > 0 {
+        if let Some(width) = unit(i64::from(source.width)) {
+            caption = caption.with_width(width);
+        }
+    }
+    Some(caption)
 }
 
 /// Keeps rows that the wire left empty truthful when row spans from earlier
@@ -6152,6 +6215,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: true,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 2,
                 cols: 3,
                 page_break: Hwp5TablePageBreak::None,
@@ -6177,6 +6241,65 @@ mod tests {
         assert_eq!(table.border_fill_id, Some(8));
         // 이것을 실패시키는 것: 투영에서 `no_adjust` 대입 삭제.
         assert!(table.no_adjust);
+    }
+
+    fn captioned(side: u8, full_size: bool, last_width: u32) -> Table {
+        use crate::decoder::section::Hwp5TableCaption;
+        let mut table = table_with_ctrl(0, 0, 0);
+        table.cells = vec![grid_test_cell(0, 0, 1, 1), grid_test_cell(0, 1, 1, 1)];
+        table.rows = 1;
+        table.cols = 2;
+        table.caption = Some(Hwp5TableCaption {
+            side,
+            full_size,
+            width: 8504,
+            gap: 850,
+            last_width,
+            paragraphs: vec![grid_test_cell(0, 0, 1, 1).paragraphs.remove(0)],
+        });
+        let para = Hwp5Paragraph {
+            end_char_shape: None,
+            silent_wires: Vec::new(),
+            page_break: false,
+            column_break: false,
+            text: String::new(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(table)],
+        };
+        let (doc, _) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        doc.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|r| r.content.as_table().cloned())
+            .expect("table run")
+    }
+
+    /// D: the HWP5 caption becomes a Core caption — side, `fullSz`, width,
+    /// gap and paragraphs; `last_width` only when it differs from the width
+    /// the encoder writes (here the first row, 8,000).
+    /// 이것을 실패시키는 것: 측 대응 밀림 · `fullSz` 무시 · 정규화 생략(8,000 이
+    /// `Some`) · 정규화 반전(다른 값이 `None`) · 캡션 대입 삭제.
+    #[test]
+    fn table_caption_projects_to_core() {
+        let table = captioned(3, true, 8566);
+        let caption = table.caption.as_ref().expect("caption");
+        assert_eq!(caption.side, CaptionSide::Bottom);
+        assert!(caption.full_size);
+        assert_eq!(caption.width, Some(HwpUnit::new(8504).unwrap()));
+        assert_eq!(caption.gap, HwpUnit::new(850).unwrap());
+        assert_eq!(caption.last_width, Some(HwpUnit::new(8566).unwrap()));
+        assert_eq!(caption.paragraphs.len(), 1);
+        assert_eq!(captioned(3, false, 8000).caption.unwrap().last_width, None);
+        let sides: Vec<CaptionSide> =
+            (0..4).map(|side| captioned(side, false, 8000).caption.unwrap().side).collect();
+        assert_eq!(
+            sides,
+            [CaptionSide::Left, CaptionSide::Right, CaptionSide::Top, CaptionSide::Bottom]
+        );
     }
 
     /// F: zones that start past their end or reach outside the declared
@@ -6266,6 +6389,7 @@ mod tests {
             inner_margin: None,
             no_adjust: false,
             cell_zones: Vec::new(),
+            caption: None,
             rows: 1,
             cols: 1,
             page_break: Hwp5TablePageBreak::Cell,
@@ -6498,6 +6622,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows,
                 cols,
                 page_break: Hwp5TablePageBreak::None,
@@ -6580,6 +6705,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6665,6 +6791,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6749,6 +6876,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 1,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6898,6 +7026,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 3,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6996,6 +7125,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -7077,6 +7207,7 @@ mod tests {
                     inner_margin: None,
                     no_adjust: false,
                     cell_zones: Vec::new(),
+                    caption: None,
                     rows: 1,
                     cols: 1,
                     page_break: Hwp5TablePageBreak::Cell,
@@ -7362,6 +7493,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 3,
                 cols: 4,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -7391,6 +7523,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 0,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::None,
@@ -7418,6 +7551,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 2,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::Table,
@@ -7444,6 +7578,7 @@ mod tests {
                 inner_margin: None,
                 no_adjust: false,
                 cell_zones: Vec::new(),
+                caption: None,
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Unknown(3),

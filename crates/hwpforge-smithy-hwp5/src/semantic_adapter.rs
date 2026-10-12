@@ -1355,6 +1355,7 @@ mod tests {
                             inner_margin: None,
                             no_adjust: false,
                             cell_zones: Vec::new(),
+                            caption: None,
                             rows: 1,
                             cols: 1,
                             page_break: Hwp5TablePageBreak::Cell,
