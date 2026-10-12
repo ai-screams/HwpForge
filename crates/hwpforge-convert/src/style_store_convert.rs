@@ -246,6 +246,12 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     .map(|v| to_unit(i32::from(v)));
     shape.border_connect = raw.border_connect();
     shape.border_ignore_margin = raw.border_ignore_margin();
+    // property2 bits 0-1 "한 줄로 입력": Hancom twins write 1 as SQUEEZE and
+    // 0 as BREAK (133/133 definitions). 2 and 3 are undefined and stay
+    // BREAK, reported by `warn_on_para_line_wrap`.
+    if raw.line_wrap_raw() == 1 {
+        shape.line_wrap = "SQUEEZE".to_string();
+    }
     shape
 }
 
@@ -290,6 +296,7 @@ fn append_para_shape_projection_warnings(
     warn_on_para_break_latin_word(raw, raw_id, warnings);
     warn_on_para_font_line_height(raw, raw_id, warnings);
     warn_on_para_auto_spacing(raw, raw_id, warnings);
+    warn_on_para_line_wrap(raw, raw_id, warnings);
 }
 
 fn warn_on_char_vertical_position_conflict(
@@ -485,6 +492,18 @@ fn warn_on_para_auto_spacing(
             "para shape {raw_id} auto-spacing [{}] was dropped because the current style surface does not carry those flags",
             enabled.join(", ")
         ),
+    );
+}
+
+fn warn_on_para_line_wrap(raw: &Hwp5RawParaShape, raw_id: usize, warnings: &mut Vec<Hwp5Warning>) {
+    let mode = raw.line_wrap_raw();
+    if mode < 2 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.line_wrap",
+        format!("para shape {raw_id} single-line input mode {mode} is undefined; written as BREAK"),
     );
 }
 

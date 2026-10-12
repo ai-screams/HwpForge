@@ -1135,6 +1135,62 @@ fn hwp5_para_shape_carries_vertical_align_and_border_offsets() {
     }
 }
 
+/// P21: `property2` bits 0-1 "한 줄로 입력" → `lineWrap`. 1 is SQUEEZE, 0 is
+/// BREAK, 2 and 3 are undefined — BREAK with one warning per definition.
+/// Reserved bits 2-3 alone and a record without `property2` are BREAK and
+/// quiet.
+///
+/// 이것을 실패시키는 것: SQUEEZE 대입 삭제 · 값 1 과 0 뒤바꿈 · 값 2 를 KEEP
+/// 등 지원값으로 쓰기 · 값 2·3 경고 삭제 · 비트 2–3 에 경고 · `property2`
+/// 없음에 경고.
+#[test]
+fn hwp5_para_shape_single_line_input_maps_to_line_wrap() {
+    let mut raws = Vec::new();
+    for property2 in [Some(1u32), Some(0), Some(2), Some(3), Some(0b1100), None] {
+        let mut raw = default_para_shape();
+        raw.property2 = property2;
+        raws.push(raw);
+    }
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: raws,
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+
+    let wraps: Vec<String> = (0..6)
+        .map(|i| {
+            hwpx_store
+                .para_shape(hwpforge_foundation::ParaShapeIndex::new(i))
+                .expect("projected para shape")
+                .line_wrap
+                .clone()
+        })
+        .collect();
+    assert_eq!(wraps, ["SQUEEZE", "BREAK", "BREAK", "BREAK", "BREAK", "BREAK"]);
+    let reasons: Vec<&str> = warnings
+        .iter()
+        .filter_map(|w| match w {
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "style.para_shape.line_wrap" =>
+            {
+                Some(reason.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons.len(), 2, "{warnings:?}");
+    assert!(reasons[0].contains("para shape 2") && reasons[0].contains("mode 2"), "{reasons:?}");
+    assert!(reasons[1].contains("para shape 3") && reasons[1].contains("mode 3"), "{reasons:?}");
+}
+
 #[test]
 fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
     // Task #121 (Wave 12p): HWP5 wire bit 25-27 is a 3-bit zero-based
