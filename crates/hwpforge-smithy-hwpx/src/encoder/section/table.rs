@@ -98,7 +98,9 @@ pub(super) fn build_table(
             },
         )?,
         border_fill_id_ref: table_border_fill_id,
-        no_adjust: 0,
+        // E: fixed cell sizes. 이것을 실패시키는 것: 상수 0 으로 되돌리기
+        // (`table_no_adjust_and_protect_round_trip`).
+        no_adjust: u32::from(table.no_adjust),
         sz: Some(HxTableSz {
             width: table_width,
             width_rel_to: "ABSOLUTE".to_string(),

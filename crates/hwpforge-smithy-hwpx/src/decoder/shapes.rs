@@ -7236,4 +7236,26 @@ mod frame_tests {
         let out = encode(content);
         assert!(out.contains(r#"heightRelTo="ABSOLUTE" protect="1""#), "{out}");
     }
+
+    /// E: a table's `noAdjust` round-trips on its own and together with the
+    /// size lock — all four combinations.
+    /// 이것을 실패시키는 것: `noAdjust` 를 읽지 않기 · 상수 0 으로 쓰기 ·
+    /// `protect` 와 섞기.
+    #[test]
+    fn table_no_adjust_and_protect_round_trip() {
+        let tbl = |protect: u32, no_adjust: u32| {
+            format!(
+                r#"<hp:tbl id="3" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="1" noAdjust="{no_adjust}"><hp:sz width="1000" widthRelTo="ABSOLUTE" height="500" heightRelTo="ABSOLUTE" protect="{protect}"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:tr><hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="1"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="500"/><hp:cellMargin left="0" right="0" top="0" bottom="0"/></hp:tc></hp:tr></hp:tbl>"#
+            )
+        };
+        for (protect, no_adjust) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            let (content, _) = decode(&tbl(protect, no_adjust));
+            let RunContent::Table(table) = &content else { panic!("{content:?}") };
+            assert_eq!(table.frame.size_protect, protect == 1);
+            assert_eq!(table.no_adjust, no_adjust == 1);
+            let out = encode(content);
+            assert!(out.contains(&format!(r#"noAdjust="{no_adjust}""#)), "{out}");
+            assert!(out.contains(&format!(r#"protect="{protect}""#)), "{out}");
+        }
+    }
 }

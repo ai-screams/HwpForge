@@ -1136,6 +1136,9 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     // S20: the size lock. 이것을 실패시키는 것: 읽지 않기
     // (`picture_and_table_protect_round_trip`).
     table.frame.size_protect = hx.sz.as_ref().is_some_and(|sz| sz.protect != 0);
+    // E: fixed cell sizes. 이것을 실패시키는 것: 읽지 않기
+    // (`table_no_adjust_and_protect_round_trip`).
+    table.no_adjust = hx.no_adjust != 0;
     Ok(table)
 }
 
