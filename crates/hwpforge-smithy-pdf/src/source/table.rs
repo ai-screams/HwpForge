@@ -795,8 +795,33 @@ fn emit_anchor_clipped(
         let (clip_from, clip_to) = clip.unwrap_or((0, full_h));
         let h = clip_to - clip_from;
 
+        // F: 셀 영역(`Table::cell_zones`) 안의 칸은 채우기를 영역 borderFill 로
+        // 그린다(뒤 영역이 이김). 영역의 선은 칸 선 위에 덧그리지 않는다 —
+        // 한컴 동작 미확인이라 선이 있는 영역은 경고만.
+        // 이것을 실패시키는 것: 영역 무시(`cell_zone_fill_replaces_the_cell_fill`) /
+        // 선 있는 영역 경고 삭제.
+        let zone = table.cell_zones.iter().rev().find(|z| {
+            let (r, c) = (a.anchor.row, a.anchor.col);
+            u32::from(z.start_row) <= r
+                && r <= u32::from(z.end_row)
+                && u32::from(z.start_col) <= c
+                && c <= u32::from(z.end_col)
+        });
+        if let Some(zone) = zone {
+            let has_lines = input.styles.border_fill_lines(zone.border_fill_id).is_some_and(|l| {
+                [l.left, l.right, l.top, l.bottom].iter().any(|e| e.kind != BorderLineKind::None)
+            });
+            if has_lines {
+                warnings.push(PdfWarning::UnsupportedTableStyle {
+                    location: cell_loc.clone(),
+                    what: "cell zone border",
+                });
+            }
+        }
+        let fill_id =
+            zone.map(|z| z.border_fill_id).or(cell.border_fill_id).or(table.border_fill_id);
         // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
-        if let Some(id) = cell.border_fill_id.or(table.border_fill_id) {
+        if let Some(id) = fill_id {
             match input.styles.border_fill_face(id) {
                 Some(FillKind::Solid(color)) => {
                     let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
@@ -819,8 +844,9 @@ fn emit_anchor_clipped(
                 }
                 Some(FillKind::None) | None | Some(_) => {}
             }
-            // 괘선 4변 (Solid 만 — Other 는 경고 후 생략).
-            if let Some(lines) = input.styles.border_fill_lines(id) {
+            // 괘선 4변 (Solid 만 — Other 는 경고 후 생략). 선은 늘 칸(또는 표)의 것.
+            let line_id = cell.border_fill_id.or(table.border_fill_id);
+            if let Some(lines) = line_id.and_then(|id| input.styles.border_fill_lines(id)) {
                 let edges = [
                     (lines.left, (x0, row_y), (x0, row_y + h)),
                     (lines.right, (x0 + w, row_y), (x0 + w, row_y + h)),

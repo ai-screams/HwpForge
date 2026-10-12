@@ -192,3 +192,77 @@ fn probe_blank_hpc_replay() {
         Err(e) => eprintln!("REJECTED: {e}"),
     }
 }
+
+// ── F 셀 영역 채우기 (rules-table 의 첫 표에 영역을 얹는 합성) ──
+
+/// rules-table 을 디코드해 첫 표의 칸 (0,0) 에 `zone_fill`·`zone_left_line` 인
+/// borderFill 영역을 얹고 재생한다.
+fn replay_with_zone(
+    zone_fill: &str,
+    zone_left_line: &str,
+) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
+    use hwpforge_core::run::RunContent;
+    use hwpforge_core::table::CellZone;
+    use hwpforge_smithy_hwpx::style_store::{HwpxBorderFill, HwpxBorderLine, HwpxFill};
+    let bytes = fixture("rules-table.hwpx")?;
+    let mut decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let id = decoded.style_store.iter_border_fills().map(|b| b.id).max().unwrap_or(0) + 1;
+    let mut fill = HwpxBorderFill::default_page_border();
+    fill.id = id;
+    fill.left = HwpxBorderLine { line_type: zone_left_line.into(), ..HwpxBorderLine::default() };
+    fill.fill = Some(HwpxFill::WinBrush {
+        face_color: zone_fill.into(),
+        hatch_color: "#000000".into(),
+        alpha: "0".into(),
+    });
+    decoded.style_store.push_border_fill(fill);
+    let mut zoned = false;
+    decoded.document.for_each_paragraph_mut(|p| {
+        for run in &mut p.runs {
+            if let RunContent::Table(t) = &mut run.content {
+                if !zoned {
+                    t.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
+                    zoned = true;
+                }
+            }
+        }
+    });
+    assert!(zoned, "rules-table has a table");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
+}
+
+/// F: a cell inside a zone is filled with the zone's border fill; cells
+/// outside keep theirs; a zone whose border fill has a line warns (zone
+/// lines are not drawn).
+/// 이것을 실패시키는 것: 영역 무시(칸 (0,0) 이 빨강이 아님) · 영역을 모든 칸에
+/// (칸 (0,1) 도 빨강) · 선 있는 영역 경고 삭제 · 선 없는 영역에도 경고.
+#[test]
+fn cell_zone_fill_replaces_the_cell_fill() {
+    use hwpforge_foundation::Color;
+    let Some(layout) = replay_with_zone("#FF0000", "NONE") else { return };
+    let red = Color::from_rgb(255, 0, 0);
+    let rect = |suffix: &str| {
+        layout.pages[0].rects.iter().find(|r| r.location.ends_with(suffix)).map(|r| r.color)
+    };
+    assert_eq!(rect("t0r0c0"), Some(red), "{:?}", layout.pages[0].rects);
+    assert_ne!(rect("t0r0c1"), Some(red));
+    let zone_warn = |l: &hwpforge_smithy_pdf::source::ReplayLayout| {
+        l.warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    hwpforge_smithy_pdf::PdfWarning::UnsupportedTableStyle {
+                        what: "cell zone border",
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    assert_eq!(zone_warn(&layout), 0);
+    let lined = replay_with_zone("#FF0000", "SOLID").expect("fixture");
+    assert_eq!(zone_warn(&lined), 1);
+}
