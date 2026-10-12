@@ -143,7 +143,7 @@ struct TableNode {
     frame: hwpforge_core::ObjectFrame,
     rows: Vec<TableRow>,
     width: Option<HwpUnit>,
-    caption: Option<String>,
+    caption: Option<hwpforge_core::caption::Caption>,
     no_adjust: bool,
     cell_zones: Vec<hwpforge_core::table::CellZone>,
 }
@@ -414,15 +414,8 @@ fn attach_closed_node(
             if let Some(width) = table.width {
                 core_table = core_table.with_width(width);
             }
-            if let Some(text) = table.caption {
-                use hwpforge_core::caption::{Caption, CaptionSide};
-                core_table = core_table.with_caption(Caption::new(
-                    vec![Paragraph::with_runs(
-                        vec![Run::text(&text, CharShapeIndex::new(0))],
-                        ParaShapeIndex::new(0),
-                    )],
-                    CaptionSide::Bottom,
-                ));
+            if let Some(caption) = table.caption {
+                core_table = core_table.with_caption(caption);
             }
             push_run_to_parent(stack, Run::table(core_table, table.char_shape_id))
         }
@@ -636,7 +629,7 @@ fn parse_table_node(start: &BytesStart<'_>) -> MdResult<TableNode> {
         char_shape_id: parse_index_attr(start, "table", "data-char-shape")?,
         rows: Vec::new(),
         width: parse_optional_length_attr(start, "table", "data-width-unit", "data-width-mm")?,
-        caption: attr_value(start, "data-caption")?,
+        caption: parse_caption_attrs(start)?,
         no_adjust: parse_flag_attr(start, "table", "data-no-adjust")?,
         cell_zones: parse_cell_zones_attr(start)?,
     })
@@ -672,6 +665,67 @@ fn unique_attr(
         found = Some(value.into_owned());
     }
     Ok(found)
+}
+
+/// D (Q9): the table caption — `data-caption` (its text; `""` is an empty
+/// caption), `data-caption-side` (`top|bottom|left|right`, missing =
+/// bottom), `data-caption-full-size` (`"true"`/`"false"`) and
+/// `data-caption-last-width-unit` (+ readable `-mm`; `-mm` alone is
+/// missing its `-unit`). A caption attribute without `data-caption` is
+/// refused. 이것을 실패시키는 것: 측 값 검사 삭제 · `-mm` 단독 허용 · 캡션 없는
+/// 캡션 속성 허용(`table_caption_attribute_errors`).
+fn parse_caption_attrs(
+    start: &BytesStart<'_>,
+) -> MdResult<Option<hwpforge_core::caption::Caption>> {
+    use hwpforge_core::caption::{Caption, CaptionSide};
+    const SIDE: &str = "data-caption-side";
+    const FULL: &str = "data-caption-full-size";
+    const UNIT: &str = "data-caption-last-width-unit";
+    const MM: &str = "data-caption-last-width-mm";
+    let text = unique_attr(start, "table", "data-caption")?;
+    let side = unique_attr(start, "table", SIDE)?;
+    let full_size = parse_flag_attr(start, "table", FULL)?;
+    let unit = unique_attr(start, "table", UNIT)?;
+    let mm = unique_attr(start, "table", MM)?;
+    let Some(text) = text else {
+        if side.is_some() || full_size || unit.is_some() || mm.is_some() {
+            return Err(MdError::LosslessParse {
+                detail: "<table> has caption attributes without data-caption".to_string(),
+            });
+        }
+        return Ok(None);
+    };
+    let side = match side.as_deref() {
+        None | Some("bottom") => CaptionSide::Bottom,
+        Some("top") => CaptionSide::Top,
+        Some("left") => CaptionSide::Left,
+        Some("right") => CaptionSide::Right,
+        Some(other) => {
+            return Err(MdError::LosslessInvalidAttribute {
+                element: "table",
+                attribute: SIDE,
+                value: other.to_string(),
+            })
+        }
+    };
+    let last_width = match (unit, mm) {
+        (Some(v), _) => Some(parse_unit_value("table", UNIT, v)?),
+        (None, Some(_)) => {
+            return Err(MdError::LosslessMissingAttribute { element: "table", attribute: UNIT })
+        }
+        (None, None) => None,
+    };
+    Ok(Some(
+        Caption::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text(&text, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            side,
+        )
+        .with_full_size(full_size)
+        .with_last_width(last_width),
+    ))
 }
 
 /// A `"true"`/`"false"` attribute (the FRAME boolean grammar): missing or
@@ -1079,6 +1133,45 @@ mod tests {
             assert!(matches!(table(&attrs), Err(MdError::LosslessParse { .. })), "{attrs}");
         }
         assert!(table(p).is_ok());
+    }
+
+    /// D (Q9): caption attribute errors — a side other than the four, a
+    /// full-size flag other than `"true"`/`"false"`, `-mm` without `-unit`,
+    /// caption attributes without `data-caption`, a repeated side.
+    /// 이것을 실패시키는 것: 측 값 검사 · 플래그 검사 · `-mm` 단독 허용 · 캡션
+    /// 없는 속성 허용 · 중복 검사 각각 삭제.
+    #[test]
+    fn table_caption_attribute_errors() {
+        let table = |attrs: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><table data-char-shape="0" {attrs}><tr><td data-col-span="1" data-row-span="1" data-width-unit="9000"><p data-para-shape="0"><span data-char-shape="0">t</span></p></td></tr></table></p>"#
+            )))
+        };
+        assert!(matches!(
+            table(r#"data-caption="c" data-caption-side="middle""#),
+            Err(MdError::LosslessInvalidAttribute { attribute: "data-caption-side", .. })
+        ));
+        assert!(matches!(
+            table(r#"data-caption="c" data-caption-full-size="1""#),
+            Err(MdError::LosslessInvalidAttribute { attribute: "data-caption-full-size", .. })
+        ));
+        assert!(matches!(
+            table(r#"data-caption="c" data-caption-last-width-mm="10.00""#),
+            Err(MdError::LosslessMissingAttribute {
+                attribute: "data-caption-last-width-unit",
+                ..
+            })
+        ));
+        assert!(matches!(table(r#"data-caption-side="top""#), Err(MdError::LosslessParse { .. })));
+        assert!(matches!(
+            table(
+                r#"data-width-unit="9000" data-width-mm="31.75" data-caption="c" data-caption-side="top" data-caption-side="top""#
+            ),
+            Err(MdError::LosslessParse { .. })
+        ));
+        let sections = table(r#"data-caption="" data-caption-side="top""#).unwrap();
+        let RunContent::Table(t) = &sections[0].paragraphs[0].runs[0].content else { panic!() };
+        assert_eq!(t.caption.as_ref().unwrap().side, hwpforge_core::caption::CaptionSide::Top);
     }
 
     /// F: `data-cell-zones` — each zone exactly five integers in range; an

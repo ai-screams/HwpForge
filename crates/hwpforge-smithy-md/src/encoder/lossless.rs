@@ -358,8 +358,31 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             .filter_map(|r| r.content.as_text())
             .collect::<Vec<_>>()
             .join("");
-        if !text.is_empty() {
-            out.push_str(&format!(" data-caption=\"{}\"", escape_html(&text)));
+        // D (Q9): an empty caption keeps its place (`data-caption=""`); the
+        // side is written unless it is bottom (the reading default), the
+        // full-size flag and a saved box width only when set — a bottom text
+        // caption's markup is the one written before.
+        // 이것을 실패시키는 것: 빈 캡션 생략 · 측·`fullSz`·`lastWidth` 방출 삭제
+        // (`table_caption_attributes_round_trip`).
+        out.push_str(&format!(" data-caption=\"{}\"", escape_html(&text)));
+        let side = match caption.side {
+            hwpforge_core::caption::CaptionSide::Top => Some("top"),
+            hwpforge_core::caption::CaptionSide::Left => Some("left"),
+            hwpforge_core::caption::CaptionSide::Right => Some("right"),
+            _ => None,
+        };
+        if let Some(side) = side {
+            out.push_str(&format!(" data-caption-side=\"{side}\""));
+        }
+        if caption.full_size {
+            out.push_str(" data-caption-full-size=\"true\"");
+        }
+        if let Some(width) = caption.last_width {
+            out.push_str(&format!(
+                " data-caption-last-width-unit=\"{}\" data-caption-last-width-mm=\"{:.2}\"",
+                width.as_i32(),
+                width.to_mm()
+            ));
         }
     }
     out.push('>');
@@ -812,6 +835,76 @@ mod tests {
             panic!()
         };
         assert_eq!((&inner.cell_zones, inner.no_adjust), (&inner_zones, true));
+    }
+
+    /// D (Q9): a caption's presence (an empty one too), side, `full_size`
+    /// and `last_width` round-trip at the top level and in a nested table;
+    /// a bottom caption writes no side.
+    /// 이것을 실패시키는 것: 빈 캡션 생략 · 측·`full_size`·`last_width` 방출 삭제 ·
+    /// 디코더 미반영 · 아래 캡션에도 측 방출.
+    #[test]
+    fn table_caption_attributes_round_trip() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::table::{TableCell, TableRow};
+        let cell = |runs: Vec<Run>| {
+            TableCell::new(vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))], hu(9000))
+        };
+        let captioned = |text: &str, side, full: bool, last: Option<i32>| {
+            Table::new(vec![TableRow::new(vec![cell(vec![Run::text(
+                "t",
+                CharShapeIndex::new(0),
+            )])])])
+            .with_caption(
+                Caption::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text(text, CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    side,
+                )
+                .with_full_size(full)
+                .with_last_width(last.map(hu)),
+            )
+        };
+        let summary = |t: &Table| {
+            let c = t.caption.as_ref().unwrap();
+            (
+                c.paragraphs
+                    .iter()
+                    .flat_map(|p| p.runs.iter())
+                    .filter_map(|r| r.content.as_text())
+                    .collect::<String>(),
+                c.side,
+                c.full_size,
+                c.last_width.map(|w| w.as_i32()),
+            )
+        };
+        for (text, side, full, last) in [
+            ("", CaptionSide::Bottom, false, None),
+            ("c", CaptionSide::Top, true, Some(48190)),
+            ("c", CaptionSide::Left, false, Some(1)),
+            ("c", CaptionSide::Right, false, None),
+        ] {
+            let inner = captioned(text, side, full, last);
+            let outer = Table::new(vec![TableRow::new(vec![cell(vec![Run::table(
+                inner.clone(),
+                CharShapeIndex::new(0),
+            )])])]);
+            let doc = frame_doc(vec![Run::table(outer, CharShapeIndex::new(0))]);
+            let back = round_trip(&doc);
+            let RunContent::Table(t) = first_run(&back) else { panic!() };
+            let RunContent::Table(nested) = &t.rows[0].cells[0].paragraphs[0].runs[0].content
+            else {
+                panic!()
+            };
+            assert_eq!(summary(nested), summary(&inner));
+        }
+        let md = encode_lossless(&frame_doc(vec![Run::table(
+            captioned("c", CaptionSide::Bottom, false, None),
+            CharShapeIndex::new(0),
+        )]))
+        .unwrap();
+        assert!(md.contains(r#"data-caption="c">"#), "{md}");
     }
 
     /// A default frame writes nothing: the picture's markup is the one
