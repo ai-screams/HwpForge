@@ -22,7 +22,12 @@ pub enum MdMode {
 
 /// AI-first CLI for Korean HWP/HWPX document generation.
 #[derive(Parser)]
-#[command(name = "hwpforge", version, about)]
+#[command(
+    name = "hwpforge",
+    version,
+    about,
+    after_help = "본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다."
+)]
 struct Cli {
     /// Output in JSON format (machine-readable).
     #[arg(long, global = true)]
