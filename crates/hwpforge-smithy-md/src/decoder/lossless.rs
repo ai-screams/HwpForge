@@ -993,27 +993,33 @@ mod tests {
     }
 
     /// The meaning stage: a negative axis, or an original axis of 0 under a
-    /// shown one, decodes to a Draft that Core validation refuses.
+    /// shown one, decodes to a Draft that Core validation refuses — for a
+    /// picture and for a text box.
     #[test]
     fn frame_meaning_is_left_to_validation() {
+        let text_box = |frame: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><textbox data-char-shape="0" data-width-unit="3000" data-height-unit="2000" {frame}><p data-para-shape="0"><span data-char-shape="0">t</span></p></textbox></p>"#
+            )))
+        };
         for frame in [
             r#"data-original-width-unit="-5" data-original-height-unit="20""#,
             r#"data-original-width-unit="0" data-original-height-unit="20""#,
-        ] {
-            let sections = img(frame).unwrap();
+        ]
+        .into_iter()
+        .flat_map(|f| [img(f), text_box(f)])
+        {
+            let sections = frame.unwrap();
             let mut doc = hwpforge_core::Document::new();
             for s in sections {
                 doc.add_section(s);
             }
-            assert!(
-                matches!(
-                    doc.validate(),
-                    Err(hwpforge_core::error::CoreError::Validation(
-                        hwpforge_core::ValidationError::InvalidObjectFrame { .. }
-                    ))
-                ),
-                "{frame}"
-            );
+            assert!(matches!(
+                doc.validate(),
+                Err(hwpforge_core::error::CoreError::Validation(
+                    hwpforge_core::ValidationError::InvalidObjectFrame { .. }
+                ))
+            ));
         }
     }
 

@@ -282,7 +282,7 @@ hwpforge = { version = "0.16", features = ["md"] }
 | **RAG 추천**  | **추천** — 청크 분할에 적합 | 원본 복원이 필요할 때만        |
 | **LLM 추천**  | **추천** — 토큰 효율적      | 라운드트립 편집 시             |
 
-Lossless 모드는 그림·글상자·표의 개체 틀(원래 크기와 크기 고정)도 `data-original-width-unit`·`data-original-height-unit`·`data-size-protect` 속성으로 담아 되읽습니다(선·타원·다각형은 쓰기만 하고, 이 태그들은 아직 되읽지 못합니다). 이 속성들은 이전 버전의 디코더가 무시하므로, 이전 버전으로 되읽으면 개체 틀은 기본값이 됩니다.
+Lossless 모드는 그림·글상자의 개체 틀(원래 크기와 크기 고정)을 `data-original-width-unit`·`data-original-height-unit`·`data-size-protect` 속성으로, 표의 크기 고정을 `data-size-protect` 로 담아 되읽습니다(표에는 원래 크기가 없습니다. 선·타원·다각형은 쓰기만 하고, 이 태그들은 아직 되읽지 못합니다). 이 속성들은 이전 버전의 디코더가 무시하므로, 이전 버전으로 되읽으면 개체 틀은 기본값이 됩니다.
 
 **RAG 시스템에서는 `encode_lossy`를 권장합니다.** 표준 GFM으로 출력되어 청크 분할기(text splitter)와 호환성이 높고, 불필요한 마크업이 없어 토큰을 절약합니다.
 

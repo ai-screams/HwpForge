@@ -578,9 +578,54 @@ mod tests {
         }
     }
 
+    /// The container path of every frame-bearing object in `paragraphs`
+    /// (`body`, `cell`, `textbox`, `note`, joined by `/`), with its frame.
+    fn frames_by_path(paragraphs: &[Paragraph], path: &str, out: &mut Vec<String>) {
+        let at =
+            |kind: &str| if path.is_empty() { kind.to_string() } else { format!("{path}/{kind}") };
+        for p in paragraphs {
+            for r in &p.runs {
+                match &r.content {
+                    RunContent::Image(i) => out.push(format!(
+                        "{} pic {:?} {}",
+                        if path.is_empty() { "body" } else { path },
+                        i.frame.original_size.map(|o| o.width.as_i32()),
+                        i.frame.size_protect
+                    )),
+                    RunContent::Table(t) => {
+                        out.push(format!(
+                            "{} table {}",
+                            if path.is_empty() { "body" } else { path },
+                            t.frame.size_protect
+                        ));
+                        for row in &t.rows {
+                            for cell in &row.cells {
+                                frames_by_path(&cell.paragraphs, &at("cell"), out);
+                            }
+                        }
+                    }
+                    RunContent::Control(c) => match c.as_ref() {
+                        Control::TextBox { paragraphs, .. } => {
+                            frames_by_path(paragraphs, &at("textbox"), out)
+                        }
+                        Control::Footnote { paragraphs, .. } => {
+                            frames_by_path(paragraphs, &at("note"), out)
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Frames stay where they are: pictures with different frames in the
-    /// body, a cell, a nested cell and a text box, and a locked table in a
-    /// text box, all in one document.
+    /// body, a cell, a nested cell, a text box and a footnote, and a locked
+    /// table in a text box, all in one document — compared by container
+    /// path, so an object moved to another container in the same order is
+    /// caught.
+    /// 이것을 실패시키는 것: 디코더가 글상자 안 그림을 같은 순서로 바깥 문단에
+    /// 옮기기(경로 비교가 잡는다).
     #[test]
     fn frames_keep_their_context() {
         use hwpforge_core::table::{TableCell, TableRow};
@@ -608,53 +653,32 @@ mod tests {
             hu(9000),
             hu(9000),
         );
+        let note = Control::footnote(vec![para(vec![picture(1005, true)])]);
         let doc = frame_doc(vec![
             picture(1001, false),
             Run::table(outer, CharShapeIndex::new(0)),
             Run::control(tb, CharShapeIndex::new(0)),
+            Run::control(note, CharShapeIndex::new(0)),
         ]);
-        let back = round_trip(&doc);
-        let mut seen = Vec::new();
-        fn walk(paragraphs: &[Paragraph], seen: &mut Vec<String>) {
-            for p in paragraphs {
-                for r in &p.runs {
-                    match &r.content {
-                        RunContent::Image(i) => seen.push(format!(
-                            "pic {:?} {}",
-                            i.frame.original_size.map(|o| o.width.as_i32()),
-                            i.frame.size_protect
-                        )),
-                        RunContent::Table(t) => {
-                            seen.push(format!("table {}", t.frame.size_protect));
-                            for row in &t.rows {
-                                for cell in &row.cells {
-                                    walk(&cell.paragraphs, seen);
-                                }
-                            }
-                        }
-                        RunContent::Control(c) => {
-                            if let Control::TextBox { paragraphs, .. } = c.as_ref() {
-                                walk(paragraphs, seen);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        walk(&back.sections()[0].paragraphs, &mut seen);
+        let mut want = Vec::new();
+        frames_by_path(&doc.sections()[0].paragraphs, "", &mut want);
         assert_eq!(
-            seen,
+            want,
             [
-                "pic Some(1001) false",
-                "table false",
-                "pic Some(1002) true",
-                "table false",
-                "pic Some(1003) false",
-                "pic Some(1004) false",
-                "table true",
+                "body pic Some(1001) false",
+                "body table false",
+                "cell pic Some(1002) true",
+                "cell table false",
+                "cell/cell pic Some(1003) false",
+                "textbox pic Some(1004) false",
+                "textbox table true",
+                "note pic Some(1005) true",
             ]
         );
+        let back = round_trip(&doc);
+        let mut got = Vec::new();
+        frames_by_path(&back.sections()[0].paragraphs, "", &mut got);
+        assert_eq!(got, want);
     }
 
     /// A table keeps its size lock.
