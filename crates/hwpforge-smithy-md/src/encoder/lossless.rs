@@ -328,6 +328,21 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
     if table.no_adjust {
         out.push_str(" data-no-adjust=\"true\"");
     }
+    // F: the cell zones, `r0,c0,r1,c1,bf` joined by `;`, only when any.
+    // 이것을 실패시키는 것: 방출 삭제 · 칸 순서 바꾸기(`table_cell_zones_round_trip`).
+    if !table.cell_zones.is_empty() {
+        let zones: Vec<String> = table
+            .cell_zones
+            .iter()
+            .map(|z| {
+                format!(
+                    "{},{},{},{},{}",
+                    z.start_row, z.start_col, z.end_row, z.end_col, z.border_fill_id
+                )
+            })
+            .collect();
+        out.push_str(&format!(" data-cell-zones=\"{}\"", zones.join(";")));
+    }
     if let Some(width) = table.width {
         out.push_str(&format!(
             " data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
@@ -749,6 +764,54 @@ mod tests {
                 assert_eq!((inner.no_adjust, inner.frame.size_protect), (no_adjust, lock));
             }
         }
+    }
+
+    /// F: cell zones round-trip in order and field by field, at the top
+    /// level and in a table nested in a cell, together with `no_adjust`; a
+    /// table without zones writes no `data-cell-zones`.
+    /// 이것을 실패시키는 것: 인코더 방출 삭제 · 칸 순서 바꾸기 · 디코더 미반영 ·
+    /// 중첩 표 소실 · 빈 목록 방출.
+    #[test]
+    fn table_cell_zones_round_trip() {
+        use hwpforge_core::table::{CellZone, TableCell, TableRow};
+        let grid = |zones: Vec<CellZone>| {
+            let row = || {
+                TableRow::new(
+                    (0..2)
+                        .map(|_| {
+                            TableCell::new(
+                                vec![Paragraph::with_runs(
+                                    vec![Run::text("t", CharShapeIndex::new(0))],
+                                    ParaShapeIndex::new(0),
+                                )],
+                                hu(4500),
+                            )
+                        })
+                        .collect(),
+                )
+            };
+            Table::new((0..32).map(|_| row()).collect()).with_cell_zones(zones)
+        };
+        let inner_zones = vec![CellZone::new(12, 0, 31, 1, 7), CellZone::new(0, 1, 0, 1, 3)];
+        let inner = grid(inner_zones.clone()).with_no_adjust(true);
+        let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::table(inner, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            hu(9000),
+        )])]);
+        let doc = frame_doc(vec![Run::table(outer, CharShapeIndex::new(0))]);
+        let md = encode_lossless(&doc).unwrap();
+        assert_eq!(md.matches("data-cell-zones").count(), 1, "{md}");
+        assert!(md.contains(r#"data-cell-zones="12,0,31,1,7;0,1,0,1,3""#), "{md}");
+        let back = round_trip(&doc);
+        let RunContent::Table(t) = first_run(&back) else { panic!() };
+        assert!(t.cell_zones.is_empty());
+        let RunContent::Table(inner) = &t.rows[0].cells[0].paragraphs[0].runs[0].content else {
+            panic!()
+        };
+        assert_eq!((&inner.cell_zones, inner.no_adjust), (&inner_zones, true));
     }
 
     /// A default frame writes nothing: the picture's markup is the one

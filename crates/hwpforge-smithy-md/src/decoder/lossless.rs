@@ -145,6 +145,7 @@ struct TableNode {
     width: Option<HwpUnit>,
     caption: Option<String>,
     no_adjust: bool,
+    cell_zones: Vec<hwpforge_core::table::CellZone>,
 }
 
 #[derive(Debug)]
@@ -407,7 +408,8 @@ fn attach_closed_node(
             } else {
                 table.rows
             };
-            let mut core_table = Table::new(rows).with_no_adjust(table.no_adjust);
+            let mut core_table =
+                Table::new(rows).with_no_adjust(table.no_adjust).with_cell_zones(table.cell_zones);
             core_table.frame = table.frame;
             if let Some(width) = table.width {
                 core_table = core_table.with_width(width);
@@ -636,18 +638,17 @@ fn parse_table_node(start: &BytesStart<'_>) -> MdResult<TableNode> {
         width: parse_optional_length_attr(start, "table", "data-width-unit", "data-width-mm")?,
         caption: attr_value(start, "data-caption")?,
         no_adjust: parse_flag_attr(start, "table", "data-no-adjust")?,
+        cell_zones: parse_cell_zones_attr(start)?,
     })
 }
 
-/// A `"true"`/`"false"` attribute (the FRAME boolean grammar): missing or
-/// `"false"` is false, a repeated name is refused, any other value
-/// (`"1"`, `"0"` …) is invalid. 이것을 실패시키는 것: 중복 검사 삭제 · `"1"`
-/// 을 참으로 받기 · `"false"` 를 참으로(`table_flag_attribute_errors`).
-fn parse_flag_attr(
+/// The value of `attribute`, scanning the whole list once without
+/// quick-xml's duplicate check and refusing the name met twice.
+fn unique_attr(
     start: &BytesStart<'_>,
     element: &'static str,
     attribute: &'static str,
-) -> MdResult<bool> {
+) -> MdResult<Option<String>> {
     let mut found: Option<String> = None;
     let mut attributes = start.attributes();
     attributes.with_checks(false);
@@ -670,13 +671,59 @@ fn parse_flag_attr(
         })?;
         found = Some(value.into_owned());
     }
-    match found.as_deref() {
+    Ok(found)
+}
+
+/// A `"true"`/`"false"` attribute (the FRAME boolean grammar): missing or
+/// `"false"` is false, a repeated name is refused, any other value
+/// (`"1"`, `"0"` …) is invalid. 이것을 실패시키는 것: 중복 검사 삭제 · `"1"`
+/// 을 참으로 받기 · `"false"` 를 참으로(`table_flag_attribute_errors`).
+fn parse_flag_attr(
+    start: &BytesStart<'_>,
+    element: &'static str,
+    attribute: &'static str,
+) -> MdResult<bool> {
+    match unique_attr(start, element, attribute)?.as_deref() {
         None | Some("false") => Ok(false),
         Some("true") => Ok(true),
         Some(other) => {
             Err(MdError::LosslessInvalidAttribute { element, attribute, value: other.to_string() })
         }
     }
+}
+
+/// F: `data-cell-zones="r0,c0,r1,c1,bf;…"` — each zone five integers (four
+/// `u16` addresses, a `u32` border fill). A missing attribute is no zones; an
+/// empty value, a zone without exactly five integers or a value out of range
+/// is invalid; a repeat is refused. What a zone means (a start past its end,
+/// a range outside the table) is left to Core validation.
+/// 이것을 실패시키는 것: 항목 수 검사 삭제 · 행·열 뒤바꿈 · 중복 검사 삭제
+/// (`cell_zones_attribute_errors`).
+fn parse_cell_zones_attr(start: &BytesStart<'_>) -> MdResult<Vec<hwpforge_core::table::CellZone>> {
+    const ATTR: &str = "data-cell-zones";
+    let Some(value) = unique_attr(start, "table", ATTR)? else {
+        return Ok(Vec::new());
+    };
+    let invalid = || MdError::LosslessInvalidAttribute {
+        element: "table",
+        attribute: ATTR,
+        value: value.clone(),
+    };
+    value
+        .split(';')
+        .map(|zone| {
+            let parts: Vec<&str> = zone.split(',').collect();
+            let [r0, c0, r1, c1, bf] = parts[..] else { return Err(invalid()) };
+            let addr = |v: &str| v.parse::<u16>().map_err(|_| invalid());
+            Ok(hwpforge_core::table::CellZone::new(
+                addr(r0)?,
+                addr(c0)?,
+                addr(r1)?,
+                addr(c1)?,
+                bf.parse::<u32>().map_err(|_| invalid())?,
+            ))
+        })
+        .collect()
 }
 
 fn parse_image_format(raw: &str) -> ImageFormat {
@@ -1032,6 +1079,48 @@ mod tests {
             assert!(matches!(table(&attrs), Err(MdError::LosslessParse { .. })), "{attrs}");
         }
         assert!(table(p).is_ok());
+    }
+
+    /// F: `data-cell-zones` — each zone exactly five integers in range; an
+    /// empty value or a bad zone is invalid, a repeat refused, a missing one
+    /// is no zones. Meaning (a reversed range) is left to validation.
+    /// 이것을 실패시키는 것: 항목 수 검사 삭제 · 범위 검사 삭제 · 중복 검사 삭제 ·
+    /// 빈 값을 빈 목록으로.
+    #[test]
+    fn cell_zones_attribute_errors() {
+        let table = |attrs: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><table data-char-shape="0" {attrs}><tr><td data-col-span="1" data-row-span="1" data-width-unit="9000"><p data-para-shape="0"><span data-char-shape="0">t</span></p></td></tr></table></p>"#
+            )))
+        };
+        let zones = |attrs: &str| {
+            let sections = table(attrs).unwrap();
+            let RunContent::Table(t) = &sections[0].paragraphs[0].runs[0].content else { panic!() };
+            t.cell_zones.clone()
+        };
+        use hwpforge_core::table::CellZone;
+        assert!(zones("").is_empty());
+        assert_eq!(
+            zones(r#"data-cell-zones="1,0,0,0,9;0,0,0,0,4294967295""#),
+            [CellZone::new(1, 0, 0, 0, 9), CellZone::new(0, 0, 0, 0, u32::MAX)]
+        );
+        for value in
+            ["", "0,0,0,0", "0,0,0,0,1,2", "0,0,0,65536,1", "0,0,0,0,-1", "0,0,0,0,1;", "a,0,0,0,1"]
+        {
+            assert!(
+                matches!(
+                    table(&format!(r#"data-cell-zones="{value}""#)),
+                    Err(MdError::LosslessInvalidAttribute { attribute: "data-cell-zones", .. })
+                ),
+                "{value}"
+            );
+        }
+        assert!(matches!(
+            table(
+                r#"data-width-unit="9000" data-width-mm="31.75" data-caption="c" data-cell-zones="0,0,0,0,1" data-cell-zones="0,0,0,0,1""#
+            ),
+            Err(MdError::LosslessParse { .. })
+        ));
     }
 
     /// `data-no-adjust` reads only `"true"`/`"false"`; a repeat is refused.
