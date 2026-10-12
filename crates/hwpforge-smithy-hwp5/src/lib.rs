@@ -706,6 +706,11 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         )?;
     document.set_metadata(metadata.clone());
     warnings.extend(proj_warnings);
+    projection::drop_cell_zones_with_unknown_border_fill(
+        &mut document,
+        style_store.border_fills.len(),
+        &mut warnings,
+    );
     supplement_border_fill_image_assets(
         &style_store,
         &image_assets,

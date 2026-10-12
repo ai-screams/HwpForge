@@ -615,6 +615,21 @@ pub(crate) struct Hwp5Table {
     /// Whether the cell sizes are fixed: table body record property bit 3
     /// (HWPX `noAdjust`).
     pub no_adjust: bool,
+    /// Cell zones read from the table body record ("valid zone info"),
+    /// complete entries only — not yet checked against the grid.
+    pub cell_zones: Vec<Hwp5TableCellZone>,
+}
+
+/// One cell zone of a table body record: 10 bytes, five `u16` in wire
+/// order (start row, start column, end row, end column, border fill id —
+/// 90/94 Hancom twins equal `<hp:cellzone>` value for value).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5TableCellZone {
+    pub start_row: u16,
+    pub start_col: u16,
+    pub end_row: u16,
+    pub end_col: u16,
+    pub border_fill_id: u16,
 }
 
 /// Placement facts of a table's `CtrlHeader` (표 70 object common header):

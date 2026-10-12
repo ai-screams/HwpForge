@@ -346,6 +346,7 @@ mod tests {
         let mut table = Hwp5Table {
             inner_margin: None,
             no_adjust: false,
+            cell_zones: Vec::new(),
             rows: 0,
             cols: 0,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
@@ -376,6 +377,7 @@ mod tests {
         let table = Hwp5Table {
             inner_margin: None,
             no_adjust: false,
+            cell_zones: Vec::new(),
             rows: 1,
             cols: 1,
             page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,

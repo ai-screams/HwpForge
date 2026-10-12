@@ -284,6 +284,7 @@ impl TableContext {
             table: Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 0,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::None,
@@ -1315,6 +1316,17 @@ impl BodyTextParserState {
                     ctx.table.border_fill_id = table_header.border_fill_id;
                     ctx.table.inner_margin = table_header.inner_margin;
                     ctx.table.no_adjust = table_header.no_adjust;
+                    if let Some(declared) = table_header.cell_zones_declared {
+                        crate::warning_utils::push_projection_fallback(
+                            &mut self.warnings,
+                            "table.cell_zone",
+                            format!(
+                                "table record declares {declared} cell zones but holds {}; the rest are dropped",
+                                table_header.cell_zones.len()
+                            ),
+                        );
+                    }
+                    ctx.table.cell_zones = table_header.cell_zones;
                     ctx.seen_table_body = true;
                 }
             }
@@ -2699,7 +2711,7 @@ fn parse_ctrl_id(data: &[u8]) -> u32 {
 }
 
 /// Parsed table-level fields recovered from a `Table` record payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedTableHeader {
     rows: u16,
     cols: u16,
@@ -2709,6 +2721,10 @@ struct ParsedTableHeader {
     border_fill_id: Option<u16>,
     inner_margin: Option<Hwp5TableCellMargin>,
     no_adjust: bool,
+    cell_zones: Vec<Hwp5TableCellZone>,
+    /// The zone count the record declares when it holds fewer complete
+    /// entries (a damaged list); `None` when the list is whole or absent.
+    cell_zones_declared: Option<u16>,
 }
 
 /// Extract minimal table-level fields from a `Table` record data payload.
@@ -2735,6 +2751,8 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
             border_fill_id: None,
             inner_margin: None,
             no_adjust: false,
+            cell_zones: Vec::new(),
+            cell_zones_declared: None,
         };
     }
     let properties = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -2764,6 +2782,34 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
     // lists bits 0-2 only). 이것을 실패시키는 것: bit 2 읽기
     // (`table_property_bit_3_is_no_adjust`).
     let no_adjust = properties & 0b1000 != 0;
+    // F: after the border fill id, a zone count (`u16`, 5.0.1.0 and later)
+    // and 10-byte zones. No count = no zones (an older record, not damage);
+    // a count the record cannot hold keeps the complete entries and reports
+    // the rest. 이것을 실패시키는 것: 수 오프셋 오류 · 행·열 뒤바꿈 · 잘림
+    // 보고 삭제(`table_cell_zones_are_read`).
+    let zone_count_at = border_fill_offset.saturating_add(2);
+    let (cell_zones, cell_zones_declared) = match data.get(zone_count_at..zone_count_at + 2) {
+        None => (Vec::new(), None),
+        Some(bytes) => {
+            let declared = u16::from_le_bytes([bytes[0], bytes[1]]);
+            let zones: Vec<Hwp5TableCellZone> = data[zone_count_at + 2..]
+                .chunks_exact(10)
+                .take(usize::from(declared))
+                .map(|z| {
+                    let v = |i: usize| u16::from_le_bytes([z[i], z[i + 1]]);
+                    Hwp5TableCellZone {
+                        start_row: v(0),
+                        start_col: v(2),
+                        end_row: v(4),
+                        end_col: v(6),
+                        border_fill_id: v(8),
+                    }
+                })
+                .collect();
+            let short = zones.len() < usize::from(declared);
+            (zones, short.then_some(declared))
+        }
+    };
     ParsedTableHeader {
         rows,
         cols,
@@ -2773,6 +2819,8 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
         border_fill_id,
         inner_margin,
         no_adjust,
+        cell_zones,
+        cell_zones_declared,
     }
 }
 
@@ -5736,6 +5784,72 @@ mod tests {
         assert!(header.repeat_header);
         assert_eq!(header.cell_spacing, 120);
         assert_eq!(header.border_fill_id, Some(9));
+    }
+
+    fn zone_table_data(declared: Option<u16>, zones: &[[u16; 5]]) -> Vec<u8> {
+        let mut data = table_data(TestTableSpec {
+            rows: 40,
+            cols: 2,
+            page_break_bits: 0,
+            repeat_header: false,
+            cell_spacing: 0,
+            row_metadata: vec![2; 40],
+            border_fill_id: Some(1),
+        });
+        if let Some(n) = declared {
+            data.extend_from_slice(&n.to_le_bytes());
+            for zone in zones {
+                for v in zone {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
+            }
+        }
+        data
+    }
+
+    /// F: the zone list after the border fill id — none when the field is
+    /// absent, the entries in wire order, and only the complete entries of a
+    /// list shorter than its count (which is then reported).
+    /// 이것을 실패시키는 것: 수 오프셋 ±2 · 행·열 뒤바꿈(비대칭 (12,0,31,1)) ·
+    /// 선언 수 무시(남는 바이트를 읽기) · 잘림 표시 삭제.
+    #[test]
+    fn table_cell_zones_are_read() {
+        let zone = |z: [u16; 5]| Hwp5TableCellZone {
+            start_row: z[0],
+            start_col: z[1],
+            end_row: z[2],
+            end_col: z[3],
+            border_fill_id: z[4],
+        };
+        let absent = parse_table_header(&zone_table_data(None, &[]));
+        assert!(absent.cell_zones.is_empty() && absent.cell_zones_declared.is_none());
+        let empty = parse_table_header(&zone_table_data(Some(0), &[]));
+        assert!(empty.cell_zones.is_empty() && empty.cell_zones_declared.is_none());
+        let two =
+            parse_table_header(&zone_table_data(Some(2), &[[12, 0, 31, 1, 7], [0, 1, 0, 1, 3]]));
+        assert_eq!(two.cell_zones, [zone([12, 0, 31, 1, 7]), zone([0, 1, 0, 1, 3])]);
+        assert_eq!(two.cell_zones_declared, None);
+        let mut extra = zone_table_data(Some(1), &[[12, 0, 31, 1, 7]]);
+        extra.extend_from_slice(&[9u8; 10]);
+        assert_eq!(parse_table_header(&extra).cell_zones, [zone([12, 0, 31, 1, 7])]);
+        let short = parse_table_header(&zone_table_data(Some(2), &[[12, 0, 31, 1, 7]]));
+        assert_eq!(short.cell_zones, [zone([12, 0, 31, 1, 7])]);
+        assert_eq!(short.cell_zones_declared, Some(2));
+
+        let warnings = |declared, zones: &[[u16; 5]]| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+            stream.extend(make_record(TagId::Table, 1, &zone_table_data(Some(declared), zones)));
+            parse_body_text(&stream, &version())
+                .unwrap()
+                .warnings
+                .iter()
+                .filter(|w| format!("{w:?}").contains("table.cell_zone"))
+                .count()
+        };
+        assert_eq!(warnings(2, &[[12, 0, 31, 1, 7]]), 1);
+        assert_eq!(warnings(1, &[[12, 0, 31, 1, 7]]), 0);
     }
 
     /// E: table property bit 3 is `noAdjust`; bits 0-2 (page break, repeat

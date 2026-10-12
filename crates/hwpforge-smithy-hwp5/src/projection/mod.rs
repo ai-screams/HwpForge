@@ -23,7 +23,7 @@ use hwpforge_core::placement::{
 };
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
-use hwpforge_core::table::{CellLineWrap, Table, TableCell, TableMargin, TableRow};
+use hwpforge_core::table::{CellLineWrap, CellZone, Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
@@ -4270,6 +4270,73 @@ fn projected_row_is_header(cells: &[&Hwp5TableCell], warnings: &mut Vec<Hwp5Warn
     }
 }
 
+/// F: the table's cell zones, each checked against the declared grid. A
+/// zone whose start is past its end or whose end is outside the table is
+/// dropped and reported (Core `validate` would refuse it); the border fill
+/// id is checked against `DocInfo` after projection
+/// ([`drop_cell_zones_with_unknown_border_fill`]).
+/// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 경고 삭제
+/// (`invalid_cell_zones_are_dropped_and_reported`).
+fn project_cell_zones(table: &Hwp5Table, warnings: &mut Vec<Hwp5Warning>) -> Vec<CellZone> {
+    let mut zones = Vec::with_capacity(table.cell_zones.len());
+    for (i, z) in table.cell_zones.iter().enumerate() {
+        let why = if z.start_row > z.end_row || z.start_col > z.end_col {
+            "starts past its end"
+        } else if z.end_row >= table.rows || z.end_col >= table.cols {
+            "lies outside the table"
+        } else {
+            zones.push(CellZone::new(
+                z.start_row,
+                z.start_col,
+                z.end_row,
+                z.end_col,
+                u32::from(z.border_fill_id),
+            ));
+            continue;
+        };
+        push_projection_fallback(
+            warnings,
+            "table.cell_zone",
+            format!(
+                "cell zone {i} ({}, {})-({}, {}) of a {}x{} table {why}; dropped",
+                z.start_row, z.start_col, z.end_row, z.end_col, table.rows, table.cols
+            ),
+        );
+    }
+    zones
+}
+
+/// F: drops every table cell zone whose border fill id is not one of the
+/// document's `border_fill_count` border fills (ids are 1-based), with a
+/// warning each — the HWPX it would become points at nothing.
+/// 이것을 실패시키는 것: 범위 검사 삭제 · 0 을 유효로 · 마지막 id 를 거부
+/// (`cell_zone_with_unknown_border_fill_is_dropped`).
+pub(crate) fn drop_cell_zones_with_unknown_border_fill(
+    document: &mut Document<Draft>,
+    border_fill_count: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    document.for_each_paragraph_mut(|paragraph| {
+        for run in &mut paragraph.runs {
+            let RunContent::Table(table) = &mut run.content else { continue };
+            table.cell_zones.retain(|z| {
+                let ok = z.border_fill_id >= 1 && z.border_fill_id as usize <= border_fill_count;
+                if !ok {
+                    push_projection_fallback(
+                        warnings,
+                        "table.cell_zone",
+                        format!(
+                            "cell zone border fill {} is not one of the {border_fill_count} border fills; dropped",
+                            z.border_fill_id
+                        ),
+                    );
+                }
+                ok
+            });
+        }
+    });
+}
+
 fn apply_table_projection_metadata(
     table: &Hwp5Table,
     core_table: &mut Table,
@@ -4277,6 +4344,7 @@ fn apply_table_projection_metadata(
 ) {
     core_table.repeat_header = table.repeat_header;
     core_table.no_adjust = table.no_adjust;
+    core_table.cell_zones = project_cell_zones(table, warnings);
     core_table.cell_spacing = (table.cell_spacing > 0)
         .then(|| HwpUnit::new(i32::from(table.cell_spacing)))
         .transpose()
@@ -6083,6 +6151,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: true,
+                cell_zones: Vec::new(),
                 rows: 2,
                 cols: 3,
                 page_break: Hwp5TablePageBreak::None,
@@ -6110,10 +6179,93 @@ mod tests {
         assert!(table.no_adjust);
     }
 
+    /// F: zones that start past their end or reach outside the declared
+    /// grid are dropped with one warning each; the rest keep their order.
+    /// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로
+    /// 비교(마지막 칸 영역 버림) · 경고 삭제.
+    #[test]
+    fn invalid_cell_zones_are_dropped_and_reported() {
+        use crate::decoder::section::Hwp5TableCellZone;
+        let z = |r0, c0, r1, c1| Hwp5TableCellZone {
+            start_row: r0,
+            start_col: c0,
+            end_row: r1,
+            end_col: c1,
+            border_fill_id: 4,
+        };
+        let mut table = table_with_ctrl(0, 0, 0);
+        table.rows = 3;
+        table.cols = 2;
+        table.cell_zones = vec![
+            z(0, 0, 2, 1),
+            z(1, 0, 0, 1),
+            z(0, 1, 0, 0),
+            z(0, 0, 3, 1),
+            z(0, 0, 2, 2),
+            z(2, 1, 2, 1),
+        ];
+        let mut warnings = Vec::new();
+        let zones = project_cell_zones(&table, &mut warnings);
+        assert_eq!(zones, [CellZone::new(0, 0, 2, 1, 4), CellZone::new(2, 1, 2, 1, 4)]);
+        let reasons: Vec<String> = warnings.iter().map(|w| format!("{w:?}")).collect();
+        assert_eq!(reasons.len(), 4, "{reasons:?}");
+        assert!(reasons[..2].iter().all(|r| r.contains("starts past its end")), "{reasons:?}");
+        assert!(reasons[2..].iter().all(|r| r.contains("outside the table")), "{reasons:?}");
+    }
+
+    /// F: a zone whose border fill is not one of the document's (ids are
+    /// 1-based) is dropped with a warning, in a nested table too.
+    /// 이것을 실패시키는 것: 범위 검사 삭제 · 0 을 유효로 · 마지막 id 거부 ·
+    /// 중첩 표 미방문.
+    #[test]
+    fn cell_zone_with_unknown_border_fill_is_dropped() {
+        let zones = vec![
+            CellZone::new(0, 0, 0, 0, 0),
+            CellZone::new(0, 0, 0, 0, 1),
+            CellZone::new(0, 0, 0, 0, 3),
+            CellZone::new(0, 0, 0, 0, 4),
+        ];
+        let cell = |paragraphs| TableCell::new(paragraphs, HwpUnit::new(1000).unwrap());
+        let text = || {
+            Paragraph::with_runs(
+                vec![Run::text("x", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let inner = Table::new(vec![TableRow::new(vec![cell(vec![text()])])])
+            .with_cell_zones(zones.clone());
+        let outer = Table::new(vec![TableRow::new(vec![cell(vec![Paragraph::with_runs(
+            vec![Run::table(inner, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )])])])
+        .with_cell_zones(zones);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(outer, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let mut warnings = Vec::new();
+        drop_cell_zones_with_unknown_border_fill(&mut doc, 3, &mut warnings);
+        let kept = [CellZone::new(0, 0, 0, 0, 1), CellZone::new(0, 0, 0, 0, 3)];
+        let RunContent::Table(outer) = &doc.sections()[0].paragraphs[0].runs[0].content else {
+            panic!()
+        };
+        assert_eq!(outer.cell_zones, kept);
+        let RunContent::Table(inner) = &outer.rows[0].cells[0].paragraphs[0].runs[0].content else {
+            panic!()
+        };
+        assert_eq!(inner.cell_zones, kept);
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+    }
+
     fn table_with_ctrl(properties: u32, x: i32, y: i32) -> Hwp5Table {
         Hwp5Table {
             inner_margin: None,
             no_adjust: false,
+            cell_zones: Vec::new(),
             rows: 1,
             cols: 1,
             page_break: Hwp5TablePageBreak::Cell,
@@ -6345,6 +6497,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows,
                 cols,
                 page_break: Hwp5TablePageBreak::None,
@@ -6426,6 +6579,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6510,6 +6664,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::None,
@@ -6593,6 +6748,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 1,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6741,6 +6897,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 3,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6838,6 +6995,7 @@ mod tests {
             controls: vec![Hwp5Control::Table(Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -6918,6 +7076,7 @@ mod tests {
                 controls: vec![Hwp5Control::Table(Hwp5Table {
                     inner_margin: None,
                     no_adjust: false,
+                    cell_zones: Vec::new(),
                     rows: 1,
                     cols: 1,
                     page_break: Hwp5TablePageBreak::Cell,
@@ -7202,6 +7361,7 @@ mod tests {
             &Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 3,
                 cols: 4,
                 page_break: Hwp5TablePageBreak::Cell,
@@ -7230,6 +7390,7 @@ mod tests {
             &Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 0,
                 cols: 2,
                 page_break: Hwp5TablePageBreak::None,
@@ -7256,6 +7417,7 @@ mod tests {
             &Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 2,
                 cols: 0,
                 page_break: Hwp5TablePageBreak::Table,
@@ -7281,6 +7443,7 @@ mod tests {
             &Hwp5Table {
                 inner_margin: None,
                 no_adjust: false,
+                cell_zones: Vec::new(),
                 rows: 1,
                 cols: 1,
                 page_break: Hwp5TablePageBreak::Unknown(3),
