@@ -69,13 +69,13 @@ use crate::inline_text::{
 use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 
 use crate::schema::section::{
-    HxAutoNum, HxAutoNumFormat, HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart,
-    HxCompose, HxComposeCharPr, HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip,
-    HxImgDim, HxImgRect, HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset,
-    HxPageHiding, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRenderingInfo,
-    HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShapeComment,
-    HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz,
-    HxText, HxTitleMark,
+    HxAutoNum, HxAutoNumFormat, HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz,
+    HxCellZone, HxCellZoneList, HxChart, HxCompose, HxComposeCharPr, HxCtrl, HxDutmal, HxEquation,
+    HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxIndexMark, HxLineSeg,
+    HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageHiding, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch,
+    HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
 use super::EncodeOptions;

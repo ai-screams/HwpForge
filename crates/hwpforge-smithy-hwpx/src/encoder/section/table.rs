@@ -132,6 +132,21 @@ pub(super) fn build_table(
             .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
             .transpose()?,
         in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
+        // F: the cell zones, only when there are any.
+        // 이것을 실패시키는 것: 미방출 · 행·열 뒤바꿈(`cell_zones_round_trip`).
+        cell_zone_list: (!table.cell_zones.is_empty()).then(|| HxCellZoneList {
+            zones: table
+                .cell_zones
+                .iter()
+                .map(|z| HxCellZone {
+                    start_row_addr: u32::from(z.start_row),
+                    start_col_addr: u32::from(z.start_col),
+                    end_row_addr: u32::from(z.end_row),
+                    end_col_addr: u32::from(z.end_col),
+                    border_fill_id_ref: z.border_fill_id,
+                })
+                .collect(),
+        }),
         rows,
     })
 }

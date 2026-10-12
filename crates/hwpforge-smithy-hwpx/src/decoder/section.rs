@@ -13,9 +13,10 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
+use hwpforge_core::table::grid::TableGrid;
 use hwpforge_core::table::{
-    CellLineWrap, Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak, TableRow,
-    TableVerticalAlign,
+    CellLineWrap, CellZone, Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak,
+    TableRow, TableVerticalAlign,
 };
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -1139,7 +1140,37 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     // E: fixed cell sizes. 이것을 실패시키는 것: 읽지 않기
     // (`table_no_adjust_and_protect_round_trip`).
     table.no_adjust = hx.no_adjust != 0;
+    table.cell_zones = decode_cell_zones(hx, &table, ctx);
     Ok(table)
+}
+
+/// F: the table's `<hp:cellzoneList>`. A zone whose address does not fit a
+/// `u16`, starts past its end or reaches outside the grid is reported as
+/// lost content and dropped (Core `validate` would refuse it).
+/// 이것을 실패시키는 것: 읽지 않기 · 행·열 뒤바꿈(`cell_zones_round_trip`) ·
+/// 검사 삭제(`invalid_cell_zone_is_reported_as_lost`).
+fn decode_cell_zones(hx: &HxTable, table: &Table, ctx: &mut DecodeCtx) -> Vec<CellZone> {
+    let Some(list) = hx.cell_zone_list.as_ref() else {
+        return Vec::new();
+    };
+    let (rows, cols) = TableGrid::from_table(table).map(|g| g.dimensions()).unwrap_or((0, 0));
+    let mut zones = Vec::with_capacity(list.zones.len());
+    for (i, z) in list.zones.iter().enumerate() {
+        let addr = [z.start_row_addr, z.start_col_addr, z.end_row_addr, z.end_col_addr];
+        let why = if addr.iter().any(|&v| v > u32::from(u16::MAX)) {
+            "an address past 65535"
+        } else if z.start_row_addr > z.end_row_addr || z.start_col_addr > z.end_col_addr {
+            "a start past its end"
+        } else if z.end_row_addr >= rows || z.end_col_addr >= cols {
+            "a range outside the table"
+        } else {
+            let a = addr.map(|v| v as u16);
+            zones.push(CellZone::new(a[0], a[1], a[2], a[3], z.border_fill_id_ref));
+            continue;
+        };
+        ctx.content_lost("cellzone", format!("cell zone {i} has {why}"));
+    }
+    zones
 }
 
 /// The table's `<hp:pos>` and `textWrap`/`textFlow` as a Core placement

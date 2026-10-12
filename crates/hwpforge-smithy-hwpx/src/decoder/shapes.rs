@@ -7237,6 +7237,74 @@ mod frame_tests {
         assert!(out.contains(r#"heightRelTo="ABSOLUTE" protect="1""#), "{out}");
     }
 
+    /// A `rows`×`cols` table whose `inMargin` is followed by `zones`.
+    fn zone_tbl(rows: u32, cols: u32, zones: &str) -> String {
+        let cell = |r: u32, c: u32| {
+            format!(
+                r#"<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" borderFillIDRef="1"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr colAddr="{c}" rowAddr="{r}"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="500"/><hp:cellMargin left="0" right="0" top="0" bottom="0"/></hp:tc>"#
+            )
+        };
+        let body: String = (0..rows)
+            .map(|r| {
+                format!("<hp:tr>{}</hp:tr>", (0..cols).map(|c| cell(r, c)).collect::<String>())
+            })
+            .collect();
+        format!(
+            r#"<hp:tbl id="3" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="{rows}" colCnt="{cols}" cellSpacing="0" borderFillIDRef="1" noAdjust="0"><hp:sz width="{}" widthRelTo="ABSOLUTE" height="500" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:inMargin left="0" right="0" top="0" bottom="0"/>{zones}{body}</hp:tbl>"#,
+            1000 * cols
+        )
+    }
+
+    /// F: cell zones round-trip in order and field by field, written between
+    /// `inMargin` and the first row; a table without zones writes no list.
+    /// 이것을 실패시키는 것: 읽지 않기 · 행·열 뒤바꿈(비대칭 (12,0,31,1)) ·
+    /// 미방출 · 빈 목록 방출.
+    #[test]
+    fn cell_zones_round_trip() {
+        let zones = r#"<hp:cellzoneList><hp:cellzone startRowAddr="12" startColAddr="0" endRowAddr="31" endColAddr="1" borderFillIDRef="7"/><hp:cellzone startRowAddr="0" startColAddr="1" endRowAddr="0" endColAddr="1" borderFillIDRef="3"/></hp:cellzoneList>"#;
+        let (content, lost) = decode(&zone_tbl(32, 2, zones));
+        assert!(lost.is_empty(), "{lost:?}");
+        let RunContent::Table(table) = &content else { panic!("{content:?}") };
+        assert_eq!(
+            table.cell_zones,
+            [
+                hwpforge_core::table::CellZone::new(12, 0, 31, 1, 7),
+                hwpforge_core::table::CellZone::new(0, 1, 0, 1, 3)
+            ]
+        );
+        let out = encode(content);
+        assert!(out.contains(&format!("{zones}<hp:tr>")), "{out}");
+        assert!(out.find("<hp:inMargin").unwrap() < out.find("<hp:cellzoneList").unwrap(), "{out}");
+        let (plain, _) = decode(&zone_tbl(1, 1, ""));
+        assert!(!encode(plain).contains("cellzone"));
+    }
+
+    /// F: a zone starting past its end, reaching outside the grid or with an
+    /// address past `u16` is dropped and reported as lost content.
+    /// 이것을 실패시키는 것: 세 검사 중 하나를 지우기 · 끝을 배타로 비교.
+    #[test]
+    fn invalid_cell_zone_is_reported_as_lost() {
+        for (zone, kept) in [
+            (r#"startRowAddr="1" startColAddr="0" endRowAddr="0" endColAddr="1""#, 0),
+            (r#"startRowAddr="0" startColAddr="0" endRowAddr="2" endColAddr="1""#, 0),
+            (r#"startRowAddr="0" startColAddr="0" endRowAddr="1" endColAddr="2""#, 0),
+            (r#"startRowAddr="0" startColAddr="0" endRowAddr="65536" endColAddr="1""#, 0),
+            (r#"startRowAddr="1" startColAddr="1" endRowAddr="1" endColAddr="1""#, 1),
+        ] {
+            let list = format!(
+                r#"<hp:cellzoneList><hp:cellzone {zone} borderFillIDRef="3"/></hp:cellzoneList>"#
+            );
+            let (content, lost) = decode(&zone_tbl(2, 2, &list));
+            let RunContent::Table(table) = &content else { panic!("{content:?}") };
+            assert_eq!(table.cell_zones.len(), kept, "{zone}");
+            assert_eq!(
+                lost,
+                if kept == 1 { vec![] } else { vec!["cellzone".to_string()] },
+                "{zone}"
+            );
+        }
+    }
+
     /// E: a table's `noAdjust` round-trips on its own and together with the
     /// size lock — all four combinations.
     /// 이것을 실패시키는 것: `noAdjust` 를 읽지 않기 · 상수 0 으로 쓰기 ·

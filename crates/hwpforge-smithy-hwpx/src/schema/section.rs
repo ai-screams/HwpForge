@@ -1971,12 +1971,45 @@ pub struct HxTable {
         skip_serializing_if = "Option::is_none"
     )]
     pub in_margin: Option<HxTableMargin>,
+    /// Cell zones (`<hp:cellzoneList>`), between `inMargin` and the rows.
+    #[serde(
+        rename(serialize = "hp:cellzoneList", deserialize = "cellzoneList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cell_zone_list: Option<HxCellZoneList>,
     #[serde(
         rename(serialize = "hp:tr", deserialize = "tr"),
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
     pub rows: Vec<HxTableRow>,
+}
+
+/// `<hp:cellzoneList>` — a table's cell zones.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCellZoneList {
+    #[serde(
+        rename(serialize = "hp:cellzone", deserialize = "cellzone"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub zones: Vec<HxCellZone>,
+}
+
+/// `<hp:cellzone startRowAddr startColAddr endRowAddr endColAddr borderFillIDRef/>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCellZone {
+    #[serde(rename = "@startRowAddr", default)]
+    pub start_row_addr: u32,
+    #[serde(rename = "@startColAddr", default)]
+    pub start_col_addr: u32,
+    #[serde(rename = "@endRowAddr", default)]
+    pub end_row_addr: u32,
+    #[serde(rename = "@endColAddr", default)]
+    pub end_col_addr: u32,
+    #[serde(rename = "@borderFillIDRef", default)]
+    pub border_fill_id_ref: u32,
 }
 
 /// `<hp:sz>` — table size specification.
