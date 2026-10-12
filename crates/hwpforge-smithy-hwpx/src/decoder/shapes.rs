@@ -7279,9 +7279,9 @@ mod frame_tests {
         assert!(!encode(plain).contains("cellzone"));
     }
 
-    /// F: a zone starting past its end, reaching outside the grid or with an
-    /// address past `u16` is dropped and reported as lost content.
-    /// 이것을 실패시키는 것: 세 검사 중 하나를 지우기 · 끝을 배타로 비교.
+    /// F: a zone starting past its end or reaching outside the grid (an
+    /// address past 65535 included) is dropped and reported as lost content.
+    /// 이것을 실패시키는 것: 두 검사 중 하나를 지우기 · 끝을 배타로 비교.
     #[test]
     fn invalid_cell_zone_is_reported_as_lost() {
         for (zone, kept) in [

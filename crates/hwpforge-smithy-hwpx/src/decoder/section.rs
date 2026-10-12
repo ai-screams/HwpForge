@@ -1144,22 +1144,24 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     Ok(table)
 }
 
-/// F: the table's `<hp:cellzoneList>`. A zone whose address does not fit a
-/// `u16`, starts past its end or reaches outside the grid is reported as
-/// lost content and dropped (Core `validate` would refuse it).
+/// F: the table's `<hp:cellzoneList>`. A zone that starts past its end or
+/// reaches outside the grid (or past address 65535) is reported as lost
+/// content and dropped (Core `validate` would refuse it).
 /// 이것을 실패시키는 것: 읽지 않기 · 행·열 뒤바꿈(`cell_zones_round_trip`) ·
 /// 검사 삭제(`invalid_cell_zone_is_reported_as_lost`).
 fn decode_cell_zones(hx: &HxTable, table: &Table, ctx: &mut DecodeCtx) -> Vec<CellZone> {
     let Some(list) = hx.cell_zone_list.as_ref() else {
         return Vec::new();
     };
+    // A grid wider than `u16` addresses still bounds a zone at 65535, so a
+    // kept zone always fits Core's `u16` fields.
+    let limit = |n: u32| n.min(u32::from(u16::MAX) + 1);
     let (rows, cols) = TableGrid::from_table(table).map(|g| g.dimensions()).unwrap_or((0, 0));
+    let (rows, cols) = (limit(rows), limit(cols));
     let mut zones = Vec::with_capacity(list.zones.len());
     for (i, z) in list.zones.iter().enumerate() {
         let addr = [z.start_row_addr, z.start_col_addr, z.end_row_addr, z.end_col_addr];
-        let why = if addr.iter().any(|&v| v > u32::from(u16::MAX)) {
-            "an address past 65535"
-        } else if z.start_row_addr > z.end_row_addr || z.start_col_addr > z.end_col_addr {
+        let why = if z.start_row_addr > z.end_row_addr || z.start_col_addr > z.end_col_addr {
             "a start past its end"
         } else if z.end_row_addr >= rows || z.end_col_addr >= cols {
             "a range outside the table"
