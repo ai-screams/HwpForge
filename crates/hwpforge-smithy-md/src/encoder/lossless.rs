@@ -81,19 +81,28 @@ fn refuse_out_margin(
     Ok(())
 }
 
-/// An object's frame (S20 — original size, size lock) has no place in the
-/// grammar yet (P5b): a frame other than the default is refused rather than
-/// dropped (a dropped original box redraws the points at another scale).
-/// 이것을 실패시키는 것: 이 거부를 지우기 / 원래 크기만 또는 잠금만 보기
-/// (`object_frame_is_refused`).
-fn refuse_frame(frame: &hwpforge_core::ObjectFrame) -> MdResult<()> {
-    if !frame.is_unset() {
-        return Err(MdError::UnsupportedStructure {
-            detail: "object original size or size lock is not carried by the lossless encoder"
-                .to_string(),
-        });
+/// The object frame (S20, design §19.23.21 FRAME): the original box as
+/// `data-original-width-unit`/`-height-unit` (with readable `-mm`) when it
+/// is set, and `data-size-protect="true"` when the size is locked. A default
+/// frame writes nothing, so its output is unchanged.
+/// 이것을 실패시키는 것: 너비·높이·잠금 방출 중 하나를 지우기 / 기본 frame 에도
+/// 쓰기 / `Some(표시 크기)` 를 건너뛰기(`object_frame_round_trips`,
+/// `default_frame_writes_nothing`, `write_only_shapes_carry_the_frame`).
+fn frame_attrs(frame: &hwpforge_core::ObjectFrame) -> String {
+    let mut out = String::new();
+    if let Some(o) = frame.original_size {
+        out.push_str(&format!(
+            " data-original-width-unit=\"{}\" data-original-height-unit=\"{}\" data-original-width-mm=\"{:.2}\" data-original-height-mm=\"{:.2}\"",
+            o.width.as_i32(),
+            o.height.as_i32(),
+            o.width.to_mm(),
+            o.height.to_mm()
+        ));
     }
-    Ok(())
+    if frame.size_protect {
+        out.push_str(" data-size-protect=\"true\"");
+    }
+    out
 }
 
 /// One paragraph. Its end-mark char shape (`Paragraph::end_char_shape`,
@@ -125,7 +134,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
             }
             RunContent::Image(image) => {
                 refuse_out_margin(image.placement.as_ref())?;
-                refuse_frame(&image.frame)?;
+                let frame = frame_attrs(&image.frame);
                 // The picture's link, when it has one (`Image::hyperlink`).
                 let link = image
                     .hyperlink
@@ -133,7 +142,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     .map(|url| format!(" data-hyperlink=\"{}\"", escape_html(url)))
                     .unwrap_or_default();
                 out.push_str(&format!(
-                    "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{link} />",
+                    "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{frame}{link} />",
                     run.char_shape_id.get(),
                     escape_html(&image.path),
                     escape_html(&image.path),
@@ -164,7 +173,6 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     ..
                 } => {
                     refuse_out_margin(placement.as_ref())?;
-                    refuse_frame(frame)?;
                     // §19.22 D4: nor for a text margin other than 283 (P5b).
                     // 이것을 실패시키는 것: 이 거부를 지우기
                     // (`text_box_margin_is_refused`).
@@ -187,12 +195,13 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         });
                     }
                     out.push_str(&format!(
-                        "<textbox data-char-shape=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\">",
+                        "<textbox data-char-shape=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{}>",
                         run.char_shape_id.get(),
                         width.as_i32(),
                         height.as_i32(),
                         width.to_mm(),
-                        height.to_mm()
+                        height.to_mm(),
+                        frame_attrs(frame)
                     ));
                     for paragraph in paragraphs {
                         out.push_str(&encode_paragraph(paragraph)?);
@@ -228,23 +237,23 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     ));
                 }
                 Control::Line { start, end, width, height, frame, .. } => {
-                    refuse_frame(frame)?;
                     out.push_str(&format!(
-                        "<line data-char-shape=\"{}\" data-start-x=\"{}\" data-start-y=\"{}\" data-end-x=\"{}\" data-end-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"/>",
+                        "<line data-char-shape=\"{}\" data-start-x=\"{}\" data-start-y=\"{}\" data-end-x=\"{}\" data-end-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}/>",
                         run.char_shape_id.get(),
                         start.x, start.y, end.x, end.y,
-                        width.as_i32(), height.as_i32()
+                        width.as_i32(), height.as_i32(),
+                        frame_attrs(frame)
                     ));
                 }
                 Control::Ellipse {
                     center, axis1, axis2, width, height, paragraphs, frame, ..
                 } => {
-                    refuse_frame(frame)?;
                     out.push_str(&format!(
-                        "<ellipse data-char-shape=\"{}\" data-cx=\"{}\" data-cy=\"{}\" data-ax1-x=\"{}\" data-ax1-y=\"{}\" data-ax2-x=\"{}\" data-ax2-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\">",
+                        "<ellipse data-char-shape=\"{}\" data-cx=\"{}\" data-cy=\"{}\" data-ax1-x=\"{}\" data-ax1-y=\"{}\" data-ax2-x=\"{}\" data-ax2-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}>",
                         run.char_shape_id.get(),
                         center.x, center.y, axis1.x, axis1.y, axis2.x, axis2.y,
-                        width.as_i32(), height.as_i32()
+                        width.as_i32(), height.as_i32(),
+                        frame_attrs(frame)
                     ));
                     for paragraph in paragraphs {
                         out.push_str(&encode_paragraph(paragraph)?);
@@ -252,14 +261,14 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     out.push_str("</ellipse>");
                 }
                 Control::Polygon { vertices, width, height, paragraphs, frame, .. } => {
-                    refuse_frame(frame)?;
                     let pts: Vec<String> =
                         vertices.iter().map(|v| format!("{},{}", v.x, v.y)).collect();
                     out.push_str(&format!(
-                        "<polygon data-char-shape=\"{}\" data-points=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\">",
+                        "<polygon data-char-shape=\"{}\" data-points=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}>",
                         run.char_shape_id.get(),
                         pts.join(";"),
-                        width.as_i32(), height.as_i32()
+                        width.as_i32(), height.as_i32(),
+                        frame_attrs(frame)
                     ));
                     for paragraph in paragraphs {
                         out.push_str(&encode_paragraph(paragraph)?);
@@ -308,8 +317,12 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
 }
 
 fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
-    refuse_frame(&table.frame)?;
     let mut out = format!("<table data-char-shape=\"{}\"", char_shape_id);
+    // A table keeps only its size lock (it has no original box — validate).
+    // 이것을 실패시키는 것: 표 잠금 방출을 지우기(`table_size_lock_round_trips`).
+    if table.frame.size_protect {
+        out.push_str(" data-size-protect=\"true\"");
+    }
     if let Some(width) = table.width {
         out.push_str(&format!(
             " data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
@@ -503,91 +516,221 @@ mod tests {
         }
     }
 
-    /// S20: an object whose frame is not the default (an original box, a
-    /// size lock) is refused; the default frame is written.
+    // ── S20 FRAME (design §19.23.21) ──
+
+    fn frame_doc(runs: Vec<Run>) -> Document<Validated> {
+        let mut d = Document::new();
+        d.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+            hwpforge_core::PageSettings::a4(),
+        ));
+        d.validate().unwrap()
+    }
+
+    fn hu(v: i32) -> HwpUnit {
+        HwpUnit::new(v).unwrap()
+    }
+
+    fn frame_of(original: Option<(i32, i32)>, lock: bool) -> hwpforge_core::ObjectFrame {
+        let f = hwpforge_core::ObjectFrame::new().with_size_protect(lock);
+        match original {
+            Some((w, h)) => f.with_original_size(hwpforge_foundation::Size::new(hu(w), hu(h))),
+            None => f,
+        }
+    }
+
+    fn round_trip(doc: &Document<Validated>) -> Document {
+        let md = encode_lossless(doc).unwrap();
+        crate::MdDecoder::decode_lossless(&md).unwrap()
+    }
+
+    fn first_run(doc: &Document) -> RunContent {
+        doc.sections()[0].paragraphs[0].runs[0].content.clone()
+    }
+
+    /// A picture's and a text box's frame comes back as written: no original
+    /// box, one equal to the shown size (kept apart from `None`), a smaller
+    /// one, an asymmetric one — each locked and unlocked.
     #[test]
-    fn object_frame_is_refused() {
-        use hwpforge_core::ObjectFrame;
-        let doc = |run: Run| {
-            let mut d = Document::new();
-            d.add_section(Section::with_paragraphs(
-                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
-                hwpforge_core::PageSettings::a4(),
-            ));
-            d.validate().unwrap()
-        };
-        let unit = HwpUnit::new(3000).unwrap();
-        let half = HwpUnit::new(1500).unwrap();
-        let frames = [
-            (ObjectFrame::new(), false),
-            (
-                ObjectFrame::new().with_original_size(hwpforge_foundation::Size::new(half, half)),
-                true,
-            ),
-            (ObjectFrame::new().with_size_protect(true), true),
-        ];
-        for (frame, refused) in frames {
-            let refused_of =
-                |r: MdResult<String>| matches!(r, Err(MdError::UnsupportedStructure { .. }));
-            let mut image = Image::new("BinData/a.png", unit, unit, ImageFormat::Png);
-            image.frame = frame;
-            assert_eq!(
-                refused_of(encode_lossless(&doc(Run::image(image, CharShapeIndex::new(0))))),
-                refused,
-                "image {frame:?}"
-            );
-            let mut tb =
-                Control::text_box(vec![Paragraph::new(ParaShapeIndex::new(0))], unit, unit);
-            *tb.frame_mut().unwrap() = frame;
-            assert_eq!(
-                refused_of(encode_lossless(&doc(Run::control(tb, CharShapeIndex::new(0))))),
-                refused,
-                "text box {frame:?}"
-            );
-            let mut line = Control::line(
-                hwpforge_core::control::ShapePoint { x: 0, y: 0 },
-                hwpforge_core::control::ShapePoint { x: 3000, y: 0 },
-            )
-            .unwrap();
-            *line.frame_mut().unwrap() = frame;
-            assert_eq!(
-                refused_of(encode_lossless(&doc(Run::control(line, CharShapeIndex::new(0))))),
-                refused,
-                "line {frame:?}"
-            );
-            let mut ellipse = Control::ellipse(unit, unit);
-            *ellipse.frame_mut().unwrap() = frame;
-            assert_eq!(
-                refused_of(encode_lossless(&doc(Run::control(ellipse, CharShapeIndex::new(0))))),
-                refused,
-                "ellipse {frame:?}"
-            );
-            let mut polygon = Control::polygon(vec![
-                hwpforge_core::control::ShapePoint { x: 0, y: 0 },
-                hwpforge_core::control::ShapePoint { x: 3000, y: 0 },
-                hwpforge_core::control::ShapePoint { x: 0, y: 3000 },
-            ])
-            .unwrap();
-            *polygon.frame_mut().unwrap() = frame;
-            assert_eq!(
-                refused_of(encode_lossless(&doc(Run::control(polygon, CharShapeIndex::new(0))))),
-                refused,
-                "polygon {frame:?}"
-            );
-            if frame.original_size.is_none() {
-                // A table may not carry an original size (validate).
-                let cell = hwpforge_core::table::TableCell::new(
-                    vec![Paragraph::new(ParaShapeIndex::new(0))],
-                    unit,
+    fn object_frame_round_trips() {
+        for original in [None, Some((3000, 2000)), Some((1500, 1000)), Some((1, 7000))] {
+            for lock in [false, true] {
+                let frame = frame_of(original, lock);
+                let mut image = Image::new("BinData/a.png", hu(3000), hu(2000), ImageFormat::Png);
+                image.frame = frame;
+                let back = round_trip(&frame_doc(vec![Run::image(image, CharShapeIndex::new(0))]));
+                let RunContent::Image(image) = first_run(&back) else { panic!() };
+                assert_eq!(image.frame, frame, "picture");
+
+                let mut tb = Control::text_box(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("box", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    hu(3000),
+                    hu(2000),
                 );
-                let mut table = Table::new(vec![hwpforge_core::table::TableRow::new(vec![cell])]);
-                table.frame = frame;
-                assert_eq!(
-                    refused_of(encode_lossless(&doc(Run::table(table, CharShapeIndex::new(0))))),
-                    refused,
-                    "table {frame:?}"
-                );
+                *tb.frame_mut().unwrap() = frame;
+                let back = round_trip(&frame_doc(vec![Run::control(tb, CharShapeIndex::new(0))]));
+                let RunContent::Control(c) = first_run(&back) else { panic!() };
+                assert_eq!(*c.frame().unwrap(), frame, "text box");
             }
+        }
+    }
+
+    /// Frames stay where they are: pictures with different frames in the
+    /// body, a cell, a nested cell and a text box, and a locked table in a
+    /// text box, all in one document.
+    #[test]
+    fn frames_keep_their_context() {
+        use hwpforge_core::table::{TableCell, TableRow};
+        let picture = |w: i32, lock: bool| {
+            let mut image = Image::new("BinData/a.png", hu(3000), hu(2000), ImageFormat::Png);
+            image.frame = frame_of(Some((w, 1000)), lock);
+            Run::image(image, CharShapeIndex::new(0))
+        };
+        let para = |runs: Vec<Run>| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let table = |runs: Vec<Run>, lock: bool| {
+            let mut t =
+                Table::new(vec![TableRow::new(vec![TableCell::new(vec![para(runs)], hu(9000))])]);
+            t.frame = frame_of(None, lock);
+            t
+        };
+        let nested = table(vec![picture(1003, false)], false);
+        let outer =
+            table(vec![picture(1002, true), Run::table(nested, CharShapeIndex::new(0))], false);
+        let locked_in_box = table(vec![Run::text("t", CharShapeIndex::new(0))], true);
+        let tb = Control::text_box(
+            vec![para(vec![
+                picture(1004, false),
+                Run::table(locked_in_box, CharShapeIndex::new(0)),
+            ])],
+            hu(9000),
+            hu(9000),
+        );
+        let doc = frame_doc(vec![
+            picture(1001, false),
+            Run::table(outer, CharShapeIndex::new(0)),
+            Run::control(tb, CharShapeIndex::new(0)),
+        ]);
+        let back = round_trip(&doc);
+        let mut seen = Vec::new();
+        fn walk(paragraphs: &[Paragraph], seen: &mut Vec<String>) {
+            for p in paragraphs {
+                for r in &p.runs {
+                    match &r.content {
+                        RunContent::Image(i) => seen.push(format!(
+                            "pic {:?} {}",
+                            i.frame.original_size.map(|o| o.width.as_i32()),
+                            i.frame.size_protect
+                        )),
+                        RunContent::Table(t) => {
+                            seen.push(format!("table {}", t.frame.size_protect));
+                            for row in &t.rows {
+                                for cell in &row.cells {
+                                    walk(&cell.paragraphs, seen);
+                                }
+                            }
+                        }
+                        RunContent::Control(c) => {
+                            if let Control::TextBox { paragraphs, .. } = c.as_ref() {
+                                walk(paragraphs, seen);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        walk(&back.sections()[0].paragraphs, &mut seen);
+        assert_eq!(
+            seen,
+            [
+                "pic Some(1001) false",
+                "table false",
+                "pic Some(1002) true",
+                "table false",
+                "pic Some(1003) false",
+                "pic Some(1004) false",
+                "table true",
+            ]
+        );
+    }
+
+    /// A table keeps its size lock.
+    #[test]
+    fn table_size_lock_round_trips() {
+        use hwpforge_core::table::{TableCell, TableRow};
+        for lock in [false, true] {
+            let mut t = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("t", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hu(9000),
+            )])]);
+            t.frame = frame_of(None, lock);
+            let back = round_trip(&frame_doc(vec![Run::table(t, CharShapeIndex::new(0))]));
+            let RunContent::Table(t) = first_run(&back) else { panic!() };
+            assert_eq!(t.frame.size_protect, lock);
+        }
+    }
+
+    /// A default frame writes nothing: the picture's markup is the one
+    /// written before S20.
+    #[test]
+    fn default_frame_writes_nothing() {
+        let image = Image::new("BinData/a.png", hu(3000), hu(2000), ImageFormat::Png);
+        let md =
+            encode_lossless(&frame_doc(vec![Run::image(image, CharShapeIndex::new(0))])).unwrap();
+        assert!(
+            md.contains(r#"<img data-char-shape="0" src="BinData/a.png" alt="BinData/a.png" data-format="PNG" data-width-unit="3000" data-height-unit="2000" data-width-mm="10.58" data-height-mm="7.06" />"#),
+            "{md}"
+        );
+    }
+
+    /// Lines, ellipses and polygons write their frame (the decoder reads
+    /// these tags only from WS W3 on, so the document still fails to decode
+    /// — no silent loss). A line shown flat with a flat original box is a
+    /// valid frame (Core, built directly).
+    #[test]
+    fn write_only_shapes_carry_the_frame() {
+        use hwpforge_core::control::ShapePoint;
+        let mut line =
+            Control::line(ShapePoint { x: 0, y: 0 }, ShapePoint { x: 1000, y: 0 }).unwrap();
+        *line.frame_mut().unwrap() = frame_of(Some((1000, 0)), true);
+        if let Control::Line { width, height, .. } = &mut line {
+            *width = hu(2000);
+            *height = HwpUnit::ZERO;
+        }
+        let mut ellipse = Control::ellipse(hu(850), hu(850));
+        *ellipse.frame_mut().unwrap() = frame_of(Some((560, 560)), true);
+        let mut polygon = Control::polygon(vec![
+            ShapePoint { x: 0, y: 0 },
+            ShapePoint { x: 100, y: 0 },
+            ShapePoint { x: 0, y: 100 },
+        ])
+        .unwrap();
+        *polygon.frame_mut().unwrap() = frame_of(Some((100, 100)), false);
+        for (control, expected) in [
+            (
+                line,
+                r#" data-original-width-unit="1000" data-original-height-unit="0" data-original-width-mm="3.53" data-original-height-mm="0.00" data-size-protect="true"/>"#,
+            ),
+            (
+                ellipse,
+                r#" data-original-width-unit="560" data-original-height-unit="560" data-original-width-mm="1.98" data-original-height-mm="1.98" data-size-protect="true">"#,
+            ),
+            (
+                polygon,
+                r#" data-original-width-unit="100" data-original-height-unit="100" data-original-width-mm="0.35" data-original-height-mm="0.35">"#,
+            ),
+        ] {
+            let md =
+                encode_lossless(&frame_doc(vec![Run::control(control, CharShapeIndex::new(0))]))
+                    .unwrap();
+            assert!(md.contains(expected), "{md}");
+            assert!(crate::MdDecoder::decode_lossless(&md).is_err(), "{md}");
         }
     }
 

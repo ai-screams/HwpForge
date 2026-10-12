@@ -140,6 +140,7 @@ struct ParagraphNode {
 #[derive(Debug)]
 struct TableNode {
     char_shape_id: CharShapeIndex,
+    frame: hwpforge_core::ObjectFrame,
     rows: Vec<TableRow>,
     width: Option<HwpUnit>,
     caption: Option<String>,
@@ -176,6 +177,7 @@ struct LinkNode {
 #[derive(Debug)]
 struct TextBoxNode {
     char_shape_id: CharShapeIndex,
+    frame: hwpforge_core::ObjectFrame,
     width: HwpUnit,
     height: HwpUnit,
     text: String,
@@ -228,6 +230,8 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
             text: String::new(),
         })),
         "textbox" => Ok(OpenNode::TextBox(TextBoxNode {
+            // FRAME first: its full scan judges duplicates before any lookup.
+            frame: parse_frame_attrs(start, "textbox", true)?,
             char_shape_id: parse_index_attr(start, "textbox", "data-char-shape")?,
             width: parse_length_attr(start, "textbox", "data-width-unit", "data-width-mm")?,
             height: parse_length_attr(start, "textbox", "data-height-unit", "data-height-mm")?,
@@ -256,6 +260,7 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
     validate_parent(tag, stack)?;
     match tag {
         "img" => {
+            let frame = parse_frame_attrs(empty, "img", true)?;
             let char_shape_id = parse_index_attr(empty, "img", "data-char-shape")?;
             let src = required_attr(empty, "img", "src")?;
             let format = parse_image_format(&required_attr(empty, "img", "data-format")?);
@@ -263,6 +268,7 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
             let height = parse_length_attr(empty, "img", "data-height-unit", "data-height-mm")?;
 
             let mut image = Image::new(src, width, height, format);
+            image.frame = frame;
             image.hyperlink = attr_value(empty, "data-hyperlink")?;
             push_run_to_parent(stack, Run::image(image, char_shape_id))
         }
@@ -401,6 +407,7 @@ fn attach_closed_node(
                 table.rows
             };
             let mut core_table = Table::new(rows);
+            core_table.frame = table.frame;
             if let Some(width) = table.width {
                 core_table = core_table.with_width(width);
             }
@@ -477,7 +484,7 @@ fn attach_closed_node(
                 stack,
                 Run::control(
                     Control::TextBox {
-                        frame: hwpforge_core::ObjectFrame::new(),
+                        frame: text_box.frame,
                         text_margin: None,
                         paragraphs,
                         width: text_box.width,
@@ -622,6 +629,7 @@ fn parse_section_node(start: &BytesStart<'_>) -> MdResult<SectionNode> {
 
 fn parse_table_node(start: &BytesStart<'_>) -> MdResult<TableNode> {
     Ok(TableNode {
+        frame: parse_frame_attrs(start, "table", false)?,
         char_shape_id: parse_index_attr(start, "table", "data-char-shape")?,
         rows: Vec::new(),
         width: parse_optional_length_attr(start, "table", "data-width-unit", "data-width-mm")?,
@@ -639,6 +647,90 @@ fn parse_image_format(raw: &str) -> ImageFormat {
         "EMF" => ImageFormat::Emf,
         _ => ImageFormat::Unknown(raw.to_string()),
     }
+}
+
+/// The FRAME attributes (S20, design §19.23.21), in a fixed order.
+const FRAME_ATTRIBUTES: [&str; 5] = [
+    "data-original-width-unit",
+    "data-original-height-unit",
+    "data-original-width-mm",
+    "data-original-height-mm",
+    "data-size-protect",
+];
+
+/// Reads an element's object frame (S20, design §19.23.21). The whole
+/// attribute list is scanned once — without quick-xml's duplicate check, so
+/// the policy for the other attributes stays as it is — and a FRAME name met
+/// twice is refused. The original box needs both `-unit` attributes (the
+/// `-mm` ones are for reading only and ignored); `original` = whether the
+/// element may have one (a table may not). What a value means (a negative
+/// axis, a zero axis under a shown one) is left to Core validation.
+/// 이것을 실패시키는 것: 중복 검사 / 쌍 규칙 / 표의 원래 크기 거부 / `"false"`
+/// 처리 중 하나를 지우기(`frame_attribute_errors`).
+fn parse_frame_attrs(
+    start: &BytesStart<'_>,
+    element: &'static str,
+    original: bool,
+) -> MdResult<hwpforge_core::ObjectFrame> {
+    let mut found: [Option<String>; 5] = Default::default();
+    let mut attributes = start.attributes();
+    attributes.with_checks(false);
+    for attr in attributes {
+        let attr = attr.map_err(|err| MdError::LosslessParse {
+            detail: format!("attribute decode error: {err}"),
+        })?;
+        let Some(index) = FRAME_ATTRIBUTES.iter().position(|n| attr.key.as_ref() == *n) else {
+            continue;
+        };
+        if found[index].is_some() {
+            return Err(MdError::LosslessParse {
+                detail: format!("<{element}> repeats {}", FRAME_ATTRIBUTES[index]),
+            });
+        }
+        let value = attr.normalized_value(XmlVersion::Explicit1_0).map_err(|err| {
+            MdError::LosslessParse {
+                detail: format!(
+                    "attribute value decode error ({}): {err}",
+                    FRAME_ATTRIBUTES[index]
+                ),
+            }
+        })?;
+        found[index] = Some(value.into_owned());
+    }
+    let [width, height, width_mm, height_mm, protect] = found;
+    if !original
+        && (width.is_some() || height.is_some() || width_mm.is_some() || height_mm.is_some())
+    {
+        return Err(MdError::LosslessParse { detail: format!("<{element}> has no original size") });
+    }
+    let missing = |attribute| MdError::LosslessMissingAttribute { element, attribute };
+    let original_size = match (width, height) {
+        (Some(w), Some(h)) => Some(hwpforge_foundation::Size::new(
+            parse_unit_value(element, FRAME_ATTRIBUTES[0], w)?,
+            parse_unit_value(element, FRAME_ATTRIBUTES[1], h)?,
+        )),
+        (Some(_), None) => return Err(missing(FRAME_ATTRIBUTES[1])),
+        (None, Some(_)) => return Err(missing(FRAME_ATTRIBUTES[0])),
+        (None, None) if width_mm.is_some() => return Err(missing(FRAME_ATTRIBUTES[0])),
+        (None, None) if height_mm.is_some() => return Err(missing(FRAME_ATTRIBUTES[1])),
+        (None, None) => None,
+    };
+    let size_protect = match protect.as_deref() {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(other) => {
+            return Err(MdError::LosslessInvalidAttribute {
+                element,
+                attribute: FRAME_ATTRIBUTES[4],
+                value: other.to_string(),
+            })
+        }
+    };
+    let frame = hwpforge_core::ObjectFrame::new().with_size_protect(size_protect);
+    Ok(match original_size {
+        Some(o) => frame.with_original_size(o),
+        None => frame,
+    })
 }
 
 fn required_attr(
@@ -827,6 +919,102 @@ mod tests {
         s.push_str(inner);
         s.push_str("</section>");
         s
+    }
+
+    // ── S20 FRAME (design §19.23.21) ──
+
+    const IMG: &str = r#"data-char-shape="0" src="a.png" alt="a.png" data-format="PNG" data-width-unit="3000" data-height-unit="2000""#;
+
+    fn img(frame: &str) -> MdResult<Vec<Section>> {
+        decode_lossless_sections(&section_wrap(&format!(
+            r#"<p data-para-shape="0"><img {IMG} {frame} /></p>"#
+        )))
+    }
+
+    fn picture_frame(frame: &str) -> hwpforge_core::ObjectFrame {
+        let sections = img(frame).unwrap();
+        match &sections[0].paragraphs[0].runs[0].content {
+            RunContent::Image(i) => i.frame,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The grammar stage of FRAME: duplicates (first, middle, last place,
+    /// same value too), half a pair, `-mm` without `-unit`, a boolean other
+    /// than true/false, a value past HWPUNIT, and an original box on a table
+    /// are refused; `"false"` is no lock, the `-mm` values are ignored, and
+    /// 100,000,000 is in range.
+    #[test]
+    fn frame_attribute_errors() {
+        let w = r#"data-original-width-unit="10""#;
+        let h = r#"data-original-height-unit="20""#;
+        let p = r#"data-size-protect="true""#;
+        for dup in [format!("{p} {w} {h} {p}"), format!("{w} {p} {p} {h}"), format!("{w} {h} {w}")]
+        {
+            // The FRAME scan names the repeat itself — quick-xml's own check
+            // is not relied on (a lookup may stop before reaching it).
+            assert!(
+                matches!(img(&dup), Err(MdError::LosslessParse { detail }) if detail.contains("repeats")),
+                "{dup}"
+            );
+        }
+        assert!(matches!(img(w), Err(MdError::LosslessMissingAttribute { .. })));
+        assert!(matches!(img(h), Err(MdError::LosslessMissingAttribute { .. })));
+        assert!(matches!(
+            img(r#"data-original-width-mm="1.0" data-original-height-mm="2.0""#),
+            Err(MdError::LosslessMissingAttribute { .. })
+        ));
+        assert!(matches!(
+            img(r#"data-size-protect="yes""#),
+            Err(MdError::LosslessInvalidAttribute { .. })
+        ));
+        assert!(matches!(
+            img(r#"data-original-width-unit="100000001" data-original-height-unit="20""#),
+            Err(MdError::LosslessInvalidAttribute { .. })
+        ));
+        let u = |v| HwpUnit::new(v).unwrap();
+        let f = picture_frame(
+            r#"data-original-width-unit="100000000" data-original-height-unit="20" data-original-width-mm="1.00" data-original-height-mm="999.00" data-size-protect="false""#,
+        );
+        assert_eq!(f.original_size, Some(hwpforge_foundation::Size::new(u(100_000_000), u(20))));
+        assert!(!f.size_protect);
+        assert!(picture_frame(p).size_protect);
+        assert!(picture_frame("").is_unset(), "an old file without FRAME");
+
+        let table = |attrs: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><table data-char-shape="0" {attrs}><tr><td data-col-span="1" data-row-span="1" data-width-unit="9000"><p data-para-shape="0"><span data-char-shape="0">t</span></p></td></tr></table></p>"#
+            )))
+        };
+        for attrs in [format!("{w} {h}"), r#"data-original-width-mm="1.0""#.to_string()] {
+            assert!(matches!(table(&attrs), Err(MdError::LosslessParse { .. })), "{attrs}");
+        }
+        assert!(table(p).is_ok());
+    }
+
+    /// The meaning stage: a negative axis, or an original axis of 0 under a
+    /// shown one, decodes to a Draft that Core validation refuses.
+    #[test]
+    fn frame_meaning_is_left_to_validation() {
+        for frame in [
+            r#"data-original-width-unit="-5" data-original-height-unit="20""#,
+            r#"data-original-width-unit="0" data-original-height-unit="20""#,
+        ] {
+            let sections = img(frame).unwrap();
+            let mut doc = hwpforge_core::Document::new();
+            for s in sections {
+                doc.add_section(s);
+            }
+            assert!(
+                matches!(
+                    doc.validate(),
+                    Err(hwpforge_core::error::CoreError::Validation(
+                        hwpforge_core::ValidationError::InvalidObjectFrame { .. }
+                    ))
+                ),
+                "{frame}"
+            );
+        }
     }
 
     #[test]
