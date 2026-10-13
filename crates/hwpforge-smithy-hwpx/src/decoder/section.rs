@@ -741,6 +741,12 @@ fn convert_paragraph(
         }
         let mut lines = Vec::with_capacity(array.items.len());
         for s in &array.items {
+            // S22: a line that starts inside a field drops the cache.
+            // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
+            if tokens.inside_field(s.textpos) {
+                ctx.cache_dropped(format!("lineseg textpos {} is inside a field", s.textpos));
+                return None;
+            }
             match map.to_core(s.textpos) {
                 Ok(textpos) => {
                     let mut line = hwpforge_core::layout::LineSeg::default();

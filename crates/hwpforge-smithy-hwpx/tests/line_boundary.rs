@@ -267,3 +267,80 @@ fn folded_field_body_is_one_token_on_both_sides() {
     let cache = decoded.document.sections()[0].paragraphs[0].layout_cache.clone().expect("cache");
     assert_eq!(cache.lines[1].boundary, after);
 }
+
+/// Design 3.3: a line that starts inside a field drops the paragraph's
+/// cache — on encode (inside a bookmark span's text) and on decode (between
+/// a folded field's text pieces, where the coordinate map alone accepts it).
+/// 이것을 실패시키는 것: 인코더·디코더의 필드 안쪽 검사 삭제.
+#[test]
+fn line_inside_a_field_drops_the_cache() {
+    use hwpforge_foundation::BookmarkType;
+    use hwpforge_smithy_hwpx::HwpxDecoder;
+    let mark = |bookmark_type| {
+        Run::control(Control::Bookmark { name: "bm".into(), bookmark_type }, CharShapeIndex::new(0))
+    };
+    let runs = vec![
+        mark(BookmarkType::SpanStart),
+        Run::text("가나다", CharShapeIndex::new(0)),
+        mark(BookmarkType::SpanEnd),
+        Run::text("끝", CharShapeIndex::new(0)),
+    ];
+    let (cache, warnings) = encode(host(runs, vec![line(0, None), line(1, None)]), false);
+    assert_eq!(cache, None, "{warnings:?}");
+    assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
+
+    // Decode: secPr 0, colPr 8, fieldBegin 16, "a" 24, tab 25, "b" 33,
+    // fieldEnd 34 — a line at 25 (between the field's pieces).
+    let field = Run::control(
+        Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("a\tb".into()),
+            help_text: None,
+            name: Some("f".into()),
+            display_text: "a\tb".into(),
+        },
+        CharShapeIndex::new(0),
+    );
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![host(vec![field, Run::text("끝", CharShapeIndex::new(0))], vec![line(0, None)])],
+        PageSettings::a4(),
+    ));
+    let store = style_store_for_preset("default").unwrap();
+    let bytes = HwpxEncoder::encode_with_options(
+        &doc.validate().unwrap(),
+        &store,
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    assert!(decoded.document.sections()[0].paragraphs[0].layout_cache.is_some(), "premise");
+    let edited = {
+        use std::io::{Read as _, Write as _};
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).unwrap();
+                let at = xml.find("</hp:linesegarray>").unwrap();
+                let extra = r#"<hp:lineseg textpos="25" vertpos="1000" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="40000" flags="0"/>"#;
+                data = format!("{}{extra}{}", &xml[..at], &xml[at..]).into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        out.finish().unwrap().into_inner()
+    };
+    let decoded = HwpxDecoder::decode(&edited).unwrap();
+    assert!(decoded.document.sections()[0].paragraphs[0].layout_cache.is_none());
+    assert!(
+        decoded.warnings.iter().any(|w| w.code() == "LAYOUT_CACHE_DROPPED"),
+        "{:?}",
+        decoded.warnings
+    );
+}

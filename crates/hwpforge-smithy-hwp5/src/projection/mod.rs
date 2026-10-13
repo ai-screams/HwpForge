@@ -1674,6 +1674,14 @@ fn promote_line_segments(
     };
     let mut lines = Vec::with_capacity(segs.len());
     for s in segs {
+        // S22: a line that starts inside a field drops the cache (design 3.3).
+        // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
+        if tokens.inside_field(s.text_start_position) {
+            warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
+                reason: format!("lineseg textpos {} is inside a field", s.text_start_position),
+            });
+            return None;
+        }
         let textpos = match map.to_core(s.text_start_position) {
             Ok(core) => core,
             Err(e) => {
@@ -6629,6 +6637,43 @@ mod tests {
             promote_line_segments(&[seg(0), seg(9)], build_flat_ledger(&para), &mut warnings)
                 .unwrap_or_else(|| panic!("{warnings:?}"));
         assert_eq!(cache.lines[1].boundary, b(&[Table], Some(End)));
+    }
+
+    /// S22 (design 3.3): a line that starts inside a field — here inside a
+    /// re-emitted field's visible text — drops the cache with a warning; a
+    /// line at the field's edge does not.
+    /// 이것을 실패시키는 것: 필드 안쪽 검사 삭제.
+    #[test]
+    fn line_inside_a_field_drops_the_cache() {
+        use crate::schema::section::Hwp5ParaLineSeg;
+        let seg = |w: u32| Hwp5ParaLineSeg {
+            text_start_position: w,
+            vertical_position: 0,
+            line_height: 1000,
+            text_height: 1000,
+            baseline_distance: 850,
+            line_spacing: 600,
+            column_start_position: 0,
+            segment_width: 40000,
+            tag: 0,
+        };
+        // "가" 0, field begin 1, "나다라" 9, field end 12, "끝" 20, end 21.
+        let ledger = || {
+            let mut l = ParaLedger::new(&[]);
+            l.observe_text(1);
+            l.begin_field();
+            l.observe_text(3);
+            l.commit_field(FieldEmissionOutcome::ReEmitted);
+            l.observe_text(1);
+            l.observe_para_break();
+            l.finish()
+        };
+        let mut warnings = Vec::new();
+        assert!(promote_line_segments(&[seg(0), seg(10)], ledger(), &mut warnings).is_none());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let mut warnings = Vec::new();
+        assert!(promote_line_segments(&[seg(0), seg(20)], ledger(), &mut warnings).is_some());
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
 
     /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is

@@ -976,6 +976,15 @@ fn build_paragraph(
                             Some(b) => tokens.place(&map, l.textpos, b),
                             None => map.to_wire(l.textpos).map_err(|e| e.to_string()),
                         };
+                        // S22: never write a line start inside a field.
+                        // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
+                        let wire = wire.and_then(|w| {
+                            if tokens.inside_field(w) {
+                                Err(format!("wire {w} is inside a field"))
+                            } else {
+                                Ok(w)
+                            }
+                        });
                         match wire {
                             Ok(textpos) => items.push(HxLineSeg {
                                 textpos,

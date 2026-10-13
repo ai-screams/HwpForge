@@ -333,6 +333,27 @@ impl TokenLedger {
         self.tokens.push(token);
     }
 
+    /// `wire` 가 필드 안(필드 시작 < `wire` < 필드 끝 컨트롤의 끝, 8 유닛)인지
+    /// (S22 설계 3.3). 그런 줄은 캐시를 버린다.
+    pub(crate) fn inside_field(&self, wire: u32) -> bool {
+        use hwpforge_core::layout::WireTokenKind::{FieldBegin, FieldEnd};
+        let mut open: Vec<u32> = Vec::new();
+        for t in &self.tokens {
+            match t.kind {
+                FieldBegin => open.push(t.wire_start),
+                FieldEnd => {
+                    if let Some(start) = open.pop() {
+                        if start < wire && wire < t.wire_start + 8 {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// wire 위치 `wire`(Core 위치 `core`)에서 시작하는 줄의 경계. 그 위치의
     /// 토큰 앞에서 시작하면(토큰이 없거나 첫 토큰 앞) `None` — 가장 이른
     /// 자리라 좌표만으로 정해진다. 몇 개를 지난 뒤면 지난 종류들과 다음 종류.
