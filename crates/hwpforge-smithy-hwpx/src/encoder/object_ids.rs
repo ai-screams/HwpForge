@@ -34,13 +34,15 @@ thread_local! {
 }
 
 /// One encode call's id allocator, open until dropped (also on unwind).
-pub(crate) struct IdScope(());
+///
+/// Not `Send`: the scope lives on the thread whose stack it pushed.
+pub(crate) struct IdScope(std::marker::PhantomData<*const ()>);
 
 impl IdScope {
     /// Opens an allocator that skips `reserved`.
     pub(crate) fn enter(reserved: HashSet<u64>) -> Self {
         SCOPES.with(|s| s.borrow_mut().push(IdAllocator { next: 1, reserved }));
-        Self(())
+        Self(std::marker::PhantomData)
     }
 }
 
@@ -173,8 +175,10 @@ mod tests {
     use hwpforge_core::{ObjectId, PageSettings};
     use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
 
+    use super::{next_id, IdScope, SCOPES};
     use crate::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
     use crate::HwpxEncoder;
+    use std::collections::HashSet;
 
     fn unit() -> HwpUnit {
         HwpUnit::new(1000).unwrap()
@@ -204,8 +208,8 @@ mod tests {
         img
     }
 
-    /// Every XML part of an encoded package, concatenated.
-    fn encode(section: Section) -> String {
+    /// The package bytes of a one-section document.
+    fn encode_bytes(section: Section) -> Vec<u8> {
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape::default());
@@ -213,7 +217,12 @@ mod tests {
         doc.add_section(section);
         let mut images = ImageStore::new();
         images.insert("a.png", vec![0x89, b'P', b'N', b'G']);
-        let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images).unwrap();
+        HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images).unwrap()
+    }
+
+    /// Every XML part of the package, concatenated (for the id checks).
+    fn encode(section: Section) -> String {
+        let bytes = encode_bytes(section);
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut all = String::new();
         for i in 0..zip.len() {
@@ -301,10 +310,38 @@ mod tests {
     fn same_document_same_bytes_in_one_process() {
         let a = || with_drawn_ids(2);
         let b = || with_drawn_ids(5);
-        let first = encode(a());
-        assert_eq!(encode(a()), first);
-        let _ = encode(b());
-        assert_eq!(encode(a()), first);
+        // Whole package bytes (review W0 r1 L1), not only the XML parts.
+        let first = encode_bytes(a());
+        assert_eq!(encode_bytes(a()), first);
+        let _ = encode_bytes(b());
+        assert_eq!(encode_bytes(a()), first);
+        let other_thread = std::thread::spawn(move || encode_bytes(with_drawn_ids(2)));
+        assert_eq!(other_thread.join().unwrap(), first);
+    }
+
+    /// Review W0 r1 L2: closing an inner scope resumes the outer one where
+    /// it stopped, and a scope closes on unwind too.
+    /// 이것을 실패시키는 것: `Drop` 의 `pop` 삭제(바깥이 3 대신 안쪽 2 를 낸다 ·
+    /// panic 뒤 깊이가 하나 늘어 있다).
+    #[test]
+    fn scopes_nest_and_close_on_unwind() {
+        let depth = || SCOPES.with(|s| s.borrow().len());
+        let base = depth();
+        let outer = IdScope::enter(HashSet::new());
+        assert_eq!((next_id(), next_id()), (1, 2));
+        {
+            let _inner = IdScope::enter(HashSet::from([1]));
+            assert_eq!(next_id(), 2);
+        }
+        assert_eq!(next_id(), 3);
+        drop(outer);
+        assert_eq!(depth(), base);
+        let unwound = std::panic::catch_unwind(|| {
+            let _scope = IdScope::enter(HashSet::new());
+            panic!("inside an encode");
+        });
+        assert!(unwound.is_err());
+        assert_eq!(depth(), base);
     }
 
     fn with_drawn_ids(n: usize) -> Section {
