@@ -106,9 +106,9 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
-        // F (review r2 MEDIUM-2): cell zones are checked on every table an
-        // encoder writes — nested tables, captions (run pictures' included),
-        // headers/footers and master pages — through the one table walk.
+        // F (review r2 MEDIUM-2): cell zones are checked on every table —
+        // nested tables, captions (run pictures' included), headers/footers
+        // and master pages — through the one table walk.
         // 이것을 실패시키는 것: 이 순회를 최상위 표로 좁히기
         // (`cell_zone_validation_reaches_nested_tables`).
         let lists = std::iter::once(&section.paragraphs)
@@ -1457,6 +1457,17 @@ mod tests {
                 s.headers.push(header);
                 s
             },
+            // Review r3 M3: a table directly in a memo's anchor runs.
+            Section::with_paragraphs(
+                vec![host(Run::control(
+                    crate::control::Control::memo_with_anchor(
+                        vec![simple_paragraph()],
+                        vec![Run::table(bad(), CharShapeIndex::new(0))],
+                    ),
+                    CharShapeIndex::new(0),
+                ))],
+                PageSettings::a4(),
+            ),
             {
                 // A picture in a cell whose caption holds the bad table.
                 let mut pic = Image::new("b.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);

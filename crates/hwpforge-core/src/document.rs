@@ -118,7 +118,7 @@ pub struct Document<S = Draft> {
 // ---------------------------------------------------------------------------
 
 impl<S> Document<S> {
-    /// Visits every table an encoder writes, in every section (see
+    /// Visits every table in the document, in every section (see
     /// [`crate::section::Section::for_each_table`]).
     pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
         for section in &self.sections {

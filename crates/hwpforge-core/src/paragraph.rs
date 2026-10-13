@@ -188,15 +188,17 @@ impl Paragraph {
         }
     }
 
-    /// Visits every table an encoder writes from this paragraph: the tables
-    /// in its runs and in every paragraph nested in it — table cells and
-    /// captions, text boxes, notes, memos, shape captions, group children
+    /// Visits every table in this paragraph: the tables in its runs and in
+    /// every paragraph nested in it — table cells and captions, text boxes,
+    /// notes, memos (body and anchor runs), shape captions, group children
     /// **and run pictures' captions** (which [`Self::for_each_paragraph`]
     /// does not enter). A table is visited before the tables inside it.
     ///
-    /// This is the one traversal for checks that must reach every written
+    /// This is the one structural traversal for checks that must reach every
     /// table (cell zones, …), so a new container cannot be missed by one
-    /// check and not another.
+    /// check and not another. A format writer that drops some content (the
+    /// HWPX encoder writes only the text of a memo anchor) filters on top
+    /// of it.
     ///
     /// # Examples
     ///

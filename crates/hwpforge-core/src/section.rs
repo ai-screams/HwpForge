@@ -679,7 +679,7 @@ impl Section {
         }
     }
 
-    /// Visits every table an encoder writes from this section — body,
+    /// Visits every table in this section — body,
     /// headers, footers and master pages, nested containers and run picture
     /// captions included (see [`Paragraph::for_each_table`]).
     pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {

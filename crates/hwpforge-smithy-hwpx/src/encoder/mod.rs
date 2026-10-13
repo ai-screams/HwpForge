@@ -1032,8 +1032,27 @@ fn refuse_unknown_cell_zone_fills(
             style_store.border_fill(id).is_ok()
         }
     };
+    // Tables in a memo's anchor runs are not written (the anchor keeps its
+    // text only, `build_memo_anchor_xml`), so they are not checked (review r3
+    // M3). 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
+    // 의 메모 앵커 안 999 성공).
+    let mut dropped: std::collections::HashSet<*const hwpforge_core::table::Table> =
+        std::collections::HashSet::new();
+    for section in document.sections() {
+        let tops = section
+            .paragraphs
+            .iter()
+            .chain(section.headers.iter().chain(section.footers.iter()).flat_map(|h| &h.paragraphs))
+            .chain(section.master_pages.iter().flatten().flat_map(|m| &m.paragraphs));
+        for p in tops {
+            memo_anchor_tables(p, &mut dropped);
+        }
+    }
     let mut missing = None;
     document.for_each_table(|table| {
+        if dropped.contains(&std::ptr::from_ref(table)) {
+            return;
+        }
         if let Some(zone) = table.cell_zones.iter().find(|z| !written(z.border_fill_id)) {
             missing.get_or_insert(zone.border_fill_id);
         }
@@ -1044,6 +1063,37 @@ fn refuse_unknown_cell_zone_fills(
         }),
         None => Ok(()),
     }
+}
+
+/// The tables inside memo anchor runs reachable from `p` (run picture
+/// captions entered too) — content the HWPX encoder does not write.
+fn memo_anchor_tables(
+    p: &hwpforge_core::paragraph::Paragraph,
+    out: &mut std::collections::HashSet<*const hwpforge_core::table::Table>,
+) {
+    use hwpforge_core::control::Control;
+    use hwpforge_core::run::RunContent;
+    p.for_each_paragraph(|q| {
+        for run in &q.runs {
+            match &run.content {
+                RunContent::Control(c) => {
+                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                        for anchor in anchor_runs {
+                            anchor.for_each_table(|t| {
+                                out.insert(std::ptr::from_ref(t));
+                            });
+                        }
+                    }
+                }
+                RunContent::Image(img) => {
+                    for cp in img.caption.iter().flat_map(|c| &c.paragraphs) {
+                        memo_anchor_tables(cp, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 /// Encodes Core documents to HWPX format (ZIP + XML).
@@ -1404,6 +1454,52 @@ mod tests {
         // Review r2 MEDIUM-3: an empty store writes the defaults 1–3.
         assert!(encode(false, false, 3).is_ok());
         assert!(refused(encode(false, false, 4)));
+        // Review r3 M3: a table in a memo anchor is not written, so its zone
+        // is not checked; the same table in the memo body is.
+        let memo = |in_anchor: bool| {
+            let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("x", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::new(1000).unwrap(),
+            )])])
+            .with_cell_zones(vec![CellZone::new(0, 0, 0, 0, 999)]);
+            let holder = Run::table(table, CharShapeIndex::new(0));
+            let text = || Run::text("a", CharShapeIndex::new(0));
+            let (content, anchor) = if in_anchor {
+                // The reviewed case: the table sits in a text box in the anchor.
+                let text_box = hwpforge_core::control::Control::text_box(
+                    vec![Paragraph::with_runs(vec![holder], ParaShapeIndex::new(0))],
+                    HwpUnit::new(1000).unwrap(),
+                    HwpUnit::new(1000).unwrap(),
+                );
+                let boxed = Run::control(text_box, CharShapeIndex::new(0));
+                (
+                    vec![Paragraph::with_runs(vec![text()], ParaShapeIndex::new(0))],
+                    vec![text(), boxed],
+                )
+            } else {
+                (vec![Paragraph::with_runs(vec![holder], ParaShapeIndex::new(0))], vec![text()])
+            };
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(HwpxCharShape::default());
+            store.push_para_shape(HwpxParaShape::default());
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::control(
+                        hwpforge_core::control::Control::memo_with_anchor(content, anchor),
+                        CharShapeIndex::new(0),
+                    )],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            ));
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new())
+        };
+        assert!(memo(true).is_ok());
+        assert!(refused(memo(false)));
     }
 
     /// R2 HIGH 1 — the defect was that a *successful* encode kept only the

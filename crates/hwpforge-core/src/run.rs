@@ -84,7 +84,7 @@ impl Run {
         }
     }
 
-    /// Visits every table this run writes — itself if it is one, and the
+    /// Visits every table in this run — itself if it is one, and the
     /// tables in every paragraph nested in it, run picture captions included
     /// (see [`crate::paragraph::Paragraph::for_each_table`]).
     pub fn for_each_table<F: FnMut(&Table)>(&self, mut f: F) {
@@ -92,64 +92,64 @@ impl Run {
     }
 
     pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&Table)) {
-        // The paragraph walk below enters cells, captions and controls but
-        // not run pictures' captions; each visited paragraph's own runs are
-        // looked at here, and a run picture's caption is entered explicitly.
-        fn direct(q: &crate::paragraph::Paragraph, f: &mut dyn FnMut(&Table)) {
-            for run in &q.runs {
-                match &run.content {
-                    RunContent::Table(t) => f(t),
-                    RunContent::Image(img) => {
-                        for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
-                            cp.walk_tables(f);
+        // `own` visits the tables a run holds outside any paragraph of its
+        // own: itself, its picture caption's tables (the paragraph walk
+        // does not enter run pictures' captions) and, for a memo, its anchor
+        // runs (review r3 M3 — not paragraphs either). Every paragraph the
+        // run nests is then walked and its runs looked at the same way.
+        // 이것을 실패시키는 것: 메모 앵커 갈래 삭제(`cell_zone_validation_reaches_nested_tables`
+        // 의 메모 앵커 표).
+        fn own(run: &Run, f: &mut dyn FnMut(&Table)) {
+            match &run.content {
+                RunContent::Table(t) => f(t),
+                RunContent::Image(img) => {
+                    for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
+                        cp.walk_tables(f);
+                    }
+                }
+                RunContent::Control(c) => {
+                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                        for anchor in anchor_runs {
+                            own(anchor, f);
                         }
                     }
-                    _ => {}
                 }
+                RunContent::Text(_) | RunContent::InlineText(_) => {}
             }
         }
-        match &self.content {
-            RunContent::Table(t) => {
-                f(t);
-                t.walk_paragraphs(&mut |q| direct(q, f));
+        own(self, f);
+        self.walk_paragraphs(&mut |q| {
+            for run in &q.runs {
+                own(run, f);
             }
-            RunContent::Image(img) => {
-                for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
-                    cp.walk_tables(f);
-                }
-            }
-            RunContent::Control(c) => c.walk_paragraphs(&mut |q| direct(q, f)),
-            RunContent::Text(_) | RunContent::InlineText(_) => {}
-        }
+        });
     }
 
     pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut Table)) {
-        fn direct(q: &mut crate::paragraph::Paragraph, f: &mut dyn FnMut(&mut Table)) {
-            for run in &mut q.runs {
-                match &mut run.content {
-                    RunContent::Table(t) => f(t),
-                    RunContent::Image(img) => {
-                        for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
-                            cp.walk_tables_mut(f);
+        fn own(run: &mut Run, f: &mut dyn FnMut(&mut Table)) {
+            match &mut run.content {
+                RunContent::Table(t) => f(t),
+                RunContent::Image(img) => {
+                    for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
+                        cp.walk_tables_mut(f);
+                    }
+                }
+                RunContent::Control(c) => {
+                    if let Control::Memo { anchor_runs, .. } = c.as_mut() {
+                        for anchor in anchor_runs {
+                            own(anchor, f);
                         }
                     }
-                    _ => {}
                 }
+                RunContent::Text(_) | RunContent::InlineText(_) => {}
             }
         }
-        match &mut self.content {
-            RunContent::Table(t) => {
-                f(t);
-                t.walk_paragraphs_mut(&mut |q| direct(q, f));
+        own(self, f);
+        self.walk_paragraphs_mut(&mut |q| {
+            for run in &mut q.runs {
+                own(run, f);
             }
-            RunContent::Image(img) => {
-                for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
-                    cp.walk_tables_mut(f);
-                }
-            }
-            RunContent::Control(c) => c.walk_paragraphs_mut(&mut |q| direct(q, f)),
-            RunContent::Text(_) | RunContent::InlineText(_) => {}
-        }
+        });
     }
 
     /// Creates a text run.
