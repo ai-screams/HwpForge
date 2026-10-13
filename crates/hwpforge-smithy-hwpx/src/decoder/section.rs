@@ -3395,6 +3395,104 @@ mod tests {
         );
     }
 
+    /// S22 r1: a field that crosses paragraphs (Hancom's press-release
+    /// templates wrap the whole body in one "본문" click-here field). Its
+    /// begin and end tokens are zero-width and the text around them is one to
+    /// one, so every paragraph keeps its cache and each line lands on its own
+    /// character. A line inside a body folded into the begin's run is refused
+    /// by the coordinate map; a line inside a field closed within the
+    /// paragraph drops by the field rule; a line right after an end keeps.
+    /// 이것을 실패시키는 것: 끝이 다른 문단에 있는 필드의 시작·끝 문단 캐시를
+    /// 버리는 것(첫 경우의 두 문단이 캐시를 잃는다).
+    #[test]
+    fn a_field_across_paragraphs_keeps_its_one_to_one_caches() {
+        let lines = |starts: &[u32]| -> String {
+            starts
+                .iter()
+                .map(|w| format!(r#"<lineseg textpos="{w}" vertpos="0" vertsize="1000"/>"#))
+                .collect()
+        };
+        let begin_ctrl = |id: u32| {
+            format!(
+                r#"<ctrl><fieldBegin id="{id}" type="BOOKMARK" name="b{id}" editable="1" dirty="0" zorder="-1" fieldid="{id}" metaTag=""/></ctrl>"#
+            )
+        };
+        let end_ctrl =
+            |id: u32| format!(r#"<ctrl><fieldEnd beginIDRef="{id}" fieldid="{id}"/></ctrl>"#);
+        let run = |inner: String| format!(r#"<run charPrIDRef="0">{inner}</run>"#);
+        let t = |s: &str| format!("<t>{s}</t>");
+        let para = |runs: String, starts: &[u32]| {
+            format!(
+                r#"<p paraPrIDRef="0">{runs}<linesegarray>{}</linesegarray></p>"#,
+                lines(starts)
+            )
+        };
+        // (cache Core textpos or None, Core text) per paragraph, and warnings.
+        let decode = |paras: Vec<String>| {
+            let xml = format!("<sec>{}</sec>", paras.concat());
+            let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+            let out: Vec<(Option<Vec<u32>>, String)> = result
+                .paragraphs
+                .iter()
+                .map(|p| {
+                    (
+                        p.layout_cache
+                            .as_ref()
+                            .map(|c| c.lines.iter().map(|l| l.textpos).collect()),
+                        p.text_content(),
+                    )
+                })
+                .collect();
+            (out, result.warnings.len())
+        };
+
+        // The begin in its own run: wire begin 0..8, "abcd" 8..12 → the line
+        // at 9 is Core 1 ('b'); "efgh" 0..4, end 4..12 → the line at 2 is 'g'.
+        let (out, warnings) = decode(vec![
+            para(run(begin_ctrl(7)) + &run(t("abcd")), &[0, 9]),
+            para(run(t("efgh")) + &run(end_ctrl(7)), &[0, 2]),
+        ]);
+        assert_eq!(warnings, 0);
+        assert_eq!(out[0], (Some(vec![0, 1]), "abcd".to_string()));
+        assert_eq!(out[1], (Some(vec![0, 2]), "efgh".to_string()));
+
+        // A body folded into the begin's run: a line inside it (wire 9) has
+        // no Core position.
+        let (out, warnings) = decode(vec![
+            para(run(begin_ctrl(7) + &t("abcd")), &[0, 9]),
+            para(run(t("efgh")) + &run(end_ctrl(7)), &[0, 2]),
+        ]);
+        assert_eq!(warnings, 1);
+        assert_eq!(out[0].0, None);
+        assert_eq!(out[1].0, Some(vec![0, 2]));
+
+        // Across three: the middle paragraph has no field token and keeps.
+        let (out, warnings) = decode(vec![
+            para(run(t("가")) + &run(begin_ctrl(7)) + &run(t("나")), &[0, 9]),
+            para(run(t("다라")), &[0, 1]),
+            para(run(t("마")) + &run(end_ctrl(7)) + &run(t("바")), &[0, 9]),
+        ]);
+        assert_eq!(warnings, 0);
+        assert_eq!(
+            out.iter().map(|o| o.0.clone()).collect::<Vec<_>>(),
+            [Some(vec![0, 1]), Some(vec![0, 1]), Some(vec![0, 1]),]
+        );
+
+        // Nested in one run: a line inside the inner field, which closes
+        // within the paragraph (begin 9, end token ends at 26), drops.
+        let (out, _) = decode(vec![para(
+            run(begin_ctrl(1) + &t("가") + &begin_ctrl(2) + &t("나") + &end_ctrl(2) + &t("다")),
+            &[0, 17],
+        )]);
+        assert_eq!(out[0].0, None);
+
+        // Closed within the paragraph: an empty field, then a line right
+        // after the field end (wire 16).
+        let (out, warnings) =
+            decode(vec![para(run(begin_ctrl(1) + &end_ctrl(1)) + &run(t("가나")), &[0, 16])]);
+        assert_eq!((out[0].0.clone(), warnings), (Some(vec![0, 0]), 0));
+    }
+
     #[test]
     fn out_of_range_textpos_drops_cache_with_warning() {
         // 텍스트 2유닛인데 textpos=70 — wire 총길이와 모순되는 조작 캐시는

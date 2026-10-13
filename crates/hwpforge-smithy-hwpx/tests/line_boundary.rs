@@ -344,3 +344,52 @@ fn line_inside_a_field_drops_the_cache() {
         decoded.warnings
     );
 }
+
+/// S22 r1: a bookmark span that crosses paragraphs writes its begin in the
+/// first paragraph and its text one to one after it, so that paragraph keeps
+/// its line cache; the end paragraph drops its cache because the encoder
+/// cannot write a span end without its start ("unmatched bookmark span end").
+/// A span closed in its own paragraph keeps both caches.
+/// 이것을 실패시키는 것: 인코더에서 "끝 없는 필드 시작이 있으면 캐시 drop" 을
+/// 넣는 것(시작 문단의 맞는 캐시가 사라진다).
+#[test]
+fn a_bookmark_span_across_paragraphs_keeps_its_first_cache() {
+    use hwpforge_foundation::BookmarkType;
+    let mark = |bookmark_type| {
+        Run::control(Control::Bookmark { name: "bm".into(), bookmark_type }, CharShapeIndex::new(0))
+    };
+    let text = |t: &str| Run::text(t, CharShapeIndex::new(0));
+    let caches = |paragraphs: Vec<Paragraph>| {
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
+        let store = style_store_for_preset("default").unwrap();
+        let outcome = HwpxEncoder::encode_with_diagnostics(
+            &doc.validate().unwrap(),
+            &store,
+            &ImageStore::new(),
+            EncodeOptions::default().with_emit_layout_cache(true),
+        )
+        .unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("Contents/section0.xml").unwrap(), &mut xml)
+            .unwrap();
+        let drops = outcome.warnings.iter().filter(|w| w.code() == "LAYOUT_CACHE_DROPPED").count();
+        (xml.matches("<hp:linesegarray>").count(), drops)
+    };
+
+    let across = vec![
+        host(vec![mark(BookmarkType::SpanStart), text("가나")], vec![line(0, None), line(1, None)]),
+        host(vec![text("다"), mark(BookmarkType::SpanEnd)], vec![line(0, None)]),
+    ];
+    assert_eq!(caches(across), (1, 1));
+
+    let within = vec![
+        host(
+            vec![mark(BookmarkType::SpanStart), text("가나"), mark(BookmarkType::SpanEnd)],
+            vec![line(0, None)],
+        ),
+        host(vec![text("다")], vec![line(0, None)]),
+    ];
+    assert_eq!(caches(within), (2, 0));
+}
