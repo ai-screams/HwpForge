@@ -1,6 +1,6 @@
 # @hwpforge/mcp
 
-> Anvil — HwpForge MCP Server for AI-native Korean HWP/HWPX document tools
+> Vise — HwpForge MCP Server for AI-native Korean HWP/HWPX document tools
 
 ## Install
 

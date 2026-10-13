@@ -1,7 +1,7 @@
 //! HwpForge Foundation: primitive types for the HwpForge ecosystem.
 //!
-//! This crate sits at the bottom of the dependency graph. It provides
-//! raw-material value types used by every other HwpForge crate:
+//! This crate sits at the bottom of the dependency graph -- the **Ingot**
+//! in the Forge metaphor. It provides raw-material value types used by every other HwpForge crate:
 //!
 //! - [`HwpUnit`] -- the universal measurement unit (1/100 pt)
 //! - [`Color`] -- BGR color matching the HWP specification

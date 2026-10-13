@@ -1,6 +1,6 @@
 # hwpforge
 
-Read, edit and generate Korean HWP/HWPX documents from Python.
+Tongs — Read, edit and generate Korean HWP/HWPX documents from Python.
 
 > 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
 > (Developed with reference to Hancom's public HWP file format documents: <https://www.hancom.com/etc/hwpDownload.do>.)

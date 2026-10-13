@@ -32,14 +32,14 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 ## Architecture (Forge Metaphor)
 
-The codebase follows a **blacksmith workshop** metaphor with clear separation of concerns:
+The codebase follows a **blacksmith workshop** metaphor with clear separation of concerns (canonical names: `branding/BRANDING.md` "대장간 이름 체계"):
 
 ```
-Foundation (🔩 primitives)
-  → Core (🔨 pure document structure, no style definitions)
-  → Blueprint (📐 YAML style templates, centralized like Figma Design Tokens)
-  → Smithy (🔥 format-specific compilers: HWPX, HWP5, Markdown, PDF)
-  → Bindings (🐍⚒️🤖 Python/CLI/MCP interfaces)
+Foundation = Ingot (primitives)
+  → Core = Anvil (pure document structure, no style definitions; the hub every format passes through)
+  → Blueprint = Blueprint (YAML style templates, centralized like Figma Design Tokens)
+  → Smithy = Hearth (format-specific compilers: HWPX, HWP5, Markdown, PDF)
+  → Bindings: CLI = Hammer 🔨 · MCP = Vise 🗜️ · Python = Tongs 🐍
 ```
 
 **Key Principle**: **Structure and Style are separate** (like HTML + CSS).
