@@ -18,6 +18,7 @@ pub(super) fn build_memo_run_xml(
     metadata: &hwpforge_core::MemoMetadata,
     char_pr_id_ref: u32,
     field_id: usize,
+    memo_create_time: Option<u64>,
 ) -> String {
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
     let begin_id = 1_500_000_000_u64 + field_id as u64;
@@ -33,8 +34,9 @@ pub(super) fn build_memo_run_xml(
     } else {
         metadata.command.clone()
     };
+    // W0: no clock read — the caller's time or the epoch.
     let create_datetime = if metadata.create_datetime.is_empty() {
-        iso8601_utc_now()
+        memo_default_datetime(memo_create_time)
     } else {
         metadata.create_datetime.clone()
     };

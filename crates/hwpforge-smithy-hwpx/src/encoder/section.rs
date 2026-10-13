@@ -1546,6 +1546,7 @@ fn build_runs(
                             metadata,
                             char_pr_id_ref,
                             field_id,
+                            options.memo_create_time,
                         );
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -2179,17 +2180,13 @@ use super::shapes::{
     encode_line_to_hx, encode_polygon_to_hx, encode_rect_to_hx, encode_textbox_to_rect,
 };
 
-/// Returns the current UTC time as an ISO 8601 timestamp
-/// (`"YYYY-MM-DDTHH:MM:SSZ"`). Used as a sensible default for
-/// `<hp:parameters name="CreateDateTime">` when callers don't supply one.
-///
-/// Implemented against `std::time` so the encoder stays dependency-free.
-/// Algorithm is Howard Hinnant's civil-from-days conversion; see
-/// <https://howardhinnant.github.io/date_algorithms.html>.
-fn iso8601_utc_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let (y, mo, d, h, mi, s) = unix_to_ymdhms(secs);
+/// The memo `CreateDateTime` written when the memo has none: the time the
+/// caller gave ([`super::EncodeOptions::with_memo_create_time`], seconds
+/// since the Unix epoch), else the epoch itself. The encoder never reads
+/// the clock (W0): the same document always encodes to the same bytes.
+/// Format `"YYYY-MM-DDTHH:MM:SSZ"`, as Hancom writes it.
+fn memo_default_datetime(unix_secs: Option<u64>) -> String {
+    let (y, mo, d, h, mi, s) = unix_to_ymdhms(unix_secs.unwrap_or(0));
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
 }
 
@@ -6081,6 +6078,7 @@ mod tests {
                 &hwpforge_core::MemoMetadata::default(),
                 0,
                 big,
+                None,
             ),
             "memo",
         );

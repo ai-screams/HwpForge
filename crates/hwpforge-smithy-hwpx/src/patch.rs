@@ -526,7 +526,10 @@ impl RawPackage {
         let mut zip = ZipWriter::new(cursor);
 
         for entry in &self.entries {
-            let options = SimpleFileOptions::default().compression_method(entry.compression);
+            // W0: fixed entry time (the ZIP epoch), never the clock.
+            let options = SimpleFileOptions::default()
+                .compression_method(entry.compression)
+                .last_modified_time(zip::DateTime::default());
             zip.start_file(&entry.path, options).map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(&entry.bytes).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
@@ -2143,6 +2146,20 @@ mod tests {
             } else {
                 at += 1;
             }
+        }
+    }
+
+    /// W0: a rewritten package keeps every entry at the fixed ZIP epoch.
+    /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
+    /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
+    #[test]
+    fn rewritten_entries_keep_a_fixed_time() {
+        let bytes = zeros_zip(&[("a.bin", 8), ("b.bin", 8)]);
+        let out = RawPackage::read_capped(&bytes, 1024, u64::MAX).unwrap().write().unwrap();
+        let mut archive = ZipArchive::new(Cursor::new(out)).unwrap();
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).unwrap();
+            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
         }
     }
 

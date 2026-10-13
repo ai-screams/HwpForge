@@ -6434,3 +6434,39 @@ fn size_lock_round_trips_through_json() {
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(frame_answer(&rewritten), answer);
 }
+
+/// W0 G-det (a): two separate processes convert each input to the same
+/// bytes, with and without the layout cache — pictures, memos (whose time
+/// comes from the file, not the clock) and a chart.
+/// 이것을 실패시키는 것: 프로세스마다 다른 id 출발점(할당기를 pid 에서 시작).
+/// 시계 의존은 두 실행이 같은 초에 끝나면 못 잡는다 — 그것은 인코더 단위
+/// 시험(`memo_time_comes_from_the_caller_not_the_clock`)이 잡는다.
+#[test]
+fn hwp5_conversion_is_byte_stable_across_processes() {
+    let tmp = test_tmp();
+    for name in [
+        "images/img_03_two_images_png_jpg.hwp",
+        "user_samples/sample-memo-basic.hwp",
+        "user_samples/sample-memo-multiple.hwp",
+        "charts/chart_01_single_column.hwp",
+    ] {
+        let source = resolve_workspace_fixture_path(name);
+        for carry in [false, true] {
+            let outs: Vec<Vec<u8>> = (0..2)
+                .map(|run_index| {
+                    let out =
+                        tmp.join(format!("{}_{carry}_{run_index}.hwpx", name.replace('/', "_")));
+                    let mut args =
+                        vec!["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()];
+                    if carry {
+                        args.push("--carry-layout-cache");
+                    }
+                    let (_, stderr, code) = run(&args);
+                    assert_eq!(code, 0, "{name}: {stderr}");
+                    std::fs::read(&out).unwrap()
+                })
+                .collect();
+            assert_eq!(outs[0], outs[1], "{name} carry={carry}");
+        }
+    }
+}

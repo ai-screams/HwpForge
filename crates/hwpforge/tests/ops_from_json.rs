@@ -864,3 +864,47 @@ fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
     assert_eq!(dropped.len(), 1, "{dropped:?}");
     assert!(dropped[0].contains("section[1].masterpage[1].npara[0]"), "{}", dropped[0]);
 }
+
+/// W0: `from-json` authors documents, so a memo whose JSON has no time gets
+/// the current time (the encoder alone would write the epoch); a memo with
+/// a time keeps it.
+/// 이것을 실패시키는 것: `from_json` 의 현재 시각 주입 삭제(epoch 가 나온다).
+#[test]
+fn a_memo_without_a_time_gets_the_current_time() {
+    let mut value: serde_json::Value = serde_json::from_str(&exported_text(
+        "../../../../tests/fixtures/user_samples/sample-memo-basic.hwpx",
+    ))
+    .unwrap();
+    let mut blanked = 0;
+    blank_memo_times(&mut value, &mut blanked);
+    assert!(blanked > 0, "the fixture has a memo");
+    let out = from_json(&value.to_string(), &FromJsonOptions::default()).expect("from_json");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(out.bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("Contents/section0.xml").unwrap(), &mut xml)
+        .unwrap();
+    let tag = r#"<hp:stringParam name="CreateDateTime">"#;
+    let at = xml.find(tag).expect("CreateDateTime") + tag.len();
+    let year: u32 = xml[at..at + 4].parse().unwrap();
+    assert!(year >= 2026, "not the current time: {}", &xml[at..at + 20]);
+}
+
+fn blank_memo_times(value: &mut serde_json::Value, blanked: &mut usize) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(t)) = map.get_mut("create_datetime") {
+                t.clear();
+                *blanked += 1;
+            }
+            for v in map.values_mut() {
+                blank_memo_times(v, blanked);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for v in items {
+                blank_memo_times(v, blanked);
+            }
+        }
+        _ => {}
+    }
+}

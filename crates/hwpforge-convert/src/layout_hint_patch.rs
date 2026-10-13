@@ -153,7 +153,10 @@ impl RawPackage {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
         for entry in &self.entries {
-            let options = SimpleFileOptions::default().compression_method(entry.compression);
+            // W0: fixed entry time (the ZIP epoch), never the clock.
+            let options = SimpleFileOptions::default()
+                .compression_method(entry.compression)
+                .last_modified_time(zip::DateTime::default());
             zip.start_file(&entry.path, options).map_err(|e| LayoutPatchError::Package {
                 detail: format!("zip start '{}': {e}", entry.path),
             })?;
@@ -543,6 +546,20 @@ mod tests {
             make_zip(&[("a.xml", &[b'a'; 40]), ("b.xml", &[b'b'; 40]), ("c.xml", &[b'c'; 40])]);
         let err = RawPackage::read_capped(&zip, 50, 100, MAX_ENTRIES).unwrap_err();
         assert!(err.to_string().contains("total decompressed data"), "got: {err}");
+    }
+
+    /// W0: a rewritten package keeps every entry at the fixed ZIP epoch.
+    /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
+    /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
+    #[test]
+    fn rewritten_entries_keep_a_fixed_time() {
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>"), ("mimetype", b"x")]);
+        let out = RawPackage::read(&zip).unwrap().write().unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(out)).unwrap();
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).unwrap();
+            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
+        }
     }
 
     #[test]

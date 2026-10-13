@@ -2809,6 +2809,48 @@ fn finish_active_field(
     }
 }
 
+/// Q8 (W0): the HWP5 wire keeps no time per memo, so every memo without
+/// one takes the document's last-saved time (summary information), else the
+/// epoch. A conversion never reads the clock: the same file converts to the
+/// same bytes. Memos in run pictures' captions are reached too.
+/// 이것을 실패시키는 것: 채우기 삭제(인코더 epoch 로 떨어져 저장 시각을 잃는다) ·
+/// 저장 시각 대신 생성 시각(`memo_takes_the_last_saved_time`).
+pub(crate) fn fill_memo_create_times(document: &mut hwpforge_core::document::Document) {
+    fn fill(p: &mut Paragraph, time: &str) {
+        p.for_each_paragraph_mut(|q| {
+            for run in &mut q.runs {
+                match &mut run.content {
+                    RunContent::Control(c) => {
+                        if let Control::Memo { metadata, .. } = c.as_mut() {
+                            if metadata.create_datetime.is_empty() {
+                                metadata.create_datetime = time.to_string();
+                            }
+                        }
+                    }
+                    RunContent::Image(img) => {
+                        for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
+                            fill(cp, time);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    let time =
+        document.metadata().modified.clone().unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string());
+    for section in document.sections_mut() {
+        let hs = section.headers.iter_mut().chain(section.footers.iter_mut());
+        let tops =
+            section.paragraphs.iter_mut().chain(hs.flat_map(|h| h.paragraphs.iter_mut())).chain(
+                section.master_pages.iter_mut().flatten().flat_map(|m| m.paragraphs.iter_mut()),
+            );
+        for p in tops {
+            fill(p, &time);
+        }
+    }
+}
+
 /// Projects a HWP5 memo placeholder into a Core `Run` carrying
 /// `Control::Memo`. Body paragraphs come from the joined
 /// `HWPTAG_MEMO_LIST` cluster (filled by the decoder during `finish`);
@@ -2825,9 +2867,10 @@ fn project_memo_run(
         ImageProjectionContext::Flow,
     );
     // Map the parsed wire command onto the format-agnostic
-    // `MemoMetadata`. `id` and `create_datetime` are left at their default
-    // (empty) so the HWPX encoder derives `"memo{number}"` and a current-UTC
-    // timestamp at emit time — wire never carried either field. We go
+    // `MemoMetadata`. `id` is left empty so the HWPX encoder derives
+    // `"memo{number}"`; `create_datetime` is filled after projection from
+    // the document's last-saved time ([`fill_memo_create_times`], Q8) —
+    // the wire carries neither field per memo. We go
     // through `Default::default()` because `MemoMetadata` is
     // `#[non_exhaustive]` and can't be constructed positionally outside
     // `hwpforge-core`.
@@ -6308,6 +6351,72 @@ mod tests {
             .find_map(|r| r.content.as_table().cloned())
             .expect("table run");
         (table, warnings)
+    }
+
+    /// Q8 (W0): every memo without a time takes the document's last-saved
+    /// time — a body memo and one in a run picture's caption — and a memo
+    /// with a time keeps it; with no saved time, the epoch.
+    /// 이것을 실패시키는 것: 채우기 삭제 · 생성 시각 사용 · 그림 캡션 미방문 ·
+    /// 이미 있는 시각 덮어쓰기.
+    #[test]
+    fn memo_takes_the_last_saved_time() {
+        use hwpforge_core::metadata::Metadata;
+        let cs = CharShapeIndex::new(0);
+        let memo = |time: &str| {
+            let mut c = Control::memo_with_anchor(
+                vec![Paragraph::with_runs(vec![Run::text("m", cs)], ParaShapeIndex::new(0))],
+                vec![Run::text("a", cs)],
+            );
+            if let Control::Memo { metadata, .. } = &mut c {
+                metadata.create_datetime = time.to_string();
+            }
+            Run::control(c, cs)
+        };
+        let doc = |modified: Option<&str>| {
+            let mut pic =
+                Image::new("BinData/a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+            pic.caption = Some(Caption::new(
+                vec![Paragraph::with_runs(vec![memo("")], ParaShapeIndex::new(0))],
+                CaptionSide::Bottom,
+            ));
+            let body = Paragraph::with_runs(
+                vec![memo(""), memo("2001-02-03T04:05:06Z"), Run::image(pic, cs)],
+                ParaShapeIndex::new(0),
+            );
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
+            let mut m = Metadata::default();
+            m.created = Some("2020-01-01T00:00:00Z".to_string());
+            m.modified = modified.map(str::to_string);
+            d.set_metadata(m);
+            fill_memo_create_times(&mut d);
+            let mut times = Vec::new();
+            fn collect(p: &Paragraph, out: &mut Vec<String>) {
+                p.for_each_paragraph(|q| {
+                    for r in &q.runs {
+                        match &r.content {
+                            RunContent::Control(c) => {
+                                if let Control::Memo { metadata, .. } = c.as_ref() {
+                                    out.push(metadata.create_datetime.clone());
+                                }
+                            }
+                            RunContent::Image(img) => {
+                                for cp in img.caption.iter().flat_map(|c| &c.paragraphs) {
+                                    collect(cp, out);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+            collect(&d.sections()[0].paragraphs[0], &mut times);
+            times
+        };
+        let saved = "2026-05-29T23:16:46Z";
+        assert_eq!(doc(Some(saved)), [saved, "2001-02-03T04:05:06Z", saved]);
+        let epoch = "1970-01-01T00:00:00Z";
+        assert_eq!(doc(None), [epoch, "2001-02-03T04:05:06Z", epoch]);
     }
 
     /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is

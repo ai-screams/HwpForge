@@ -448,10 +448,17 @@ impl PackageWriter {
         let cursor = Cursor::new(buf);
         let mut zip = ZipWriter::new(cursor);
 
-        let stored_opts =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        let deflate_opts =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        // W0: entry times are fixed (1980-01-01, the ZIP epoch). The zip
+        // crate stamps the current time by default once its `time` feature
+        // is on, which another dependency can turn on.
+        // 이것을 실패시키는 것: 시각 고정 삭제 + `time` 기능 켜기.
+        let fixed = zip::DateTime::default();
+        let stored_opts = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Stored)
+            .last_modified_time(fixed);
+        let deflate_opts = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .last_modified_time(fixed);
 
         // 1. mimetype — STORED, must be first entry (OPF convention)
         zip.start_file("mimetype", stored_opts).map_err(|e| HwpxError::Zip(e.to_string()))?;

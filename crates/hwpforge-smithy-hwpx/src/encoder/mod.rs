@@ -1037,6 +1037,11 @@ pub struct EncodeOptions {
     /// 좌표로 정규화**돼 있다 (선행 컨트롤 8유닛 차감) — 방출값도 원본
     /// wire 의 스트림 좌표와 다르다.
     pub emit_layout_cache: bool,
+    /// 작성 시각(`CreateDateTime`)이 비어 있는 메모에 쓸 시각, Unix 초.
+    /// `None`(기본)이면 epoch(`1970-01-01T00:00:00Z`). 인코더는 시계를 읽지
+    /// 않는다 — 같은 문서는 늘 같은 바이트(W0). 사용자가 새로 쓰는 문서의
+    /// 진입점(`from-json` 등)이 현재 시각을 넣는다.
+    pub memo_create_time: Option<u64>,
 }
 
 impl EncodeOptions {
@@ -1044,6 +1049,22 @@ impl EncodeOptions {
     #[must_use]
     pub fn with_emit_layout_cache(mut self, emit: bool) -> Self {
         self.emit_layout_cache = emit;
+        self
+    }
+
+    /// 작성 시각이 빈 메모에 쓸 시각(Unix 초)을 정한다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::EncodeOptions;
+    ///
+    /// let options = EncodeOptions::default().with_memo_create_time(1_700_000_000);
+    /// assert_eq!(options.memo_create_time, Some(1_700_000_000));
+    /// ```
+    #[must_use]
+    pub fn with_memo_create_time(mut self, unix_secs: u64) -> Self {
+        self.memo_create_time = Some(unix_secs);
         self
     }
 }

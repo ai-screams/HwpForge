@@ -380,4 +380,58 @@ mod tests {
         zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
         assert_eq!(objects_with_id(&xml, "7"), 2);
     }
+
+    /// W0: every package entry carries the fixed ZIP epoch time.
+    /// 이것을 실패시키는 것: 시각 고정 삭제 — `--features zip/time` 으로 돌릴 때
+    /// (그 기능이 꺼진 빌드에서는 zip 기본값이 같은 epoch 라 통과한다).
+    #[test]
+    fn package_entry_times_are_fixed() {
+        let bytes = encode_bytes(with_drawn_ids(1));
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
+        }
+    }
+
+    /// W0: a memo without a time gets the epoch, or the time the caller
+    /// passes — never the clock, so two encodes match.
+    /// 이것을 실패시키는 것: 인코더가 현재 시각을 읽기 · 주입 시각 무시.
+    #[test]
+    fn memo_time_comes_from_the_caller_not_the_clock() {
+        let cs = CharShapeIndex::new(0);
+        let memo = Control::memo_with_anchor(vec![text()], vec![Run::text("a", cs)]);
+        let section = || {
+            Section::with_paragraphs(
+                vec![para(vec![Run::control(memo.clone(), cs)])],
+                PageSettings::a4(),
+            )
+        };
+        let encode_with = |options: crate::EncodeOptions| {
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(HwpxCharShape::default());
+            store.push_para_shape(HwpxParaShape::default());
+            let mut doc = Document::new();
+            doc.add_section(section());
+            let bytes = HwpxEncoder::encode_with_options(
+                &doc.validate().unwrap(),
+                &store,
+                &ImageStore::new(),
+                options,
+            )
+            .unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            let mut xml = String::new();
+            zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
+            xml
+        };
+        let time = |xml: &str| {
+            let tag = r#"<hp:stringParam name="CreateDateTime">"#;
+            let at = xml.find(tag).expect("CreateDateTime") + tag.len();
+            xml[at..at + xml[at..].find('<').unwrap()].to_string()
+        };
+        assert_eq!(time(&encode_with(crate::EncodeOptions::default())), "1970-01-01T00:00:00Z");
+        let given = crate::EncodeOptions::default().with_memo_create_time(1_780_000_606);
+        assert_eq!(time(&encode_with(given)), "2026-05-28T20:36:46Z");
+    }
 }

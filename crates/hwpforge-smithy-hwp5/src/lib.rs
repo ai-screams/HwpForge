@@ -607,6 +607,7 @@ pub(crate) fn decode_hwp5_with_images_with_budget_limit(
     let (mut document, image_store, proj_warnings) =
         projection::project_to_core_with_images(intermediate.sections, &image_assets, budget)?;
     document.set_metadata(metadata);
+    projection::fill_memo_create_times(&mut document);
     warnings.extend(proj_warnings);
 
     Ok(Hwp5Document { document, image_store, warnings })
@@ -705,6 +706,7 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
             budget,
         )?;
     document.set_metadata(metadata.clone());
+    projection::fill_memo_create_times(&mut document);
     warnings.extend(proj_warnings);
     projection::drop_cell_zones_with_unknown_border_fill(
         &mut document,

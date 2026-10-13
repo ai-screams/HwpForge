@@ -408,8 +408,7 @@ impl FromJsonOutput {
 /// Besides the encoder's own diagnostics, one `LAYOUT_CACHE_DROPPED` per
 /// section whose JSON carried a non-empty layout cache — [`to_json`] exports
 /// each paragraph's promoted `linesegarray` cache, but this function always
-/// encodes with [`EncodeOptions::default`], whose `emit_layout_cache` stays
-/// off (a stale cache after edits is worse than none). Without this warning
+/// encodes with `emit_layout_cache` off (a stale cache after edits is worse than none). Without this warning
 /// the round trip is silently render-degraded: 한글 recomputes layout on
 /// open regardless, but `hwpforge`'s own PDF path needs the cache and would
 /// otherwise fail later with no link back to this step.
@@ -464,7 +463,7 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         exported.document.sections().iter().map(|section| section.paragraphs.len()).sum();
 
     // Same reason this must run before `validate()` consumes the tree: the
-    // encode below always runs with `EncodeOptions::default` (emit off), so
+    // encode below always runs with `emit_layout_cache` off, so
     // a cache the input carried is dropped without a trace unless flagged
     // here. `first_layout_cache_path` walks every paragraph the encoder
     // would serialize (including image captions — see its doc), so one
@@ -504,11 +503,18 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         None => ImageStore::new(),
     };
 
+    // W0: `from-json` writes documents the caller authors, so a memo the
+    // JSON gives no time gets the current time — the encoder itself never
+    // reads the clock (conversions and edits stay byte-stable).
+    // 이것을 실패시키는 것: 현재 시각 주입 삭제(`a_memo_without_a_time_gets_the_current_time`).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let outcome = HwpxEncoder::encode_with_diagnostics(
         &validated,
         &style_store,
         &image_store,
-        EncodeOptions::default(),
+        EncodeOptions::default().with_memo_create_time(now),
     )
     .map_err(OpsError::encode)?;
 
