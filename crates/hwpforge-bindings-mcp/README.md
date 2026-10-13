@@ -2,6 +2,9 @@
 
 MCP (Model Context Protocol) server for HwpForge — enables AI agents to create and edit Korean HWPX documents.
 
+> 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+> (Developed with reference to Hancom's public HWP file format documents: <https://www.hancom.com/etc/hwpDownload.do>.)
+
 Documentation: <https://ai-scream.ai/HwpForge/>
 
 ## Installation

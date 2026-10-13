@@ -2,6 +2,9 @@
 
 Read, edit and generate Korean HWP/HWPX documents from Python.
 
+> 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+> (Developed with reference to Hancom's public HWP file format documents: <https://www.hancom.com/etc/hwpDownload.do>.)
+
 `hwpforge` wraps the [HwpForge](https://github.com/ai-screams/HwpForge) Rust library: a
 document model for the HWPX (OWPML) format, an HWP5 reader, a Markdown bridge and a PDF
 renderer. The Python package is a thin layer over that library, so it performs the same

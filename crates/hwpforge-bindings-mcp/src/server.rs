@@ -1047,7 +1047,10 @@ impl ServerHandler for HwpForgeServer {
         .with_server_info(
             Implementation::new("hwpforge-mcp", env!("CARGO_PKG_VERSION"))
                 .with_title("HwpForge MCP Server")
-                .with_description("AI-first Korean HWPX document generation and editing tools")
+                .with_description(
+                    "AI-first Korean HWPX document generation and editing tools. \
+                     본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.",
+                )
                 .with_website_url("https://github.com/ai-screams/HwpForge"),
         )
         .with_instructions(

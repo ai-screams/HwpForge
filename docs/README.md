@@ -6,6 +6,8 @@
 [![docs.rs](https://docs.rs/hwpforge/badge.svg)](https://docs.rs/hwpforge)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/ai-screams/HwpForge)
 
+> 본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+
 ---
 
 ## HwpForge란?
