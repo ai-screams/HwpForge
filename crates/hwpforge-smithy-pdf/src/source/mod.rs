@@ -1216,6 +1216,21 @@ fn replay_section(
                     location,
                 });
             }
+            // S22 r1: a placement the replay does not support is refused
+            // before a missing host cache — re-saving in Hancom would write
+            // the cache but leave the table unrenderable.
+            // 이것을 실패시키는 것: 이 검사를 캐시 검사 뒤로
+            // (`unsupported_table_placement_is_reported_before_a_missing_cache`).
+            let hosted = para.runs.iter().find_map(|r| match &r.content {
+                RunContent::Table(t) => Some(t.as_ref()),
+                _ => None,
+            });
+            if hosted.is_some_and(|t| !table::placement_is_default_flow(t)) {
+                return Err(PdfError::UnsupportedContent {
+                    kind: "non-default table position",
+                    location,
+                });
+            }
             let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
                 return Err(PdfError::MissingLayoutCache { count: 1, first: location });
             };
@@ -5175,6 +5190,35 @@ mod tests {
         let table = Table::new(vec![TableRow::new(vec![uncached_cell])])
             .with_layout_cache(hwpforge_core::table::TableLayoutCache::new(None, true));
         let err = replay(&doc_of(vec![table_host(table, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
+    }
+
+    /// S22 r1: a cacheless table host is refused for its placement first —
+    /// a re-save writes the cache, not a supported placement — and only a
+    /// default-flow table is refused for the missing cache.
+    #[test]
+    fn unsupported_table_placement_is_reported_before_a_missing_cache() {
+        use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
+        let cacheless = |table: Table| {
+            let mut host = table_host(table, 0);
+            host.layout_cache = None;
+            host
+        };
+        let floating = one_cell_cached_table().with_placement(
+            ObjectPlacement::new(
+                ObjectTextWrap::TopAndBottom,
+                ObjectRelativeTo::Para,
+                ObjectRelativeTo::Para,
+            )
+            .with_treat_as_char(true),
+        );
+        let err = replay(&doc_of(vec![cacheless(floating)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
+            "{err:?}"
+        );
+        let err = replay(&doc_of(vec![cacheless(one_cell_cached_table())]), &PdfOptions::default())
+            .unwrap_err();
         assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
     }
 

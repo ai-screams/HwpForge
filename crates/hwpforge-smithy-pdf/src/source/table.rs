@@ -84,7 +84,7 @@ pub(crate) struct TableReplayOutcome {
 /// 이것을 실패시키는 것: 캐시 `default_flow_pos` 로 되돌리기
 /// (`table_admission_reads_the_core_placement`) / 비교에서 새 네 필드 중
 /// 하나를 빼기.
-fn placement_is_default_flow(table: &Table) -> bool {
+pub(crate) fn placement_is_default_flow(table: &Table) -> bool {
     use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
     table.placement.as_ref().is_none_or(|p| {
         *p == ObjectPlacement::new(

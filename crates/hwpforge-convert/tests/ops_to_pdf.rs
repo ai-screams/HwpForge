@@ -477,3 +477,57 @@ fn the_committed_font_is_the_synthetic_face_unmodified() {
         .collect();
     assert_eq!(entries, vec![PY_FONT_FILE.to_string()]);
 }
+
+/// S22 r1: the hint names what helps. A missing layout cache is written by a
+/// re-save in Hancom; content the replay does not support (here a table
+/// treated as a character) is not, and the hint says to export from Hancom.
+/// 이것을 실패시키는 것: `hint` 의 원인 분기 삭제(두 오류가 같은 재저장 안내).
+#[test]
+fn the_hint_tells_a_missing_cache_from_unsupported_content() {
+    let missing =
+        to_pdf(&retyped("rules-justify.hwpx", true), &options().with_partial_cache_reject(true))
+            .expect_err("a cacheless paragraph is refused");
+    assert_eq!(missing.cause(), Some(PdfErrorCode::MissingLayoutCache));
+    let hint = missing.hint().expect("a hint");
+    assert!(hint.contains("re-saving the document in Hancom writes one"), "{hint}");
+
+    let decoded = HwpxDecoder::decode(&fixture("rules-table.hwpx")).expect("decode fixture");
+    let mut store = decoded.style_store;
+    let faces: Vec<String> = store.iter_fonts().map(|font| font.face_name.clone()).collect();
+    for face in faces {
+        if face != TEST_FACE {
+            store.replace_font(&face, TEST_FACE);
+        }
+    }
+    let mut document = decoded.document;
+    let section = document.sections_mut().first_mut().expect("a section");
+    let table = section
+        .paragraphs
+        .iter_mut()
+        .flat_map(|p| p.runs.iter_mut())
+        .find_map(|r| match &mut r.content {
+            hwpforge_core::run::RunContent::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("a table");
+    table.placement = Some(
+        hwpforge_core::placement::ObjectPlacement::new(
+            hwpforge_core::placement::ObjectTextWrap::TopAndBottom,
+            hwpforge_core::placement::ObjectRelativeTo::Para,
+            hwpforge_core::placement::ObjectRelativeTo::Para,
+        )
+        .with_treat_as_char(true),
+    );
+    let bytes = HwpxEncoder::encode_with_diagnostics(
+        &document.validate().expect("validate"),
+        &store,
+        &decoded.image_store,
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .expect("encode")
+    .bytes;
+    let unsupported = to_pdf(&bytes, &options()).expect_err("an inline table is refused");
+    assert_eq!(unsupported.cause(), Some(PdfErrorCode::UnsupportedContent), "{unsupported}");
+    let hint = unsupported.hint().expect("a hint");
+    assert!(hint.contains("re-saving in Hancom does not change that"), "{hint}");
+}
