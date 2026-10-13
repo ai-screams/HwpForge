@@ -172,10 +172,8 @@ fn collect_flow_table_layout_hints(
     // rows (`<hp:caption>` precedes `<hp:tr>`), so their hints come first.
     // 이것을 실패시키는 것: 캡션 hint 를 빼거나 칸 뒤로(캡션 표 변환이
     // hint 수 부족으로 실패 — `table_caption_converts_with_its_line_cache`).
-    if let Some(caption) = &table.caption {
-        for paragraph in &caption.paragraphs {
-            collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
-        }
+    for paragraph in crate::projection::written_caption_paragraphs(table) {
+        collect_flow_paragraph_layout_hints(paragraph, body, header, footer);
     }
     for cell in &table.cells {
         for paragraph in &cell.paragraphs {
@@ -250,6 +248,10 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
 
 fn collect_table_layout_hints(table: &Hwp5Table, scope: &mut ScopeLayoutHints) {
     scope.push_table(table);
+    // D: a caption is written before the rows here too (a table in a text
+    // box, a header, a note). 이것을 실패시키는 것: 이 줄을 지우기 — 글상자 안
+    // 캡션 표 변환이 hint 부족으로 실패(`caption_in_a_text_box_table_converts`).
+    collect_scope_paragraphs(crate::projection::written_caption_paragraphs(table), scope);
     for cell in &table.cells {
         collect_scope_paragraphs(&cell.paragraphs, scope);
     }
@@ -345,6 +347,64 @@ mod tests {
             segment_width: 20272,
             tag: 393216,
         }
+    }
+
+    /// D: a captioned table inside a scope (a text box, a note) queues the
+    /// caption paragraph's hint before the cells', as HWPX writes them; a
+    /// table without cells (its caption dropped) queues none for it.
+    /// 이것을 실패시키는 것: scope 표에서 캡션 hint 빼기 · 칸 뒤로 · 칸 없는 표의
+    /// 캡션도 넣기.
+    #[test]
+    fn caption_in_a_text_box_table_converts() {
+        use crate::decoder::section::{
+            Hwp5TableCaption, Hwp5TableCell, Hwp5TableCellMargin, Hwp5TableCellVerticalAlign,
+        };
+        let cell = Hwp5TableCell {
+            has_margin: false,
+            line_wrap: 0,
+            column: 0,
+            row: 0,
+            col_span: 1,
+            row_span: 1,
+            width: 1000,
+            height: 0,
+            margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+            vertical_align: Hwp5TableCellVerticalAlign::Top,
+            is_header: false,
+            border_fill_id: None,
+            paragraphs: vec![paragraph("cell", vec![line_segment(0, 2, 1000)], vec![])],
+        };
+        let table = |cells: Vec<Hwp5TableCell>| Hwp5Table {
+            inner_margin: None,
+            no_adjust: false,
+            cell_zones: Vec::new(),
+            caption: Some(Hwp5TableCaption {
+                side: 3,
+                full_size: false,
+                width: 0,
+                gap: 850,
+                last_width: 1000,
+                paragraphs: vec![paragraph("cap", vec![line_segment(0, 1, 1000)], vec![])],
+            }),
+            rows: 1,
+            cols: 1,
+            page_break: crate::decoder::section::Hwp5TablePageBreak::Cell,
+            repeat_header: false,
+            cell_spacing: 0,
+            border_fill_id: None,
+            cells,
+            instance_id: 0,
+            ctrl: None,
+        };
+        let host = |t| paragraph("", vec![line_segment(0, 0, 1000)], vec![Hwp5Control::Table(t)]);
+        let mut scope = ScopeLayoutHints::default();
+        collect_scope_paragraph_layout_hints(&host(table(vec![cell])), &mut scope);
+        let order: Vec<i32> =
+            scope.paragraphs.iter().map(|h| h.line_segments[0].vertical_position).collect();
+        assert_eq!(order, [0, 1, 2]);
+        let mut empty = ScopeLayoutHints::default();
+        collect_scope_paragraph_layout_hints(&host(table(vec![])), &mut empty);
+        assert_eq!(empty.paragraphs.len(), 1);
     }
 
     /// A-T4: the table height hint is the table `CtrlHeader` height (법무부

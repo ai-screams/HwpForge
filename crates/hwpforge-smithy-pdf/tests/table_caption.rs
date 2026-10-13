@@ -253,3 +253,48 @@ fn split_fixture_with_a_bottom_caption_is_refused_until_measured() {
     let err = replay_converted("sample-table-caption-split.hwp").expect_err("refused");
     assert!(matches!(err, PdfError::InvalidCache { .. }), "{err}");
 }
+
+fn first_caption_line(d: &mut Document<Draft>) -> &mut hwpforge_core::layout::LineSeg {
+    let caption = table_mut(d, 0).caption.as_mut().unwrap();
+    &mut caption.paragraphs[0].layout_cache.as_mut().unwrap().lines[0]
+}
+
+fn invalid_cache(r: Result<ReplayLayout, PdfError>) -> bool {
+    matches!(r, Err(PdfError::InvalidCache { ref detail }) if detail.contains("/caption"))
+}
+
+/// D review r1 HIGH-1: a caption line cache that does not start at the text
+/// start, or whose line starts at the text end, is refused — before, the
+/// caption vanished from a successful PDF ("여백 미포함 캡션" = 9 UTF-16).
+/// 이것을 실패시키는 것: 첫 줄 0 검사 삭제 · 마지막 줄 끝 검사 삭제 · 끝 검사를
+/// `>` 로(둘째 줄이 길이에서 시작해도 통과).
+#[test]
+fn caption_lines_must_cover_the_text() {
+    assert!(replay(|_| {}).is_ok());
+    assert!(invalid_cache(replay(|d| first_caption_line(d).textpos = 1)));
+    assert!(invalid_cache(replay(|d| first_caption_line(d).textpos = 9)));
+    // A second line starting at the text end (the first still at 0).
+    assert!(invalid_cache(replay(|d| {
+        let caption = table_mut(d, 0).caption.as_mut().unwrap();
+        let lines = &mut caption.paragraphs[0].layout_cache.as_mut().unwrap().lines;
+        let mut second = lines[0];
+        second.textpos = 9;
+        second.vertpos += second.vertsize;
+        lines.push(second);
+    })));
+}
+
+/// D review r1 MEDIUM-3: caption line values past the unit range are an
+/// invalid cache, not an overflow (debug panic, release wraparound); the
+/// range end itself is accepted.
+/// 이것을 실패시키는 것: 범위 검사 삭제(`i32::MAX` 세로 위치 → panic) ·
+/// `<=` 를 `<` 로(경계 100,000,000 거부).
+#[test]
+fn caption_geometry_out_of_range_is_invalid_cache() {
+    assert!(invalid_cache(replay(|d| first_caption_line(d).vertpos = i32::MAX)));
+    assert!(invalid_cache(replay(|d| first_caption_line(d).horzpos = i32::MAX)));
+    assert!(invalid_cache(replay(|d| first_caption_line(d).horzpos = 100_000_001)));
+    assert!(invalid_cache(replay(|d| first_caption_line(d).baseline = i32::MIN)));
+    let edge = replay(|d| first_caption_line(d).horzpos = 100_000_000).expect("range end");
+    assert!(caption_lines(&edge)[0].line_box.horzpos > 100_000_000);
+}

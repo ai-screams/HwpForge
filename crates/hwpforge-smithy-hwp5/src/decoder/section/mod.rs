@@ -1352,8 +1352,24 @@ impl BodyTextParserState {
                 let table_header = parse_table_header(&record.data);
                 if let Some(ctx) = self.table_stack.last_mut() {
                     // D: the caption's paragraphs end where the body starts.
+                    // Fewer than the list header declared is a cut caption
+                    // (D review r1 MEDIUM-5). 이것을 실패시키는 것: 이 경고 삭제
+                    // (`table_caption_is_read` 의 2 문단 선언·1 문단 도착) · `<` 를 `<=` 로
+                    // (선언대로 온 캡션도 경고).
                     if ctx.current_cell.as_ref().is_some_and(|c| c.caption.is_some()) {
                         ctx.flush_current_cell_paragraph(&mut self.warnings);
+                        if let Some(cell) = &ctx.current_cell {
+                            let got = cell.cell.paragraphs.len();
+                            if got < cell.expected_paragraphs {
+                                self.warnings.push(Hwp5Warning::ParserFallback {
+                                    subject: "table.caption",
+                                    reason: format!(
+                                        "caption declares {} paragraphs but {got} arrived before the table body",
+                                        cell.expected_paragraphs
+                                    ),
+                                });
+                            }
+                        }
                         ctx.finish_active_cell();
                     }
                     ctx.table.rows = table_header.rows;
@@ -6069,6 +6085,17 @@ mod tests {
         .unwrap();
         assert_eq!(only_table(&open).caption.as_ref().map(|c| c.paragraphs.len()), Some(1));
         assert_eq!(only_table(&open).cells[0].paragraphs[0].text, "칸");
+        let cut = |r: &SectionResult| {
+            r.warnings
+                .iter()
+                .filter(|w| {
+                    matches!(w, Hwp5Warning::ParserFallback { subject: "table.caption", .. })
+                })
+                .count()
+        };
+        assert_eq!(cut(&open), 1);
+        assert!(format!("{:?}", open.warnings).contains("declares 2 paragraphs but 1"));
+        assert_eq!(cut(&result), 0);
     }
 
     /// E: table property bit 3 is `noAdjust`; bits 0-2 (page break, repeat

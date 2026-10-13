@@ -410,6 +410,10 @@ pub(crate) fn replay_table(
     })
 }
 
+/// The largest magnitude a caption line value may have — the unit range
+/// ([`hwpforge_foundation::HwpUnit::MAX_VALUE`]).
+const MAX_UNIT: u32 = hwpforge_foundation::HwpUnit::MAX_VALUE.unsigned_abs();
+
 /// 표 캡션의 배치 사실 (admission 통과분).
 struct AdmittedCaption<'a> {
     caption: &'a Caption,
@@ -451,8 +455,38 @@ fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<Admitted
                 location: location.to_string(),
             });
         }
+        // D review r1 HIGH-1: the lines must cover the caption's text from
+        // its start — a first line past 0 or a line starting at the end
+        // would drop text, or the whole caption, without a word.
+        // 이것을 실패시키는 것: 이 검사 삭제(`caption_lines_must_cover_the_text`
+        // 의 textpos 1 · textpos = 길이).
+        let len = p.text_content().encode_utf16().count();
+        let first = cache.lines.first().map_or(0, |seg| seg.textpos as usize);
+        let last = cache.lines.last().map_or(0, |seg| seg.textpos as usize);
+        if len > 0 && (first != 0 || last >= len) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}/caption: lines start at {first} and {last} of {len} UTF-16 units"
+                ),
+            });
+        }
+        // D review r1 MEDIUM-3: line geometry within the unit range, so the
+        // caption box sums below cannot overflow. 이것을 실패시키는 것: 범위
+        // 검사 삭제(`caption_geometry_out_of_range_is_invalid_cache` — debug
+        // 빌드 overflow panic).
         for seg in &cache.lines {
-            height = height.max(seg.vertpos + seg.vertsize);
+            let fields = [seg.vertpos, seg.vertsize, seg.baseline, seg.horzpos, seg.horzsize];
+            let bottom = seg.vertpos.checked_add(seg.vertsize);
+            match bottom {
+                Some(bottom) if fields.iter().all(|v| v.unsigned_abs() <= MAX_UNIT) => {
+                    height = height.max(bottom);
+                }
+                _ => {
+                    return Err(PdfError::InvalidCache {
+                        detail: format!("{location}/caption: line geometry out of range"),
+                    })
+                }
+            }
         }
     }
     Ok(AdmittedCaption {

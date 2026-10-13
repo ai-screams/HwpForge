@@ -4184,12 +4184,25 @@ fn build_table_with_images(
     core_table
 }
 
+/// The caption paragraphs the projection writes for `table` — none when
+/// the table has no cells (its caption is dropped, [`build_empty_table`]) or
+/// the caption has no paragraph (dropped, [`project_table_caption`]). The
+/// layout hints follow this so their count matches the written paragraphs.
+pub(crate) fn written_caption_paragraphs(table: &Hwp5Table) -> &[Hwp5Paragraph] {
+    match &table.caption {
+        Some(caption) if !table.cells.is_empty() => &caption.paragraphs,
+        _ => &[],
+    }
+}
+
 /// D: the table caption as a Core caption. `last_width` is kept only when
 /// it differs from the width the HWPX encoder writes for this table (its
 /// own width, else the first row's), so an unedited conversion writes the
-/// source value back either way.
+/// source value back either way. A width or last width Core cannot hold is
+/// dropped with a warning — not taken for "equal to the table width".
 /// 이것을 실패시키는 것: 측 대응 밀림 · `fullSz` 무시 · 정규화 생략/반전
-/// (`table_caption_projects_to_core`).
+/// (`table_caption_projects_to_core`) · 표현 불가 폭 경고 삭제 · 빈 캡션
+/// 유지(`caption_without_paragraphs_or_with_a_huge_width_is_reported`).
 fn project_table_caption(
     table: &Hwp5Table,
     core_table: &Table,
@@ -4202,38 +4215,54 @@ fn project_table_caption(
         2 => CaptionSide::Top,
         _ => CaptionSide::Bottom,
     };
-    let paragraphs = if source.paragraphs.is_empty() {
-        vec![empty_paragraph()]
-    } else {
-        source
-            .paragraphs
-            .iter()
-            .map(|paragraph| {
-                project_paragraph_with_images(
-                    paragraph,
-                    projection_images,
-                    ImageProjectionContext::Flow,
-                    None,
-                )
-                .paragraph
-            })
-            .collect()
-    };
+    if source.paragraphs.is_empty() {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "caption",
+            reason: "a table caption without paragraphs is not carried".to_string(),
+        });
+        return None;
+    }
+    let paragraphs = source
+        .paragraphs
+        .iter()
+        .map(|paragraph| {
+            project_paragraph_with_images(
+                paragraph,
+                projection_images,
+                ImageProjectionContext::Flow,
+                None,
+            )
+            .paragraph
+        })
+        .collect();
     let unit = |v: i64| HwpUnit::new(i32::try_from(v).unwrap_or(i32::MAX)).ok();
     let encoder_width = core_table.width.map(HwpUnit::as_i32).unwrap_or_else(|| {
         core_table.rows.first().map_or(0, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
+    let mut unrepresentable = |field: &str, value: u32| {
+        push_projection_fallback(
+            &mut projection_images.warnings,
+            "table.caption",
+            format!("caption {field} {value} is out of range; dropped"),
+        );
+    };
+    let last_width = if i64::from(source.last_width) == i64::from(encoder_width) {
+        None
+    } else {
+        let value = unit(i64::from(source.last_width));
+        if value.is_none() {
+            unrepresentable("last width", source.last_width);
+        }
+        value
+    };
     let mut caption = Caption::new(paragraphs, side)
         .with_gap(unit(i64::from(source.gap)).unwrap_or(HwpUnit::ZERO))
         .with_full_size(source.full_size)
-        .with_last_width(
-            (i64::from(source.last_width) != i64::from(encoder_width))
-                .then(|| unit(i64::from(source.last_width)))
-                .flatten(),
-        );
+        .with_last_width(last_width);
     if source.width > 0 {
-        if let Some(width) = unit(i64::from(source.width)) {
-            caption = caption.with_width(width);
+        match unit(i64::from(source.width)) {
+            Some(width) => caption = caption.with_width(width),
+            None => unrepresentable("width", source.width),
         }
     }
     Some(caption)
@@ -6241,19 +6270,24 @@ mod tests {
     }
 
     fn captioned(side: u8, full_size: bool, last_width: u32) -> Table {
+        let paragraphs = vec![grid_test_cell(0, 0, 1, 1).paragraphs.remove(0)];
+        captioned_with(side, full_size, 8504, last_width, paragraphs).0
+    }
+
+    fn captioned_with(
+        side: u8,
+        full_size: bool,
+        width: u32,
+        last_width: u32,
+        paragraphs: Vec<Hwp5Paragraph>,
+    ) -> (Table, Vec<Hwp5Warning>) {
         use crate::decoder::section::Hwp5TableCaption;
         let mut table = table_with_ctrl(0, 0, 0);
         table.cells = vec![grid_test_cell(0, 0, 1, 1), grid_test_cell(0, 1, 1, 1)];
         table.rows = 1;
         table.cols = 2;
-        table.caption = Some(Hwp5TableCaption {
-            side,
-            full_size,
-            width: 8504,
-            gap: 850,
-            last_width,
-            paragraphs: vec![grid_test_cell(0, 0, 1, 1).paragraphs.remove(0)],
-        });
+        table.caption =
+            Some(Hwp5TableCaption { side, full_size, width, gap: 850, last_width, paragraphs });
         let para = Hwp5Paragraph {
             end_char_shape: None,
             silent_wires: Vec::new(),
@@ -6267,12 +6301,43 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Table(table)],
         };
-        let (doc, _) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
-        doc.sections()[0].paragraphs[0]
+        let (doc, warnings) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        let table = doc.sections()[0].paragraphs[0]
             .runs
             .iter()
             .find_map(|r| r.content.as_table().cloned())
-            .expect("table run")
+            .expect("table run");
+        (table, warnings)
+    }
+
+    /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is
+    /// dropped and reported (the layout hints count none for it), and a width
+    /// or last width Core cannot hold is dropped and reported rather than
+    /// read as "equal to the table width".
+    /// 이것을 실패시키는 것: 빈 캡션 유지(`if source.paragraphs.is_empty()` 를
+    /// `if false`) · 폭·마지막 폭 경고 삭제.
+    #[test]
+    fn caption_without_paragraphs_or_with_a_huge_width_is_reported() {
+        let text = || vec![grid_test_cell(0, 0, 1, 1).paragraphs.remove(0)];
+        let (table, warnings) = captioned_with(3, false, 8504, 8000, Vec::new());
+        assert!(table.caption.is_none());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "caption", .. })),
+            "{warnings:?}"
+        );
+        let huge = 100_000_001;
+        let (table, warnings) = captioned_with(3, false, 8504, huge, text());
+        assert_eq!(table.caption.unwrap().last_width, None);
+        let text_of = |w: &[Hwp5Warning]| format!("{w:?}");
+        assert!(text_of(&warnings).contains("caption last width 100000001"), "{warnings:?}");
+        let (table, warnings) = captioned_with(3, false, huge, 8000, text());
+        assert_eq!(table.caption.unwrap().width, None);
+        assert!(text_of(&warnings).contains("caption width 100000001"), "{warnings:?}");
+        // In range: no caption warning.
+        let (_, warnings) = captioned_with(3, false, 8504, 9000, text());
+        assert!(!text_of(&warnings).contains("caption"), "{warnings:?}");
     }
 
     /// D: the HWP5 caption becomes a Core caption — side, `fullSz`, width,

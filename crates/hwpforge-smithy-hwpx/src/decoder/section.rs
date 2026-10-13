@@ -2292,9 +2292,21 @@ pub(crate) fn convert_hx_caption(
 
     // D: `fullSz` and `lastWidth` (31/31 HWP5 twins). 이것을 실패시키는 것:
     // `fullSz` 무시 · `lastWidth` 정규화 생략/반전(`caption_full_size_and_last_width_round_trip`).
-    let last_width = (Some(i64::from(hx.last_width)) != object_width.map(i64::from))
-        .then(|| HwpUnit::new(i32::try_from(hx.last_width).unwrap_or(i32::MAX)).ok())
-        .flatten();
+    // A value Core cannot hold is a loss, not "equal to the object width"
+    // (D review r1 MEDIUM-4). 이것을 실패시키는 것: 이 손실 진단 삭제
+    // (`caption_last_width_out_of_range_is_lost`).
+    let last_width = if Some(i64::from(hx.last_width)) == object_width.map(i64::from) {
+        None
+    } else {
+        let value = i32::try_from(hx.last_width).ok().and_then(|v| HwpUnit::new(v).ok());
+        if value.is_none() {
+            ctx.content_lost(
+                "caption",
+                format!("caption lastWidth {} is out of range", hx.last_width),
+            );
+        }
+        value
+    };
     let mut caption = Caption::new(paragraphs, side)
         .with_gap(gap)
         .with_full_size(hx.full_sz != 0)

@@ -7312,6 +7312,29 @@ mod frame_tests {
         }
     }
 
+    /// D review r1 MEDIUM-4: a table caption `lastWidth` past the unit range
+    /// (table width 2,000) is reported as lost, not read as "equal to the
+    /// table width"; the range end decodes as a value.
+    /// 이것을 실패시키는 것: 손실 진단 삭제 · 범위 끝(100,000,000) 거부.
+    #[test]
+    fn caption_last_width_out_of_range_is_lost() {
+        let tbl = |last: u64| {
+            let caption = format!(
+                r#"<hp:caption side="BOTTOM" fullSz="0" width="8504" gap="850" lastWidth="{last}"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="8504" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>c</hp:t></hp:run></hp:p></hp:subList></hp:caption>"#
+            );
+            zone_tbl(1, 2, "").replace("<hp:inMargin", &format!("{caption}<hp:inMargin"))
+        };
+        let (_, lost) = decode(&tbl(100_000_001));
+        assert_eq!(lost, ["caption"]);
+        let (content, lost) = decode(&tbl(100_000_000));
+        assert!(lost.is_empty(), "{lost:?}");
+        let RunContent::Table(table) = &content else { panic!("{content:?}") };
+        assert_eq!(
+            table.caption.as_ref().unwrap().last_width.map(|w| w.as_i32()),
+            Some(100_000_000)
+        );
+    }
+
     /// D: a picture caption's `lastWidth` equal to the picture width decodes
     /// to `None`; another width stays (the object-width path, not the
     /// table's).
