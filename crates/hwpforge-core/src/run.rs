@@ -84,6 +84,74 @@ impl Run {
         }
     }
 
+    /// Visits every table this run writes — itself if it is one, and the
+    /// tables in every paragraph nested in it, run picture captions included
+    /// (see [`crate::paragraph::Paragraph::for_each_table`]).
+    pub fn for_each_table<F: FnMut(&Table)>(&self, mut f: F) {
+        self.walk_tables(&mut f);
+    }
+
+    pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&Table)) {
+        // The paragraph walk below enters cells, captions and controls but
+        // not run pictures' captions; each visited paragraph's own runs are
+        // looked at here, and a run picture's caption is entered explicitly.
+        fn direct(q: &crate::paragraph::Paragraph, f: &mut dyn FnMut(&Table)) {
+            for run in &q.runs {
+                match &run.content {
+                    RunContent::Table(t) => f(t),
+                    RunContent::Image(img) => {
+                        for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
+                            cp.walk_tables(f);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match &self.content {
+            RunContent::Table(t) => {
+                f(t);
+                t.walk_paragraphs(&mut |q| direct(q, f));
+            }
+            RunContent::Image(img) => {
+                for cp in img.caption.iter().flat_map(|c| c.paragraphs.iter()) {
+                    cp.walk_tables(f);
+                }
+            }
+            RunContent::Control(c) => c.walk_paragraphs(&mut |q| direct(q, f)),
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
+        }
+    }
+
+    pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut Table)) {
+        fn direct(q: &mut crate::paragraph::Paragraph, f: &mut dyn FnMut(&mut Table)) {
+            for run in &mut q.runs {
+                match &mut run.content {
+                    RunContent::Table(t) => f(t),
+                    RunContent::Image(img) => {
+                        for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
+                            cp.walk_tables_mut(f);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match &mut self.content {
+            RunContent::Table(t) => {
+                f(t);
+                t.walk_paragraphs_mut(&mut |q| direct(q, f));
+            }
+            RunContent::Image(img) => {
+                for cp in img.caption.iter_mut().flat_map(|c| c.paragraphs.iter_mut()) {
+                    cp.walk_tables_mut(f);
+                }
+            }
+            RunContent::Control(c) => c.walk_paragraphs_mut(&mut |q| direct(q, f)),
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
+        }
+    }
+
     /// Creates a text run.
     ///
     /// This is the most common constructor. Most runs in a typical

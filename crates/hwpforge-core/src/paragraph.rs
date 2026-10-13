@@ -188,6 +188,53 @@ impl Paragraph {
         }
     }
 
+    /// Visits every table an encoder writes from this paragraph: the tables
+    /// in its runs and in every paragraph nested in it — table cells and
+    /// captions, text boxes, notes, memos, shape captions, group children
+    /// **and run pictures' captions** (which [`Self::for_each_paragraph`]
+    /// does not enter). A table is visited before the tables inside it.
+    ///
+    /// This is the one traversal for checks that must reach every written
+    /// table (cell zones, …), so a new container cannot be missed by one
+    /// check and not another.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_core::table::{Table, TableCell, TableRow};
+    /// use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    ///
+    /// let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO);
+    /// let table = Table::new(vec![TableRow::new(vec![cell])]);
+    /// let p = Paragraph::with_runs(vec![Run::table(table, CharShapeIndex::new(0))], ParaShapeIndex::new(0));
+    /// let mut count = 0;
+    /// p.for_each_table(|_| count += 1);
+    /// assert_eq!(count, 1);
+    /// ```
+    pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
+        self.walk_tables(&mut f);
+    }
+
+    /// [`Self::for_each_table`] 의 가변판 — 방문 대상·순서 동일. 표를 바꾼
+    /// 뒤에 그 안의 표를 방문한다.
+    pub fn for_each_table_mut<F: FnMut(&mut crate::table::Table)>(&mut self, mut f: F) {
+        self.walk_tables_mut(&mut f);
+    }
+
+    pub(crate) fn walk_tables(&self, f: &mut dyn FnMut(&crate::table::Table)) {
+        for run in &self.runs {
+            run.walk_tables(f);
+        }
+    }
+
+    pub(crate) fn walk_tables_mut(&mut self, f: &mut dyn FnMut(&mut crate::table::Table)) {
+        for run in &mut self.runs {
+            run.walk_tables_mut(f);
+        }
+    }
+
     /// Visits every picture in this paragraph and the paragraphs nested in
     /// it: run pictures ([`RunContent::Image`]) and group pictures
     /// ([`GroupChild::Picture`], nested groups included).

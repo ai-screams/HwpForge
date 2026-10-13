@@ -968,7 +968,8 @@ fn emit_anchor_clipped(
         if let Some(zone) = zone {
             let has_lines = input.styles.border_fill_lines(zone.border_fill_id).is_some_and(|l| {
                 [l.left, l.right, l.top, l.bottom].iter().any(|e| e.kind != BorderLineKind::None)
-            }) || input.styles.border_fill_has_inner_lines(zone.border_fill_id);
+            }) || input.styles.border_fill_has_inner_lines(zone.border_fill_id)
+                != Some(false);
             // Review r1 HIGH-2: a zone whose border fill is not in the store
             // would select nothing and erase the cell's own fill — the cell
             // keeps its fill and the gap is reported.

@@ -106,6 +106,35 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
         }
 
+        // F (review r2 MEDIUM-2): cell zones are checked on every table an
+        // encoder writes — nested tables, captions (run pictures' included),
+        // headers/footers and master pages — through the one table walk.
+        // 이것을 실패시키는 것: 이 순회를 최상위 표로 좁히기
+        // (`cell_zone_validation_reaches_nested_tables`).
+        let lists = std::iter::once(&section.paragraphs)
+            .chain(section.headers.iter().chain(section.footers.iter()).map(|hf| &hf.paragraphs))
+            .chain(section.master_pages.iter().flatten().map(|mp| &mp.paragraphs));
+        for paragraphs in lists {
+            for (pi, paragraph) in paragraphs.iter().enumerate() {
+                for (ri, run) in paragraph.runs.iter().enumerate() {
+                    let ctx = RunValidationContext {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                    };
+                    let mut first = None;
+                    run.walk_tables(&mut |table| {
+                        if first.is_none() {
+                            first = validate_cell_zones(table, ctx).err();
+                        }
+                    });
+                    if let Some(err) = first {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
         // S20: an object frame is checked in the same places as the corner
         // ratio. 이것을 실패시키는 것: 이 순회를 지우기(`object_frame_is_checked_in_nested_places`).
         let lists = std::iter::once(&section.paragraphs)
@@ -337,7 +366,7 @@ fn validate_table_run(
     for (row_i, row) in table.rows.iter().enumerate() {
         validate_table_row(row, ctx, row_i, &mut seen_non_header_row, empty_rows_covered)?;
     }
-    validate_cell_zones(table, ctx)
+    Ok(())
 }
 
 /// Every cell zone starts at or before its end and lies inside the grid; a
@@ -1387,6 +1416,79 @@ mod tests {
                 cell_index: 0,
             })
         );
+    }
+
+    /// Review r2 MEDIUM-2: a bad zone on a table nested in a cell, in a run
+    /// picture's caption and in a header is refused like a top-level one.
+    /// 이것을 실패시키는 것: 순회를 최상위 표로 좁히기 · 그림 캡션 미방문
+    /// (최상위 그림, 칸 안 그림 각각 — 불변·가변 순회 모두).
+    #[test]
+    fn cell_zone_validation_reaches_nested_tables() {
+        use crate::caption::{Caption, CaptionSide};
+        use crate::image::{Image, ImageFormat};
+        use crate::section::HeaderFooter;
+        use crate::table::CellZone;
+        let bad = || {
+            Table::new(vec![TableRow::new(vec![simple_cell()])])
+                .with_cell_zones(vec![CellZone::new(1, 0, 0, 0, 3)])
+        };
+        let host = |run: Run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let in_cell = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+            HwpUnit::from_mm(10.0).unwrap(),
+        )])]);
+        let mut image = Image::new("a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+        image.caption = Some(Caption::new(
+            vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+            CaptionSide::Bottom,
+        ));
+        let header = HeaderFooter::all_pages(vec![host(Run::table(bad(), CharShapeIndex::new(0)))]);
+        let cases: Vec<Section> = vec![
+            Section::with_paragraphs(
+                vec![host(Run::table(in_cell, CharShapeIndex::new(0)))],
+                PageSettings::a4(),
+            ),
+            Section::with_paragraphs(
+                vec![host(Run::image(image, CharShapeIndex::new(0)))],
+                PageSettings::a4(),
+            ),
+            {
+                let mut s = simple_section();
+                s.headers.push(header);
+                s
+            },
+            {
+                // A picture in a cell whose caption holds the bad table.
+                let mut pic = Image::new("b.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+                pic.caption = Some(Caption::new(
+                    vec![host(Run::table(bad(), CharShapeIndex::new(0)))],
+                    CaptionSide::Bottom,
+                ));
+                let cell = TableCell::new(
+                    vec![host(Run::image(pic, CharShapeIndex::new(0)))],
+                    HwpUnit::from_mm(10.0).unwrap(),
+                );
+                let outer = Table::new(vec![TableRow::new(vec![cell])]);
+                Section::with_paragraphs(
+                    vec![host(Run::table(outer, CharShapeIndex::new(0)))],
+                    PageSettings::a4(),
+                )
+            },
+        ];
+        for (i, mut section) in cases.into_iter().enumerate() {
+            // The mutable walk (decoders drop zones with it) reaches the same
+            // tables.
+            let mut zoned = 0;
+            section.for_each_table_mut(|t| zoned += usize::from(!t.cell_zones.is_empty()));
+            assert_eq!(zoned, 1, "case {i}");
+            assert!(
+                matches!(
+                    validate_sections(&[section]),
+                    Err(ValidationError::InvalidCellZone { .. })
+                ),
+                "case {i}"
+            );
+        }
     }
 
     /// F: a cell zone must start at or before its end and end inside the

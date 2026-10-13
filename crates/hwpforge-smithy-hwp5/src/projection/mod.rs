@@ -4379,24 +4379,21 @@ pub(crate) fn drop_cell_zones_with_unknown_border_fill(
     border_fill_count: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    document.for_each_paragraph_mut(|paragraph| {
-        for run in &mut paragraph.runs {
-            let RunContent::Table(table) = &mut run.content else { continue };
-            table.cell_zones.retain(|z| {
-                let ok = z.border_fill_id >= 1 && z.border_fill_id as usize <= border_fill_count;
-                if !ok {
-                    push_projection_fallback(
-                        warnings,
-                        "table.cell_zone",
-                        format!(
-                            "cell zone border fill {} is not one of the {border_fill_count} border fills; dropped",
-                            z.border_fill_id
-                        ),
-                    );
-                }
-                ok
-            });
-        }
+    document.for_each_table_mut(|table| {
+        table.cell_zones.retain(|z| {
+            let ok = z.border_fill_id >= 1 && z.border_fill_id as usize <= border_fill_count;
+            if !ok {
+                push_projection_fallback(
+                    warnings,
+                    "table.cell_zone",
+                    format!(
+                        "cell zone border fill {} is not one of the {border_fill_count} border fills; dropped",
+                        z.border_fill_id
+                    ),
+                );
+            }
+            ok
+        });
     });
 }
 

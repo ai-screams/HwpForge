@@ -118,6 +118,14 @@ pub struct Document<S = Draft> {
 // ---------------------------------------------------------------------------
 
 impl<S> Document<S> {
+    /// Visits every table an encoder writes, in every section (see
+    /// [`crate::section::Section::for_each_table`]).
+    pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
+        for section in &self.sections {
+            section.for_each_table(&mut f);
+        }
+    }
+
     /// Returns a slice of all sections.
     ///
     /// # Examples
@@ -230,6 +238,13 @@ impl Document<Draft> {
     pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
         for section in &mut self.sections {
             section.walk_paragraphs_mut(&mut f);
+        }
+    }
+
+    /// [`Self::for_each_table`] 의 가변판 — 방문 대상·순서 동일.
+    pub fn for_each_table_mut<F: FnMut(&mut crate::table::Table)>(&mut self, mut f: F) {
+        for section in &mut self.sections {
+            section.for_each_table_mut(&mut f);
         }
     }
 

@@ -90,6 +90,19 @@ fn replay_fixture(name: &str) -> Option<hwpforge_smithy_pdf::source::ReplayLayou
     Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
 }
 
+/// An outside `StyleLookup` that forwards the four edges and the fill but
+/// not the newer inner-line query (its default answers "unknown").
+struct FillsOnly<'a>(&'a hwpforge_smithy_hwpx::HwpxStyleStore);
+
+impl hwpforge_core::StyleLookup for FillsOnly<'_> {
+    fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines> {
+        self.0.border_fill_lines(id)
+    }
+    fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind> {
+        self.0.border_fill_face(id)
+    }
+}
+
 /// 쪽의 표 데이터 첫 줄 텍스트 (번호 열) 를 찾는다.
 fn first_table_number_on_page(page: &hwpforge_smithy_pdf::source::PageLayout) -> Option<String> {
     page.lines
@@ -203,7 +216,7 @@ fn replay_with_zone(
 ) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
     use hwpforge_smithy_hwpx::style_store::HwpxBorderLine;
     let left = zone_left_line.to_string();
-    replay_with_zone_fill(zone_fill, true, &move |f| {
+    replay_with_zone_fill(zone_fill, true, false, &move |f| {
         f.left = HwpxBorderLine { line_type: left.clone(), ..HwpxBorderLine::default() }
     })
 }
@@ -213,6 +226,7 @@ fn replay_with_zone(
 fn replay_with_zone_fill(
     zone_fill: &str,
     register: bool,
+    adapter: bool,
     edit: &dyn Fn(&mut hwpforge_smithy_hwpx::style_store::HwpxBorderFill),
 ) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
     use hwpforge_core::run::RunContent;
@@ -256,7 +270,10 @@ fn replay_with_zone_fill(
     });
     assert!(zoned, "rules-table has a table");
     let validated = decoded.document.validate().expect("validate");
-    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    let wrapped = FillsOnly(&decoded.style_store);
+    let styles: &dyn hwpforge_core::StyleLookup =
+        if adapter { &wrapped } else { &decoded.style_store };
+    let input = PdfInput { document: &validated, styles };
     Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
 }
 
@@ -309,7 +326,7 @@ fn zone_warnings(l: &hwpforge_smithy_pdf::source::ReplayLayout, what: &str) -> u
 #[test]
 fn cell_zone_with_only_a_diagonal_warns() {
     let Some(layout) =
-        replay_with_zone_fill("#FF0000", true, &|f| f.slash.border_type = "CENTER".into())
+        replay_with_zone_fill("#FF0000", true, false, &|f| f.slash.border_type = "CENTER".into())
     else {
         return;
     };
@@ -321,10 +338,20 @@ fn cell_zone_with_only_a_diagonal_warns() {
 /// 이것을 실패시키는 것: 조회 실패 분기 삭제(배경 사라짐) · 경고 삭제.
 #[test]
 fn cell_zone_with_a_missing_border_fill_keeps_the_cell_fill() {
-    let Some(missing) = replay_with_zone_fill("#FF0000", false, &|_| {}) else { return };
+    let Some(missing) = replay_with_zone_fill("#FF0000", false, false, &|_| {}) else { return };
     let rect = |l: &hwpforge_smithy_pdf::source::ReplayLayout| {
         l.pages[0].rects.iter().find(|r| r.location.ends_with("t0r0c0")).map(|r| r.color)
     };
     assert_eq!(rect(&missing), Some(hwpforge_foundation::Color::from_rgb(0, 0, 255)));
     assert_eq!(zone_warnings(&missing, "cell zone without its border fill"), 1);
+}
+
+/// Review r2 MEDIUM-4: a style lookup that does not answer the inner-line
+/// query (the trait default, "unknown") gets the zone-line warning instead
+/// of a silent "no lines".
+/// 이것을 실패시키는 것: 미확인을 선 없음으로 취급(`!= Some(false)` 를 `== Some(true)` 로).
+#[test]
+fn cell_zone_with_an_unknown_inner_line_answer_warns() {
+    let Some(layout) = replay_with_zone_fill("#FF0000", true, true, &|_| {}) else { return };
+    assert_eq!(zone_warnings(&layout, "cell zone border"), 1);
 }

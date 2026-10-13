@@ -724,27 +724,22 @@ fn drop_cell_zones_with_unknown_border_fill(
     warnings: &mut Vec<DecodeWarning>,
 ) {
     for (i, section) in document.sections_mut().iter_mut().enumerate() {
-        section.for_each_paragraph_mut(|paragraph| {
-            for run in &mut paragraph.runs {
-                let hwpforge_core::run::RunContent::Table(table) = &mut run.content else {
-                    continue;
-                };
-                table.cell_zones.retain(|zone| {
-                    let known = style_store.border_fill(zone.border_fill_id).is_ok();
-                    if !known {
-                        warnings.push(DecodeWarning::ContentLost {
-                            part: format!("Contents/section{i}.xml"),
-                            path: ParagraphPath::default(),
-                            kind: "cellzone".to_string(),
-                            reason: format!(
-                                "cell zone border fill {} is not in the header",
-                                zone.border_fill_id
-                            ),
-                        });
-                    }
-                    known
-                });
-            }
+        section.for_each_table_mut(|table| {
+            table.cell_zones.retain(|zone| {
+                let known = style_store.border_fill(zone.border_fill_id).is_ok();
+                if !known {
+                    warnings.push(DecodeWarning::ContentLost {
+                        part: format!("Contents/section{i}.xml"),
+                        path: ParagraphPath::default(),
+                        kind: "cellzone".to_string(),
+                        reason: format!(
+                            "cell zone border fill {} is not in the header",
+                            zone.border_fill_id
+                        ),
+                    });
+                }
+                known
+            });
         });
     }
 }
@@ -807,6 +802,93 @@ fn extract_master_page_cnt(section_xml: &str) -> usize {
 mod tests {
     use super::*;
     use hwpforge_foundation::{HeadingType, NumberFormatType};
+
+    /// Review r2 HIGH: a package whose picture-caption table names a border
+    /// fill the header lacks decodes with that zone dropped and reported.
+    /// The package is encoded with border fill 7, then its header renames 7.
+    /// 이것을 실패시키는 것: 디코드 순회가 그림 캡션에 들어가지 않기.
+    #[test]
+    fn picture_caption_table_zone_with_an_unknown_fill_is_lost() {
+        use crate::style_store::{HwpxBorderFill, HwpxCharShape, HwpxParaShape};
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::run::{Run, RunContent};
+        use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
+        use hwpforge_core::Paragraph;
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        for id in 1..=7 {
+            let mut bf = HwpxBorderFill::default_page_border();
+            bf.id = id;
+            store.push_border_fill(bf);
+        }
+        let text = || {
+            Paragraph::with_runs(
+                vec![Run::text("x", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![text()],
+            HwpUnit::new(1000).unwrap(),
+        )])])
+        .with_cell_zones(vec![CellZone::new(0, 0, 0, 0, 7)]);
+        let unit = HwpUnit::new(1000).unwrap();
+        let mut image = Image::new("BinData/a.png", unit, unit, ImageFormat::Png);
+        image.caption = Some(Caption::new(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            CaptionSide::Bottom,
+        ));
+        let mut doc = Document::<Draft>::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::image(image, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let mut images = ImageStore::new();
+        images.insert("a.png", vec![0x89, b'P', b'N', b'G']);
+        let bytes = crate::HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images).unwrap();
+        let caption_zones = |bytes: &[u8]| {
+            let decoded = crate::HwpxDecoder::decode(bytes).unwrap();
+            let RunContent::Image(img) =
+                &decoded.document.sections()[0].paragraphs[0].runs[0].content
+            else {
+                panic!()
+            };
+            let RunContent::Table(t) = &img.caption.as_ref().unwrap().paragraphs[0].runs[0].content
+            else {
+                panic!()
+            };
+            (t.cell_zones.len(), decoded.warnings.iter().filter(|w| w.is_content_loss()).count())
+        };
+        assert_eq!(caption_zones(&bytes), (1, 0));
+        // Rename border fill 7 in the header.
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            let mut data = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+            if name == "Contents/header.xml" {
+                data = String::from_utf8(data)
+                    .unwrap()
+                    .replace(r#"borderFill id="7""#, r#"borderFill id="70""#)
+                    .into_bytes();
+            }
+            out.start_file(name, SimpleFileOptions::default()).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        let renamed = out.finish().unwrap().into_inner();
+        assert_eq!(caption_zones(&renamed), (0, 1));
+    }
 
     /// Review r1 HIGH-2: a cell zone naming a border fill the header does
     /// not have (by id — the store holds 1 and 5, the zone names 3) is

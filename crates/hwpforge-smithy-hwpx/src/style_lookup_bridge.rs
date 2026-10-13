@@ -79,7 +79,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex>;
         fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines>;
         fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind>;
-        fn border_fill_has_inner_lines(&self, id: u32) -> bool;
+        fn border_fill_has_inner_lines(&self, id: u32) -> Option<bool>;
     }
 
     fn image_resolve_filename(&self, key: &str) -> Option<&str> {

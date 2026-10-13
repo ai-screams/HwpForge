@@ -1881,8 +1881,8 @@ impl StyleLookup for HwpxStyleStore {
     // Review r1 MEDIUM-4: a diagonal or a center line is a line too (a cell
     // zone that only has those must still warn). 이것을 실패시키는 것: 대각선
     // 판정 삭제(`border_fill_inner_lines`).
-    fn border_fill_has_inner_lines(&self, id: u32) -> bool {
-        let Ok(bf) = self.border_fill(id) else { return false };
+    fn border_fill_has_inner_lines(&self, id: u32) -> Option<bool> {
+        let bf = self.border_fill(id).ok()?;
         let set = |v: &str| !v.is_empty() && !v.eq_ignore_ascii_case("NONE");
         let diagonal = [
             &bf.slash_type,
@@ -1893,7 +1893,7 @@ impl StyleLookup for HwpxStyleStore {
         .iter()
         .any(|v| set(v));
         let line_drawn = bf.diagonal.as_ref().is_none_or(|d| set(&d.line_type));
-        (diagonal && line_drawn) || set(&bf.center_line)
+        Some((diagonal && line_drawn) || set(&bf.center_line))
     }
 
     fn border_fill_face(&self, id: u32) -> Option<FillKind> {
@@ -3296,8 +3296,9 @@ mod tests {
                 Some(HwpxBorderLine { line_type: "NONE".into(), ..HwpxBorderLine::default() });
         });
         add(4, &|bf| bf.center_line = "VERTICAL".into());
-        let got: Vec<bool> = (1..=5).map(|id| store.border_fill_has_inner_lines(id)).collect();
-        assert_eq!(got, [false, true, false, true, false]);
+        let got: Vec<Option<bool>> =
+            (1..=5).map(|id| store.border_fill_has_inner_lines(id)).collect();
+        assert_eq!(got, [Some(false), Some(true), Some(false), Some(true), None]);
     }
 
     /// C: replacing a face with a different one clears its kind, substitute

@@ -1011,30 +1011,32 @@ impl EncodeOptions {
     }
 }
 
-/// Review r1 HIGH-2: a table cell zone must name a border fill the style
-/// store has (looked up by id) — JSON or Markdown can author any number, and
-/// the package would point at nothing.
+/// Review r1 HIGH-2: a table cell zone must name a border fill the package
+/// writes (looked up by id) — JSON or Markdown can author any number, and
+/// the package would point at nothing. Every written table is checked
+/// ([`Document::for_each_table`] — picture captions too, review r2 HIGH).
 /// 이것을 실패시키는 것: 이 검사 삭제(`unknown_cell_zone_fill_is_refused`).
 fn refuse_unknown_cell_zone_fills(
     document: &Document<Validated>,
     style_store: &HwpxStyleStore,
 ) -> HwpxResult<()> {
+    // An empty store writes the three default border fills (ids 1–3,
+    // `build_border_fills_xml`), so those ids exist then (review r2
+    // MEDIUM-3). 이것을 실패시키는 것: 빈 저장소 기본 id 를 빼기
+    // (`unknown_cell_zone_fill_is_refused` 의 빈 저장소 1–3 성공).
+    let written = |id: u32| {
+        if style_store.border_fill_count() == 0 {
+            (1..=3).contains(&id)
+        } else {
+            style_store.border_fill(id).is_ok()
+        }
+    };
     let mut missing = None;
-    for section in document.sections() {
-        section.for_each_paragraph(|paragraph| {
-            for run in &paragraph.runs {
-                if let hwpforge_core::run::RunContent::Table(table) = &run.content {
-                    if let Some(zone) = table
-                        .cell_zones
-                        .iter()
-                        .find(|z| style_store.border_fill(z.border_fill_id).is_err())
-                    {
-                        missing.get_or_insert(zone.border_fill_id);
-                    }
-                }
-            }
-        });
-    }
+    document.for_each_table(|table| {
+        if let Some(zone) = table.cell_zones.iter().find(|z| !written(z.border_fill_id)) {
+            missing.get_or_insert(zone.border_fill_id);
+        }
+    });
     match missing {
         Some(id) => Err(crate::error::HwpxError::InvalidStructure {
             detail: format!("table cell zone border fill {id} is not in the style store"),
@@ -1336,34 +1338,65 @@ mod tests {
     /// 이것을 실패시키는 것: 사전 검사 삭제.
     #[test]
     fn unknown_cell_zone_fill_is_refused() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::image::{Image, ImageFormat};
         use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
-        let encode = |fill: u32| {
+        let encode = |with_7: bool, in_picture_caption: bool, fill: u32| {
             let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
             store.push_char_shape(HwpxCharShape::default());
             store.push_para_shape(HwpxParaShape::default());
-            let mut bf = crate::style_store::HwpxBorderFill::default_page_border();
-            bf.id = 7;
-            store.push_border_fill(bf);
-            let table = Table::new(vec![TableRow::new(vec![TableCell::new(
-                vec![Paragraph::with_runs(
+            if with_7 {
+                let mut bf = crate::style_store::HwpxBorderFill::default_page_border();
+                bf.id = 7;
+                store.push_border_fill(bf);
+            }
+            let text = || {
+                Paragraph::with_runs(
                     vec![Run::text("x", CharShapeIndex::new(0))],
                     ParaShapeIndex::new(0),
-                )],
+                )
+            };
+            let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![text()],
                 HwpUnit::new(1000).unwrap(),
             )])])
             .with_cell_zones(vec![CellZone::new(0, 0, 0, 0, fill)]);
+            let run = if in_picture_caption {
+                let mut image = Image::new(
+                    "BinData/a.png",
+                    HwpUnit::new(1000).unwrap(),
+                    HwpUnit::new(1000).unwrap(),
+                    ImageFormat::Png,
+                );
+                image.caption = Some(Caption::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::table(table, CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    CaptionSide::Bottom,
+                ));
+                Run::image(image, CharShapeIndex::new(0))
+            } else {
+                Run::table(table, CharShapeIndex::new(0))
+            };
             let mut doc = Document::new();
             doc.add_section(Section::with_paragraphs(
-                vec![Paragraph::with_runs(
-                    vec![Run::table(table, CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
+                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
                 PageSettings::a4(),
             ));
-            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new())
+            let mut images = ImageStore::new();
+            images.insert("a.png", vec![0x89, b'P', b'N', b'G']);
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images)
         };
-        assert!(encode(7).is_ok());
-        assert!(matches!(encode(999), Err(crate::error::HwpxError::InvalidStructure { .. })));
+        let refused = |r: HwpxResult<Vec<u8>>| matches!(r, Err(crate::error::HwpxError::InvalidStructure { ref detail }) if detail.contains("cell zone"));
+        assert!(encode(true, false, 7).is_ok());
+        assert!(refused(encode(true, false, 999)));
+        // Review r2 HIGH: a table in a picture caption is checked too.
+        assert!(encode(true, true, 7).is_ok());
+        assert!(refused(encode(true, true, 999)));
+        // Review r2 MEDIUM-3: an empty store writes the defaults 1–3.
+        assert!(encode(false, false, 3).is_ok());
+        assert!(refused(encode(false, false, 4)));
     }
 
     /// R2 HIGH 1 — the defect was that a *successful* encode kept only the

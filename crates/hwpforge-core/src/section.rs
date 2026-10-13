@@ -679,6 +679,42 @@ impl Section {
         }
     }
 
+    /// Visits every table an encoder writes from this section — body,
+    /// headers, footers and master pages, nested containers and run picture
+    /// captions included (see [`Paragraph::for_each_table`]).
+    pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
+        for p in self.all_top_paragraphs() {
+            p.walk_tables(&mut f);
+        }
+    }
+
+    /// [`Self::for_each_table`] 의 가변판 — 방문 대상·순서 동일.
+    pub fn for_each_table_mut<F: FnMut(&mut crate::table::Table)>(&mut self, mut f: F) {
+        for p in &mut self.paragraphs {
+            p.walk_tables_mut(&mut f);
+        }
+        for hf in self.headers.iter_mut().chain(self.footers.iter_mut()) {
+            for p in &mut hf.paragraphs {
+                p.walk_tables_mut(&mut f);
+            }
+        }
+        for mp in self.master_pages.iter_mut().flatten() {
+            for p in &mut mp.paragraphs {
+                p.walk_tables_mut(&mut f);
+            }
+        }
+    }
+
+    /// Body, header, footer and master-page paragraphs, in that order.
+    fn all_top_paragraphs(&self) -> impl Iterator<Item = &Paragraph> {
+        self.paragraphs
+            .iter()
+            .chain(
+                self.headers.iter().chain(self.footers.iter()).flat_map(|hf| hf.paragraphs.iter()),
+            )
+            .chain(self.master_pages.iter().flatten().flat_map(|mp| mp.paragraphs.iter()))
+    }
+
     /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
     /// 대상이 동일하며, 이미지 캡션 갭도 동일하게 적용된다.
     pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {

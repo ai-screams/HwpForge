@@ -206,10 +206,11 @@ pub trait StyleLookup {
 
     /// Whether the `borderFill` at `id` draws a line inside its box — a
     /// diagonal or a center line — beside the four edges
-    /// [`Self::border_fill_lines`] reports. `false` when the id is not
-    /// registered or the implementor does not know.
-    fn border_fill_has_inner_lines(&self, _id: u32) -> bool {
-        false
+    /// [`Self::border_fill_lines`] reports. `None` when the implementor does
+    /// not know (the default) or the id is not registered; a renderer treats
+    /// that as a possible line and warns rather than assuming none.
+    fn border_fill_has_inner_lines(&self, _id: u32) -> Option<bool> {
+        None
     }
 
     /// Returns the face-fill verdict of the `borderFill` at `id` (1-based
