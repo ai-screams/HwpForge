@@ -20,6 +20,7 @@
 - **작은 결함 묶음** (2026-10-01, **`0.16.8`**): 메모·묶음 글상자의 탭·줄바꿈·하이퍼링크 치환 문자열 수리(#195) · 금지 제어 문자 제거 + `XML_FORBIDDEN_CHARS_REMOVED` 경고(#198) · 33겹 이상 묶음 도형 `InvalidStructure` 거부(#196) · 무손실 Markdown 왕복의 `&`·`<`·`>`·따옴표 보존(#197) · 이미지 여럿 문서의 HWPX 바이트 결정성(#200) · `census-hwp5 --companion` 깨진 section 을 `HWPX_CENSUS_FAILED` 로 종료(#201). 출처 = `crates/hwpforge/CHANGELOG.md`.
 - **글맵시 줄바꿈 + MSRV 1.89** (2026-10-03, **`0.16.9`**): HWP→HWPX 변환에서 여러 줄 글맵시(TextArt)의 줄바꿈을 `␍␊`(U+240D U+240A)로 쓰고 읽을 때 `\r\n` 으로 푼다(#199). 워크스페이스 MSRV 를 1.89 로 올림(간접 의존성 `uuid` 1.27 이 rustc 1.89 요구, krilla 경로 4크레이트는 1.92 유지).
 - **Wave 0 안정성 수정** (2026-10-04, **`0.16.10`**): 신뢰할 수 없는 입력의 메모리·스택 폭주 3건 — 편집 경로 ZIP 엔트리 해제 상한(#227) · HWP5 차트 OLE·이미지 해제를 문서 예산에 합산(#228) · 수식→LaTeX 파서 중첩 깊이 32 가드(#229). 전체 리팩터링 검토 백로그의 P0(`.docs/planning/2026-10-04-refactoring-review.md`).
+- **한컴 표기·이름 정리** (2026-10-13, **`0.16.11`**): 한컴 HWP 공개 문서 이용 표기를 README·문서·CLI 도움말·MCP 서버 정보·Python README 에 추가(#232) · 대장간 비유 이름 정본화(`branding/BRANDING.md`, MCP 별칭 Anvil→Vise, #233) · MCP `initialize` 제목과 Python 모듈 설명에 같은 이름(#234). 코드·API 변화 없음.
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) + 커밋이 귀속된 크레이트별 `crates/*/CHANGELOG.md`(canonical — `hwpforge-core`·`hwpforge-smithy-hwpx`·`hwpforge-smithy-md`·`hwpforge-bindings-mcp` 등, release-plz 는 커밋 없는 크레이트는 건너뛴다) 와 Claude auto-memory `MEMORY.md` / `phase11_wave_history.md`. umbrella `crates/hwpforge/CHANGELOG.md` 는 `0.5.0`(2026-03-22) 뒤 공백이 있다가 `0.16.5` 부터 release-plz 가 다시 채운다 — `0.6.0`\~`0.16.4` 구간은 크레이트별 CHANGELOG·GitHub Releases 로 (루트 `CHANGELOG.md` 는 0.9.0 이후 정지).
@@ -36,7 +37,7 @@
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.10` (2026-10-04) · MSRV `1.89` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
+- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.11` (2026-10-13) · MSRV `1.89` (`hwpforge-convert`·bindings-cli·bindings-py·smithy-pdf 는 krilla 경로로 `1.92`) · Dev toolchain Rust `1.93`
 - `crates/` 추적 src `.rs` 파일 `264` · nextest(make ci) \~`4,087` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `6`
 
 ---
