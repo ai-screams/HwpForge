@@ -150,10 +150,19 @@ fn push(out: &mut Vec<(&'static str, u64)>, kind: &'static str, id: Option<Objec
 }
 
 /// Ids held by more than one object, with the holders' kinds in document
-/// order.
+/// order. Footnotes and endnotes are left out: Hancom itself saves several
+/// notes with one instance id (corpus: three footnotes sharing 6029409 in
+/// one document, a footnote and an endnote sharing 1 in `full_report.hwp`),
+/// so a shared note id says nothing about a cross reference. Their ids are
+/// still reserved.
+/// 이것을 실패시키는 것: 각주·미주 제외 삭제(`shared_core_id_is_kept_and_reported`
+/// 의 각주 쌍이 경고).
 pub(crate) fn conflicts(ids: &[(&'static str, u64)]) -> BTreeMap<u64, Vec<&'static str>> {
     let mut by_id: BTreeMap<u64, Vec<&'static str>> = BTreeMap::new();
     for &(kind, id) in ids {
+        if kind == "footnote" || kind == "endnote" {
+            continue;
+        }
         by_id.entry(id).or_default().push(kind);
     }
     by_id.retain(|_, kinds| kinds.len() > 1);
@@ -349,7 +358,8 @@ mod tests {
     }
 
     /// W0: two tables with Core id 7 keep it (both written as 7) and give
-    /// one warning naming both; a third object with another id adds none.
+    /// one warning naming both; a third object with another id adds none,
+    /// and neither do two footnotes sharing 9.
     /// 이것을 실패시키는 것: 경고 삭제 · 중복 판정을 `> 0` 으로(모든 id 경고).
     #[test]
     fn shared_core_id_is_kept_and_reported() {
@@ -358,7 +368,21 @@ mod tests {
         store.push_para_shape(HwpxParaShape::default());
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(
-            vec![holder(table(Some(7))), holder(table(Some(7))), holder(table(Some(8)))],
+            vec![
+                holder(table(Some(7))),
+                holder(table(Some(7))),
+                holder(table(Some(8))),
+                para(vec![
+                    Run::control(
+                        Control::footnote_with_id(9, vec![text()]),
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::control(
+                        Control::footnote_with_id(9, vec![text()]),
+                        CharShapeIndex::new(0),
+                    ),
+                ]),
+            ],
             PageSettings::a4(),
         ));
         let outcome = HwpxEncoder::encode_with_diagnostics(
