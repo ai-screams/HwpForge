@@ -995,6 +995,18 @@ fn build_paragraph(
                             }
                         }
                     }
+                    // S22 (Q6): line starts must increase. Lines that still
+                    // fall on one place — no boundary to tell them apart, or a
+                    // boundary that did not restore them — leave the paragraph
+                    // without a cache rather than with a collapsed one.
+                    // 이것을 실패시키는 것: 이 검사 삭제(`collapsed_lines_are_dropped`).
+                    if !dropped && items.windows(2).any(|w| w[1].textpos <= w[0].textpos) {
+                        sink.cache_dropped(format!(
+                            "line starts do not increase: {:?}",
+                            items.iter().map(|l| l.textpos).collect::<Vec<_>>()
+                        ));
+                        dropped = true;
+                    }
                     if dropped {
                         None
                     } else {

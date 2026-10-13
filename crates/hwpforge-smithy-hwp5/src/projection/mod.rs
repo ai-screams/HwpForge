@@ -18,6 +18,7 @@ use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
+use hwpforge_core::layout::WireTokenKind;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::placement::{
     HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
@@ -1650,7 +1651,10 @@ fn project_paragraph_with_images_flat(
 /// 없음 = 캐시 부재 의미).
 fn promote_line_segments(
     segs: &[crate::schema::section::Hwp5ParaLineSeg],
-    ledger: Result<crate::wire_text_map::WireTextMap, &'static str>,
+    ledger: Result<
+        (crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger),
+        &'static str,
+    >,
     warnings: &mut Vec<crate::decoder::Hwp5Warning>,
 ) -> Option<hwpforge_core::layout::LayoutCache> {
     if segs.is_empty() {
@@ -1659,8 +1663,8 @@ fn promote_line_segments(
     // W1b: raw wire textpos → Core 가시(text_content) 좌표 정규화.
     // ledger 구축 실패·좌표 변환 실패 = fail-closed (캐시 미승격 + 경고) —
     // 추측 좌표를 Core 에 싣지 않는다 (§1g v5).
-    let map = match ledger {
-        Ok(map) => map,
+    let (map, tokens) = match ledger {
+        Ok(ledger) => ledger,
         Err(reason) => {
             warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
                 reason: reason.to_string(),
@@ -1689,6 +1693,11 @@ fn promote_line_segments(
         line.horzpos = s.column_start_position;
         line.horzsize = s.segment_width;
         line.flags = s.tag;
+        // S22: a line that starts after some of the zero-length tokens at its
+        // Core position records which ones (`None` = before them all).
+        // 이것을 실패시키는 것: 경계 기록 삭제(붕괴 문단이 한 자리로 접힌다,
+        // `collapsed_lines_keep_their_token_boundary`).
+        line.boundary = tokens.boundary_at(textpos, s.text_start_position);
         lines.push(line);
     }
     Some(hwpforge_core::layout::LayoutCache::new(lines))
@@ -1697,10 +1706,13 @@ fn promote_line_segments(
 /// ledger 가 예측한 Core 총길이와 실제 방출된 run 들의 텍스트 총길이를
 /// 대조한다 — 불일치 = ledger/방출 분기 (fail-closed, §1g v5 choke).
 fn check_ledger_against_emission(
-    ledger_result: Result<crate::wire_text_map::WireTextMap, &'static str>,
+    ledger_result: Result<
+        (crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger),
+        &'static str,
+    >,
     runs: &[Run],
-) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
-    let map = ledger_result?;
+) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), &'static str> {
+    let (map, tokens) = ledger_result?;
     let emitted_core: u32 = runs
         .iter()
         .filter_map(|r| r.content.plain_text())
@@ -1709,7 +1721,7 @@ fn check_ledger_against_emission(
     if map.core_end() != emitted_core {
         return Err("ledger/emission core length mismatch");
     }
-    Ok(map)
+    Ok((map, tokens))
 }
 
 /// FieldBegin~FieldEnd 방출 결과 — ledger 의 field 구간 core 폭을
@@ -1735,23 +1747,82 @@ enum FieldEmissionOutcome {
 /// fail-closed (캐시 미승격).
 struct ParaLedger<'a> {
     builder: crate::wire_text_map::WireMapBuilder,
+    /// S22: the zero-length tokens, with their kinds, in wire order.
+    tokens: crate::wire_text_map::TokenLedger,
     silent: &'a [SilentWire],
     silent_idx: usize,
     /// ledger 자체 wire 커서 — pending 동안 builder 커서와 분리.
     wire_cursor: u32,
-    /// FieldBegin 이후 버퍼된 body 조각 `(wire, 재방출 시 core)`.
-    pending: Option<Vec<(u32, u32)>>,
+    /// FieldBegin 이후 버퍼된 body 조각 `(wire, 재방출 시 core, 종류)`.
+    pending: Option<Vec<(u32, u32, WireTokenKind)>>,
+    /// The wire position of the pending field's begin.
+    pending_begin: u32,
     failed: Option<&'static str>,
+}
+
+/// The kind of a zero-length control marker (S22), from its control id.
+/// `gso` objects take their kind in order from `gso_kinds` (a picture or a
+/// shape — what the projection makes of them).
+fn marker_kind(ctrl_id: u32, gso_kinds: &mut std::vec::IntoIter<WireTokenKind>) -> WireTokenKind {
+    use crate::ctrl_ids as id;
+    match ctrl_id {
+        id::CTRL_ID_TABLE => WireTokenKind::Table,
+        id::CTRL_ID_GSO => gso_kinds.next().unwrap_or(WireTokenKind::Shape),
+        id::CTRL_ID_EQED => WireTokenKind::Equation,
+        id::CTRL_ID_SECD => WireTokenKind::SectionDef,
+        id::CTRL_ID_COLUMN_DEF => WireTokenKind::ColumnDef,
+        id::CTRL_ID_HEADER => WireTokenKind::Header,
+        id::CTRL_ID_FOOTER => WireTokenKind::Footer,
+        id::CTRL_ID_FOOTNOTE => WireTokenKind::Footnote,
+        id::CTRL_ID_ENDNOTE => WireTokenKind::Endnote,
+        id::CTRL_ID_PAGE_NUMBER => WireTokenKind::PageNumber,
+        id::CTRL_ID_NEW_NUMBER => WireTokenKind::NewNumber,
+        id::CTRL_ID_PAGE_HIDING => WireTokenKind::PageHiding,
+        id::CTRL_ID_BOOKMARK_POINT => WireTokenKind::Bookmark,
+        id::CTRL_ID_ATNO => WireTokenKind::AutoNumber,
+        id::CTRL_ID_DUTMAL | id::CTRL_ID_COMPOSE | id::CTRL_ID_INDEXMARK => WireTokenKind::Other,
+        _ => WireTokenKind::Silent,
+    }
+}
+
+/// The kinds of the paragraph's `gso` objects in control order: a picture
+/// for an image, a shape for any other drawing object.
+fn gso_kinds(hwp_para: &Hwp5Paragraph) -> std::vec::IntoIter<WireTokenKind> {
+    hwp_para
+        .controls
+        .iter()
+        .filter_map(|control| match control {
+            Hwp5Control::Image(_) => Some(WireTokenKind::Picture),
+            Hwp5Control::Line(_)
+            | Hwp5Control::Rect(_)
+            | Hwp5Control::Polygon(_)
+            | Hwp5Control::Ellipse(_)
+            | Hwp5Control::Arc(_)
+            | Hwp5Control::Curve(_)
+            | Hwp5Control::ConnectLine(_)
+            | Hwp5Control::TextBox(_)
+            | Hwp5Control::OleObject(_)
+            | Hwp5Control::Group(_)
+            | Hwp5Control::TextArt(_) => Some(WireTokenKind::Shape),
+            Hwp5Control::Unknown { ctrl_id, .. } if *ctrl_id == crate::ctrl_ids::CTRL_ID_GSO => {
+                Some(WireTokenKind::Shape)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 impl<'a> ParaLedger<'a> {
     fn new(silent: &'a [SilentWire]) -> Self {
         Self {
             builder: crate::wire_text_map::WireMapBuilder::new(),
+            tokens: crate::wire_text_map::TokenLedger::default(),
             silent,
             silent_idx: 0,
             wire_cursor: 0,
             pending: None,
+            pending_begin: 0,
             failed: None,
         }
     }
@@ -1775,13 +1846,27 @@ impl<'a> ParaLedger<'a> {
                 continue;
             }
             self.silent_idx += 1;
-            self.consume(s.len, 0, 0);
+            // S22: a silently consumed control keeps its control's kind (a
+            // page number position `pgnp`, say); anything else is `Silent`.
+            let kind = match s.ctrl_id {
+                0 => WireTokenKind::Silent,
+                id => marker_kind(id, &mut Vec::new().into_iter()),
+            };
+            self.consume(s.len, 0, 0, kind);
         }
     }
 
+    /// A zero-length token at the current position (outside a field).
+    fn record(&mut self, wire_start: u32, kind: WireTokenKind) {
+        let (_, core) = self.builder.cursors();
+        self.tokens.push(crate::wire_text_map::ZeroToken { core, wire_start, kind });
+    }
+
     /// 소비 하나를 기록한다. `core_folded`/`core_reemitted` 는 각각
-    /// field 밖(즉시 반영)·재방출 body 조각일 때의 Core 폭.
-    fn consume(&mut self, wire: u32, core_outside: u32, core_reemitted: u32) {
+    /// field 밖(즉시 반영)·재방출 body 조각일 때의 Core 폭. `kind` 는 그
+    /// 폭이 0 일 때 적는 토큰 종류 (S22).
+    fn consume(&mut self, wire: u32, core_outside: u32, core_reemitted: u32, kind: WireTokenKind) {
+        let start = self.wire_cursor;
         match self.wire_cursor.checked_add(wire) {
             Some(w) => self.wire_cursor = w,
             None => {
@@ -1790,10 +1875,13 @@ impl<'a> ParaLedger<'a> {
             }
         }
         if let Some(pieces) = self.pending.as_mut() {
-            pieces.push((wire, core_reemitted));
+            pieces.push((wire, core_reemitted, kind));
         } else if core_outside == wire {
             self.builder.advance_identity(wire);
         } else {
+            if core_outside == 0 {
+                self.record(start, kind);
+            }
             self.builder.push_span(wire, core_outside);
         }
     }
@@ -1801,38 +1889,38 @@ impl<'a> ParaLedger<'a> {
     /// 일반 텍스트 (field 밖 1:1 · 재방출 body 도 1:1).
     fn observe_text(&mut self, utf16_len: u32) {
         self.drain_silent();
-        self.consume(utf16_len, utf16_len, utf16_len);
+        self.consume(utf16_len, utf16_len, utf16_len, WireTokenKind::Text);
     }
 
     /// Tab — wire 8 · Core `\t` 1 (양쪽 동일).
     fn observe_tab(&mut self) {
         self.drain_silent();
-        self.consume(8, 1, 1);
+        self.consume(8, 1, 1, WireTokenKind::Text);
     }
 
     /// 단일 유닛 제어 (`\n`·nbSp·fwSp) — 1:1.
     fn observe_unit(&mut self) {
         self.drain_silent();
-        self.consume(1, 1, 1);
+        self.consume(1, 1, 1, WireTokenKind::Text);
     }
 
-    /// ParaBreak — wire 1 · Core 0.
+    /// ParaBreak — wire 1 · Core 0 (S22: 종류 `End`).
     fn observe_para_break(&mut self) {
         self.drain_silent();
-        self.consume(1, 0, 0);
+        self.consume(1, 0, 0, WireTokenKind::End);
     }
 
     /// ControlRef/ExtendedControlRef marker — field 밖 (8,0) (U+FFFC
     /// 미방출), 재방출 body 안 (8,1) (U+FFFC 가 텍스트로 살아남음).
-    fn observe_marker(&mut self) {
+    fn observe_marker(&mut self, kind: WireTokenKind) {
         self.drain_silent();
-        self.consume(8, 0, 1);
+        self.consume(8, 0, 1, kind);
     }
 
     /// SectionColumnDef — wire 8 · Core 0 (양쪽 동일).
-    fn observe_section_ctrl(&mut self) {
+    fn observe_section_ctrl(&mut self, kind: WireTokenKind) {
         self.drain_silent();
-        self.consume(8, 0, 0);
+        self.consume(8, 0, 0, kind);
     }
 
     /// FieldBegin — pending 개시 (begin 자체 8유닛 소비).
@@ -1841,6 +1929,7 @@ impl<'a> ParaLedger<'a> {
         if self.pending.is_some() {
             self.fail("nested field begin");
         }
+        self.pending_begin = self.wire_cursor;
         match self.wire_cursor.checked_add(8) {
             Some(w) => self.wire_cursor = w,
             None => {
@@ -1856,6 +1945,7 @@ impl<'a> ParaLedger<'a> {
     /// FieldEnd — 방출 결과에 따라 pending 을 commit 한다.
     fn commit_field(&mut self, outcome: FieldEmissionOutcome) {
         self.drain_silent();
+        let end_start = self.wire_cursor;
         match self.wire_cursor.checked_add(8) {
             Some(w) => self.wire_cursor = w,
             None => {
@@ -1867,10 +1957,11 @@ impl<'a> ParaLedger<'a> {
             self.fail("unpaired field end");
             return;
         };
+        let begin = self.pending_begin;
         match outcome {
             FieldEmissionOutcome::Folded => {
                 let mut total: u32 = 16; // begin + end
-                for (wire, _) in &pieces {
+                for (wire, _, _) in &pieces {
                     match total.checked_add(*wire) {
                         Some(t) => total = t,
                         None => {
@@ -1879,24 +1970,40 @@ impl<'a> ParaLedger<'a> {
                         }
                     }
                 }
+                // S22: begin, the folded body, end — at one Core position.
+                self.record(begin, WireTokenKind::FieldBegin);
+                if total > 16 {
+                    self.record(begin + 8, WireTokenKind::Text);
+                }
+                self.record(end_start, WireTokenKind::FieldEnd);
                 self.builder.push_span(total, 0);
             }
             FieldEmissionOutcome::ReEmitted => {
+                self.record(begin, WireTokenKind::FieldBegin);
                 self.builder.push_span(8, 0);
-                for (wire, core) in pieces {
+                let mut at = begin + 8;
+                for (wire, core, kind) in pieces {
                     if wire == core {
                         self.builder.advance_identity(wire);
                     } else {
+                        if core == 0 {
+                            self.record(at, kind);
+                        }
                         self.builder.push_span(wire, core);
                     }
+                    at += wire;
                 }
+                self.record(end_start, WireTokenKind::FieldEnd);
                 self.builder.push_span(8, 0);
             }
         }
     }
 
     /// 문단 종료 — 잔여 무음 구간 합류 후 seal.
-    fn finish(mut self) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
+    fn finish(
+        mut self,
+    ) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), &'static str>
+    {
         if self.pending.is_some() {
             self.fail("dangling field begin");
         }
@@ -1907,15 +2014,17 @@ impl<'a> ParaLedger<'a> {
         if let Some(why) = self.failed {
             return Err(why);
         }
-        self.builder.finish().map_err(|_| "wire map invariant violation")
+        let map = self.builder.finish().map_err(|_| "wire map invariant violation")?;
+        Ok((map, self.tokens))
     }
 }
 
 /// field 없는(flat) 문단의 ledger — 세그먼트 종류만으로 구축한다.
 fn build_flat_ledger(
     hwp_para: &Hwp5Paragraph,
-) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
+) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), &'static str> {
     let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
+    let mut gso = gso_kinds(hwp_para);
     for segment in &hwp_para.text_segments {
         match segment {
             crate::schema::section::TextSegment::Text(text) => {
@@ -1926,12 +2035,13 @@ fn build_flat_ledger(
             | crate::schema::section::TextSegment::NonBreakingSpace
             | crate::schema::section::TextSegment::FwSpace => ledger.observe_unit(),
             crate::schema::section::TextSegment::ParaBreak => ledger.observe_para_break(),
-            crate::schema::section::TextSegment::ControlRef { .. }
-            | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
-                ledger.observe_marker();
+            crate::schema::section::TextSegment::ControlRef { extra }
+            | crate::schema::section::TextSegment::ExtendedControlRef { extra } => {
+                ledger.observe_marker(marker_kind(ctrl_id_from_inline_extra(extra), &mut gso));
             }
-            crate::schema::section::TextSegment::SectionColumnDef { .. } => {
-                ledger.observe_section_ctrl();
+            crate::schema::section::TextSegment::SectionColumnDef { extra } => {
+                ledger
+                    .observe_section_ctrl(marker_kind(ctrl_id_from_inline_extra(extra), &mut gso));
             }
             crate::schema::section::TextSegment::FieldBegin { .. }
             | crate::schema::section::TextSegment::FieldEnd => {
@@ -1956,6 +2066,7 @@ fn project_paragraph_with_images_structural(
     let mut visible_utf16: u32 = 0;
     let mut active_field: Option<ActiveField> = None;
     let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
+    let mut gso = gso_kinds(hwp_para);
 
     for segment in &hwp_para.text_segments {
         match segment {
@@ -2019,9 +2130,9 @@ fn project_paragraph_with_images_structural(
                     '\u{001F}',
                 );
             }
-            crate::schema::section::TextSegment::ControlRef { .. }
-            | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
-                ledger.observe_marker();
+            crate::schema::section::TextSegment::ControlRef { extra }
+            | crate::schema::section::TextSegment::ExtendedControlRef { extra } => {
+                ledger.observe_marker(marker_kind(ctrl_id_from_inline_extra(extra), &mut gso));
                 if active_field.is_none() {
                     if let Some(control) = queues.object_controls.pop_front() {
                         if let Some(run) = project_control_run(
@@ -2037,8 +2148,8 @@ fn project_paragraph_with_images_structural(
                 visible_utf16 += 1;
             }
             crate::schema::section::TextSegment::SectionColumnDef { extra } => {
-                ledger.observe_section_ctrl();
                 let ctrl_id = ctrl_id_from_inline_extra(extra);
+                ledger.observe_section_ctrl(marker_kind(ctrl_id, &mut gso));
                 let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
@@ -5041,7 +5152,8 @@ mod tests {
             b.advance_identity(64);
             b.finish().expect("identity map")
         };
-        let cache = promote_line_segments(&segs, Ok(identity), &mut warnings).expect("promoted");
+        let cache = promote_line_segments(&segs, Ok((identity, Default::default())), &mut warnings)
+            .expect("promoted");
         assert!(warnings.is_empty(), "identity promote must not warn: {warnings:?}");
         assert_eq!(cache.line_count(), 2);
         // 필드 대응: 이름만 다르고 wire 의미 동일 (textpos/vertpos/vertsize/…)
@@ -5055,7 +5167,8 @@ mod tests {
         assert_eq!(cache.lines[1].flags, 0x0016_0000);
         // 세그먼트 없음 = 캐시 부재 (경고도 없음)
         let empty_map = crate::wire_text_map::WireMapBuilder::new().finish().expect("empty");
-        assert!(promote_line_segments(&[], Ok(empty_map), &mut warnings).is_none());
+        assert!(promote_line_segments(&[], Ok((empty_map, Default::default())), &mut warnings)
+            .is_none());
         assert!(warnings.is_empty());
     }
 
@@ -6417,6 +6530,105 @@ mod tests {
         assert_eq!(doc(Some(saved)), [saved, "2001-02-03T04:05:06Z", saved]);
         let epoch = "1970-01-01T00:00:00Z";
         assert_eq!(doc(None), [epoch, "2001-02-03T04:05:06Z", epoch]);
+    }
+
+    /// S22: lines that start after some of the zero-length tokens at one
+    /// Core position record which ones — section and column definitions, a
+    /// silently consumed page number position, tables, the paragraph end —
+    /// and a line before them all records none.
+    /// 이것을 실패시키는 것: 경계 기록 삭제 · 무음 컨트롤의 종류를 `Silent` 로
+    /// (쪽 번호 위치) · 문단 끝을 `End` 아닌 종류로 · gso 를 그림/도형 구분 없이.
+    #[test]
+    fn collapsed_lines_keep_their_token_boundary() {
+        use crate::schema::section::{Hwp5ParaLineSeg, SilentWire, TextSegment};
+        use hwpforge_core::layout::LineBoundary;
+        use WireTokenKind::*;
+        let extra = |id: u32| {
+            let mut e = [0u8; 14];
+            e[..4].copy_from_slice(&id.to_le_bytes());
+            e
+        };
+        let seg = |w: u32| Hwp5ParaLineSeg {
+            text_start_position: w,
+            vertical_position: 0,
+            line_height: 1000,
+            text_height: 1000,
+            baseline_distance: 850,
+            line_spacing: 600,
+            column_start_position: 0,
+            segment_width: 40000,
+            tag: 0,
+        };
+        let id = |s: &[u8; 4]| u32::from_be_bytes(*s);
+        // secd 0, cold 8, pgnp 16 (silent), tbl 24, gso(picture) 32, "끝" 40, end 41.
+        let para = Hwp5Paragraph {
+            end_char_shape: None,
+            silent_wires: vec![SilentWire { start: 16, len: 8, ctrl_id: id(b"pgnp") }],
+            page_break: false,
+            column_break: false,
+            text: "끝".into(),
+            text_segments: vec![
+                TextSegment::SectionColumnDef { extra: extra(id(b"secd")) },
+                TextSegment::SectionColumnDef { extra: extra(id(b"cold")) },
+                TextSegment::ControlRef { extra: extra(id(b"tbl ")) },
+                TextSegment::ControlRef { extra: extra(id(b"gso ")) },
+                TextSegment::Text("끝".into()),
+                TextSegment::ParaBreak,
+            ],
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Image(Hwp5ImageControl {
+                ctrl_id: id(b"gso "),
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    outer_margin: [0; 4],
+                    x: 0,
+                    y: 0,
+                    width: 3_000,
+                    height: 2_000,
+                },
+                binary_data_id: 1,
+                original_size: None,
+                instance_id: 0,
+                ctrl_properties: 0x1,
+                picture: Default::default(),
+                link: None,
+            })],
+        };
+        let segs = [seg(0), seg(24), seg(32), seg(40), seg(41)];
+        let mut warnings = Vec::new();
+        let cache = promote_line_segments(&segs, build_flat_ledger(&para), &mut warnings)
+            .unwrap_or_else(|| panic!("{warnings:?}"));
+        let got: Vec<(u32, Option<LineBoundary>)> =
+            cache.lines.iter().map(|l| (l.textpos, l.boundary.clone())).collect();
+        let b = |skip: &[WireTokenKind], next| Some(LineBoundary::new(skip.to_vec(), next));
+        assert_eq!(
+            got,
+            [
+                (0, None),
+                (0, b(&[SectionDef, ColumnDef, PageNumber], Some(Table))),
+                (0, b(&[SectionDef, ColumnDef, PageNumber, Table], Some(Picture))),
+                (0, b(&[SectionDef, ColumnDef, PageNumber, Table, Picture], None)),
+                (1, None),
+            ]
+        );
+        // "가", a table at core 1, the paragraph end: a line before the end.
+        let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
+            text: "가".into(),
+            text_segments: vec![
+                TextSegment::Text("가".into()),
+                TextSegment::ControlRef { extra: extra(id(b"tbl ")) },
+                TextSegment::ParaBreak,
+            ],
+            controls: Vec::new(),
+            ..para
+        };
+        let cache =
+            promote_line_segments(&[seg(0), seg(9)], build_flat_ledger(&para), &mut warnings)
+                .unwrap_or_else(|| panic!("{warnings:?}"));
+        assert_eq!(cache.lines[1].boundary, b(&[Table], Some(End)));
     }
 
     /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is

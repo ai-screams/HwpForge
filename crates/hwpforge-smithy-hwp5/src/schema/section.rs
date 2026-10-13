@@ -212,6 +212,9 @@ pub(crate) struct SilentWire {
     pub start: u32,
     /// wire 소비 유닛 수 (확장/인라인 컨트롤=8, 단일 제어문자=1).
     pub len: u32,
+    /// 8 유닛 컨트롤의 ctrl id (`extra[0..4]`), 단일 제어문자는 0 — 줄 경계의
+    /// 토큰 종류(S22, 예: 승격하지 않는 쪽 번호 위치 `pgnp`).
+    pub ctrl_id: u32,
 }
 
 /// Parsed from a `ParaText` (tag `0x43`) record in a BodyText section.
@@ -308,7 +311,7 @@ impl Hwp5ParaText {
                 // (segments_to_string 결과는 동일).
                 0x00 => {
                     flush_text!();
-                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1, ctrl_id: 0 });
                 }
 
                 // Extended controls: 8 wchars total (1 control + 7 extra u16).
@@ -316,8 +319,12 @@ impl Hwp5ParaText {
                 0x01 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
                 0x02 => {
                     flush_text!();
@@ -342,8 +349,12 @@ impl Hwp5ParaText {
                 0x13 | 0x14 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
                 // 0x17: dutmal (덧말) inline marker.
                 // `extra[0..4]` carries the BE-ascii ctrl_id `tdut` for the
@@ -369,7 +380,11 @@ impl Hwp5ParaText {
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x12: extended control — Wave 12n discovered that
@@ -385,7 +400,11 @@ impl Hwp5ParaText {
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_ATNO {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x11: 각주/미주 (footnote/endnote) inline reference marker
@@ -412,7 +431,11 @@ impl Hwp5ParaText {
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x15: page-control marker (새 번호 `nwno`·감추기 `pghd`·
@@ -432,7 +455,11 @@ impl Hwp5ParaText {
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
-                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                        silent_wires.push(SilentWire {
+                            start: seg_start,
+                            len: 8,
+                            ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                        });
                     }
                 }
                 // 0x0E-0x10: extended controls (bookmarks, change tracking,
@@ -442,8 +469,12 @@ impl Hwp5ParaText {
                 0x0E..=0x10 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
-                    let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    let extra = read_extra!(i - 1);
+                    silent_wires.push(SilentWire {
+                        start: seg_start,
+                        len: 8,
+                        ctrl_id: ctrl_id_from_inline_extra_bytes(&extra),
+                    });
                 }
 
                 // Inline controls: 8 wchars total (1 control + 7 extra u16).
@@ -456,14 +487,15 @@ impl Hwp5ParaText {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    // An inline control's payload holds no control id.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8, ctrl_id: 0 });
                 }
                 0x08 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
                     // Title mark is not modeled in Core IR yet — 무음 8유닛.
-                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
+                    silent_wires.push(SilentWire { start: seg_start, len: 8, ctrl_id: 0 });
                 }
                 0x09 => {
                     flush_text!();
@@ -496,7 +528,7 @@ impl Hwp5ParaText {
                 0x1E => {
                     flush_text!();
                     // Hard hyphen — not modeled in Core yet; consumed silently.
-                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1, ctrl_id: 0 });
                 }
 
                 // Everything else: normal character.

@@ -58,9 +58,9 @@ pub struct LineSeg {
     pub flags: u32,
     /// 줄 시작이 Core 위치 `textpos` 의 영-core wire 토큰 열(표·그림·컨트롤·
     /// 필드 경계처럼 Core 텍스트 길이가 0 인 것) 한가운데에 놓일 때, 그 열의
-    /// 몇 번째 토큰 앞인지 (S22). `None` = 그 위치에 영-core 토큰이 없다
-    /// (줄 대부분). 문단 내용을 바꾸면 `layout_cache` 를 `None` 으로 —
-    /// 경계는 그 내용의 토큰 열을 가리킨다.
+    /// 몇 번째 토큰 앞인지 (S22). `None` = 그 위치의 토큰을 하나도 지나지
+    /// 않는다 — 토큰이 없거나 첫 토큰 앞(줄 대부분). 문단 내용을 바꾸면
+    /// `layout_cache` 를 `None` 으로 — 경계는 그 내용의 토큰 열을 가리킨다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boundary: Option<LineBoundary>,
 }
@@ -143,7 +143,7 @@ pub enum WireTokenKind {
     Text,
     /// 문단 끝.
     End,
-    /// 그 밖의 컨트롤(덧말·글자 겹침·찾아보기 표시 등).
+    /// 그 밖의 컨트롤: 덧말(`tdut`)·글자 겹침(`tcps`)·찾아보기 표시(`idxm`).
     Other,
 }
 

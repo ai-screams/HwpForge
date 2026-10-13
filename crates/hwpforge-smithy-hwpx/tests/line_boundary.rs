@@ -157,3 +157,14 @@ fn mismatched_or_inside_boundary_drops_the_cache() {
     assert_eq!(cache, None);
     assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
 }
+
+/// Q6: lines that still fall on one place (no boundary to tell them apart)
+/// leave the paragraph without a cache, with a warning.
+/// 이것을 실패시키는 것: 순증가 검사 삭제(`[0, 0]` 캐시가 나간다).
+#[test]
+fn collapsed_lines_are_dropped() {
+    let collapsed = vec![line(0, None), line(0, None)];
+    let (cache, warnings) = encode(host(vec![table(), table()], collapsed), false);
+    assert_eq!(cache, None);
+    assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
+}

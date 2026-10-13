@@ -232,6 +232,11 @@ impl WireMapBuilder {
         Self::default()
     }
 
+    /// 지금까지 기록한 `(wire, core)` 길이.
+    pub(crate) fn cursors(&self) -> (u32, u32) {
+        (self.wire_cursor, self.core_cursor)
+    }
+
     /// 1:1 구간 전진 (일반 텍스트 UTF-16 `units`).
     pub(crate) fn advance_identity(&mut self, units: u32) {
         match (self.wire_cursor.checked_add(units), self.core_cursor.checked_add(units)) {
@@ -300,6 +305,49 @@ impl WireMapBuilder {
             spans: self.spans,
             wire_end: self.wire_cursor,
             core_end: self.core_cursor,
+        })
+    }
+}
+
+/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ZeroToken {
+    /// 토큰이 놓인 Core 위치.
+    pub core: u32,
+    /// wire 시작 위치.
+    pub wire_start: u32,
+    /// 종류.
+    pub kind: hwpforge_core::layout::WireTokenKind,
+}
+
+/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵과 나란히 기록하고 맵은
+/// 바꾸지 않는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TokenLedger {
+    tokens: Vec<ZeroToken>,
+}
+
+impl TokenLedger {
+    /// 토큰 하나를 더한다 (wire 순서대로).
+    pub(crate) fn push(&mut self, token: ZeroToken) {
+        self.tokens.push(token);
+    }
+
+    /// wire 위치 `wire`(Core 위치 `core`)에서 시작하는 줄의 경계. 그 위치의
+    /// 토큰 앞에서 시작하면(토큰이 없거나 첫 토큰 앞) `None` — 가장 이른
+    /// 자리라 좌표만으로 정해진다. 몇 개를 지난 뒤면 지난 종류들과 다음 종류.
+    pub(crate) fn boundary_at(
+        &self,
+        core: u32,
+        wire: u32,
+    ) -> Option<hwpforge_core::layout::LineBoundary> {
+        let here: Vec<&ZeroToken> = self.tokens.iter().filter(|t| t.core == core).collect();
+        let k = here.iter().take_while(|t| t.wire_start < wire).count();
+        (k > 0).then(|| {
+            hwpforge_core::layout::LineBoundary::new(
+                here[..k].iter().map(|t| t.kind).collect(),
+                here.get(k).map(|t| t.kind),
+            )
         })
     }
 }
