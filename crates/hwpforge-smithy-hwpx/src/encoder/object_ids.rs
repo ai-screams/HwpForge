@@ -150,22 +150,23 @@ fn push(out: &mut Vec<(&'static str, u64)>, kind: &'static str, id: Option<Objec
 }
 
 /// Ids held by more than one object, with the holders' kinds in document
-/// order. Footnotes and endnotes are left out: Hancom itself saves several
-/// notes with one instance id (corpus: three footnotes sharing 6029409 in
-/// one document, a footnote and an endnote sharing 1 in `full_report.hwp`),
-/// so a shared note id says nothing about a cross reference. Their ids are
-/// still reserved.
-/// 이것을 실패시키는 것: 각주·미주 제외 삭제(`shared_core_id_is_kept_and_reported`
-/// 의 각주 쌍이 경고).
+/// order. An id held only by footnotes and endnotes is left out: Hancom
+/// itself saves several notes with one instance id (corpus: three
+/// footnotes sharing 6029409 in one document, a footnote and an endnote
+/// sharing 1 in `full_report.hwp`), so such a share says nothing about a
+/// cross reference. An id a note shares with any other object is kept.
+/// Every id is still reserved.
+/// 이것을 실패시키는 것: 주석만인 경우 제외 삭제(각주·미주 공유가 경고) · 주석을
+/// 집계 전에 빼기(표↔각주·그림↔미주 혼합이 숨는다)
+/// (`shared_core_id_is_kept_and_reported`).
 pub(crate) fn conflicts(ids: &[(&'static str, u64)]) -> BTreeMap<u64, Vec<&'static str>> {
     let mut by_id: BTreeMap<u64, Vec<&'static str>> = BTreeMap::new();
     for &(kind, id) in ids {
-        if kind == "footnote" || kind == "endnote" {
-            continue;
-        }
         by_id.entry(id).or_default().push(kind);
     }
-    by_id.retain(|_, kinds| kinds.len() > 1);
+    by_id.retain(|_, kinds| {
+        kinds.len() > 1 && !kinds.iter().all(|k| *k == "footnote" || *k == "endnote")
+    });
     by_id
 }
 
@@ -359,7 +360,8 @@ mod tests {
 
     /// W0: two tables with Core id 7 keep it (both written as 7) and give
     /// one warning naming both; a third object with another id adds none,
-    /// and neither do two footnotes sharing 9.
+    /// and neither does a footnote and an endnote sharing 9 — but a note
+    /// sharing with a table (10) or a picture (11) does.
     /// 이것을 실패시키는 것: 경고 삭제 · 중복 판정을 `> 0` 으로(모든 id 경고).
     #[test]
     fn shared_core_id_is_kept_and_reported() {
@@ -377,11 +379,18 @@ mod tests {
                         Control::footnote_with_id(9, vec![text()]),
                         CharShapeIndex::new(0),
                     ),
+                    Run::control(Control::endnote_with_id(9, vec![text()]), CharShapeIndex::new(0)),
                     Run::control(
-                        Control::footnote_with_id(9, vec![text()]),
+                        Control::footnote_with_id(10, vec![text()]),
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::control(
+                        Control::endnote_with_id(11, vec![text()]),
                         CharShapeIndex::new(0),
                     ),
                 ]),
+                holder(table(Some(10))),
+                para(vec![Run::image(picture(Some(11)), CharShapeIndex::new(0))]),
             ],
             PageSettings::a4(),
         ));
@@ -398,7 +407,14 @@ mod tests {
             .filter(|w| w.code() == "OBJECT_ID_CONFLICT")
             .map(crate::EncodeWarning::message)
             .collect();
-        assert_eq!(conflicts, ["2 objects share id 7: table, table"]);
+        assert_eq!(
+            conflicts,
+            [
+                "2 objects share id 7: table, table",
+                "2 objects share id 10: footnote, table",
+                "2 objects share id 11: endnote, picture",
+            ]
+        );
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
         let mut xml = String::new();
         zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
