@@ -456,17 +456,32 @@ fn admit_caption<'a>(caption: &'a Caption, location: &str) -> PdfResult<Admitted
             });
         }
         // D review r1 HIGH-1: the lines must cover the caption's text from
-        // its start — a first line past 0 or a line starting at the end
-        // would drop text, or the whole caption, without a word.
-        // 이것을 실패시키는 것: 이 검사 삭제(`caption_lines_must_cover_the_text`
-        // 의 textpos 1 · textpos = 길이).
-        let len = p.text_content().encode_utf16().count();
+        // its start, and no line may start past the text — or at its end,
+        // except the empty line after a closing line break (review r3 M1).
+        // A line may not start inside a surrogate pair either: the halves
+        // would be replaced without a word (review r3 M2).
+        // 이것을 실패시키는 것: 첫 줄 0 검사 삭제 · 끝 검사 삭제 · 끝 줄바꿈 뒤
+        // 빈 줄 거부 · 서로게이트 검사 삭제(`caption_lines_must_cover_the_text`,
+        // `caption_line_breaks_and_surrogates`).
+        let utf16: Vec<u16> = p.text_content().encode_utf16().collect();
+        let len = utf16.len();
         let first = cache.lines.first().map_or(0, |seg| seg.textpos as usize);
         let last = cache.lines.last().map_or(0, |seg| seg.textpos as usize);
-        if len > 0 && (first != 0 || last >= len) {
+        let ends_in_break = utf16.last() == Some(&u16::from(b'\n'));
+        if len > 0 && (first != 0 || last > len || (last == len && !ends_in_break)) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}/caption: lines start at {first} and {last} of {len} UTF-16 units"
+                ),
+            });
+        }
+        if let Some(seg) = cache.lines.iter().find(|seg| {
+            utf16.get(seg.textpos as usize).is_some_and(|&u| (0xDC00..=0xDFFF).contains(&u))
+        }) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}/caption: a line starts at {} inside a surrogate pair",
+                    seg.textpos
                 ),
             });
         }

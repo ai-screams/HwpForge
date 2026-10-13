@@ -298,3 +298,38 @@ fn caption_geometry_out_of_range_is_invalid_cache() {
     let edge = replay(|d| first_caption_line(d).horzpos = 100_000_000).expect("range end");
     assert!(caption_lines(&edge)[0].line_box.horzpos > 100_000_000);
 }
+
+/// Sets table 1's caption text and line starts (each line a copy of the
+/// first, one line height lower).
+fn caption_text(d: &mut Document<Draft>, text: &str, starts: &[u32]) {
+    let caption = table_mut(d, 0).caption.as_mut().unwrap();
+    let p = &mut caption.paragraphs[0];
+    p.runs.truncate(1);
+    p.runs[0].content = RunContent::Text(text.to_string());
+    let lines = &mut p.layout_cache.as_mut().unwrap().lines;
+    let mut line = lines[0];
+    lines.clear();
+    for &start in starts {
+        line.textpos = start;
+        lines.push(line);
+        line.vertpos += line.vertsize;
+    }
+}
+
+/// Review r3 M1·M2: the empty line after a closing line break, an empty
+/// line in the middle and an empty paragraph are accepted; a line starting
+/// at the end without a closing break, or inside a surrogate pair, is an
+/// invalid cache.
+/// 이것을 실패시키는 것: 끝 줄바꿈 뒤 빈 줄 거부(`A\n` [0,2]) · 서로게이트
+/// 검사 삭제("😀" [0,1] 통과) · 서로게이트 검사를 높은 쪽으로("😀😀" [0,2] 거부).
+#[test]
+fn caption_line_breaks_and_surrogates() {
+    for (text, starts) in
+        [("A\n", &[0u32, 2][..]), ("A\n\nB", &[0, 2, 3]), ("", &[0]), ("😀😀", &[0, 2])]
+    {
+        assert!(replay(|d| caption_text(d, text, starts)).is_ok(), "{text:?} {starts:?}");
+    }
+    for (text, starts) in [("AB", &[0u32, 2][..]), ("😀", &[0, 1]), ("😀😀", &[0, 3])] {
+        assert!(invalid_cache(replay(|d| caption_text(d, text, starts))), "{text:?} {starts:?}");
+    }
+}

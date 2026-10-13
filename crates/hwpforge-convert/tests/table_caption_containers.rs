@@ -6,9 +6,11 @@
 //! moved into the first paragraph of each container in a Hancom fixture:
 //! its control goes in front of that paragraph's text and its records sit
 //! one level below the paragraph. Before the fix, the container scopes'
-//! layout hints left out the caption paragraph, and every such conversion
-//! failed with a hint count underflow — the layout hint patch runs whether
-//! or not the cache is carried.
+//! layout hints left out the caption paragraph: the header, footer,
+//! footnote, endnote and text box conversions failed with a hint count
+//! underflow, with and without the cache (10 of the 12 cases, run on the
+//! code before the fix). The cell case already converted — the table flow
+//! collector counted its caption.
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -190,7 +192,7 @@ fn section0(hwpx: &[u8]) -> String {
 /// carried — and both conversions succeed.
 ///
 /// 이것을 실패시키는 것: 컨테이너 scope 수집기에서 캡션 문단 hint 를 빼기
-/// (여섯 컨테이너 모두 hint 부족으로 변환 실패) · 캡션을 칸 hint 뒤로.
+/// (셀 밖 다섯 컨테이너가 carry 양쪽에서 hint 부족으로 변환 실패).
 #[test]
 fn captioned_table_in_every_container_converts_with_and_without_the_cache() {
     let cases: [(&str, &str, [u8; 4], &str, &str); 6] = [
