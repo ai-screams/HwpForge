@@ -63,6 +63,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         warnings = per_language_scalar_losses(ref_list);
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
+        warnings.extend(font_embedding_losses(ref_list));
     }
 
     Ok(HeaderParseResult { style_store: store, begin_num, warnings })
@@ -159,6 +160,41 @@ fn per_language_scalar_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning>
             })
         })
         .collect()
+}
+
+/// An embedded font (`<hh:font isEmbedded="1">`) or substitute font
+/// (`<hh:substFont isEmbedded="1">` or a `binaryItemIDRef`): the style store
+/// keeps neither the flag nor the reference, so a re-encode writes the font
+/// as not embedded and its link to the package binary is cut. Reported as
+/// lost (editors then refuse the input); the Hancom corpus has none (3,828
+/// header parts, 59,531 substitutes, 0 embedded), so carrying the binary
+/// link is left until one is seen.
+/// 이것을 실패시키는 것: 이 보고를 지우기 · 대체 글꼴 참조를 보지 않기
+/// (`embedded_fonts_are_reported_as_lost`).
+fn font_embedding_losses(ref_list: &HxRefList) -> Vec<super::DecodeWarning> {
+    let Some(fontfaces) = &ref_list.fontfaces else { return Vec::new() };
+    let lost = |id: u32, lang: &str, what: &str| super::DecodeWarning::ContentLost {
+        part: "Contents/header.xml".to_string(),
+        path: super::ParagraphPath::default(),
+        kind: "font_embedding".to_string(),
+        reason: format!("{lang} font {id}: the embedded {what} is written as not embedded"),
+    };
+    let mut out = Vec::new();
+    for group in &fontfaces.groups {
+        for font in &group.fonts {
+            if font.is_embedded != 0 {
+                out.push(lost(font.id, &group.lang, "font"));
+            }
+            if font
+                .subst_font
+                .as_ref()
+                .is_some_and(|s| s.is_embedded != 0 || !s.binary_item_id_ref.is_empty())
+            {
+                out.push(lost(font.id, &group.lang, "substitute font"));
+            }
+        }
+    }
+    out
 }
 
 fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
@@ -1104,6 +1140,44 @@ mod tests {
         let border_fill = store.border_fill(4).unwrap();
         assert!(matches!(border_fill.fill, Some(HwpxFill::WinBrush { .. })));
         assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
+    }
+
+    /// Review r1 HIGH-1: an embedded font or substitute font (flag or a
+    /// binary reference) is reported as lost content; a plain one is not.
+    /// 이것을 실패시키는 것: 보고 삭제 · 대체 글꼴 참조 무시 · 일반 글꼴에도 보고.
+    #[test]
+    fn embedded_fonts_are_reported_as_lost() {
+        let header = |font_embedded: u32, subst: &str| {
+            format!(
+                r#"<head version="1.4" secCnt="1"><refList><fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="1"><font id="0" face="A" type="TTF" isEmbedded="{font_embedded}">{subst}</font></fontface></fontfaces></refList></head>"#
+            )
+        };
+        let lost = |xml: String| {
+            parse_header(&xml)
+                .unwrap()
+                .warnings
+                .iter()
+                .filter(|w| matches!(w, crate::DecodeWarning::ContentLost { kind, .. } if kind == "font_embedding"))
+                .count()
+        };
+        let plain = r#"<substFont face="B" type="TTF" isEmbedded="0" binaryItemIDRef=""/>"#;
+        assert_eq!(lost(header(0, plain)), 0);
+        assert_eq!(lost(header(0, "")), 0);
+        assert_eq!(lost(header(1, plain)), 1);
+        assert_eq!(
+            lost(header(
+                0,
+                r#"<substFont face="B" type="TTF" isEmbedded="1" binaryItemIDRef=""/>"#
+            )),
+            1
+        );
+        assert_eq!(
+            lost(header(
+                0,
+                r#"<substFont face="B" type="TTF" isEmbedded="0" binaryItemIDRef="font1"/>"#
+            )),
+            1
+        );
     }
 
     #[test]
