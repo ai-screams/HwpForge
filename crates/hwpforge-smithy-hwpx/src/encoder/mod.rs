@@ -1273,14 +1273,6 @@ impl HwpxEncoder {
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
         let mut warnings: Vec<EncodeWarning> = Vec::new();
-        // W0: two objects with one Core id are written as they are, and
-        // reported. 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
-        for (id, kinds) in object_ids::conflicts(&object_ids::written_object_ids(document)) {
-            warnings.push(EncodeWarning::ObjectIdConflict {
-                id,
-                kinds: kinds.into_iter().map(str::to_string).collect(),
-            });
-        }
         // #198: a font face loses its forbidden characters (with the other
         // controls) to `clean_font_name` before serialization, so the part
         // scan below cannot see them; they are counted here instead.
@@ -1331,6 +1323,15 @@ impl HwpxEncoder {
         }
         for r in &mut section_results {
             warnings.append(&mut r.warnings);
+        }
+        // W0: two written objects with one Core id keep it, and are reported
+        // — counted from the ids the encoder actually wrote (review W0 r3).
+        // 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
+        for (id, kinds) in object_ids::conflicts(&object_ids::written()) {
+            warnings.push(EncodeWarning::ObjectIdConflict {
+                id,
+                kinds: kinds.into_iter().map(str::to_string).collect(),
+            });
         }
 
         // Single move-consuming pass: extract all four fields without cloning

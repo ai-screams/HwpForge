@@ -26,6 +26,9 @@ use hwpforge_core::ObjectId;
 struct IdAllocator {
     next: u64,
     reserved: HashSet<u64>,
+    /// The Core ids the encoder actually wrote, in write order, with the
+    /// kind of object — what the duplicate-id diagnostic counts.
+    written: Vec<(&'static str, u64)>,
 }
 
 thread_local! {
@@ -41,7 +44,9 @@ pub(crate) struct IdScope(std::marker::PhantomData<*const ()>);
 impl IdScope {
     /// Opens an allocator that skips `reserved`.
     pub(crate) fn enter(reserved: HashSet<u64>) -> Self {
-        SCOPES.with(|s| s.borrow_mut().push(IdAllocator { next: 1, reserved }));
+        SCOPES.with(|s| {
+            s.borrow_mut().push(IdAllocator { next: 1, reserved, written: Vec::new() });
+        });
         Self(std::marker::PhantomData)
     }
 }
@@ -67,7 +72,7 @@ pub(crate) fn next_id() -> u64 {
         // call; they get one allocator for the test thread.
         #[cfg(test)]
         if scopes.is_empty() {
-            scopes.push(IdAllocator { next: 1, reserved: HashSet::new() });
+            scopes.push(IdAllocator { next: 1, reserved: HashSet::new(), written: Vec::new() });
         }
         #[allow(clippy::expect_used)] // invariant: encode entry points open a scope
         let alloc = scopes.last_mut().expect("object id drawn outside an encode scope");
@@ -79,6 +84,37 @@ pub(crate) fn next_id() -> u64 {
             }
         }
     })
+}
+
+/// The id to write for an object of `kind`: its Core id, recorded as
+/// written, else a drawn one. Every place that writes a Core id goes
+/// through here (notes through [`record`]), so the duplicate-id diagnostic
+/// sees exactly the objects in the output (review W0 r3): an object the
+/// encoder leaves out — anything in a memo anchor, a group child equation —
+/// is never recorded.
+pub(crate) fn core_or_drawn(kind: &'static str, id: Option<ObjectId>) -> String {
+    match id {
+        Some(id) => {
+            record(kind, id.value());
+            id.to_string()
+        }
+        None => next_id().to_string(),
+    }
+}
+
+/// Records a Core id the encoder wrote (footnotes and endnotes, whose
+/// `instId` has no drawn fallback).
+pub(crate) fn record(kind: &'static str, id: u64) {
+    SCOPES.with(|s| {
+        if let Some(alloc) = s.borrow_mut().last_mut() {
+            alloc.written.push((kind, id));
+        }
+    });
+}
+
+/// The Core ids written so far in the innermost encode scope.
+pub(crate) fn written() -> Vec<(&'static str, u64)> {
+    SCOPES.with(|s| s.borrow().last().map(|a| a.written.clone()).unwrap_or_default())
 }
 
 /// Every Core object id in the document, in document order, with the kind
@@ -93,33 +129,20 @@ pub(crate) fn next_id() -> u64 {
 /// (`build_memo_anchor_xml` keeps the anchor's text): skipping an id too
 /// many is harmless.
 pub(crate) fn core_object_ids<S>(document: &Document<S>) -> Vec<(&'static str, u64)> {
-    collect(document, &HashSet::new())
-}
-
-/// The ids of the objects the encoder writes — [`core_object_ids`] without
-/// the objects inside memo anchor runs — for the duplicate-id diagnostic,
-/// which must not report an object that is not in the output (review W0 r2
-/// LOW).
-/// 이것을 실패시키는 것: 앵커 문단 제외 삭제(`shared_core_id_is_kept_and_reported`
-/// 의 메모 앵커 글상자 안 표가 경고).
-pub(crate) fn written_object_ids<S>(document: &Document<S>) -> Vec<(&'static str, u64)> {
-    let mut anchored: HashSet<*const Paragraph> = HashSet::new();
+    let mut out = Vec::new();
     for_each_top_paragraph(document, &mut |p| {
         walk(p, &mut |q| {
             for run in &q.runs {
-                if let RunContent::Control(c) = &run.content {
-                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
-                        for anchor in anchor_runs {
-                            anchor.for_each_paragraph(|a| {
-                                anchored.insert(std::ptr::from_ref(a));
-                            });
-                        }
-                    }
+                match &run.content {
+                    RunContent::Table(t) => push(&mut out, "table", t.inst_id),
+                    RunContent::Image(img) => push(&mut out, "picture", img.inst_id),
+                    RunContent::Control(c) => visit_control(c, &mut out),
+                    _ => {}
                 }
             }
         });
     });
-    collect(document, &anchored)
+    out
 }
 
 fn for_each_top_paragraph<S>(document: &Document<S>, f: &mut dyn FnMut(&Paragraph)) {
@@ -147,29 +170,6 @@ fn walk(p: &Paragraph, f: &mut dyn FnMut(&Paragraph)) {
             }
         }
     });
-}
-
-fn collect<S>(
-    document: &Document<S>,
-    skip: &HashSet<*const Paragraph>,
-) -> Vec<(&'static str, u64)> {
-    let mut out = Vec::new();
-    for_each_top_paragraph(document, &mut |p| {
-        walk(p, &mut |q| {
-            if skip.contains(&std::ptr::from_ref(q)) {
-                return;
-            }
-            for run in &q.runs {
-                match &run.content {
-                    RunContent::Table(t) => push(&mut out, "table", t.inst_id),
-                    RunContent::Image(img) => push(&mut out, "picture", img.inst_id),
-                    RunContent::Control(c) => visit_control(c, &mut out),
-                    _ => {}
-                }
-            }
-        });
-    });
-    out
 }
 
 /// A control's own id and, for a group, its children's. The paragraphs
@@ -417,6 +417,27 @@ mod tests {
     /// 이것을 실패시키는 것: 경고 삭제 · 중복 판정을 `> 0` 으로(모든 id 경고).
     #[test]
     fn shared_core_id_is_kept_and_reported() {
+        let mut captioned = picture(None);
+        captioned.caption = Some(Caption::new(vec![holder(table(Some(12)))], CaptionSide::Bottom));
+        let group_with_equation = |id: u64| Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
+            children: vec![
+                GroupChild::Picture(picture(None)),
+                GroupChild::Shape(Control::Equation {
+                    script: "a".into(),
+                    width: unit(),
+                    height: unit(),
+                    base_line: 85,
+                    text_color: hwpforge_foundation::Color::BLACK,
+                    font: "HancomEQN".into(),
+                    inst_id: Some(ObjectId::new(id)),
+                }),
+            ],
+            width: unit(),
+            height: unit(),
+            placement: None,
+            inst_id: None,
+        };
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape::default());
@@ -443,19 +464,36 @@ mod tests {
                 ]),
                 holder(table(Some(10))),
                 para(vec![Run::image(picture(Some(11)), CharShapeIndex::new(0))]),
-                // Review W0 r2 LOW: a table in a text box in a memo anchor is
-                // not written, so its id 12 shares with nothing written.
+                // Review W0 r2·r3 LOW: a memo anchor is written as text only,
+                // so the tables in it — one in a text box, one in a picture
+                // caption in that text box — share 12 with nothing written.
                 holder(table(Some(12))),
                 para(vec![Run::control(
                     Control::memo_with_anchor(
                         vec![text()],
                         vec![Run::control(
-                            Control::text_box(vec![holder(table(Some(12)))], unit(), unit()),
+                            Control::text_box(
+                                vec![
+                                    holder(table(Some(12))),
+                                    para(vec![Run::image(captioned, CharShapeIndex::new(0))]),
+                                ],
+                                unit(),
+                                unit(),
+                            ),
                             CharShapeIndex::new(0),
                         )],
                     ),
                     CharShapeIndex::new(0),
                 )]),
+                // Review W0 r3 LOW: a group child equation is left out (lost
+                // content), so it shares 13 with no written object.
+                para(vec![
+                    Run::control(
+                        Control::footnote_with_id(13, vec![text()]),
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::control(group_with_equation(13), CharShapeIndex::new(0)),
+                ]),
             ],
             PageSettings::a4(),
         ));
@@ -466,6 +504,7 @@ mod tests {
             crate::EncodeOptions::default(),
         )
         .unwrap();
+        let outcome_warnings = outcome.warnings.clone();
         let conflicts: Vec<_> = outcome
             .warnings
             .iter()
@@ -484,6 +523,11 @@ mod tests {
         let mut xml = String::new();
         zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
         assert_eq!(objects_with_id(&xml, "7"), 2);
+        assert_eq!(objects_with_id(&xml, "12"), 1, "the anchor's tables are not written");
+        assert!(
+            outcome_warnings.iter().any(|w| w.code() == "CONTENT_LOST"),
+            "the group child equation is lost: {outcome_warnings:?}"
+        );
     }
 
     /// W0: every package entry carries the fixed ZIP epoch time.

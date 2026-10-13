@@ -84,30 +84,6 @@ impl Run {
         }
     }
 
-    /// Visits every paragraph nested in this run — a table's cells and
-    /// caption, a control's paragraphs (text boxes, notes, memos and their
-    /// anchor runs, shape captions, group children) — in the order
-    /// [`crate::paragraph::Paragraph::for_each_paragraph`] uses, which does
-    /// not enter run pictures' captions.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hwpforge_core::paragraph::Paragraph;
-    /// use hwpforge_core::run::Run;
-    /// use hwpforge_core::table::{Table, TableCell, TableRow};
-    /// use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-    ///
-    /// let cell = TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::ZERO);
-    /// let run = Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
-    /// let mut count = 0;
-    /// run.for_each_paragraph(|_| count += 1);
-    /// assert_eq!(count, 1);
-    /// ```
-    pub fn for_each_paragraph<F: FnMut(&crate::paragraph::Paragraph)>(&self, mut f: F) {
-        self.walk_paragraphs(&mut f);
-    }
-
     /// Visits every table in this run — itself if it is one, and the
     /// tables in every paragraph nested in it, run picture captions included
     /// (see [`crate::paragraph::Paragraph::for_each_table`]).

@@ -1740,6 +1740,9 @@ fn encode_control_to_ctrl(
 ) -> HwpxResult<Option<HxCtrl>> {
     match ctrl {
         Control::Footnote { inst_id, paragraphs } => {
+            if let Some(id) = inst_id {
+                super::object_ids::record("footnote", id.value());
+            }
             sink.enter(crate::decoder::PathSeg::Footnote);
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
@@ -1755,6 +1758,9 @@ fn encode_control_to_ctrl(
             }))
         }
         Control::Endnote { inst_id, paragraphs } => {
+            if let Some(id) = inst_id {
+                super::object_ids::record("endnote", id.value());
+            }
             sink.enter(crate::decoder::PathSeg::Endnote);
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
