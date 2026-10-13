@@ -340,9 +340,10 @@ fn validate_table_run(
     validate_cell_zones(table, ctx)
 }
 
-/// Every cell zone starts at or before its end and lies inside the grid.
-/// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로 비교
-/// (`cell_zone_validation`).
+/// Every cell zone starts at or before its end and lies inside the grid; a
+/// table with zones must form a grid.
+/// 이것을 실패시키는 것: 역전 검사 삭제 · 표 밖 검사 삭제 · 끝을 배타로 비교 ·
+/// 격자 실패를 통과시키기 (`cell_zone_validation`).
 fn validate_cell_zones(
     table: &crate::table::Table,
     ctx: RunValidationContext,
@@ -350,25 +351,29 @@ fn validate_cell_zones(
     if table.cell_zones.is_empty() {
         return Ok(());
     }
-    let (rows, cols) = match crate::table::grid::TableGrid::from_table(table) {
-        Ok(grid) => grid.dimensions(),
-        Err(_) => return Ok(()),
+    let error = |zone_index, reason| ValidationError::InvalidCellZone {
+        section_index: ctx.section_index,
+        paragraph_index: ctx.paragraph_index,
+        run_index: ctx.run_index,
+        zone_index,
+        reason,
     };
+    // A reversed range is wrong whatever the grid (review r1 MEDIUM-3: it
+    // was skipped when the grid did not tile).
     for (zone_index, zone) in table.cell_zones.iter().enumerate() {
-        let reason = if zone.start_row > zone.end_row || zone.start_col > zone.end_col {
-            "start past end"
-        } else if u32::from(zone.end_row) >= rows || u32::from(zone.end_col) >= cols {
-            "outside the table"
-        } else {
-            continue;
-        };
-        return Err(ValidationError::InvalidCellZone {
-            section_index: ctx.section_index,
-            paragraph_index: ctx.paragraph_index,
-            run_index: ctx.run_index,
-            zone_index,
-            reason,
-        });
+        if zone.start_row > zone.end_row || zone.start_col > zone.end_col {
+            return Err(error(zone_index, "start past end"));
+        }
+    }
+    // Zones address grid cells: without a grid they cannot be placed.
+    let Ok(grid) = crate::table::grid::TableGrid::from_table(table) else {
+        return Err(error(0, "the table's cells do not form a grid"));
+    };
+    let (rows, cols) = grid.dimensions();
+    for (zone_index, zone) in table.cell_zones.iter().enumerate() {
+        if u32::from(zone.end_row) >= rows || u32::from(zone.end_col) >= cols {
+            return Err(error(zone_index, "outside the table"));
+        }
     }
     Ok(())
 }
@@ -1417,6 +1422,33 @@ mod tests {
             );
             assert_eq!(err.code(), crate::error::CoreErrorCode::InvalidSpan);
         }
+        // Review r1 MEDIUM-3: a ragged table (2 cells, then 1) does not form
+        // a grid; a reversed zone on it is still refused, and so is any zone.
+        let ragged = |zone: CellZone| {
+            let table = Table::new(vec![
+                TableRow::new(vec![simple_cell(), simple_cell()]),
+                TableRow::new(vec![simple_cell()]),
+            ])
+            .with_cell_zones(vec![zone]);
+            validate_sections(&[Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            )])
+        };
+        assert!(matches!(
+            ragged(CellZone::new(1, 0, 0, 0, 3)),
+            Err(ValidationError::InvalidCellZone { reason: "start past end", .. })
+        ));
+        assert!(matches!(
+            ragged(CellZone::new(0, 0, 0, 0, 3)),
+            Err(ValidationError::InvalidCellZone {
+                reason: "the table's cells do not form a grid",
+                ..
+            })
+        ));
     }
 
     // === Rule 6: Spans >= 1 ===
