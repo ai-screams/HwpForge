@@ -314,9 +314,39 @@ pub(crate) struct TokenLedger {
 }
 
 impl TokenLedger {
-    /// 토큰 하나를 더한다 (wire 순서대로).
+    /// 토큰 하나를 더한다 (wire 순서대로). 바로 앞 토큰에 이어지는 `Text`
+    /// (필드 본문의 글자·탭이 여러 조각으로 오는 경우)는 그 토큰에 합친다 —
+    /// 인코더는 접힌 필드 본문을 한 토큰으로 적는다.
     pub(crate) fn push(&mut self, token: ZeroToken) {
+        use hwpforge_core::layout::WireTokenKind::Text;
+        if let Some(last) = self.tokens.last_mut() {
+            if token.kind == Text
+                && last.kind == Text
+                && last.core == token.core
+                && last.wire_start + last.wire_len == token.wire_start
+            {
+                last.wire_len += token.wire_len;
+                return;
+            }
+        }
         self.tokens.push(token);
+    }
+
+    /// wire 위치 `wire`(Core 위치 `core`)에서 시작하는 줄의 경계 — 그 위치의
+    /// 토큰을 하나도 지나지 않으면 `None`(가장 이른 자리, 좌표만으로 정해짐).
+    pub(crate) fn boundary_at(
+        &self,
+        core: u32,
+        wire: u32,
+    ) -> Option<hwpforge_core::layout::LineBoundary> {
+        let here = self.at(core);
+        let k = here.iter().take_while(|t| t.wire_start < wire).count();
+        (k > 0).then(|| {
+            hwpforge_core::layout::LineBoundary::new(
+                here[..k].iter().map(|t| t.kind).collect(),
+                here.get(k).map(|t| t.kind),
+            )
+        })
     }
 
     /// Core 위치 `core` 의 토큰들, wire 순서.

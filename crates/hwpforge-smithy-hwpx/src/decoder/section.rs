@@ -433,7 +433,9 @@ impl DecodeCtx {
 /// 텍스트는 일반 방출이라 1:1. 소비량을 알 수 없는 자식(미지 Switch·
 /// Other·StrayText·`<hp:t>` 내 미지 요소·다중 payload ctrl)은 `Err` —
 /// 캐시 fail-closed (문서 디코드는 계속된다).
-fn build_paragraph_wire_map(hx: &HxParagraph) -> Result<crate::wire_text_map::WireTextMap, String> {
+fn build_paragraph_wire_map(
+    hx: &HxParagraph,
+) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String> {
     build_wire_map_over_runs(&hx.runs, 0)
 }
 
@@ -445,11 +447,20 @@ fn build_paragraph_wire_map(hx: &HxParagraph) -> Result<crate::wire_text_map::Wi
 pub(crate) fn build_wire_map_over_runs(
     runs: &[crate::schema::section::HxRun],
     injected_leading_ctrls: usize,
-) -> Result<crate::wire_text_map::WireTextMap, String> {
+) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String> {
     use crate::schema::section::{HxRunChildKind as K, HxTextPart};
+    use hwpforge_core::layout::WireTokenKind as T;
     let mut b = crate::wire_text_map::WireMapBuilder::new();
+    let mut tokens = crate::wire_text_map::TokenLedger::default();
+    // S22: a zero-length token of `kind` — recorded with its kind, then
+    // pushed as the (wire, 0) span it always was.
+    let mut zero = |b: &mut crate::wire_text_map::WireMapBuilder, wire: u32, kind: T| {
+        let (wire_start, core) = b.cursors();
+        tokens.push(crate::wire_text_map::ZeroToken { core, wire_start, wire_len: wire, kind });
+        b.push_span(wire, 0);
+    };
     for _ in 0..injected_leading_ctrls {
-        b.push_span(8, 0);
+        zero(&mut b, 8, T::Silent);
     }
     for hx_run in runs {
         let order = if hx_run.child_order.is_empty() {
@@ -473,14 +484,14 @@ pub(crate) fn build_wire_map_over_runs(
                                     continue;
                                 }
                                 if in_field {
-                                    b.push_span(n, 0);
+                                    zero(&mut b, n, T::Text);
                                 } else {
                                     b.advance_identity(n);
                                 }
                             }
                             HxTextPart::Tab { .. } => {
                                 if in_field {
-                                    b.push_span(8, 0);
+                                    zero(&mut b, 8, T::Text);
                                 } else {
                                     b.push_span(8, 1);
                                 }
@@ -489,14 +500,14 @@ pub(crate) fn build_wire_map_over_runs(
                             | HxTextPart::NbSpace {}
                             | HxTextPart::FwSpace {} => {
                                 if in_field {
-                                    b.push_span(1, 0);
+                                    zero(&mut b, 1, T::Text);
                                 } else {
                                     b.advance_identity(1);
                                 }
                             }
                             // 한컴 titleMark 는 `<t>` 내부 — HWP5 0x08
                             // 미러 = wire 8·가시 0.
-                            HxTextPart::TitleMark { .. } => b.push_span(8, 0),
+                            HxTextPart::TitleMark { .. } => zero(&mut b, 8, T::Silent),
                             // markpen 은 HWP5 range-tag (스트림 유닛 0) —
                             // corpus 프로브: native 327본 중 markpen 1본,
                             // 전부 한 줄 (§1g v3).
@@ -527,7 +538,34 @@ pub(crate) fn build_wire_map_over_runs(
                             "<hp:ctrl> wrapper with {payloads} payloads (expected exactly 1)"
                         ));
                     }
-                    b.push_span(8, 0);
+                    let kind = if ctrl.col_pr.is_some() {
+                        T::ColumnDef
+                    } else if ctrl.header.is_some() {
+                        T::Header
+                    } else if ctrl.footer.is_some() {
+                        T::Footer
+                    } else if ctrl.page_num.is_some() {
+                        T::PageNumber
+                    } else if ctrl.foot_note.is_some() {
+                        T::Footnote
+                    } else if ctrl.end_note.is_some() {
+                        T::Endnote
+                    } else if ctrl.bookmark.is_some() {
+                        T::Bookmark
+                    } else if ctrl.field_begin.is_some() {
+                        T::FieldBegin
+                    } else if ctrl.field_end.is_some() {
+                        T::FieldEnd
+                    } else if ctrl.auto_num.is_some() {
+                        T::AutoNumber
+                    } else if ctrl.new_num.is_some() {
+                        T::NewNumber
+                    } else if ctrl.page_hiding.is_some() {
+                        T::PageHiding
+                    } else {
+                        T::Other // indexmark
+                    };
+                    zero(&mut b, 8, kind);
                     if ctrl.field_begin.is_some() {
                         in_field = true;
                     }
@@ -535,21 +573,20 @@ pub(crate) fn build_wire_map_over_runs(
                         in_field = false;
                     }
                 }
-                K::SecPr
-                | K::Table
-                | K::Picture
-                | K::Rect
+                K::SecPr => zero(&mut b, 8, T::SectionDef),
+                K::Table => zero(&mut b, 8, T::Table),
+                K::Picture => zero(&mut b, 8, T::Picture),
+                K::Rect
                 | K::Line
                 | K::Ellipse
                 | K::Polygon
                 | K::Curve
                 | K::ConnectLine
                 | K::Container
-                | K::TextArt
-                | K::Equation
-                | K::Dutmal
-                | K::Compose
-                | K::TitleMark => b.push_span(8, 0),
+                | K::TextArt => zero(&mut b, 8, T::Shape),
+                K::Equation => zero(&mut b, 8, T::Equation),
+                K::Dutmal | K::Compose => zero(&mut b, 8, T::Other),
+                K::TitleMark => zero(&mut b, 8, T::Silent),
                 K::Switch => {
                     // 알려진 chart 캐리어만 (8,0) — 미지 switch 내용은
                     // 소비량 미상 (v4 R3#6: 차트 일괄 드롭은 퇴행).
@@ -559,7 +596,7 @@ pub(crate) fn build_wire_map_over_runs(
                         .and_then(|sw| sw.case.as_ref())
                         .is_some_and(|case| case.chart.is_some());
                     if is_chart {
-                        b.push_span(8, 0);
+                        zero(&mut b, 8, T::Shape);
                     } else {
                         return Err("unknown <hp:switch> content".into());
                     }
@@ -569,7 +606,17 @@ pub(crate) fn build_wire_map_over_runs(
             }
         }
     }
-    b.finish().map_err(|e| e.to_string())
+    let map = b.finish().map_err(|e| e.to_string())?;
+    // The paragraph end: a virtual token (wire 1, core 0), as the encoder
+    // records it.
+    let (wire_end, core_end) = (map.wire_end(), map.core_end());
+    tokens.push(crate::wire_text_map::ZeroToken {
+        core: core_end,
+        wire_start: wire_end,
+        wire_len: 1,
+        kind: T::End,
+    });
+    Ok((map, tokens))
 }
 
 /// Converts an `HxParagraph` to a Core `Paragraph`.
@@ -671,8 +718,8 @@ fn convert_paragraph(
     // marker 문단을 무음 오절단 — 철폐). 실패 = fail-closed: 캐시 미승격
     // + `DecodeWarning::LayoutCacheDropped` (추측 좌표 승격 금지).
     let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
-        let map = match build_paragraph_wire_map(hx) {
-            Ok(map) => map,
+        let (map, tokens) = match build_paragraph_wire_map(hx) {
+            Ok(ledger) => ledger,
             Err(reason) => {
                 ctx.cache_dropped(reason);
                 return None;
@@ -706,6 +753,10 @@ fn convert_paragraph(
                     line.horzpos = s.horzpos;
                     line.horzsize = s.horzsize;
                     line.flags = s.flags;
+                    // S22: where among the zero-length tokens at its Core
+                    // position the line starts (`None` = before them all).
+                    // 이것을 실패시키는 것: 경계 기록 삭제(`hancom_boundary_round_trips`).
+                    line.boundary = tokens.boundary_at(textpos, s.textpos);
                     lines.push(line);
                 }
                 Err(e) => {
@@ -6408,7 +6459,7 @@ mod ws_preserve_tests {
             ))
             .into_owned();
             let hx: HxParagraph = crate::decoder::xml_from_str(&xml).expect("parse");
-            let map = build_paragraph_wire_map(&hx).expect("map");
+            let (map, _) = build_paragraph_wire_map(&hx).expect("map");
             assert_eq!((map.wire_end(), map.core_end()), (2, 2), "{wire}");
         }
     }

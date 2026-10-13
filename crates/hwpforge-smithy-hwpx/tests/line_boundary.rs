@@ -168,3 +168,102 @@ fn collapsed_lines_are_dropped() {
     assert_eq!(cache, None);
     assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
 }
+
+/// Every `<hp:linesegarray>`'s textpos list, in document order.
+fn lineseg_textpos(xml: &str) -> Vec<Vec<u32>> {
+    xml.split("<hp:linesegarray>")
+        .skip(1)
+        .map(|chunk| {
+            let body = &chunk[..chunk.find("</hp:linesegarray>").unwrap()];
+            body.match_indices("textpos=\"")
+                .map(|(i, m)| {
+                    let v = &body[i + m.len()..];
+                    v[..v.find('"').unwrap()].parse().unwrap()
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// S22: a Hancom file whose line starts after some zero-length tokens at
+/// one Core position keeps that start through decode → encode, and the
+/// re-decoded document equals the decoded one.
+/// 이것을 실패시키는 것: 디코더의 경계 기록 삭제(재인코드가 가장 이른 자리로).
+#[test]
+fn hancom_boundary_round_trips() {
+    use hwpforge_smithy_hwpx::HwpxDecoder;
+    for name in ["images/anchored_marker_line.hwpx", "images/anchored_marker_boundary.hwpx"] {
+        let path = format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        let bytes = std::fs::read(&path).unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let has_boundary = decoded.document.sections().iter().any(|s| {
+            let mut found = false;
+            s.for_each_paragraph(|p| {
+                found |= p
+                    .layout_cache
+                    .as_ref()
+                    .is_some_and(|c| c.lines.iter().any(|l| l.boundary.is_some()));
+            });
+            found
+        });
+        assert!(has_boundary, "{name}: premise");
+        let outcome = HwpxEncoder::encode_with_diagnostics(
+            &decoded.document.clone().validate().unwrap(),
+            &decoded.style_store,
+            &decoded.image_store,
+            EncodeOptions::default().with_emit_layout_cache(true),
+        )
+        .unwrap();
+        let read = |b: &[u8]| {
+            use std::io::Read as _;
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(b)).unwrap();
+            let mut xml = String::new();
+            zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
+            xml
+        };
+        assert_eq!(
+            lineseg_textpos(&read(&outcome.bytes)),
+            lineseg_textpos(&read(&bytes)),
+            "{name}"
+        );
+        let again = HwpxDecoder::decode(&outcome.bytes).unwrap();
+        assert_eq!(again.document, decoded.document, "{name}");
+    }
+}
+
+/// A field whose text holds a tab is one folded body on both sides: a line
+/// after the field keeps its boundary through encode → decode.
+/// 이것을 실패시키는 것: 디코더가 필드 본문 조각(글자·탭·글자)을 한 토큰으로
+/// 합치지 않기(경계의 `skip` 이 `Text` 셋이 된다).
+#[test]
+fn folded_field_body_is_one_token_on_both_sides() {
+    use hwpforge_smithy_hwpx::HwpxDecoder;
+    let field = Run::control(
+        Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("a\tb".into()),
+            help_text: None,
+            name: Some("f".into()),
+            display_text: "a\tb".into(),
+        },
+        CharShapeIndex::new(0),
+    );
+    let after = at(&[SectionDef, ColumnDef, FieldBegin, Text, FieldEnd], Some(Table));
+    let lines = vec![line(0, None), line(0, after.clone())];
+    let mut section =
+        Section::with_paragraphs(vec![host(vec![field, table()], lines)], PageSettings::a4());
+    section.page_number = None;
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let store = style_store_for_preset("default").unwrap();
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &doc.validate().unwrap(),
+        &store,
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let decoded = HwpxDecoder::decode(&outcome.bytes).unwrap();
+    let cache = decoded.document.sections()[0].paragraphs[0].layout_cache.clone().expect("cache");
+    assert_eq!(cache.lines[1].boundary, after);
+}
