@@ -123,8 +123,8 @@ fn bottom_caption_past_the_page_end_is_refused() {
     );
 }
 
-/// 왼쪽 캡션·캐시 없는 캡션·캡션 번호는 각각 거부.
-/// 이것을 실패시키는 것: 측 검사 · 캐시 검사 · 번호 거부 각각 삭제.
+/// 왼쪽 캡션·캐시 없는 캡션·캡션 번호·글자 밖 내용은 각각 거부.
+/// 이것을 실패시키는 것: 측 검사 · 캐시 검사 · 번호 거부 · 글자 밖 거부 각각 삭제.
 #[test]
 fn unsupported_table_captions_are_refused() {
     let side = replay(|d| table_mut(d, 0).caption.as_mut().unwrap().side = CaptionSide::Left)
@@ -153,6 +153,22 @@ fn unsupported_table_captions_are_refused() {
     assert!(
         matches!(numbered, PdfError::UnsupportedContent { kind: "caption number", .. }),
         "{numbered}"
+    );
+    let shape = replay(|d| {
+        use hwpforge_core::control::{Control, ShapePoint};
+        use hwpforge_core::run::Run;
+        let line = Control::line(ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 0 }).unwrap();
+        let p = &mut table_mut(d, 0).caption.as_mut().unwrap().paragraphs[0];
+        let cs = p.runs[0].char_shape_id;
+        p.runs.push(Run::control(line, cs));
+    })
+    .expect_err("shape");
+    assert!(
+        matches!(
+            shape,
+            PdfError::UnsupportedContent { kind: "non-text content in table caption", .. }
+        ),
+        "{shape}"
     );
 }
 
