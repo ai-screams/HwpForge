@@ -18,6 +18,8 @@ pub(super) fn build_table(
             detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
         });
     }
+    // Diagnostic slot before the cells (document order, review W2 r1 LOW).
+    let id_slot = super::super::object_ids::reserve();
 
     // Guard the lenient placement scan before it allocates per-position
     // state: pathological spans (e.g. 65535×65535) cover billions of grid
@@ -78,7 +80,7 @@ pub(super) fn build_table(
         // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
         // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
         // 없으면 sequential fallback.
-        id: super::super::object_ids::core_or_drawn("table", table.inst_id),
+        id: super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id),
         z_order: 0,
         numbering_type: "TABLE".to_string(),
         text_wrap: placement.text_wrap.as_hwpx_str().into_owned(),

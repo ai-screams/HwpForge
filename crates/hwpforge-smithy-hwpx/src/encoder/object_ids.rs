@@ -26,9 +26,11 @@ use hwpforge_core::ObjectId;
 struct IdAllocator {
     next: u64,
     reserved: HashSet<u64>,
-    /// The Core ids the encoder actually wrote, in write order, with the
-    /// kind of object — what the duplicate-id diagnostic counts.
-    written: Vec<(&'static str, u64)>,
+    /// The Core ids the encoder actually wrote, with the kind of object, in
+    /// document order — what the duplicate-id diagnostic counts. A parent
+    /// reserves its slot ([`reserve`]) before its children are encoded, so a
+    /// slot left `None` is an object written without a Core id.
+    written: Vec<Option<(&'static str, u64)>>,
 }
 
 thread_local! {
@@ -93,9 +95,33 @@ pub(crate) fn next_id() -> u64 {
 /// encoder leaves out — anything in a memo anchor, a group child equation —
 /// is never recorded.
 pub(crate) fn core_or_drawn(kind: &'static str, id: Option<ObjectId>) -> String {
+    let slot = reserve();
+    core_or_drawn_at(slot, kind, id)
+}
+
+/// Reserves the diagnostic slot of an object whose children are encoded
+/// before its own id is written (tables, pictures, groups), so the record
+/// stays in document order (review W2 r1 LOW). `usize::MAX` outside a scope.
+pub(crate) fn reserve() -> usize {
+    SCOPES.with(|s| match s.borrow_mut().last_mut() {
+        Some(alloc) => {
+            alloc.written.push(None);
+            alloc.written.len() - 1
+        }
+        None => usize::MAX,
+    })
+}
+
+/// [`core_or_drawn`] into a slot reserved earlier with [`reserve`].
+pub(crate) fn core_or_drawn_at(slot: usize, kind: &'static str, id: Option<ObjectId>) -> String {
     match id {
         Some(id) => {
-            record(kind, id.value());
+            SCOPES.with(|s| {
+                if let Some(entry) = s.borrow_mut().last_mut().and_then(|a| a.written.get_mut(slot))
+                {
+                    *entry = Some((kind, id.value()));
+                }
+            });
             id.to_string()
         }
         None => next_id().to_string(),
@@ -107,14 +133,16 @@ pub(crate) fn core_or_drawn(kind: &'static str, id: Option<ObjectId>) -> String 
 pub(crate) fn record(kind: &'static str, id: u64) {
     SCOPES.with(|s| {
         if let Some(alloc) = s.borrow_mut().last_mut() {
-            alloc.written.push((kind, id));
+            alloc.written.push(Some((kind, id)));
         }
     });
 }
 
 /// The Core ids written so far in the innermost encode scope.
 pub(crate) fn written() -> Vec<(&'static str, u64)> {
-    SCOPES.with(|s| s.borrow().last().map(|a| a.written.clone()).unwrap_or_default())
+    SCOPES.with(|s| {
+        s.borrow().last().map(|a| a.written.iter().flatten().copied().collect()).unwrap_or_default()
+    })
 }
 
 /// Every Core object id in the document, in document order, with the kind
@@ -419,6 +447,15 @@ mod tests {
     fn shared_core_id_is_kept_and_reported() {
         let mut captioned = picture(None);
         captioned.caption = Some(Caption::new(vec![holder(table(Some(12)))], CaptionSide::Bottom));
+        let equation = |id: u64| Control::Equation {
+            script: "a".into(),
+            width: unit(),
+            height: unit(),
+            base_line: 85,
+            text_color: hwpforge_foundation::Color::BLACK,
+            font: "HancomEQN".into(),
+            inst_id: Some(ObjectId::new(id)),
+        };
         let group_with_equation = |id: u64| Control::Group {
             frame: hwpforge_core::ObjectFrame::new(),
             children: vec![
@@ -485,6 +522,39 @@ mod tests {
                     ),
                     CharShapeIndex::new(0),
                 )]),
+                // Review W2 r1 LOW: a parent sharing an id with its child is
+                // reported in document order (parent first).
+                para(vec![Run::control(
+                    Control::Group {
+                        frame: hwpforge_core::ObjectFrame::new(),
+                        children: vec![
+                            GroupChild::Picture(picture(Some(21))),
+                            GroupChild::Picture(picture(None)),
+                        ],
+                        width: unit(),
+                        height: unit(),
+                        placement: None,
+                        inst_id: Some(ObjectId::new(21)),
+                    },
+                    CharShapeIndex::new(0),
+                )]),
+                holder({
+                    let mut t = Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![para(vec![Run::control(equation(22), CharShapeIndex::new(0))])],
+                        unit(),
+                    )])]);
+                    t.inst_id = Some(ObjectId::new(22));
+                    t
+                }),
+                para(vec![Run::image(
+                    {
+                        let mut p = picture(Some(23));
+                        p.caption =
+                            Some(Caption::new(vec![holder(table(Some(23)))], CaptionSide::Bottom));
+                        p
+                    },
+                    CharShapeIndex::new(0),
+                )]),
                 // Review W0 r3 LOW: a group child equation is left out (lost
                 // content), so it shares 13 with no written object.
                 para(vec![
@@ -517,6 +587,9 @@ mod tests {
                 "2 objects share id 7: table, table",
                 "2 objects share id 10: footnote, table",
                 "2 objects share id 11: endnote, picture",
+                "2 objects share id 21: group, picture",
+                "2 objects share id 22: table, equation",
+                "2 objects share id 23: picture, table",
             ]
         );
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();

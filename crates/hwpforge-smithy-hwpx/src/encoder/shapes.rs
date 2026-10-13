@@ -1747,6 +1747,8 @@ fn encode_group_at(
         }
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
+    // Diagnostic slot before the children (document order, review W2 r1 LOW).
+    let id_slot = super::object_ids::reserve();
 
     let plan = shape_frame_plan(ctrl)?;
     let sc = build_shape_common(ctrl, &plan);
@@ -1823,7 +1825,7 @@ fn encode_group_at(
     )?;
 
     let id = generate_instid();
-    let instid = super::object_ids::core_or_drawn("group", inst_id);
+    let instid = super::object_ids::core_or_drawn_at(id_slot, "group", inst_id);
     Ok(format!(
         r#"<hp:container id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="{flow}" lock="0" dropcapstyle="None" href="" groupLevel="{group_level}" instid="{instid}">{common}{children_xml}{sz}{pos}{out_margin}{shape_comment}</hp:container>"#,
         numbering = shape_numbering_type(placement),
