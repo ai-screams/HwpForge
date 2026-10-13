@@ -968,7 +968,17 @@ fn emit_anchor_clipped(
         if let Some(zone) = zone {
             let has_lines = input.styles.border_fill_lines(zone.border_fill_id).is_some_and(|l| {
                 [l.left, l.right, l.top, l.bottom].iter().any(|e| e.kind != BorderLineKind::None)
-            });
+            }) || input.styles.border_fill_has_inner_lines(zone.border_fill_id);
+            // Review r1 HIGH-2: a zone whose border fill is not in the store
+            // would select nothing and erase the cell's own fill — the cell
+            // keeps its fill and the gap is reported.
+            // 이것을 실패시키는 것: 이 분기 삭제(`cell_zone_with_a_missing_border_fill_keeps_the_cell_fill`).
+            if input.styles.border_fill_face(zone.border_fill_id).is_none() {
+                warnings.push(PdfWarning::UnsupportedTableStyle {
+                    location: cell_loc.clone(),
+                    what: "cell zone without its border fill",
+                });
+            }
             if has_lines {
                 warnings.push(PdfWarning::UnsupportedTableStyle {
                     location: cell_loc.clone(),
@@ -976,8 +986,11 @@ fn emit_anchor_clipped(
                 });
             }
         }
-        let fill_id =
-            zone.map(|z| z.border_fill_id).or(cell.border_fill_id).or(table.border_fill_id);
+        let fill_id = zone
+            .map(|z| z.border_fill_id)
+            .filter(|&id| input.styles.border_fill_face(id).is_some())
+            .or(cell.border_fill_id)
+            .or(table.border_fill_id);
         // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
         if let Some(id) = fill_id {
             match input.styles.border_fill_face(id) {

@@ -1878,6 +1878,24 @@ impl StyleLookup for HwpxStyleStore {
         ))
     }
 
+    // Review r1 MEDIUM-4: a diagonal or a center line is a line too (a cell
+    // zone that only has those must still warn). 이것을 실패시키는 것: 대각선
+    // 판정 삭제(`border_fill_inner_lines`).
+    fn border_fill_has_inner_lines(&self, id: u32) -> bool {
+        let Ok(bf) = self.border_fill(id) else { return false };
+        let set = |v: &str| !v.is_empty() && !v.eq_ignore_ascii_case("NONE");
+        let diagonal = [
+            &bf.slash_type,
+            &bf.back_slash_type,
+            &bf.slash.border_type,
+            &bf.back_slash.border_type,
+        ]
+        .iter()
+        .any(|v| set(v));
+        let line_drawn = bf.diagonal.as_ref().is_none_or(|d| set(&d.line_type));
+        (diagonal && line_drawn) || set(&bf.center_line)
+    }
+
     fn border_fill_face(&self, id: u32) -> Option<FillKind> {
         let bf = self.border_fill(id).ok()?;
         if bf.gradient_fill.is_some() || bf.image_fill.is_some() {
@@ -3253,6 +3271,33 @@ mod tests {
 
         // Total count unchanged
         assert_eq!(store.font_count(), 14);
+    }
+
+    /// Review r1 MEDIUM-4: a diagonal (slash or back-slash with a drawn
+    /// diagonal line) or a center line counts as an inner line; none of them
+    /// does not, nor an unknown id.
+    /// 이것을 실패시키는 것: 대각선 판정 삭제 · 대각선 선 종류 무시(NONE 선에도 참) ·
+    /// 중심선 무시.
+    #[test]
+    fn border_fill_inner_lines() {
+        use hwpforge_core::StyleLookup;
+        let mut store = HwpxStyleStore::new();
+        let mut add = |id: u32, edit: &dyn Fn(&mut HwpxBorderFill)| {
+            let mut bf = HwpxBorderFill::default_page_border();
+            bf.id = id;
+            edit(&mut bf);
+            store.push_border_fill(bf);
+        };
+        add(1, &|_| {});
+        add(2, &|bf| bf.slash.border_type = "CENTER".into());
+        add(3, &|bf| {
+            bf.back_slash_type = "CENTER".into();
+            bf.diagonal =
+                Some(HwpxBorderLine { line_type: "NONE".into(), ..HwpxBorderLine::default() });
+        });
+        add(4, &|bf| bf.center_line = "VERTICAL".into());
+        let got: Vec<bool> = (1..=5).map(|id| store.border_fill_has_inner_lines(id)).collect();
+        assert_eq!(got, [false, true, false, true, false]);
     }
 
     /// C: replacing a face with a different one clears its kind, substitute

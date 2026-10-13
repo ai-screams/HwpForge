@@ -201,27 +201,54 @@ fn replay_with_zone(
     zone_fill: &str,
     zone_left_line: &str,
 ) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
+    use hwpforge_smithy_hwpx::style_store::HwpxBorderLine;
+    let left = zone_left_line.to_string();
+    replay_with_zone_fill(zone_fill, true, &move |f| {
+        f.left = HwpxBorderLine { line_type: left.clone(), ..HwpxBorderLine::default() }
+    })
+}
+
+/// [`replay_with_zone`] with the zone's border fill edited by `edit`, and
+/// left out of the store when `register` is false.
+fn replay_with_zone_fill(
+    zone_fill: &str,
+    register: bool,
+    edit: &dyn Fn(&mut hwpforge_smithy_hwpx::style_store::HwpxBorderFill),
+) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
     use hwpforge_core::run::RunContent;
     use hwpforge_core::table::CellZone;
-    use hwpforge_smithy_hwpx::style_store::{HwpxBorderFill, HwpxBorderLine, HwpxFill};
+    use hwpforge_smithy_hwpx::style_store::{HwpxBorderFill, HwpxFill};
     let bytes = fixture("rules-table.hwpx")?;
     let mut decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
     let id = decoded.style_store.iter_border_fills().map(|b| b.id).max().unwrap_or(0) + 1;
     let mut fill = HwpxBorderFill::default_page_border();
     fill.id = id;
-    fill.left = HwpxBorderLine { line_type: zone_left_line.into(), ..HwpxBorderLine::default() };
     fill.fill = Some(HwpxFill::WinBrush {
         face_color: zone_fill.into(),
         hatch_color: "#000000".into(),
         alpha: "0".into(),
     });
-    decoded.style_store.push_border_fill(fill);
+    edit(&mut fill);
+    if register {
+        decoded.style_store.push_border_fill(fill);
+    }
+    // The cell under the zone gets its own blue fill, so a test can tell the
+    // cell's fill from none.
+    let mut blue = HwpxBorderFill::default_page_border();
+    blue.id = id + 1;
+    blue.fill = Some(HwpxFill::WinBrush {
+        face_color: "#0000FF".into(),
+        hatch_color: "#000000".into(),
+        alpha: "0".into(),
+    });
+    decoded.style_store.push_border_fill(blue);
     let mut zoned = false;
     decoded.document.for_each_paragraph_mut(|p| {
         for run in &mut p.runs {
             if let RunContent::Table(t) = &mut run.content {
                 if !zoned {
                     t.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
+                    t.rows[0].cells[0].border_fill_id = Some(id + 1);
                     zoned = true;
                 }
             }
@@ -265,4 +292,39 @@ fn cell_zone_fill_replaces_the_cell_fill() {
     assert_eq!(zone_warn(&layout), 0);
     let lined = replay_with_zone("#FF0000", "SOLID").expect("fixture");
     assert_eq!(zone_warn(&lined), 1);
+}
+
+fn zone_warnings(l: &hwpforge_smithy_pdf::source::ReplayLayout, what: &str) -> usize {
+    l.warnings
+        .iter()
+        .filter(|w| {
+            matches!(w, hwpforge_smithy_pdf::PdfWarning::UnsupportedTableStyle { what: x, .. } if *x == what)
+        })
+        .count()
+}
+
+/// Review r1 MEDIUM-4: a zone whose border fill has only a diagonal (no
+/// edge lines) still warns that zone lines are not drawn.
+/// 이것을 실패시키는 것: 대각선 판정을 경고 조건에서 빼기.
+#[test]
+fn cell_zone_with_only_a_diagonal_warns() {
+    let Some(layout) =
+        replay_with_zone_fill("#FF0000", true, &|f| f.slash.border_type = "CENTER".into())
+    else {
+        return;
+    };
+    assert_eq!(zone_warnings(&layout, "cell zone border"), 1);
+}
+
+/// Review r1 HIGH-2: a zone whose border fill is not in the store leaves
+/// the cell's own fill and is reported, instead of erasing the background.
+/// 이것을 실패시키는 것: 조회 실패 분기 삭제(배경 사라짐) · 경고 삭제.
+#[test]
+fn cell_zone_with_a_missing_border_fill_keeps_the_cell_fill() {
+    let Some(missing) = replay_with_zone_fill("#FF0000", false, &|_| {}) else { return };
+    let rect = |l: &hwpforge_smithy_pdf::source::ReplayLayout| {
+        l.pages[0].rects.iter().find(|r| r.location.ends_with("t0r0c0")).map(|r| r.color)
+    };
+    assert_eq!(rect(&missing), Some(hwpforge_foundation::Color::from_rgb(0, 0, 255)));
+    assert_eq!(zone_warnings(&missing, "cell zone without its border fill"), 1);
 }
