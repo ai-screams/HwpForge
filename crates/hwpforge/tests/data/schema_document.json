@@ -4069,7 +4069,7 @@
           "type": "string"
         },
         "create_datetime": {
-          "description": "HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers\nencoder-side auto-generation at write time.",
+          "description": "HWPX `CreateDateTime` parameter (ISO 8601 UTC,\n`\"YYYY-MM-DDTHH:MM:SSZ\"`). When empty, the HWPX encoder writes the\ntime its caller gives (`EncodeOptions::with_memo_create_time`), else\nthe Unix epoch — it never reads the clock. HWP5 conversion fills it\nwith the file's last-saved time; `from-json` passes the current time.",
           "type": "string"
         },
         "command": {

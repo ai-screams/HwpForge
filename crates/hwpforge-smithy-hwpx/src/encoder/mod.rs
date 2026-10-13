@@ -1275,7 +1275,7 @@ impl HwpxEncoder {
         let mut warnings: Vec<EncodeWarning> = Vec::new();
         // W0: two objects with one Core id are written as they are, and
         // reported. 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
-        for (id, kinds) in object_ids::conflicts(&core_ids) {
+        for (id, kinds) in object_ids::conflicts(&object_ids::written_object_ids(document)) {
             warnings.push(EncodeWarning::ObjectIdConflict {
                 id,
                 kinds: kinds.into_iter().map(str::to_string).collect(),

@@ -81,15 +81,48 @@ pub(crate) fn next_id() -> u64 {
     })
 }
 
-/// Every Core object id the encoder writes, in document order, with the
-/// kind of object that holds it.
+/// Every Core object id in the document, in document order, with the kind
+/// of object that holds it — the ids the allocator must skip.
 ///
 /// Reaches every place an object is written: body, headers, footers and
 /// master pages; cells and table captions; text boxes, shapes, notes and
 /// memos; group children (nested groups included); and run pictures'
-/// captions, which [`Paragraph::for_each_paragraph`] does not enter.
+/// captions, which [`Paragraph::for_each_paragraph`] does not enter. It
+/// also takes objects in paragraphs nested in memo anchor runs (a text box
+/// in an anchor, say), which the encoder does not write
+/// (`build_memo_anchor_xml` keeps the anchor's text): skipping an id too
+/// many is harmless.
 pub(crate) fn core_object_ids<S>(document: &Document<S>) -> Vec<(&'static str, u64)> {
-    let mut out = Vec::new();
+    collect(document, &HashSet::new())
+}
+
+/// The ids of the objects the encoder writes — [`core_object_ids`] without
+/// the objects inside memo anchor runs — for the duplicate-id diagnostic,
+/// which must not report an object that is not in the output (review W0 r2
+/// LOW).
+/// 이것을 실패시키는 것: 앵커 문단 제외 삭제(`shared_core_id_is_kept_and_reported`
+/// 의 메모 앵커 글상자 안 표가 경고).
+pub(crate) fn written_object_ids<S>(document: &Document<S>) -> Vec<(&'static str, u64)> {
+    let mut anchored: HashSet<*const Paragraph> = HashSet::new();
+    for_each_top_paragraph(document, &mut |p| {
+        walk(p, &mut |q| {
+            for run in &q.runs {
+                if let RunContent::Control(c) = &run.content {
+                    if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                        for anchor in anchor_runs {
+                            anchor.for_each_paragraph(|a| {
+                                anchored.insert(std::ptr::from_ref(a));
+                            });
+                        }
+                    }
+                }
+            }
+        });
+    });
+    collect(document, &anchored)
+}
+
+fn for_each_top_paragraph<S>(document: &Document<S>, f: &mut dyn FnMut(&Paragraph)) {
     for section in document.sections() {
         let tops = section
             .paragraphs
@@ -97,28 +130,46 @@ pub(crate) fn core_object_ids<S>(document: &Document<S>) -> Vec<(&'static str, u
             .chain(section.headers.iter().chain(section.footers.iter()).flat_map(|h| &h.paragraphs))
             .chain(section.master_pages.iter().flatten().flat_map(|m| &m.paragraphs));
         for p in tops {
-            visit_paragraph(p, &mut out);
+            f(p);
         }
     }
-    out
 }
 
-fn visit_paragraph(p: &Paragraph, out: &mut Vec<(&'static str, u64)>) {
+/// Every paragraph in `p`, run pictures' captions entered.
+fn walk(p: &Paragraph, f: &mut dyn FnMut(&Paragraph)) {
     p.for_each_paragraph(|q| {
+        f(q);
         for run in &q.runs {
-            match &run.content {
-                RunContent::Table(t) => push(out, "table", t.inst_id),
-                RunContent::Image(img) => {
-                    push(out, "picture", img.inst_id);
-                    for cp in img.caption.iter().flat_map(|c| &c.paragraphs) {
-                        visit_paragraph(cp, out);
-                    }
+            if let RunContent::Image(img) = &run.content {
+                for cp in img.caption.iter().flat_map(|c| &c.paragraphs) {
+                    walk(cp, f);
                 }
-                RunContent::Control(c) => visit_control(c, out),
-                _ => {}
             }
         }
     });
+}
+
+fn collect<S>(
+    document: &Document<S>,
+    skip: &HashSet<*const Paragraph>,
+) -> Vec<(&'static str, u64)> {
+    let mut out = Vec::new();
+    for_each_top_paragraph(document, &mut |p| {
+        walk(p, &mut |q| {
+            if skip.contains(&std::ptr::from_ref(q)) {
+                return;
+            }
+            for run in &q.runs {
+                match &run.content {
+                    RunContent::Table(t) => push(&mut out, "table", t.inst_id),
+                    RunContent::Image(img) => push(&mut out, "picture", img.inst_id),
+                    RunContent::Control(c) => visit_control(c, &mut out),
+                    _ => {}
+                }
+            }
+        });
+    });
+    out
 }
 
 /// A control's own id and, for a group, its children's. The paragraphs
@@ -361,7 +412,8 @@ mod tests {
     /// W0: two tables with Core id 7 keep it (both written as 7) and give
     /// one warning naming both; a third object with another id adds none,
     /// and neither does a footnote and an endnote sharing 9 — but a note
-    /// sharing with a table (10) or a picture (11) does.
+    /// sharing with a table (10) or a picture (11) does. A table in a memo
+    /// anchor (not written) sharing 12 with a body table is not reported.
     /// 이것을 실패시키는 것: 경고 삭제 · 중복 판정을 `> 0` 으로(모든 id 경고).
     #[test]
     fn shared_core_id_is_kept_and_reported() {
@@ -391,6 +443,19 @@ mod tests {
                 ]),
                 holder(table(Some(10))),
                 para(vec![Run::image(picture(Some(11)), CharShapeIndex::new(0))]),
+                // Review W0 r2 LOW: a table in a text box in a memo anchor is
+                // not written, so its id 12 shares with nothing written.
+                holder(table(Some(12))),
+                para(vec![Run::control(
+                    Control::memo_with_anchor(
+                        vec![text()],
+                        vec![Run::control(
+                            Control::text_box(vec![holder(table(Some(12)))], unit(), unit()),
+                            CharShapeIndex::new(0),
+                        )],
+                    ),
+                    CharShapeIndex::new(0),
+                )]),
             ],
             PageSettings::a4(),
         ));
