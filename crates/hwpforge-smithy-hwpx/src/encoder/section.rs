@@ -367,6 +367,7 @@ pub(crate) fn encode_section(
     // 단독 호출(테스트 등)은 섹션-지역 번호 상태 — 문서 전역 연속은
     // [`encode_section_with_note_counters`] (인코더 본 경로) 소유.
     let mut local_numbering = NoteNumbering::new();
+    let _ids = super::object_ids::IdScope::enter(Default::default());
     encode_section_with_note_counters(
         section,
         section_index,
@@ -2250,21 +2251,13 @@ pub(crate) fn build_hx_caption(
 /// Cross-reference **targets** preserve their imported
 /// [`ObjectId`](hwpforge_core::ObjectId) verbatim (see `picture`/`table`/
 /// `equation`/group/text-art encoders) so the referencer's
-/// `RefTarget::Object` resolves to the same `id`. Only authored targets with
-/// no imported id fall back to this counter, whose small sequential values
-/// are disjoint from every field band above.
-///
-/// > Follow-up (ADR-010): replace this process-global counter with a
-/// > per-encode allocator and move authored object ids into a dedicated
-/// > reserved band. Deferred here because it would change authored-object
-/// > byte output without a fidelity gate requiring it (the convert path
-/// > always preserves imported ids, so it is unaffected).
-///
-/// Each call returns a monotonically increasing ID, safe for parallel encoding.
+/// `RefTarget::Object` resolves to the same `id`. Objects with no imported
+/// id draw from the encode call's own allocator (W0,
+/// [`super::object_ids`]): it counts from 1 and skips every Core id in the
+/// document, so the same document always gets the same ids, and the small
+/// sequential values stay disjoint from every field band above.
 pub(crate) fn generate_instid() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static INSTID_COUNTER: AtomicU64 = AtomicU64::new(1);
-    INSTID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string()
+    super::object_ids::next_id().to_string()
 }
 
 /// Default inner cell margin (left/right: 510 ≈ 1.8mm, top/bottom: 141 ≈ 0.5mm).
@@ -3793,6 +3786,7 @@ mod tests {
         let s2 = make(&["셋"]);
 
         let mut numbering = NoteNumbering::new();
+        let _ids = super::super::object_ids::IdScope::enter(Default::default());
         let x1 = encode_section_with_note_counters(
             &s1,
             0,

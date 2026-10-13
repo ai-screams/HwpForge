@@ -12,6 +12,7 @@
 pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod header_tabs;
+mod object_ids;
 pub(crate) mod package;
 mod references;
 pub(crate) mod section;
@@ -1152,6 +1153,12 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
         refuse_unknown_cell_zone_fills(document, style_store)?;
+        // W0: ids drawn for objects without a Core id come from this encode's
+        // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
+        // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
+        let _ids = object_ids::IdScope::enter(
+            object_ids::core_object_ids(document).into_iter().map(|(_, id)| id).collect(),
+        );
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
