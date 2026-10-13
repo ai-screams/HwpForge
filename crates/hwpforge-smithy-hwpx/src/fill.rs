@@ -162,8 +162,9 @@ struct FieldLocator {
     name: Option<String>,
 }
 
-/// section XML 에서 찾은 누름틀 하나: 위치와, 그것을 감싸는 가장 안쪽
-/// 문단의 직접 자식 `linesegarray` 바이트 구간들.
+/// section XML 에서 찾은 누름틀 하나: 위치와, 값이 바뀌면 낡는 캐시
+/// (`linesegarray`) 바이트 구간들 — 가장 안쪽 문단과 같은 흐름의 뒤 문단,
+/// 그리고 host 문단 사슬의 같은 꼬리(W2).
 #[derive(Debug)]
 struct WireField {
     locator: FieldLocator,
@@ -179,8 +180,8 @@ fn ordinals(paths: &[&[PathSeg]]) -> Vec<usize> {
         .collect()
 }
 
-/// 값이 바뀐 필드들의 둘러싼 `<hp:p>` 에서 직접 자식 `<hp:linesegarray>` 를
-/// 제거한다. 캐시 요소는 디코더처럼 접두어 없는 이름(`linesegarray`)으로
+/// 값이 바뀐 필드들이 낡게 만드는 `<hp:linesegarray>` 를 제거한다 — 둘러싼
+/// `<hp:p>` 와 같은 흐름의 뒤 문단, host 사슬의 꼬리([`scan_click_here_fields`]). 캐시 요소는 디코더처럼 접두어 없는 이름(`linesegarray`)으로
 /// 판정한다.
 ///
 /// `inventory` 는 구역별로 디코드 Core 의 모든 ClickHere 위치(이름 없는 것
@@ -305,6 +306,8 @@ enum Frame {
     ParagraphList {
         nested: bool,
         next: usize,
+        /// 목록 번호(`lists` 의 자리).
+        list: usize,
     },
     /// `hp:p` — `index` 는 문단 구간 목록 번호.
     Paragraph {
@@ -405,6 +408,9 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
     let mut path: Vec<PathSeg> = Vec::new();
     // 문단 번호 → 그 문단의 직접 자식 캐시 구간들.
     let mut paragraphs: Vec<Vec<Range<usize>>> = Vec::new();
+    // 문단 번호 → 그 문단이 놓인 목록 번호, 목록 번호 → 그 목록을 품은 문단.
+    let mut para_list: Vec<usize> = Vec::new();
+    let mut list_host: Vec<Option<usize>> = Vec::new();
     let mut found: Vec<(FieldLocator, usize)> = Vec::new();
 
     loop {
@@ -435,8 +441,11 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
 
         let mut seg: Option<PathSeg> = None;
         let frame = match stack.last_mut().map(|(frame, _)| frame) {
-            None => Frame::ParagraphList { nested: false, next: 0 },
-            Some(Frame::ParagraphList { nested, next }) if local == "p" => {
+            None => {
+                list_host.push(None);
+                Frame::ParagraphList { nested: false, next: 0, list: list_host.len() - 1 }
+            }
+            Some(Frame::ParagraphList { nested, next, list }) if local == "p" => {
                 seg = Some(if *nested {
                     PathSeg::NestedParagraph(*next)
                 } else {
@@ -444,6 +453,7 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
                 });
                 *next += 1;
                 paragraphs.push(Vec::new());
+                para_list.push(*list);
                 Frame::Paragraph { index: paragraphs.len() - 1 }
             }
             Some(Frame::Paragraph { .. }) if local == "run" => Frame::Run { pending: None },
@@ -531,7 +541,8 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
                 _ => Frame::Skip,
             },
             Some(Frame::SubListOwner) if local == "subList" => {
-                Frame::ParagraphList { nested: true, next: 0 }
+                list_host.push(innermost_paragraph);
+                Frame::ParagraphList { nested: true, next: 0, list: list_host.len() - 1 }
             }
             Some(_) => Frame::Skip,
         };
@@ -545,9 +556,28 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
         buf.clear();
     }
 
+    // W2 (design 3.5): a filled field moves everything after its paragraph
+    // in that flow, and its host paragraph grows with it — so the caches go
+    // from the paragraph to the end of its list, then the same from the host
+    // in the host's list, up to the section body. Paragraphs before keep
+    // theirs. 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · host 사슬 생략 ·
+    // 목록 처음부터(`cell_fill_drops_the_flow_tail_and_the_host_chain`).
+    let flow_tail = |paragraph: usize| {
+        let mut caches = Vec::new();
+        let mut at = Some(paragraph);
+        while let Some(q) = at {
+            for j in q..paragraphs.len() {
+                if para_list[j] == para_list[q] {
+                    caches.extend(paragraphs[j].iter().cloned());
+                }
+            }
+            at = list_host[para_list[q]];
+        }
+        caches
+    };
     Ok(found
         .into_iter()
-        .map(|(locator, paragraph)| WireField { locator, caches: paragraphs[paragraph].clone() })
+        .map(|(locator, paragraph)| WireField { locator, caches: flow_tail(paragraph) })
         .collect())
 }
 
@@ -1192,7 +1222,42 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
-        assert_eq!(caches(&xml), vec![1]);
+        // W2: 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
+        // 낡는다 — 전에는 남겼던 것이 틀렸다(r1-3). 중복 제거 시험의 이빨은 그대로:
+        // 두 필드의 제거 구간이 통째로 겹친다.
+        assert_eq!(caches(&xml), Vec::<usize>::new());
+    }
+
+    /// W2 (design 3.5 tests 1, 3): filling a field in the middle of three
+    /// cell paragraphs drops that paragraph's cache, the cell paragraph after
+    /// it, the table's host paragraph and the body paragraph after the host;
+    /// the first cell paragraph and the body paragraph before keep theirs.
+    /// A value of the same length does the same (line counts are not judged
+    /// — that would need layout).
+    /// 이것을 실패시키는 것: 꼬리 대신 문단 하나만(9003 이 남는다) · host 사슬
+    /// 생략(9004·9005 가 남는다) · 목록 처음부터(9001 이 간다).
+    #[test]
+    fn cell_fill_drops_the_flow_tail_and_the_host_chain() {
+        let cell = TableCell::new(
+            vec![para(vec![text("c0")]), para(vec![field("mid", "칸")]), para(vec![text("c2")])],
+            size(4000),
+        );
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
+        let doc = encode(
+            vec![
+                para(vec![text("앞")]),
+                para(vec![RunContent::Table(Box::new(table))]),
+                para(vec![text("뒤")]),
+            ],
+            &ImageStore::default(),
+        );
+        // close order: 앞 9000, c0 9001, mid 9002, c2 9003, host 9004, 뒤 9005.
+        let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
+        for value in ["여러 줄로 길어진 값 여러 줄로 길어진 값 여러 줄로 길어진 값", "값"]
+        {
+            let xml = fill_xml(&bytes, &[("mid", value)]).expect("fill");
+            assert_eq!(caches(&xml), vec![0, 1], "{value}");
+        }
     }
 
     #[test]
@@ -1258,9 +1323,12 @@ mod tests {
         // 9000 = 캡션 문단, 9001 = 내부 문단, 9002 = 타원이 든 본문 문단.
         let bytes = with_section_xml(&doc, add_caches(&xml));
         let only_a = fill_xml(&bytes, &[("A", "1")]).expect("fill A");
-        assert_eq!(caches(&only_a), vec![0, 2]);
+        // W2: 내부 문단(9001)의 host 는 타원이 든 본문 문단(9002) — 상자가 글에
+        // 맞춰 자랄 수 있으므로 host 사슬로 함께 지운다(전에는 남겼다). 캡션(9000)은
+        // 다른 흐름이라 남는다.
+        assert_eq!(caches(&only_a), vec![0]);
         let filled = HwpxFiller::fill(&bytes, &values(&[("A", "1"), ("B", "2")])).expect("fill");
-        assert_eq!(caches(&section_xml(&filled.bytes)), vec![2]);
+        assert_eq!(caches(&section_xml(&filled.bytes)), Vec::<usize>::new());
         let listed = HwpxFiller::list_fields(&filled.bytes).expect("list");
         let current: Vec<(Option<&str>, &str)> =
             listed.iter().map(|f| (f.name.as_deref(), f.current.as_str())).collect();
@@ -1292,7 +1360,10 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 1, "premise: the decoder drops the unpaired begin");
         let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
-        assert!(xml.contains("vertpos=\"777\""), "unpaired begin paragraph cache must stay");
+        // W2: 777 문단은 채운 문단 뒤 같은 흐름이라 이제 캐시를 잃는다(전에는
+        // 남겼던 것이 틀렸다). 이 시험의 이빨(짝 없는 begin 을 필드로 세면 위치
+        // 불일치 오류)은 위 `fill_xml(...).expect` 가 진다.
+        assert!(!xml.contains("vertpos=\"777\""), "the flow tail goes");
         assert!(!xml.contains("vertpos=\"0\""), "filled paragraph cache must go");
     }
 
@@ -1333,7 +1404,9 @@ mod tests {
         let xml = add_caches(&section_xml(&doc));
         let bytes = with_section_xml(&doc, xml.clone());
         let filled = fill_xml(&bytes, &[("cap", "1")]).expect("fill caption field");
-        assert_eq!(caches(&filled), vec![1, 2]);
+        // W2: 캡션이 자라면 그림이 든 문단(9001, host)과 그 뒤 본문 문단(9002)이
+        // 밀린다 — 전에는 둘 다 남겼다(r1-3).
+        assert_eq!(caches(&filled), Vec::<usize>::new());
 
         let start = xml.find("binaryItemIDRef=\"").expect("img ref") + "binaryItemIDRef=\"".len();
         let end = xml[start..].find('"').unwrap() + start;
@@ -1436,8 +1509,16 @@ mod tests {
             let own = xml[..at].matches("</hp:p>").count();
             let filled = fill_xml(&bytes, &[(name.as_str(), "값")])
                 .unwrap_or_else(|e| panic!("{name}: fill failed: {e}"));
-            let expected: Vec<usize> = all.iter().copied().filter(|k| *k != own).collect();
-            assert_eq!(caches(&filled), expected, "{name}: only its own paragraph cache goes");
+            // W2: 흐름 꼬리와 host 사슬도 가므로 정확한 남은 집합은 그 규칙의
+            // 전용 시험(`cell_fill_drops_the_flow_tail_and_the_host_chain`)이 맡고,
+            // 여기서는 짝지은 문단의 캐시가 가고 첫 본문 문단(9000, `body`)은
+            // 다른 필드일 때 남는지만 본다.
+            let left = caches(&filled);
+            assert!(!left.contains(&own), "{name}: its own paragraph cache goes: {left:?}");
+            assert!(left.iter().all(|k| all.contains(k)), "{name}");
+            if name != "body" {
+                assert!(left.contains(&0), "{name}: the body paragraph before it keeps its cache");
+            }
         }
     }
 
@@ -1505,7 +1586,9 @@ mod tests {
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
         assert_eq!(listed.len(), 2, "premise: the unnamed field is listed");
         let xml = fill_xml(&bytes, &[("b", "값")]).expect("fill");
-        assert_eq!(caches(&xml), vec![1]);
+        // W2: 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
+        // 이빨은 위치 불일치 오류(`expect`)가 진다.
+        assert_eq!(caches(&xml), Vec::<usize>::new());
     }
 
     #[test]

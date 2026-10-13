@@ -15,9 +15,11 @@
 //!    produced by the admission gate) and the OUTPUT the same way;
 //! 3. a paragraph whose OUTPUT slice is byte-identical to its BASELINE
 //!    slice was not touched by the edit → re-inject the original cache
-//!    before its `</hp:p>`. Anything else (edited paragraphs, paragraphs
-//!    containing edited nested paragraphs, id-shifted elements) stays
-//!    cache-less and the renderer reflows just those.
+//!    before its `</hp:p>` — unless it comes after a changed paragraph in
+//!    the same flow, or after a changed paragraph's host in the host's flow
+//!    (its position moved; W2). Anything else (edited paragraphs,
+//!    paragraphs containing edited nested paragraphs, id-shifted elements)
+//!    stays cache-less and the renderer reflows just those.
 //!
 //! Fail-open by design: any count mismatch or scan anomaly disables the
 //! carry for that section — the result is the current (reflowed) behavior,
@@ -38,6 +40,9 @@ struct ParaSlice {
     end: usize,
     /// Raw `<hp:linesegarray…>` range, when the paragraph carries one.
     line_seg: Option<(usize, usize)>,
+    /// The paragraph list (section body = 0, each `<hp:subList>` its own)
+    /// the paragraph sits in.
+    list: usize,
 }
 
 /// Finds the end of the tag starting at `start` (`<` position), honoring
@@ -67,6 +72,9 @@ fn tag_end(xml: &str, start: usize) -> Option<(usize, bool)> {
 fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
     let mut slices: Vec<ParaSlice> = Vec::new();
     let mut stack: Vec<usize> = Vec::new();
+    // Open paragraph lists, innermost last; the section body is list 0.
+    let mut lists: Vec<usize> = vec![0];
+    let mut next_list = 1usize;
     let mut pos = 0usize;
 
     while let Some(rel) = xml[pos..].find('<') {
@@ -77,12 +85,14 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
             match after.as_bytes().first() {
                 Some(b' ') | Some(b'>') | Some(b'/') => {
                     let (tag_after, self_closing) = tag_end(xml, at)?;
+                    let list = *lists.last()?;
                     if self_closing {
                         slices.push(ParaSlice {
                             start: at,
                             content_end: tag_after,
                             end: tag_after,
                             line_seg: None,
+                            list,
                         });
                     } else {
                         stack.push(slices.len());
@@ -91,6 +101,7 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
                             content_end: 0,
                             end: 0,
                             line_seg: None,
+                            list,
                         });
                     }
                     pos = tag_after;
@@ -98,6 +109,23 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
                 }
                 _ => {}
             }
+        }
+        if rest.starts_with("<hp:subList") {
+            let (tag_after, self_closing) = tag_end(xml, at)?;
+            if !self_closing {
+                lists.push(next_list);
+                next_list += 1;
+            }
+            pos = tag_after;
+            continue;
+        }
+        if rest.starts_with("</hp:subList>") {
+            if lists.len() < 2 {
+                return None;
+            }
+            lists.pop();
+            pos = at + "</hp:subList>".len();
+            continue;
         }
         if rest.starts_with("</hp:p>") {
             let idx = stack.pop()?;
@@ -126,7 +154,7 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
         pos = tag_after;
     }
 
-    if stack.is_empty() && slices.iter().all(|s| s.end != 0) {
+    if stack.is_empty() && lists.len() == 1 && slices.iter().all(|s| s.end != 0) {
         Some(slices)
     } else {
         None
@@ -144,12 +172,23 @@ fn splice_section(original: &str, baseline: &str, output: &str) -> Option<String
         return None;
     }
 
+    // W2 (design 3.5): a changed paragraph moves everything after it in its
+    // flow, so the paragraphs after it in its list keep no cache even when
+    // their bytes are the same. Its host is changed too (its bytes hold the
+    // edit), so the same holds one level up, to the section body.
+    // 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · 목록 처음부터 지우기
+    // (`edit_in_a_cell_drops_the_flow_tail_and_the_host_chain`).
+    let changed: Vec<bool> = (0..out.len())
+        .map(|i| baseline[base[i].start..base[i].end] != output[out[i].start..out[i].end])
+        .collect();
+    let stale = flow_tails(&out, &changed);
+
     let mut inserts: Vec<(usize, &str)> = Vec::new();
     for i in 0..orig.len() {
         let Some((seg_start, seg_end)) = orig[i].line_seg else {
             continue;
         };
-        let unchanged = baseline[base[i].start..base[i].end] == output[out[i].start..out[i].end];
+        let unchanged = !changed[i] && !stale[i];
         let has_close = out[i].content_end < out[i].end;
         let already = output[out[i].start..out[i].end].contains("<hp:linesegarray");
         if unchanged && has_close && !already {
@@ -171,6 +210,22 @@ fn splice_section(original: &str, baseline: &str, output: &str) -> Option<String
     }
     result.push_str(&output[cursor..]);
     Some(result)
+}
+
+/// The paragraphs whose cache an edit makes stale: each changed paragraph
+/// and the paragraphs after it in its list. The host chain needs no walk
+/// here: a host paragraph's slice contains the edited paragraph, so the
+/// host is itself changed and its own tail follows.
+fn flow_tails(slices: &[ParaSlice], changed: &[bool]) -> Vec<bool> {
+    let mut stale = vec![false; slices.len()];
+    for (q, _) in changed.iter().enumerate().filter(|(_, c)| **c) {
+        for (j, s) in slices.iter().enumerate().skip(q) {
+            if s.list == slices[q].list {
+                stale[j] = true;
+            }
+        }
+    }
+    stale
 }
 
 /// Carries `<hp:linesegarray>` caches from `original` into `output` for
@@ -311,5 +366,30 @@ mod tests {
         let with_cache = original.clone();
         let spliced = splice_section(&original, &with_cache, &with_cache).unwrap();
         assert_eq!(spliced.matches("<hp:linesegarray").count(), 1);
+    }
+
+    /// W2 (design 3.5 test 2): editing the second of three cell paragraphs
+    /// drops the caches of that paragraph, the cell paragraph after it, the
+    /// table's host paragraph and the body paragraph after the host; the
+    /// first cell paragraph and the body paragraph before keep theirs.
+    #[test]
+    fn edit_in_a_cell_drops_the_flow_tail_and_the_host_chain() {
+        let section = |cell1: &str, lsa: bool| {
+            let cell = format!("{}{}{}", p("c0", lsa), p(cell1, lsa), p("c2", lsa));
+            let host_lsa = if lsa { LSA } else { "" };
+            format!(
+                r#"<hs:sec>{}<hp:p id="1"><hp:run><hp:tbl><hp:tr><hp:tc><hp:subList>{cell}</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run>{host_lsa}</hp:p>{}</hs:sec>"#,
+                p("before", lsa),
+                p("after", lsa)
+            )
+        };
+        let original = section("c1", true);
+        let baseline = section("c1", false);
+        let output = section("c1 이 여러 줄로 길어졌다", false);
+        let spliced = splice_section(&original, &baseline, &output).unwrap();
+        let slices = scan_paragraphs(&spliced).unwrap();
+        // open order: before, host, c0, c1, c2, after.
+        let cached: Vec<bool> = slices.iter().map(|s| s.line_seg.is_some()).collect();
+        assert_eq!(cached, [true, false, true, false, false, false]);
     }
 }
