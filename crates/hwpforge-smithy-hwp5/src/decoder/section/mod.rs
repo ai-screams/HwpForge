@@ -1364,14 +1364,21 @@ impl BodyTextParserState {
                     ctx.table.border_fill_id = table_header.border_fill_id;
                     ctx.table.inner_margin = table_header.inner_margin;
                     ctx.table.no_adjust = table_header.no_adjust;
-                    if let Some(declared) = table_header.cell_zones_declared {
-                        crate::warning_utils::push_projection_fallback(
-                            &mut self.warnings,
-                            "table.cell_zone",
+                    let damage = if table_header.cell_zone_count_cut {
+                        Some("table record ends one byte into its cell zone count; no zones are read".to_string())
+                    } else {
+                        table_header.cell_zones_declared.map(|declared| {
                             format!(
                                 "table record declares {declared} cell zones but holds {}; the rest are dropped",
                                 table_header.cell_zones.len()
-                            ),
+                            )
+                        })
+                    };
+                    if let Some(reason) = damage {
+                        crate::warning_utils::push_projection_fallback(
+                            &mut self.warnings,
+                            "table.cell_zone",
+                            reason,
                         );
                     }
                     ctx.table.cell_zones = table_header.cell_zones;
@@ -2796,6 +2803,8 @@ struct ParsedTableHeader {
     /// The zone count the record declares when it holds fewer complete
     /// entries (a damaged list); `None` when the list is whole or absent.
     cell_zones_declared: Option<u16>,
+    /// The record ends one byte into the zone count (damage).
+    cell_zone_count_cut: bool,
 }
 
 /// Extract minimal table-level fields from a `Table` record data payload.
@@ -2824,6 +2833,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
             no_adjust: false,
             cell_zones: Vec::new(),
             cell_zones_declared: None,
+            cell_zone_count_cut: false,
         };
     }
     let properties = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -2859,6 +2869,9 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
     // the rest. 이것을 실패시키는 것: 수 오프셋 오류 · 행·열 뒤바꿈 · 잘림
     // 보고 삭제(`table_cell_zones_are_read`).
     let zone_count_at = border_fill_offset.saturating_add(2);
+    // Review r1 MEDIUM-5: one byte left is half a count — damage, not an
+    // absent field. 이것을 실패시키는 것: `left == 1` 판정 삭제(`table_cell_zones_are_read`).
+    let left = data.len().saturating_sub(zone_count_at);
     let (cell_zones, cell_zones_declared) = match data.get(zone_count_at..zone_count_at + 2) {
         None => (Vec::new(), None),
         Some(bytes) => {
@@ -2892,6 +2905,7 @@ fn parse_table_header(data: &[u8]) -> ParsedTableHeader {
         no_adjust,
         cell_zones,
         cell_zones_declared,
+        cell_zone_count_cut: left == 1,
     }
 }
 
@@ -5903,6 +5917,12 @@ mod tests {
         let mut extra = zone_table_data(Some(1), &[[12, 0, 31, 1, 7]]);
         extra.extend_from_slice(&[9u8; 10]);
         assert_eq!(parse_table_header(&extra).cell_zones, [zone([12, 0, 31, 1, 7])]);
+        let mut half = zone_table_data(None, &[]);
+        half.push(2);
+        let half = parse_table_header(&half);
+        assert!(half.cell_zones.is_empty());
+        assert!(half.cell_zone_count_cut, "one byte of a count is damage");
+        assert!(!two.cell_zone_count_cut && !absent.cell_zone_count_cut);
         let short = parse_table_header(&zone_table_data(Some(2), &[[12, 0, 31, 1, 7]]));
         assert_eq!(short.cell_zones, [zone([12, 0, 31, 1, 7])]);
         assert_eq!(short.cell_zones_declared, Some(2));
@@ -5921,6 +5941,19 @@ mod tests {
         };
         assert_eq!(warnings(2, &[[12, 0, 31, 1, 7]]), 1);
         assert_eq!(warnings(1, &[[12, 0, 31, 1, 7]]), 0);
+        let mut cut = zone_table_data(None, &[]);
+        cut.push(2);
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 1, &cut));
+        let cut_warnings = parse_body_text(&stream, &version()).unwrap().warnings;
+        assert!(
+            cut_warnings
+                .iter()
+                .any(|w| format!("{w:?}").contains("one byte into its cell zone count")),
+            "{cut_warnings:?}"
+        );
     }
 
     fn caption_list_header(
