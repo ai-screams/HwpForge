@@ -30,7 +30,7 @@ print(fill_form("form.hwpx", "form-filled.hwpx", {"user_email": "kim@example.com
 
 - 필드 이름을 미리 대조하면 `FIELD_NOT_FOUND`를 예외가 아니라 목록으로 다룰 수 있습니다.
 - 값이 비어 있으면 `EMPTY_FIELD_VALUE`입니다. 지우고 싶은 필드는 값 목록에서 빼세요.
-- `fill`은 한컴 저장 문서를 보존하므로 결과를 한컴에서 열면 그대로 보입니다. 재인코드가 없어 조판 캐시도 건드린 문단만 무효화됩니다.
+- `fill`은 한컴 저장 문서를 보존하므로 결과를 한컴에서 열면 그대로 보입니다. 재인코드가 없어 조판 캐시도 채운 문단과 그 뒤로 밀리는 문단(같은 목록의 뒤 문단, 그리고 그 문단을 품은 표·글상자가 놓인 문단부터 그 목록 끝까지 — 본문까지 거슬러)만 무효화됩니다.
 
 ## 표를 읽어 CSV로
 
@@ -123,7 +123,7 @@ import hwpforge
 
 def hwp_to_pdf(src: str, dst: str, font_dirs: list[str]) -> int:
     with open(src, "rb") as handle:
-        converted = hwpforge.convert_hwp5(handle.read(), carry_layout_cache=True)
+        converted = hwpforge.convert_hwp5(handle.read())
     pdf = converted.document.to_pdf(font_dirs=font_dirs)
     with open(dst, "wb") as out:
         out.write(pdf.data)
@@ -135,7 +135,7 @@ except hwpforge.HwpForgeError as exc:
     print(exc.code, exc.cause and exc.cause["code"])     # FONT_UNRESOLVED 면 font_dirs 를 확인
 ```
 
-글꼴을 구할 수 없고 모양이 달라져도 괜찮다면 `to_pdf(font_dirs=[...], degraded=True)`로 대체 글꼴 렌더를 받을 수 있습니다. `carry_layout_cache=True`로 변환한 HWPX는 PDF 용이며 한컴에서 다시 열어 편집할 문서로 쓰지 마세요.
+글꼴을 구할 수 없고 모양이 달라져도 괜찮다면 `to_pdf(font_dirs=[...], degraded=True)`로 대체 글꼴 렌더를 받을 수 있습니다.
 
 ## Markdown으로 문서 생성 후 검토
 

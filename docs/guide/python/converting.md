@@ -82,11 +82,11 @@ converted.document.save("old.hwpx")
 
 - 인자는 파일 경로가 아니라 **바이트**입니다(`Document.open`은 HWPX 전용입니다). 읽을 수 없는 바이트는 `HWP5_DECODE_FAILED`.
 - 보고서의 `warnings`에 HWP5가 가졌지만 HWPX로 옮기지 못한 것이 전부 나옵니다.
-- `carry_layout_cache=True`는 한컴이 계산해 둔 줄 조판 캐시를 함께 옮깁니다. PDF 렌더가 한컴의 쪽 나눔을 그대로 재현하려면 이 캐시가 필요합니다(아래). 캐시를 옮긴 HWPX는 PDF 재생·비교용이며, 한컴에서 다시 열어 편집할 문서로 취급하지 마세요.
+- 기본값(`carry_layout_cache=True`)은 한컴이 계산해 둔 줄 조판 캐시를 함께 옮깁니다. 결과가 원본의 줄 나눔 자리를 담고, PDF 렌더는 이 캐시를 재생합니다(아래). 줄 시작 자리를 정확히 옮길 수 없는 문단은 캐시를 버리고 `LAYOUT_CACHE_DROPPED`로 알립니다. 캐시 없이 쓰려면 `carry_layout_cache=False`를 줍니다.
 
 ## `to_pdf` — PDF 렌더
 
-렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5(..., carry_layout_cache=True)`로 캐시를 옮긴 HWPX. Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
+렌더는 문서에 저장된 조판을 **재생**합니다(다시 계산하지 않습니다). 그래서 조판 캐시가 있는 문서만 렌더 대상입니다: 한컴이 저장한 HWPX, 그리고 `convert_hwp5`로 캐시를 옮긴 HWPX(기본값). Markdown·JSON에서 생성한 문서는 캐시가 없어 `PDF_RENDER_FAILED`입니다.
 
 캐시가 있어도 아직 재생하지 못하는 내용이 있습니다. 한컴이 저장한 문서라도 아래 경우는 실패하고, **한컴에서 다시 저장해도 풀리지 않습니다.**
 
@@ -99,7 +99,7 @@ converted.document.save("old.hwpx")
 
 ```python
 with open("old.hwp", "rb") as handle:
-    carried = hwpforge.convert_hwp5(handle.read(), carry_layout_cache=True).document
+    carried = hwpforge.convert_hwp5(handle.read()).document
 
 try:
     pdf = carried.to_pdf(font_dirs=["/Library/Fonts/Hancom"])

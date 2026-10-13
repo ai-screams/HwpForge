@@ -54,7 +54,7 @@
 | -------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `convert_md`   | `(text: str, *, preset: str = "default", base_dir=None)`                          | `DocumentResult[ConvertMdReport]` — `sections`·`paragraphs`·`assets`·`warnings` |
 | `from_json`    | `(text: str, *, base: Document \| None = None)`                                   | `DocumentResult[EncodeReport]` — `paragraphs`·`warnings`                        |
-| `convert_hwp5` | `(data: bytes, *, carry_layout_cache: bool = False)`                              | `DocumentResult[ConvertHwp5Report]` — `warnings`                                |
+| `convert_hwp5` | `(data: bytes, *, carry_layout_cache: bool = True)`                               | `DocumentResult[ConvertHwp5Report]` — `warnings`                                |
 | `templates`    | `()`                                                                              | `TemplatesReport` — `presets[{name, description, font, page_size}]`             |
 | `schema`       | `(*, kind: "document" \| "exported-document" \| "exported-section" = "document")` | JSON Schema `dict`                                                              |
 

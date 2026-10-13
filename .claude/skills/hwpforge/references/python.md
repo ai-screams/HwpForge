@@ -95,11 +95,11 @@ print(doc.diff(res.document)["semantic"]["cells"])     # [{'table': 0, 'row': 0,
 | `stamp(request, *, manifest=True)`                                                          | `DocumentResult` | `INPUT_ENTRIES_NOT_CARRIED`                                                  |
 | `restyle(*, preset)`                                                                        | `DocumentResult` | `PRESET_NOT_FOUND` — lossy, see [templates.md](templates.md)                 |
 
-| Module function                                                                | Returns                                                            |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
-| `convert_md(text, *, preset="default", base_dir=None)`                         | `DocumentResult` — pass `base_dir` so relative image paths resolve |
-| `from_json(text, *, base=None)` — `base` is a `Document`                       | `DocumentResult`                                                   |
-| `convert_hwp5(data, *, carry_layout_cache=False)` — `data` is the `.hwp` bytes | `DocumentResult`                                                   |
-| `templates()`, `schema(*, kind="document")`                                    | report                                                             |
+| Module function                                                               | Returns                                                            |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `convert_md(text, *, preset="default", base_dir=None)`                        | `DocumentResult` — pass `base_dir` so relative image paths resolve |
+| `from_json(text, *, base=None)` — `base` is a `Document`                      | `DocumentResult`                                                   |
+| `convert_hwp5(data, *, carry_layout_cache=True)` — `data` is the `.hwp` bytes | `DocumentResult`                                                   |
+| `templates()`, `schema(*, kind="document")`                                   | report                                                             |
 
 Python names some refusals differently from the CLI (for example `INPUT_ENTRIES_NOT_CARRIED` where the CLI says `UNCARRIED_ZIP_ENTRIES`) — see [errors.md](errors.md).

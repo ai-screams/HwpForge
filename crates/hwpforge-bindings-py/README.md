@@ -24,13 +24,13 @@ resolved fails the render rather than being guessed at. `to_pdf(degraded=True)` 
 and renders the missing face with a fallback, which changes how the page looks.
 
 Rendering replays a layout stored in the document, so `to_pdf` needs a document that carries
-one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5 with the layout carried
-across — `hwpforge.convert_hwp5(data, carry_layout_cache=True).document.to_pdf(...)`. A document
+one. Two do: an HWPX Hancom saved, and an HWPX converted from HWP5, which carries the layout
+across by default — `hwpforge.convert_hwp5(data).document.to_pdf(...)`. A document
 this library generated from Markdown or JSON carries no layout and is refused with
 `PDF_RENDER_FAILED`.
 
-A layout carried over from HWP5 is for PDF replay and comparison only; do not treat such an
-HWPX as one to reopen in Hancom.
+A paragraph whose line starts cannot be carried over exactly loses its layout and is reported
+as `LAYOUT_CACHE_DROPPED`; `convert_hwp5(data, carry_layout_cache=False)` leaves the layout out.
 
 ## Install
 
@@ -132,7 +132,7 @@ such a document.
 | ------------------------------------------------------ | ----------------------------------- | ----------------------- |
 | `convert_md(text, *, preset="default", base_dir=None)` | `DocumentResult[ConvertMdReport]`   | `PRESET_NOT_FOUND`      |
 | `from_json(text, *, base=None)`                        | `DocumentResult[EncodeReport]`      | `JSON_PARSE_FAILED`     |
-| `convert_hwp5(data, *, carry_layout_cache=False)`      | `DocumentResult[ConvertHwp5Report]` | `HWP5_DECODE_FAILED`    |
+| `convert_hwp5(data, *, carry_layout_cache=True)`       | `DocumentResult[ConvertHwp5Report]` | `HWP5_DECODE_FAILED`    |
 | `templates()`                                          | `TemplatesReport`                   | —                       |
 | `schema(*, kind="document")`                           | `SchemaReport`                      | —                       |
 

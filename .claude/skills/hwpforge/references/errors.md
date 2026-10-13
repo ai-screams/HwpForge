@@ -88,12 +88,12 @@ Exit 0 is not "nothing was lost". A `warnings` key that is absent or `[]` means 
 
 Without `--json`, warnings go to stderr as `[command] …` lines (`Warning: …` for `to-md`). Common ones:
 
-| Warning                                                                 | From                                                                | Meaning                                                                                                                 |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `image "…" not embedded (…) — image dropped`                            | `convert`                                                           | file missing, outside the Markdown's directory, remote URL, unsupported format, or stdin input without a base directory |
-| `LAYOUT_CACHE_DROPPED` / `layout cache dropped at section[i].para[j] …` | `from-json`; any command decoding a document whose cache is invalid | that paragraph has no usable line-layout cache; `to-pdf` will skip it until 한컴 re-saves                               |
-| `LINE_OVERFLOW`                                                         | `to-pdf`                                                            | text no longer fits the cached line (after `patch`)                                                                     |
-| `PARAGRAPH_SKIPPED`                                                     | `to-pdf`                                                            | a paragraph without layout cache was left out of the PDF                                                                |
+| Warning                                                                 | From                                                                                                                    | Meaning                                                                                                                 |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `image "…" not embedded (…) — image dropped`                            | `convert`                                                                                                               | file missing, outside the Markdown's directory, remote URL, unsupported format, or stdin input without a base directory |
+| `LAYOUT_CACHE_DROPPED` / `layout cache dropped at section[i].para[j] …` | `from-json`; `convert-hwp5` (a line start it cannot carry over); any command decoding a document whose cache is invalid | that paragraph has no usable line-layout cache; `to-pdf` will skip it until 한컴 re-saves                               |
+| `LINE_OVERFLOW`                                                         | `to-pdf`                                                                                                                | text no longer fits the cached line (after `patch`)                                                                     |
+| `PARAGRAPH_SKIPPED`                                                     | `to-pdf`                                                                                                                | a paragraph without layout cache was left out of the PDF                                                                |
 
 ## Size limits
 
