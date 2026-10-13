@@ -1,4 +1,4 @@
-//! HwpForge MCP Server — AI-first Korean document tools.
+//! Vise — HwpForge MCP Server: AI-first Korean document tools.
 //!
 //! Communicates via stdio (JSON-RPC 2.0). All logging goes to stderr.
 
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    tracing::info!("HwpForge MCP Server v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Vise — HwpForge MCP Server v{}", env!("CARGO_PKG_VERSION"));
 
     let server = HwpForgeServer::new();
     let service = server.serve(rmcp::transport::stdio()).await?;

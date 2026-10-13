@@ -1033,6 +1033,11 @@ impl HwpForgeServer {
     }
 }
 
+/// The title the server reports in `initialize`. It carries the same forge
+/// name ("Vise") as the crate description and the npm README, so a client
+/// shows the server under the name the docs use (`branding/BRANDING.md`).
+const SERVER_TITLE: &str = "Vise — HwpForge MCP Server";
+
 #[tool_handler]
 impl ServerHandler for HwpForgeServer {
     fn get_info(&self) -> InitializeResult {
@@ -1046,7 +1051,7 @@ impl ServerHandler for HwpForgeServer {
         .with_protocol_version(ProtocolVersion::LATEST)
         .with_server_info(
             Implementation::new("hwpforge-mcp", env!("CARGO_PKG_VERSION"))
-                .with_title("HwpForge MCP Server")
+                .with_title(SERVER_TITLE)
                 .with_description(
                     "AI-first Korean HWPX document generation and editing tools. \
                      본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.",
@@ -1095,6 +1100,26 @@ impl ServerHandler for HwpForgeServer {
     ) -> Result<GetPromptResponse, McpError> {
         // rmcp 3.x MRTR(SEP-2322): 항상 완결 응답 — Complete 로 승격.
         prompts::get_prompt(&request.name, request.arguments.as_ref()).map(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod server_info_tests {
+    use super::*;
+
+    /// The reported title and the published crate description name the
+    /// server the same way. 이것을 실패시키는 것: 제목을 옛 "HwpForge MCP Server"
+    /// 로 되돌리거나, Cargo.toml description 의 이름만 바꾸는 것.
+    #[test]
+    fn the_reported_title_uses_the_crate_description_name() {
+        let alias = env!("CARGO_PKG_DESCRIPTION")
+            .split(" — ")
+            .next()
+            .expect("description starts with the forge name");
+        let info = HwpForgeServer::new().get_info();
+        let title = info.server_info.title.expect("server reports a title");
+        assert_eq!(alias, "Vise");
+        assert!(title.starts_with(&format!("{alias} — ")), "{title}");
     }
 }
 

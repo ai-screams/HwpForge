@@ -1,4 +1,4 @@
-r"""Read, edit and generate Korean HWP/HWPX documents.
+r"""Tongs — read, edit and generate Korean HWP/HWPX documents.
 
 The package is a thin layer over the HwpForge Rust library, so it performs the
 same operations, with the same meaning, as the command line tool and the MCP
