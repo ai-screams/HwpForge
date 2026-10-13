@@ -1011,6 +1011,38 @@ impl EncodeOptions {
     }
 }
 
+/// Review r1 HIGH-2: a table cell zone must name a border fill the style
+/// store has (looked up by id) — JSON or Markdown can author any number, and
+/// the package would point at nothing.
+/// 이것을 실패시키는 것: 이 검사 삭제(`unknown_cell_zone_fill_is_refused`).
+fn refuse_unknown_cell_zone_fills(
+    document: &Document<Validated>,
+    style_store: &HwpxStyleStore,
+) -> HwpxResult<()> {
+    let mut missing = None;
+    for section in document.sections() {
+        section.for_each_paragraph(|paragraph| {
+            for run in &paragraph.runs {
+                if let hwpforge_core::run::RunContent::Table(table) = &run.content {
+                    if let Some(zone) = table
+                        .cell_zones
+                        .iter()
+                        .find(|z| style_store.border_fill(z.border_fill_id).is_err())
+                    {
+                        missing.get_or_insert(zone.border_fill_id);
+                    }
+                }
+            }
+        });
+    }
+    match missing {
+        Some(id) => Err(crate::error::HwpxError::InvalidStructure {
+            detail: format!("table cell zone border fill {id} is not in the style store"),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Encodes Core documents to HWPX format (ZIP + XML).
 ///
 /// This is the reverse of [`crate::HwpxDecoder`]: it takes a validated
@@ -1117,6 +1149,7 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
+        refuse_unknown_cell_zone_fills(document, style_store)?;
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
@@ -1297,6 +1330,41 @@ mod tests {
     };
 
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
+
+    /// Review r1 HIGH-2: encoding refuses a cell zone whose border fill the
+    /// store does not have; a known one encodes.
+    /// 이것을 실패시키는 것: 사전 검사 삭제.
+    #[test]
+    fn unknown_cell_zone_fill_is_refused() {
+        use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
+        let encode = |fill: u32| {
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(HwpxCharShape::default());
+            store.push_para_shape(HwpxParaShape::default());
+            let mut bf = crate::style_store::HwpxBorderFill::default_page_border();
+            bf.id = 7;
+            store.push_border_fill(bf);
+            let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("x", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::new(1000).unwrap(),
+            )])])
+            .with_cell_zones(vec![CellZone::new(0, 0, 0, 0, fill)]);
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            ));
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new())
+        };
+        assert!(encode(7).is_ok());
+        assert!(matches!(encode(999), Err(crate::error::HwpxError::InvalidStructure { .. })));
+    }
 
     /// R2 HIGH 1 — the defect was that a *successful* encode kept only the
     /// bytes. These four cases pin the split both editors now share.

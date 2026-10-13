@@ -698,6 +698,7 @@ impl HwpxDecoder {
 
             document.add_section(section);
         }
+        drop_cell_zones_with_unknown_border_fill(&mut document, &style_store, &mut warnings);
 
         Ok(HwpxDocument { document, style_store, image_store, warnings })
     }
@@ -710,6 +711,41 @@ impl HwpxDecoder {
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
         let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)
+    }
+}
+
+/// Review r1 HIGH-2: a table cell zone whose `borderFillIDRef` names no
+/// border fill of the header (looked up by id, not by count) is dropped and
+/// reported as lost content — a renderer would draw nothing for it.
+/// 이것을 실패시키는 것: 이 검사 삭제(`cell_zone_with_an_unknown_border_fill_is_lost`).
+fn drop_cell_zones_with_unknown_border_fill(
+    document: &mut Document<hwpforge_core::document::Draft>,
+    style_store: &HwpxStyleStore,
+    warnings: &mut Vec<DecodeWarning>,
+) {
+    for (i, section) in document.sections_mut().iter_mut().enumerate() {
+        section.for_each_paragraph_mut(|paragraph| {
+            for run in &mut paragraph.runs {
+                let hwpforge_core::run::RunContent::Table(table) = &mut run.content else {
+                    continue;
+                };
+                table.cell_zones.retain(|zone| {
+                    let known = style_store.border_fill(zone.border_fill_id).is_ok();
+                    if !known {
+                        warnings.push(DecodeWarning::ContentLost {
+                            part: format!("Contents/section{i}.xml"),
+                            path: ParagraphPath::default(),
+                            kind: "cellzone".to_string(),
+                            reason: format!(
+                                "cell zone border fill {} is not in the header",
+                                zone.border_fill_id
+                            ),
+                        });
+                    }
+                    known
+                });
+            }
+        });
     }
 }
 
@@ -771,6 +807,61 @@ fn extract_master_page_cnt(section_xml: &str) -> usize {
 mod tests {
     use super::*;
     use hwpforge_foundation::{HeadingType, NumberFormatType};
+
+    /// Review r1 HIGH-2: a cell zone naming a border fill the header does
+    /// not have (by id — the store holds 1 and 5, the zone names 3) is
+    /// dropped and reported; known ids stay, in nested tables too.
+    /// 이것을 실패시키는 것: 검사 삭제 · 개수 비교로 바꾸기(3 ≤ 2 개라 통과) ·
+    /// 중첩 표 미방문.
+    #[test]
+    fn cell_zone_with_an_unknown_border_fill_is_lost() {
+        use crate::style_store::HwpxBorderFill;
+        use hwpforge_core::run::{Run, RunContent};
+        use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
+        use hwpforge_core::Paragraph;
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        let mut store = HwpxStyleStore::new();
+        for id in [1, 5] {
+            let mut bf = HwpxBorderFill::default_page_border();
+            bf.id = id;
+            store.push_border_fill(bf);
+        }
+        let zones = vec![CellZone::new(0, 0, 0, 0, 5), CellZone::new(0, 0, 0, 0, 3)];
+        let text = || {
+            Paragraph::with_runs(
+                vec![Run::text("x", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let cell = |p| TableCell::new(vec![p], HwpUnit::new(1000).unwrap());
+        let inner =
+            Table::new(vec![TableRow::new(vec![cell(text())])]).with_cell_zones(zones.clone());
+        let outer = Table::new(vec![TableRow::new(vec![cell(Paragraph::with_runs(
+            vec![Run::table(inner, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ))])])
+        .with_cell_zones(zones);
+        let mut document = Document::<Draft>::new();
+        document.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(outer, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let mut warnings = Vec::new();
+        drop_cell_zones_with_unknown_border_fill(&mut document, &store, &mut warnings);
+        let RunContent::Table(outer) = &document.sections()[0].paragraphs[0].runs[0].content else {
+            panic!()
+        };
+        assert_eq!(outer.cell_zones, [CellZone::new(0, 0, 0, 0, 5)]);
+        let RunContent::Table(inner) = &outer.rows[0].cells[0].paragraphs[0].runs[0].content else {
+            panic!()
+        };
+        assert_eq!(inner.cell_zones, [CellZone::new(0, 0, 0, 0, 5)]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().all(|w| w.is_content_loss()));
+    }
     use std::io::{Cursor, Write};
     use std::path::PathBuf;
     use zip::write::SimpleFileOptions;
