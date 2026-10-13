@@ -162,13 +162,49 @@ struct FieldLocator {
     name: Option<String>,
 }
 
-/// section XML 에서 찾은 누름틀 하나: 위치와, 값이 바뀌면 낡는 캐시
-/// (`linesegarray`) 바이트 구간들 — 가장 안쪽 문단과 같은 흐름의 뒤 문단,
-/// 그리고 host 문단 사슬의 같은 꼬리(W2).
+/// section XML 에서 찾은 누름틀 하나: 위치와 그것을 감싸는 가장 안쪽 문단
+/// 번호([`WireScan`] 안).
 #[derive(Debug)]
 struct WireField {
     locator: FieldLocator,
-    caches: Vec<Range<usize>>,
+    paragraph: usize,
+}
+
+/// [`scan_click_here_fields`] 의 결과: 필드들과, 문단마다 직접 자식 캐시
+/// 구간·놓인 목록, 목록마다 그것을 품은 문단. 크기는 입력에 선형이다 —
+/// 무효화할 캐시는 바꿀 필드를 고른 뒤 [`WireScan::stale_caches`] 가 한 번에
+/// 모은다(W2 리뷰 MEDIUM: 필드마다 꼬리를 미리 모으면 필드 수의 제곱).
+#[derive(Debug)]
+struct WireScan {
+    fields: Vec<WireField>,
+    caches: Vec<Vec<Range<usize>>>,
+    para_list: Vec<usize>,
+    list_host: Vec<Option<usize>>,
+}
+
+impl WireScan {
+    /// 값이 바뀐 필드 문단들이 낡게 만드는 캐시(W2, 설계 3.5): 각 문단부터
+    /// 같은 목록 끝까지, 이어서 그 목록을 품은 host 문단부터 host 목록 끝까지
+    /// — 구역 본문까지. 목록마다 가장 이른 무효화 지점만 남겨 합친 뒤 캐시를
+    /// 한 번 모은다.
+    /// 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · host 사슬 생략 · 목록
+    /// 처음부터(`cell_fill_drops_the_flow_tail_and_the_host_chain`,
+    /// `each_container_drops_its_flow_tail_and_host_chain`).
+    fn stale_caches(&self, paragraphs: impl IntoIterator<Item = usize>) -> Vec<Range<usize>> {
+        let mut from = vec![usize::MAX; self.list_host.len()];
+        for paragraph in paragraphs {
+            let mut at = Some(paragraph);
+            while let Some(q) = at {
+                let list = self.para_list[q];
+                from[list] = from[list].min(q);
+                at = self.list_host[list];
+            }
+        }
+        (0..self.caches.len())
+            .filter(|&j| j >= from[self.para_list[j]])
+            .flat_map(|j| self.caches[j].iter().cloned())
+            .collect()
+    }
 }
 
 /// 같은 `path` 안에서 각 항목의 순번 (0부터, 목록 순서).
@@ -207,10 +243,9 @@ fn strip_linesegarray_for_changed_fields(
         let expected = inventory.get(&section_idx).map(Vec::as_slice).unwrap_or_default();
         let mut removals =
             locate_changed_paragraph_caches(&xml, section_idx, expected, &field_indices)?;
-        // 한 문단에 바뀐 필드가 둘이면 같은 캐시가 두 번 나온다 — 한 번만
+        // 구간은 문단마다 한 번만 모인다([`WireScan::stale_caches`]) — 뒤에서부터
         // 지운다 (캐시 없는 문단은 removals 에 아무 것도 더하지 않는다 = no-op).
         removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
-        removals.dedup();
         for range in removals {
             xml.replace_range(range, "");
         }
@@ -236,7 +271,8 @@ fn locate_changed_paragraph_caches(
     expected: &[FieldLocator],
     field_indices: &[usize],
 ) -> HwpxResult<Vec<Range<usize>>> {
-    let wire = scan_click_here_fields(xml)?;
+    let scan = scan_click_here_fields(xml)?;
+    let wire = &scan.fields;
     let expected_paths: Vec<&[PathSeg]> = expected.iter().map(|f| f.path.as_slice()).collect();
     let wire_paths: Vec<&[PathSeg]> = wire.iter().map(|f| f.locator.path.as_slice()).collect();
     let expected_ordinals = ordinals(&expected_paths);
@@ -287,17 +323,15 @@ fn locate_changed_paragraph_caches(
         ));
     }
 
-    field_indices
+    let paragraphs = field_indices
         .iter()
         .map(|&i| {
-            partner.get(i).map(|&j| wire[j].caches.clone()).ok_or_else(|| {
-                HwpxError::InvalidStructure {
-                    detail: format!("section {section_idx}: filled field index {i} out of range"),
-                }
+            partner.get(i).map(|&j| wire[j].paragraph).ok_or_else(|| HwpxError::InvalidStructure {
+                detail: format!("section {section_idx}: filled field index {i} out of range"),
             })
         })
-        .collect::<HwpxResult<Vec<_>>>()
-        .map(|caches| caches.into_iter().flatten().collect())
+        .collect::<HwpxResult<Vec<_>>>()?;
+    Ok(scan.stale_caches(paragraphs))
 }
 
 /// [`scan_click_here_fields`] 의 요소 스택 한 칸.
@@ -382,7 +416,7 @@ struct PendingBegin {
 /// 다음 `fieldEnd` 가 와야 필드가 되고, 짝이 오기 전 새 `fieldBegin` 은 앞의
 /// 것을 대체한다. 이름은 디코더처럼 XML 1.0 속성값 정규화 결과(문자 참조
 /// `&#9;` 는 탭, 날 탭은 공백)이고 빈 이름은 `None` 이다.
-fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
+fn scan_click_here_fields(xml: &str) -> HwpxResult<WireScan> {
     use crate::patch::{buffer_position, event_start};
     use quick_xml::events::{BytesStart, Event};
     use quick_xml::{Reader, XmlVersion};
@@ -556,29 +590,15 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<Vec<WireField>> {
         buf.clear();
     }
 
-    // W2 (design 3.5): a filled field moves everything after its paragraph
-    // in that flow, and its host paragraph grows with it — so the caches go
-    // from the paragraph to the end of its list, then the same from the host
-    // in the host's list, up to the section body. Paragraphs before keep
-    // theirs. 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · host 사슬 생략 ·
-    // 목록 처음부터(`cell_fill_drops_the_flow_tail_and_the_host_chain`).
-    let flow_tail = |paragraph: usize| {
-        let mut caches = Vec::new();
-        let mut at = Some(paragraph);
-        while let Some(q) = at {
-            for j in q..paragraphs.len() {
-                if para_list[j] == para_list[q] {
-                    caches.extend(paragraphs[j].iter().cloned());
-                }
-            }
-            at = list_host[para_list[q]];
-        }
-        caches
-    };
-    Ok(found
-        .into_iter()
-        .map(|(locator, paragraph)| WireField { locator, caches: flow_tail(paragraph) })
-        .collect())
+    Ok(WireScan {
+        fields: found
+            .into_iter()
+            .map(|(locator, paragraph)| WireField { locator, paragraph })
+            .collect(),
+        caches: paragraphs,
+        para_list,
+        list_host,
+    })
 }
 
 /// [`scan_click_here_fields`] 에서 요소 하나가 닫힐 때의 처리.
@@ -1214,8 +1234,8 @@ mod tests {
     #[test]
     fn two_filled_fields_in_one_paragraph_remove_its_cache_once() {
         // 9000 = 필드 둘이 든 문단, 9001 = 다음 문단.
-        // 이것을 실패시키는 것: 제거 구간 중복 제거(`dedup`)를 빼기 → 같은
-        // 구간을 두 번 지워 다음 문단의 바이트를 깎는다.
+        // 이것을 실패시키는 것: 같은 구간을 두 번 모으기(`stale_caches` 가 구간을
+        // 겹쳐 내면 두 번째 제거가 다른 바이트를 깎는다).
         let doc = encode(
             vec![para(vec![field("a", "가"), field("b", "나")]), para(vec![text("다음")])],
             &ImageStore::default(),
@@ -1223,9 +1243,9 @@ mod tests {
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let xml = fill_xml(&bytes, &[("a", "1"), ("b", "2")]).expect("fill");
         // W2: 다음 문단(9001)도 채운 문단 뒤 같은 흐름이라 누적 vertpos 가
-        // 낡는다 — 전에는 남겼던 것이 틀렸다(r1-3). 중복 제거 시험의 이빨은 그대로:
-        // 두 필드의 제거 구간이 통째로 겹친다.
+        // 낡는다 — 전에는 남겼던 것이 틀렸다(r1-3).
         assert_eq!(caches(&xml), Vec::<usize>::new());
+        assert!(xml.contains("<hp:t>다음</hp:t>"), "the next paragraph's text is intact");
     }
 
     /// W2 (design 3.5 tests 1, 3): filling a field in the middle of three
@@ -1257,6 +1277,79 @@ mod tests {
         {
             let xml = fill_xml(&bytes, &[("mid", value)]).expect("fill");
             assert_eq!(caches(&xml), vec![0, 1], "{value}");
+        }
+    }
+
+    /// W2 review MEDIUM: the scan keeps one cache list per paragraph (not a
+    /// flow tail per field), and filling the last of N fields collects one
+    /// range — the first collects N.
+    /// 이것을 실패시키는 것: 필드마다 꼬리를 미리 모으기(스캔 구간 수가 N²/2).
+    #[test]
+    fn scan_and_collection_stay_linear() {
+        const N: usize = 2000;
+        let paragraphs: Vec<Paragraph> =
+            (0..N).map(|i| para(vec![field(&format!("f{i}"), "값")])).collect();
+        let doc = encode(paragraphs, &ImageStore::default());
+        let xml = add_caches(&section_xml(&doc));
+        let scan = scan_click_here_fields(&xml).expect("scan");
+        assert_eq!(scan.fields.len(), N);
+        assert_eq!(scan.caches.iter().map(Vec::len).sum::<usize>(), N);
+        assert_eq!(scan.stale_caches([scan.fields[N - 1].paragraph]).len(), 1);
+        assert_eq!(scan.stale_caches([scan.fields[0].paragraph]).len(), N);
+        let all: Vec<usize> = scan.fields.iter().map(|f| f.paragraph).collect();
+        assert_eq!(scan.stale_caches(all).len(), N);
+    }
+
+    /// W2 review: per container, filling the middle of three paragraphs
+    /// drops exactly that paragraph, the one after it, the host paragraph
+    /// and the body paragraph after the host — every other cache stays.
+    /// 이것을 실패시키는 것: host 사슬 생략 · 꼬리 대신 문단 하나만 · 목록
+    /// 처음부터 — 컨테이너마다.
+    #[test]
+    fn each_container_drops_its_flow_tail_and_host_chain() {
+        let inner =
+            || vec![para(vec![text("x0")]), para(vec![field("mid", "칸")]), para(vec![text("x2")])];
+        let containers: Vec<(&str, RunContent)> = vec![
+            (
+                "cell",
+                RunContent::Table(Box::new(Table::new(vec![TableRow::new(vec![TableCell::new(
+                    inner(),
+                    size(4000),
+                )])]))),
+            ),
+            ("text box", control(Control::text_box(inner(), size(4000), size(2000)))),
+            (
+                "table caption",
+                RunContent::Table(Box::new(
+                    Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![para(vec![text("칸")])],
+                        size(4000),
+                    )])])
+                    .with_caption(Caption::new(inner(), CaptionSide::Bottom)),
+                )),
+            ),
+            ("footnote", control(Control::footnote(inner()))),
+        ];
+        for (name, content) in containers {
+            let doc = encode(
+                vec![para(vec![text("앞")]), para(vec![content]), para(vec![text("뒤")])],
+                &ImageStore::default(),
+            );
+            let xml = add_caches(&section_xml(&doc));
+            // Close order of a paragraph = `</hp:p>` count before it closes.
+            let leaf =
+                |needle: &str| xml[..xml.find(needle).expect(needle)].matches("</hp:p>").count();
+            let host = leaf("<hp:t>뒤</hp:t>") - 1;
+            let dropped =
+                [leaf("name=\"mid\""), leaf("<hp:t>x2</hp:t>"), host, leaf("<hp:t>뒤</hp:t>")];
+            let all = caches(&xml);
+            let expected: Vec<usize> =
+                all.iter().copied().filter(|k| !dropped.contains(k)).collect();
+            let bytes = with_section_xml(&doc, xml.clone());
+            let filled = fill_xml(&bytes, &[("mid", "여러 줄로 길어진 값")])
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(caches(&filled), expected, "{name}");
+            assert!(expected.contains(&leaf("<hp:t>x0</hp:t>")), "{name}: x0 keeps its cache");
         }
     }
 
