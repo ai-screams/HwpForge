@@ -7,19 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.16.11](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.10...hwpforge-bindings-mcp-v0.16.11) - 2026-10-13
 
-### Documentation
-
-- *(branding)* give each layer and frontend one forge name
-
-- show the Hancom notice in the CLI help, MCP server info and Python README
-
-- show the notice Hancom requires for using its public HWP documents
-
-
 ### Fixed
 
-- *(bindings)* report the forge names the package descriptions use
+- *(bindings)* 서버가 `initialize` 응답에 알리는 제목을 `Vise — HwpForge MCP Server` 로 바꾼다(시작 로그도 같음). 식별자 `hwpforge-mcp` 는 그대로다 (#234)
 
+### Documentation
+
+- 서버 정보 설명과 README 에 한컴 HWP 문서 파일 공개 문서 이용 표기를 넣는다 (#232)
+
+- MCP 서버의 별칭을 Anvil 에서 **Vise** 로 바꾼다. crate 설명과 npm README 문구가 바뀌고, 설치 명령과 패키지 이름은 그대로다 (#233)
 
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.5...hwpforge-bindings-mcp-v0.16.6) - 2026-09-22
 

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.11](https://github.com/ai-screams/HwpForge/compare/v0.16.10...v0.16.11) - 2026-10-13
+
+### Fixed
+
+- *(bindings)* MCP 서버가 `initialize` 응답에 알리는 제목을 패키지 설명과 같은 이름 `Vise — HwpForge MCP Server` 로 바꾼다(시작 로그도 같음). 식별자 `hwpforge-mcp` 는 그대로다. Python `help(hwpforge)` 첫 줄은 `Tongs — …` 로 시작한다 (#234)
+
+### Documentation
+
+- 한컴이 HWP 문서 파일 공개 문서를 이용할 때 요구하는 표기("본 제품은 한컴의 HWP 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.")를 README, 문서 사이트, `hwpforge --help`, MCP 서버 정보, Python README, HWP5 크레이트 rustdoc 에 넣는다 (#232)
+
+- 계층과 창구의 대장간 비유 이름을 하나로 정한다. Core = Anvil(모루), CLI = Hammer, MCP 서버 = **Vise**(예전 Anvil), Python = Tongs. 패키지·바이너리 이름은 바뀌지 않고 crates.io·npm·PyPI 설명 문구만 바뀐다. 정본은 `branding/BRANDING.md` 의 "대장간 이름 체계" (#233)
+
 ## [0.16.10](https://github.com/ai-screams/HwpForge/compare/v0.16.9...v0.16.10) - 2026-10-04
 
 ### Fixed
