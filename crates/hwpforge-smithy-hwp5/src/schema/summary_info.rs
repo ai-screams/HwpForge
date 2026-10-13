@@ -76,8 +76,11 @@ const PID_AUTHOR: u32 = 0x04;
 const PID_KEYWORDS: u32 = 0x05;
 const PID_COMMENTS: u32 = 0x06;
 const PID_LAST_AUTHOR: u32 = 0x08;
-const PID_LAST_SAVED_TIME: u32 = 0x0C;
-const PID_CREATED_TIME: u32 = 0x0D;
+// MS-OLEPS SummaryInformation: PIDSI_CREATE_DTM = 0x0C, PIDSI_LASTSAVE_DTM =
+// 0x0D. Hancom agrees: `sample-memo-basic.hwp` 0x0C = 2026-05-29T14:09:24Z is
+// its HWPX twin's `CreatedDate`.
+const PID_CREATED_TIME: u32 = 0x0C;
+const PID_LAST_SAVED_TIME: u32 = 0x0D;
 // 한컴 custom — observed at offset 0x14 in fixtures: a formatted Korean
 // locale date string. Carried verbatim through `extras` so a future
 // HWP5 → HWPX round-trip preserves byte parity.
@@ -617,6 +620,40 @@ mod tests {
         assert_eq!(m.last_saved_by.as_deref(), Some("Editor"));
         assert_eq!(m.created.as_deref(), Some("2026-06-04T11:20:00Z"));
         assert_eq!(m.modified.as_deref(), Some("2026-06-04T11:20:00Z"));
+    }
+
+    /// MS-OLEPS: 0x0C is the creation time, 0x0D the last-saved time — raw
+    /// ids (not the constants under test), and only one of them present at
+    /// a time.
+    /// 이것을 실패시키는 것: 두 PID 를 맞바꾸기.
+    #[test]
+    fn creation_is_0x0c_and_last_saved_is_0x0d() {
+        let only = |pid: u32| {
+            let bytes =
+                build_property_set(&[(pid, VT_FILETIME, filetime_payload(FT_2026_06_04_T_11_20))]);
+            let m = parse_summary_information(&bytes).unwrap();
+            (m.created, m.modified)
+        };
+        let t = Some("2026-06-04T11:20:00Z".to_string());
+        assert_eq!(only(0x0C), (t.clone(), None));
+        assert_eq!(only(0x0D), (None, t));
+    }
+
+    /// A Hancom file whose two times differ. The expected values were read
+    /// from the stream with `olefile` (not this parser): 0x0C =
+    /// 2026-05-29T14:09:24Z — also the `CreatedDate` of its HWPX twin — and
+    /// 0x0D = 2026-09-26T02:31:10Z.
+    /// 이것을 실패시키는 것: 두 PID 를 맞바꾸기.
+    #[test]
+    fn hancom_memo_sample_times() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/user_samples/sample-memo-basic.hwp"
+        );
+        let doc = crate::decode_hwp5_with_images(&std::fs::read(path).unwrap()).unwrap();
+        let m = doc.document.metadata();
+        assert_eq!(m.created.as_deref(), Some("2026-05-29T14:09:24Z"));
+        assert_eq!(m.modified.as_deref(), Some("2026-09-26T02:31:10Z"));
     }
 
     #[test]

@@ -65,12 +65,13 @@ fn converted_memo_keeps_the_files_last_saved_time() {
     let tag = r#"<hp:stringParam name="CreateDateTime">"#;
     let at = xml.find(tag).expect("CreateDateTime") + tag.len();
     let written = &xml[at..at + xml[at..].find('<').unwrap()];
+    // Read from the stream's 0x0D (last saved) with `olefile`, not this
+    // parser; its 0x0C (created) is 2026-05-29T14:09:24Z.
+    assert_eq!(written, "2026-09-26T02:31:10Z");
     let doc = hwpforge_smithy_hwp5::decode_hwp5_with_images(&fixture(
         "user_samples/sample-memo-basic.hwp",
     ))
     .unwrap();
-    assert_eq!(Some(written), doc.document.metadata().modified.as_deref());
-    assert_ne!(written, "1970-01-01T00:00:00Z");
     // The image-decoding entry point fills it too.
     let mut memo_times = Vec::new();
     doc.document.for_each_paragraph(|p| {
