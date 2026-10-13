@@ -1673,6 +1673,7 @@ fn promote_line_segments(
         }
     };
     let mut lines = Vec::with_capacity(segs.len());
+    let mut skipped = 0usize;
     for s in segs {
         // S22: a line that starts inside a field drops the cache (design 3.3).
         // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
@@ -1706,6 +1707,20 @@ fn promote_line_segments(
         // 이것을 실패시키는 것: 경계 기록 삭제(붕괴 문단이 한 자리로 접힌다,
         // `collapsed_lines_keep_their_token_boundary`).
         line.boundary = tokens.boundary_at(textpos, s.text_start_position);
+        // S22 r1: the boundaries' skipped tokens stay within a bound, so N
+        // tokens at one place cannot grow N²/2 kinds.
+        // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
+        // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
+        skipped += line.boundary.as_ref().map_or(0, |b| b.skip.len());
+        if skipped > hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP {
+            warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
+                reason: format!(
+                    "line boundaries pass {skipped} zero-width tokens (limit {})",
+                    hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP
+                ),
+            });
+            return None;
+        }
         lines.push(line);
     }
     Some(hwpforge_core::layout::LayoutCache::new(lines))
@@ -6674,6 +6689,53 @@ mod tests {
         let mut warnings = Vec::new();
         assert!(promote_line_segments(&[seg(0), seg(20)], ledger(), &mut warnings).is_some());
         assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    /// S22 r1: a paragraph's line boundaries pass at most
+    /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
+    /// place, lines after k of them for k in a set summing to exactly the
+    /// limit, keep the cache; one more drops it with a warning.
+    /// 이것을 실패시키는 것: 상한 검사 삭제(1,025 도 유지), `>` 를 `>=` 로
+    /// (1,024 도 drop).
+    #[test]
+    fn boundary_skip_cap_keeps_the_limit_and_drops_past_it() {
+        use crate::schema::section::Hwp5ParaLineSeg;
+        let seg = |k: u32| Hwp5ParaLineSeg {
+            text_start_position: 8 * k,
+            vertical_position: 0,
+            line_height: 1000,
+            text_height: 1000,
+            baseline_distance: 850,
+            line_spacing: 600,
+            column_start_position: 0,
+            segment_width: 40000,
+            tag: 0,
+        };
+        let ledger = || {
+            let mut l = ParaLedger::new(&[]);
+            for _ in 0..64 {
+                l.observe_marker(WireTokenKind::Bookmark);
+            }
+            l.observe_para_break();
+            l.finish()
+        };
+        let limit = hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP;
+        let mut at_limit: Vec<u32> = vec![0, 25, 47, 48];
+        at_limit.extend(49..=64);
+        assert_eq!(at_limit.iter().sum::<u32>() as usize, limit, "premise");
+        let segs: Vec<_> = at_limit.iter().map(|&k| seg(k)).collect();
+        let mut warnings = Vec::new();
+        let cache = promote_line_segments(&segs, ledger(), &mut warnings)
+            .unwrap_or_else(|| panic!("{warnings:?}"));
+        let total: usize =
+            cache.lines.iter().filter_map(|l| l.boundary.as_ref()).map(|b| b.skip.len()).sum();
+        assert_eq!(total, limit);
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        let segs: Vec<_> = at_limit.iter().map(|&k| seg(if k == 25 { 26 } else { k })).collect();
+        let mut warnings = Vec::new();
+        assert!(promote_line_segments(&segs, ledger(), &mut warnings).is_none());
+        assert!(format!("{warnings:?}").contains("pass 1025 zero-width tokens"), "{warnings:?}");
     }
 
     /// D review r1 (HIGH-2, MEDIUM-4): a caption without paragraphs is

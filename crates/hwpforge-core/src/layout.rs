@@ -65,6 +65,15 @@ pub struct LineSeg {
     pub boundary: Option<LineBoundary>,
 }
 
+/// 한 문단의 줄 경계가 지나는 토큰 수의 합(`skip.len()` 의 합) 상한 (S22).
+///
+/// 같은 Core 위치에 토큰 N 개가 이어지고 줄마다 하나씩 더 지나면 합이
+/// N(N−1)/2 로 커진다 — 작은 입력이 제곱 크기의 경계를 만들지 않도록, 두
+/// 생산자(HWPX 디코더·HWP5 투영)는 이 값을 넘는 문단의 캐시를 경고와 함께
+/// 버린다. 실측 최댓값: 한컴 저장 HWPX 3,999 문서 105(15 줄, 한 줄 최대 14),
+/// HWP5 변환 2,401 문서 36 — 약 10 배 여유.
+pub const MAX_PARAGRAPH_BOUNDARY_SKIP: usize = 1024;
+
 /// 줄 시작 자리: Core 위치 `textpos` 에 있는 영-core wire 토큰 열에서 앞의
 /// `skip.len()` 개(종류가 `skip` 과 같은)를 지난 뒤, 종류 `next` 인 토큰
 /// 앞. `next = None` 은 그 위치의 토큰을 모두 지난 뒤(다음이 글자이거나

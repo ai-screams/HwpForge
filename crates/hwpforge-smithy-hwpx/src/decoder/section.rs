@@ -740,6 +740,7 @@ fn convert_paragraph(
             return None;
         }
         let mut lines = Vec::with_capacity(array.items.len());
+        let mut skipped = 0usize;
         for s in &array.items {
             // S22: a line that starts inside a field drops the cache.
             // 이것을 실패시키는 것: 이 검사 삭제(`line_inside_a_field_drops_the_cache`).
@@ -763,6 +764,18 @@ fn convert_paragraph(
                     // position the line starts (`None` = before them all).
                     // 이것을 실패시키는 것: 경계 기록 삭제(`hancom_boundary_round_trips`).
                     line.boundary = tokens.boundary_at(textpos, s.textpos);
+                    // S22 r1: the boundaries' skipped tokens stay within a
+                    // bound, so N tokens at one place cannot grow N²/2 kinds.
+                    // 이것을 실패시키는 것: 이 검사 삭제, 또는 `>` 를 `>=` 로
+                    // (`boundary_skip_cap_keeps_the_limit_and_drops_past_it`).
+                    skipped += line.boundary.as_ref().map_or(0, |b| b.skip.len());
+                    if skipped > hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP {
+                        ctx.cache_dropped(format!(
+                            "line boundaries pass {skipped} zero-width tokens (limit {})",
+                            hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP
+                        ));
+                        return None;
+                    }
                     lines.push(line);
                 }
                 Err(e) => {
@@ -3339,6 +3352,47 @@ mod tests {
         assert_eq!(cache.lines[1].vertpos, 1600);
         assert_eq!(cache.lines[1].flags, 1_441_792);
         assert!(result.warnings.is_empty(), "no drop warning: {:?}", result.warnings);
+    }
+
+    /// S22 r1: a paragraph's line boundaries pass at most
+    /// `MAX_PARAGRAPH_BOUNDARY_SKIP` tokens in total — 64 bookmarks at one
+    /// place, lines after k of them for k in a set summing to exactly the
+    /// limit, keep the cache; one more drops it with a warning.
+    /// 이것을 실패시키는 것: 상한 검사 삭제(1,025 도 유지), `>` 를 `>=` 로
+    /// (1,024 도 drop).
+    #[test]
+    fn boundary_skip_cap_keeps_the_limit_and_drops_past_it() {
+        let decode = |ks: &[u32]| {
+            let marks: String =
+                (0..64).map(|i| format!(r#"<ctrl><bookmark name="b{i}"/></ctrl>"#)).collect();
+            let lines: String = ks
+                .iter()
+                .map(|k| format!(r#"<lineseg textpos="{}" vertpos="0" vertsize="1000"/>"#, 8 * k))
+                .collect();
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0">{marks}</run><linesegarray>{lines}</linesegarray></p></sec>"#
+            );
+            parse_section(&xml, 0, &HashMap::new()).unwrap()
+        };
+        let limit = hwpforge_core::layout::MAX_PARAGRAPH_BOUNDARY_SKIP;
+        let mut at_limit: Vec<u32> = vec![0, 25, 47, 48];
+        at_limit.extend(49..=64);
+        assert_eq!(at_limit.iter().sum::<u32>() as usize, limit, "premise");
+        let kept = decode(&at_limit);
+        let cache = kept.paragraphs[0].layout_cache.as_ref().expect("kept at the limit");
+        let total: usize =
+            cache.lines.iter().filter_map(|l| l.boundary.as_ref()).map(|b| b.skip.len()).sum();
+        assert_eq!(total, limit);
+        assert!(kept.warnings.is_empty(), "{:?}", kept.warnings);
+
+        let past: Vec<u32> = at_limit.iter().map(|&k| if k == 25 { 26 } else { k }).collect();
+        let dropped = decode(&past);
+        assert!(dropped.paragraphs[0].layout_cache.is_none());
+        assert!(
+            format!("{:?}", dropped.warnings).contains("pass 1025 zero-width tokens"),
+            "{:?}",
+            dropped.warnings
+        );
     }
 
     #[test]

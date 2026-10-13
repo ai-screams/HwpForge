@@ -322,36 +322,65 @@ pub(crate) struct ZeroToken {
 
 /// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵과 나란히 기록하고 맵은
 /// 바꾸지 않는다.
+///
+/// 줄마다 하는 조회(같은 Core 위치의 토큰, 필드 안인지)는 색인으로 한다 —
+/// 줄 수 × 토큰 수로 다시 훑지 않는다.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TokenLedger {
     tokens: Vec<ZeroToken>,
+    /// Core 위치별 토큰 번호, wire 순서.
+    by_core: std::collections::BTreeMap<u32, Vec<usize>>,
+    /// 아직 닫히지 않은 필드 시작 컨트롤의 wire 시작, 안쪽이 끝.
+    open: Vec<u32>,
+    /// 닫힌 필드 구간 `(시작 컨트롤의 시작, 끝 컨트롤의 끝)`, 닫힌 순서.
+    fields: Vec<(u32, u32)>,
+    /// `fields` 를 시작 순으로 정렬하고 끝을 앞에서부터의 최댓값으로 바꾼 것 —
+    /// 첫 조회 때 만든다.
+    field_index: std::cell::OnceCell<Vec<(u32, u32)>>,
+    /// 조회가 살펴본 토큰·구간 수(선형성 시험용).
+    #[cfg(test)]
+    visits: std::cell::Cell<usize>,
 }
 
 impl TokenLedger {
     /// 토큰 하나를 더한다 (wire 순서대로).
     pub(crate) fn push(&mut self, token: ZeroToken) {
+        use hwpforge_core::layout::WireTokenKind::{FieldBegin, FieldEnd};
+        match token.kind {
+            FieldBegin => self.open.push(token.wire_start),
+            FieldEnd => {
+                if let Some(start) = self.open.pop() {
+                    // 필드 끝 컨트롤은 8 유닛.
+                    self.fields.push((start, token.wire_start + 8));
+                    self.field_index = std::cell::OnceCell::new();
+                }
+            }
+            _ => {}
+        }
+        self.by_core.entry(token.core).or_default().push(self.tokens.len());
         self.tokens.push(token);
     }
 
     /// `wire` 가 필드 안(필드 시작 < `wire` < 필드 끝 컨트롤의 끝, 8 유닛)인지
     /// (S22 설계 3.3). 그런 줄은 캐시를 버린다.
     pub(crate) fn inside_field(&self, wire: u32) -> bool {
-        use hwpforge_core::layout::WireTokenKind::{FieldBegin, FieldEnd};
-        let mut open: Vec<u32> = Vec::new();
-        for t in &self.tokens {
-            match t.kind {
-                FieldBegin => open.push(t.wire_start),
-                FieldEnd => {
-                    if let Some(start) = open.pop() {
-                        if start < wire && wire < t.wire_start + 8 {
-                            return true;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
+        let index = self.field_index.get_or_init(|| {
+            #[cfg(test)]
+            self.visits.set(self.visits.get() + self.fields.len());
+            let mut spans = self.fields.clone();
+            spans.sort_unstable();
+            let mut reach = 0;
+            spans
+                .into_iter()
+                .map(|(start, end)| {
+                    reach = reach.max(end);
+                    (start, reach)
+                })
+                .collect()
+        });
+        // 시작이 `wire` 앞인 구간 중 가장 멀리 가는 끝이 `wire` 뒤면 안이다.
+        let before = index.partition_point(|&(start, _)| start < wire);
+        before > 0 && index[before - 1].1 > wire
     }
 
     /// wire 위치 `wire`(Core 위치 `core`)에서 시작하는 줄의 경계. 그 위치의
@@ -362,7 +391,13 @@ impl TokenLedger {
         core: u32,
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
-        let here: Vec<&ZeroToken> = self.tokens.iter().filter(|t| t.core == core).collect();
+        let here: Vec<&ZeroToken> = self
+            .by_core
+            .get(&core)
+            .map(|indices| indices.iter().map(|&i| &self.tokens[i]).collect())
+            .unwrap_or_default();
+        #[cfg(test)]
+        self.visits.set(self.visits.get() + here.len());
         let k = here.iter().take_while(|t| t.wire_start < wire).count();
         (k > 0).then(|| {
             hwpforge_core::layout::LineBoundary::new(
@@ -376,6 +411,34 @@ impl TokenLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S22 r1: the per-line lookups use the ledger's index — N lines over
+    /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
+    /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
+    /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
+    #[test]
+    fn per_line_lookups_stay_linear() {
+        use hwpforge_core::layout::WireTokenKind::{Bookmark, FieldBegin, FieldEnd};
+        let n = 2048u32;
+        let mut ledger = TokenLedger::default();
+        // At Core i (wire 25i): a field (begin, end) then a bookmark, then
+        // one text unit.
+        for i in 0..n {
+            let w = 25 * i;
+            ledger.push(ZeroToken { core: i, wire_start: w, kind: FieldBegin });
+            ledger.push(ZeroToken { core: i, wire_start: w + 8, kind: FieldEnd });
+            ledger.push(ZeroToken { core: i, wire_start: w + 16, kind: Bookmark });
+        }
+        for i in 0..n {
+            let w = 25 * i;
+            let boundary = ledger.boundary_at(i, w + 16).expect("after the field");
+            assert_eq!(boundary.skip, [FieldBegin, FieldEnd]);
+            assert!(ledger.inside_field(w + 4), "inside field {i}");
+            assert!(!ledger.inside_field(w + 16), "after field {i}");
+        }
+        let visits = ledger.visits.get();
+        assert!(visits <= 5 * n as usize, "{visits} lookups for {n} lines");
+    }
 
     /// conformance vector — smithy-hwpx 의 동명 모듈 테스트와 to_core
     /// 방향에서 동일하게 유지할 것 (동형성 게이트).
