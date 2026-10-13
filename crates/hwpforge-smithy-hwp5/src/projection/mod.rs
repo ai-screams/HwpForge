@@ -1679,17 +1679,17 @@ fn promote_line_segments(
                 return None;
             }
         };
-        lines.push(hwpforge_core::layout::LineSeg {
-            textpos,
-            vertpos: s.vertical_position,
-            vertsize: s.line_height,
-            textheight: s.text_height,
-            baseline: s.baseline_distance,
-            spacing: s.line_spacing,
-            horzpos: s.column_start_position,
-            horzsize: s.segment_width,
-            flags: s.tag,
-        });
+        let mut line = hwpforge_core::layout::LineSeg::default();
+        line.textpos = textpos;
+        line.vertpos = s.vertical_position;
+        line.vertsize = s.line_height;
+        line.textheight = s.text_height;
+        line.baseline = s.baseline_distance;
+        line.spacing = s.line_spacing;
+        line.horzpos = s.column_start_position;
+        line.horzsize = s.segment_width;
+        line.flags = s.tag;
+        lines.push(line);
     }
     Some(hwpforge_core::layout::LayoutCache::new(lines))
 }

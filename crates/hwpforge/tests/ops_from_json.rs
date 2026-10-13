@@ -363,16 +363,18 @@ fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache()
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut caption_para = Paragraph::with_runs(
         vec![Run::text("caption", CharShapeIndex::new(0))],
@@ -439,16 +441,18 @@ fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut cell_para = Paragraph::with_runs(
         vec![Run::text("anchor cell", CharShapeIndex::new(0))],
@@ -513,16 +517,18 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     use hwpforge::foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut boxed_para = Paragraph::with_runs(
         vec![Run::text("boxed", CharShapeIndex::new(0))],
@@ -605,16 +611,18 @@ fn from_json_group_child_path_counts_a_group_picture() {
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut boxed_para = Paragraph::with_runs(
         vec![Run::text("boxed", CharShapeIndex::new(0))],
@@ -667,16 +675,18 @@ fn from_json_finds_a_cache_in_a_group_picture_caption() {
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
     use hwpforge::hwpx::ExportedDocument;
 
-    let line = LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    let line = {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     };
     let mut cached = Paragraph::with_runs(
         vec![Run::text("caption", CharShapeIndex::new(0))],
@@ -829,16 +839,18 @@ fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
         Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
     };
     let mut cached = para("master");
-    cached.layout_cache = Some(LayoutCache::new(vec![LineSeg {
-        textpos: 0,
-        vertpos: 0,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 48188,
-        flags: 0,
+    cached.layout_cache = Some(LayoutCache::new(vec![{
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = 0;
+        lineseg.vertpos = 0;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 48188;
+        lineseg.flags = 0;
+        lineseg
     }]));
 
     let mut first = Section::with_paragraphs(vec![para("one")], PageSettings::a4());

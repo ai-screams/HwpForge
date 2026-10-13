@@ -72,16 +72,18 @@ fn options() -> PdfOptions {
 }
 
 fn seg(textpos: u32, vertpos: i32) -> LineSeg {
-    LineSeg {
-        textpos,
-        vertpos,
-        vertsize: 1000,
-        textheight: 1000,
-        baseline: 850,
-        spacing: 600,
-        horzpos: 0,
-        horzsize: 42548,
-        flags: 0,
+    {
+        let mut lineseg = LineSeg::default();
+        lineseg.textpos = textpos;
+        lineseg.vertpos = vertpos;
+        lineseg.vertsize = 1000;
+        lineseg.textheight = 1000;
+        lineseg.baseline = 850;
+        lineseg.spacing = 600;
+        lineseg.horzpos = 0;
+        lineseg.horzsize = 42548;
+        lineseg.flags = 0;
+        lineseg
     }
 }
 

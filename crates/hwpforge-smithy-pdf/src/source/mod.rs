@@ -2005,7 +2005,7 @@ fn build_line_text_box(
                 }
             }
             inner_lines.push(TextBoxLine {
-                seg: *seg,
+                seg: seg.clone(),
                 atoms: line_atoms,
                 alignment,
                 is_last_line: li + 1 == line_count,
@@ -2141,16 +2141,18 @@ mod tests {
     impl StyleLookup for NoopStyles {}
 
     fn seg(textpos: u32, vertpos: i32) -> LineSeg {
-        LineSeg {
-            textpos,
-            vertpos,
-            vertsize: 1000,
-            textheight: 1000,
-            baseline: 850,
-            spacing: 600,
-            horzpos: 0,
-            horzsize: 48188,
-            flags: 0,
+        {
+            let mut lineseg = LineSeg::default();
+            lineseg.textpos = textpos;
+            lineseg.vertpos = vertpos;
+            lineseg.vertsize = 1000;
+            lineseg.textheight = 1000;
+            lineseg.baseline = 850;
+            lineseg.spacing = 600;
+            lineseg.horzpos = 0;
+            lineseg.horzsize = 48188;
+            lineseg.flags = 0;
+            lineseg
         }
     }
 
@@ -2259,7 +2261,12 @@ mod tests {
     // ── W2b c2: body admission·높이 profile (§4 D1/D2) ──────────
 
     fn img_seg(textpos: u32, vertpos: i32) -> LineSeg {
-        LineSeg { vertsize: 2000, textheight: 2000, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = 2000;
+            lineseg.textheight = 2000;
+            lineseg
+        }
     }
 
     #[test]
@@ -2907,7 +2914,12 @@ mod tests {
 
     /// vertsize·textheight 를 지정하는 host 줄 seg (원자 지배 profile 검사용).
     fn sized_seg(textpos: u32, vertpos: i32, size: i32) -> LineSeg {
-        LineSeg { vertsize: size, textheight: size, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = size;
+            lineseg.textheight = size;
+            lineseg
+        }
     }
 
     /// 글상자 내부 문단 하나 — 조판 캐시 + 텍스트 run (텍스트 길이 ≥ 최대
@@ -3697,7 +3709,12 @@ mod tests {
     }
 
     fn tall_seg(textpos: u32, vertpos: i32, h: i32) -> LineSeg {
-        LineSeg { vertsize: h, textheight: h, ..seg(textpos, vertpos) }
+        {
+            let mut lineseg = (seg(textpos, vertpos)).clone();
+            lineseg.vertsize = h;
+            lineseg.textheight = h;
+            lineseg
+        }
     }
 
     fn img_with_height(key: &str, h: i32) -> Run {
@@ -3822,7 +3839,12 @@ mod tests {
         // img_h > vertsize (이미지가 줄보다 큼): 거부.
         assert!(!line_admits_image(&seg(0, 0), 1001));
         // vertsize != textheight (미측정 profile): 거부.
-        let mixed = LineSeg { vertsize: 1000, textheight: 900, ..seg(0, 0) };
+        let mixed = {
+            let mut lineseg = (seg(0, 0)).clone();
+            lineseg.vertsize = 1000;
+            lineseg.textheight = 900;
+            lineseg
+        };
         assert!(!line_admits_image(&mixed, 500));
     }
 

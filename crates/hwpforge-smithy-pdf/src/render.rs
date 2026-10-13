@@ -1142,16 +1142,18 @@ mod atom_tests {
     /// 배치는 image-dominated 분기로 고정 — sub-line 공식은 별도 테스트).
     fn inner_image_line(vertsize: i32) -> TextBoxLine {
         TextBoxLine {
-            seg: LineSeg {
-                textpos: 0,
-                vertpos: 0,
-                vertsize,
-                textheight: vertsize,
-                baseline: 0,
-                spacing: 0,
-                horzpos: 0,
-                horzsize: 16440,
-                flags: 0,
+            seg: {
+                let mut lineseg = LineSeg::default();
+                lineseg.textpos = 0;
+                lineseg.vertpos = 0;
+                lineseg.vertsize = vertsize;
+                lineseg.textheight = vertsize;
+                lineseg.baseline = 0;
+                lineseg.spacing = 0;
+                lineseg.horzpos = 0;
+                lineseg.horzsize = 16440;
+                lineseg.flags = 0;
+                lineseg
             },
             atoms: vec![LineAtom::Image(LineImage {
                 canonical_key: "img1.png".into(),

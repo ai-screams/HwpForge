@@ -695,17 +695,19 @@ fn convert_paragraph(
         let mut lines = Vec::with_capacity(array.items.len());
         for s in &array.items {
             match map.to_core(s.textpos) {
-                Ok(textpos) => lines.push(hwpforge_core::layout::LineSeg {
-                    textpos,
-                    vertpos: s.vertpos,
-                    vertsize: s.vertsize,
-                    textheight: s.textheight,
-                    baseline: s.baseline,
-                    spacing: s.spacing,
-                    horzpos: s.horzpos,
-                    horzsize: s.horzsize,
-                    flags: s.flags,
-                }),
+                Ok(textpos) => {
+                    let mut line = hwpforge_core::layout::LineSeg::default();
+                    line.textpos = textpos;
+                    line.vertpos = s.vertpos;
+                    line.vertsize = s.vertsize;
+                    line.textheight = s.textheight;
+                    line.baseline = s.baseline;
+                    line.spacing = s.spacing;
+                    line.horzpos = s.horzpos;
+                    line.horzsize = s.horzsize;
+                    line.flags = s.flags;
+                    lines.push(line);
+                }
                 Err(e) => {
                     ctx.cache_dropped(format!("lineseg textpos {}: {e}", s.textpos));
                     return None;

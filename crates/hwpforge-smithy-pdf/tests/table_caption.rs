@@ -277,7 +277,7 @@ fn caption_lines_must_cover_the_text() {
     assert!(invalid_cache(replay(|d| {
         let caption = table_mut(d, 0).caption.as_mut().unwrap();
         let lines = &mut caption.paragraphs[0].layout_cache.as_mut().unwrap().lines;
-        let mut second = lines[0];
+        let mut second = lines[0].clone();
         second.textpos = 9;
         second.vertpos += second.vertsize;
         lines.push(second);
@@ -307,11 +307,11 @@ fn caption_text(d: &mut Document<Draft>, text: &str, starts: &[u32]) {
     p.runs.truncate(1);
     p.runs[0].content = RunContent::Text(text.to_string());
     let lines = &mut p.layout_cache.as_mut().unwrap().lines;
-    let mut line = lines[0];
+    let mut line = lines[0].clone();
     lines.clear();
     for &start in starts {
         line.textpos = start;
-        lines.push(line);
+        lines.push(line.clone());
         line.vertpos += line.vertsize;
     }
 }

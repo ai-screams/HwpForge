@@ -21,7 +21,22 @@ use serde::{Deserialize, Serialize};
 ///
 /// 모든 좌표·크기 단위는 HWPUNIT (1pt = 100). `vertpos` 는 본문 흐름
 /// 기준 상대값이며 쪽 단위로 리셋된다 (표 셀 안에서는 셀 상대값).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// `#[non_exhaustive]` — 다른 크레이트에서는 [`Default`] 로 만든 뒤 칸을
+/// 채운다.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::layout::LineSeg;
+///
+/// let mut line = LineSeg::default();
+/// line.textpos = 12;
+/// line.vertsize = 1000;
+/// assert!(line.boundary.is_none());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct LineSeg {
     /// 줄 시작 텍스트 위치 (문단 텍스트의 UTF-16 코드유닛 오프셋).
     pub textpos: u32,
@@ -41,6 +56,95 @@ pub struct LineSeg {
     pub horzsize: i32,
     /// 줄 플래그 비트필드 (wire 그대로 보존 — 해석하지 않음).
     pub flags: u32,
+    /// 줄 시작이 Core 위치 `textpos` 의 영-core wire 토큰 열(표·그림·컨트롤·
+    /// 필드 경계처럼 Core 텍스트 길이가 0 인 것) 한가운데에 놓일 때, 그 열의
+    /// 몇 번째 토큰 앞인지 (S22). `None` = 그 위치에 영-core 토큰이 없다
+    /// (줄 대부분). 문단 내용을 바꾸면 `layout_cache` 를 `None` 으로 —
+    /// 경계는 그 내용의 토큰 열을 가리킨다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<LineBoundary>,
+}
+
+/// 줄 시작 자리: Core 위치 `textpos` 에 있는 영-core wire 토큰 열에서 앞의
+/// `skip.len()` 개(종류가 `skip` 과 같은)를 지난 뒤, 종류 `next` 인 토큰
+/// 앞. `next = None` 은 그 위치의 토큰을 모두 지난 뒤(다음이 글자이거나
+/// 문단의 끝 뒤).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::layout::{LineBoundary, WireTokenKind};
+///
+/// // 구역 정의·단 정의 뒤, 표 앞에서 시작하는 줄.
+/// let b = LineBoundary::new(
+///     vec![WireTokenKind::SectionDef, WireTokenKind::ColumnDef],
+///     Some(WireTokenKind::Table),
+/// );
+/// assert_eq!(b.skip.len(), 2);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct LineBoundary {
+    /// 줄 시작 앞에 있는 같은 위치의 영-core 토큰 종류들, wire 순서.
+    pub skip: Vec<WireTokenKind>,
+    /// 줄이 시작하는 토큰의 종류 (`None` = 그 위치의 토큰을 모두 지난 뒤).
+    pub next: Option<WireTokenKind>,
+}
+
+impl LineBoundary {
+    /// 경계를 만든다.
+    pub fn new(skip: Vec<WireTokenKind>, next: Option<WireTokenKind>) -> Self {
+        Self { skip, next }
+    }
+}
+
+/// Core 텍스트 길이가 0 인 wire 토큰의 종류 (S22) — 줄 경계를 적는 데만
+/// 쓴다. `#[non_exhaustive]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum WireTokenKind {
+    /// 표.
+    Table,
+    /// 그림.
+    Picture,
+    /// 그리기 개체(글상자·도형·묶음·글맵시).
+    Shape,
+    /// 수식.
+    Equation,
+    /// 구역 정의.
+    SectionDef,
+    /// 단 정의.
+    ColumnDef,
+    /// 쪽 번호 위치.
+    PageNumber,
+    /// 감추기.
+    PageHiding,
+    /// 머리말.
+    Header,
+    /// 꼬리말.
+    Footer,
+    /// 각주.
+    Footnote,
+    /// 미주.
+    Endnote,
+    /// 자동 번호.
+    AutoNumber,
+    /// 새 번호.
+    NewNumber,
+    /// 책갈피.
+    Bookmark,
+    /// 필드 시작.
+    FieldBegin,
+    /// 필드 끝.
+    FieldEnd,
+    /// 무음 소비(뜻 없는 제어 코드).
+    Silent,
+    /// Core 에 접힌 글자(필드 본문처럼 Core 길이 0 인 글자).
+    Text,
+    /// 문단 끝.
+    End,
+    /// 그 밖의 컨트롤(덧말·글자 겹침·찾아보기 표시 등).
+    Other,
 }
 
 /// 문단 하나의 줄 조판 캐시 (HWPX `<hp:linesegarray>` 전체).
@@ -85,6 +189,7 @@ mod tests {
             horzpos: 0,
             horzsize: 48188,
             flags: 0x0060_0000,
+            boundary: None,
         }
     }
 
@@ -100,10 +205,29 @@ mod tests {
             horzpos: i32::MAX,
             horzsize: 0,
             flags: u32::MAX,
+            boundary: None,
         };
         let json = serde_json::to_string(&s).unwrap();
         let back: LineSeg = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    /// S22: a line without a boundary serializes exactly as before (no
+    /// `boundary` key), and one with a boundary round-trips.
+    /// 이것을 실패시키는 것: `skip_serializing_if` 삭제(옛 JSON 바이트가 바뀜).
+    /// (`boundary` 가 없는 옛 JSON 은 serde 가 `Option` 을 `None` 으로 읽는다.)
+    #[test]
+    fn boundary_is_left_out_of_json_when_absent() {
+        let plain = seg(3, 0);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("boundary"), "{json}");
+        let old = r#"{"textpos":3,"vertpos":0,"vertsize":1000,"textheight":1000,"baseline":850,"spacing":600,"horzpos":0,"horzsize":48188,"flags":6291456}"#;
+        assert_eq!(serde_json::from_str::<LineSeg>(old).unwrap(), plain);
+        let mut with = seg(3, 0);
+        with.boundary =
+            Some(LineBoundary::new(vec![WireTokenKind::SectionDef], Some(WireTokenKind::Table)));
+        let back: LineSeg = serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(back, with);
     }
 
     #[test]
