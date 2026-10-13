@@ -226,7 +226,9 @@ fn pgnp_record(level: u16) -> Record {
 /// One host `secd · cold · pgnp · tbl`: line 0 at text position 0 (the first
 /// paragraph's cached line), line 1 at the table (wire 24, the second
 /// paragraph's cached line).
-fn restorable() -> Vec<u8> {
+/// Also returns the two source lines, each as its nine `PARA_LINE_SEG`
+/// fields in order.
+fn restorable() -> (Vec<u8>, Vec<[i64; 9]>) {
     let Fullsz { mut streams, records, host, after } = fullsz();
     let first = &records[..host];
     let mask = 1 << 2 | 1 << 11 | 1 << 21;
@@ -242,8 +244,25 @@ fn restorable() -> Vec<u8> {
     out.push(pgnp_record(first[4].level));
     out.extend(records[host + 4..after].iter().cloned()); // the table
     out.extend(records[after..].iter().cloned());
+    let source = out[3]
+        .data
+        .chunks(36)
+        .map(|line| {
+            let field = |i: usize| -> [u8; 4] { line[4 * i..4 * i + 4].try_into().unwrap() };
+            let mut fields = [0i64; 9];
+            for (i, value) in fields.iter_mut().enumerate() {
+                // textpos and flags are unsigned, the rest signed.
+                *value = if i == 0 || i == 8 {
+                    i64::from(u32::from_le_bytes(field(i)))
+                } else {
+                    i64::from(i32::from_le_bytes(field(i)))
+                };
+            }
+            fields
+        })
+        .collect();
     set_section(&mut streams, &out);
-    write_streams(&streams)
+    (write_streams(&streams), source)
 }
 
 /// The first paragraph as is; the host becomes `pgnp · tbl` with line 1 at
@@ -276,8 +295,9 @@ fn cache_drops(warnings: &[ConvertWarning]) -> Vec<String> {
         .collect()
 }
 
-/// `textpos` of each `<hp:lineseg>` in the first top-level paragraph.
-fn first_paragraph_textpos(hwpx: &[u8]) -> Vec<u32> {
+/// Each `<hp:lineseg>` of the first top-level paragraph, as its nine
+/// attributes in `PARA_LINE_SEG` order.
+fn first_paragraph_lines(hwpx: &[u8]) -> Vec<[i64; 9]> {
     let mut archive = zip::ZipArchive::new(Cursor::new(hwpx)).expect("zip");
     let mut xml = String::new();
     archive.by_name("Contents/section0.xml").expect("section").read_to_string(&mut xml).unwrap();
@@ -307,8 +327,23 @@ fn first_paragraph_textpos(hwpx: &[u8]) -> Vec<u32> {
         .split("<hp:lineseg ")
         .skip(1)
         .map(|seg| {
-            let at = seg.find("textpos=\"").expect("textpos") + 9;
-            seg[at..at + seg[at..].find('"').unwrap()].parse().expect("a number")
+            let seg = format!(" {seg}");
+            let names = [
+                "textpos",
+                "vertpos",
+                "vertsize",
+                "textheight",
+                "baseline",
+                "spacing",
+                "horzpos",
+                "horzsize",
+                "flags",
+            ];
+            names.map(|name| {
+                let key = format!(" {name}=\"");
+                let at = seg.find(&key).unwrap_or_else(|| panic!("{name}")) + key.len();
+                seg[at..at + seg[at..].find('"').unwrap()].parse().expect("a number")
+            })
         })
         .collect()
 }
@@ -391,16 +426,19 @@ fn pdf_options() -> ToPdfOptions {
 /// limit, recorded and left to its own change.
 ///
 /// 이것을 실패시키는 것: 인코더 ledger 가 쪽 번호 토큰을 단 정의 앞에 기록하는
-/// 것(실제 직렬화 순서와 어긋나 경계 불일치 → 캐시 drop 경고).
+/// 것(실제 직렬화 순서와 어긋나 경계 불일치 → 캐시 drop 경고), 경계 자리를
+/// 한 토큰 앞(wire 16)으로 놓는 것.
 #[test]
 fn a_restorable_table_host_keeps_its_lines_on_both_pdf_paths() {
-    let hwp = restorable();
+    let (hwp, source) = restorable();
     let (hwpx, warnings) =
         hwp5_to_hwpx_bytes_with_diagnostics(&hwp, ConvertOptions::default()).expect("convert");
     assert!(cache_drops(&warnings).is_empty(), "{warnings:?}");
-    let textpos = first_paragraph_textpos(&hwpx);
-    assert_eq!(textpos.len(), 2, "both lines carried: {textpos:?}");
-    assert!(textpos[0] < textpos[1], "the second line placed after the tokens: {textpos:?}");
+    // The output writes the same `secPr · colPr · pageNum · tbl`, so both
+    // lines come back exactly as the source stored them: line 1 at wire 24.
+    let lines = first_paragraph_lines(&hwpx);
+    assert_eq!(lines.iter().map(|l| l[0]).collect::<Vec<_>>(), [0, 24]);
+    assert_eq!(lines, source, "every cached field carried as stored");
 
     // Both paths reach the renderer and stop at the same table-pagination
     // check (not, say, at font resolution). When the renderer places a table
