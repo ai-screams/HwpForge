@@ -149,7 +149,7 @@ HWP5에서 실어 온 캐시는 **PDF 재생·대조 전용**입니다. 그렇�
 > section 단위로 정밀하게 편집할 수 있습니다. `--json` 플래그로 모든 명령어가
 > machine-readable 출력을 지원합니다.
 
-### ⚙️ Anvil — MCP Server (Beta)로 AI가 직접 한글 문서를 다루다
+### 🗜️ Vise — MCP Server (Beta)로 AI가 직접 한글 문서를 다루다
 
 Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집할** 수 있습니다. 현재 MCP surface는 **베타이며**, HWP5 경로는 MCP가 아니라 CLI workflow를 우선합니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
@@ -306,11 +306,11 @@ cargo install hwpforge-bindings-mcp --force   # 업데이트
 cargo uninstall hwpforge-bindings-mcp          # 삭제
 ```
 
-> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Anvil)는 AI가 **네이티브 도구로**
+> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Vise)는 AI가 **네이티브 도구로**
 > 직접 호출합니다. 파일 경로 파싱도, stdout 해석도 필요 없습니다.
 > JSON-RPC로 요청하면 구조화된 JSON으로 응답 — 깔끔합니다.
 
-### 🐍 Python으로 시작하기
+### 🐍 Tongs — Python으로 시작하기
 
 ```console
 pip install hwpforge
@@ -473,8 +473,8 @@ flowchart TB
     CONV["convert<br/>HWP5 → HWPX + PDF ops"]:::convert
 
     CLI["bindings-cli<br/>Hammer"]:::binding
-    MCP["bindings-mcp<br/>Anvil MCP Server"]:::binding
-    PY["bindings-py<br/>Python"]:::binding
+    MCP["bindings-mcp<br/>Vise MCP Server"]:::binding
+    PY["bindings-py<br/>Tongs (Python)"]:::binding
 
     F --> C
     C --> B

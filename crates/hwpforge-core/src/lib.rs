@@ -2,7 +2,8 @@
 //!
 //! This crate defines the universal document structure used across
 //! all HwpForge format conversions. It is the **Anvil** in the Forge
-//! metaphor -- the surface on which all documents are shaped.
+//! metaphor -- the hub every format passes through, on which all
+//! documents are shaped.
 //!
 //! # Architecture
 //!

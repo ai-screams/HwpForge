@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "hwpforge"
 dynamic = ["version"]
-description = "Read, edit and generate Korean HWP/HWPX documents from Python"
+description = "Tongs — Read, edit and generate Korean HWP/HWPX documents from Python"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT OR Apache-2.0"

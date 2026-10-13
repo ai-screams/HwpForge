@@ -11,7 +11,7 @@ license.workspace = true
 readme = "README.md"
 repository.workspace = true
 rust-version.workspace = true
-description = "Anvil — HwpForge MCP server for AI-native HWPX document tools"
+description = "Vise — HwpForge MCP server for AI-native HWPX document tools"
 
 [[bin]]
 name = "hwpforge-mcp"

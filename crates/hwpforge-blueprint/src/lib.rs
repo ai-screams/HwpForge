@@ -1,6 +1,6 @@
 //! HwpForge Blueprint: YAML-based style template system.
 //!
-//! Blueprint is the **design pattern** layer in the Forge metaphor.
+//! Blueprint is the **Blueprint** (the drawing to work from) in the Forge metaphor.
 //! It defines style templates (fonts, sizes, colors, spacing, tab stops) in
 //! human-readable YAML that can be applied to Core documents.
 //!
