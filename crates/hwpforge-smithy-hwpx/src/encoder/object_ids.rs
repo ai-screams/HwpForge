@@ -128,6 +128,26 @@ pub(crate) fn core_or_drawn_at(slot: usize, kind: &'static str, id: Option<Objec
     }
 }
 
+/// The current end of the diagnostic record — where the records of a part
+/// that comes earlier in the output than in the encoding go
+/// ([`move_since`]). `usize::MAX` outside a scope.
+pub(crate) fn mark() -> usize {
+    SCOPES.with(|s| s.borrow().last().map_or(usize::MAX, |a| a.written.len()))
+}
+
+/// Moves the records added since `from` to position `to` (`to <= from`, both
+/// [`mark`]s of this scope), keeping their order. A table's caption precedes its cells in the output
+/// but is encoded after them (review S22 r1 LOW): the ids are still drawn in
+/// encoding order, only the diagnostic follows the output.
+pub(crate) fn move_since(from: usize, to: usize) {
+    SCOPES.with(|s| {
+        if let Some(alloc) = s.borrow_mut().last_mut() {
+            let moved = alloc.written.len() - from;
+            alloc.written[to..].rotate_right(moved);
+        }
+    });
+}
+
 /// Records a Core id the encoder wrote (footnotes and endnotes, whose
 /// `instId` has no drawn fallback).
 pub(crate) fn record(kind: &'static str, id: u64) {
@@ -555,6 +575,23 @@ mod tests {
                     },
                     CharShapeIndex::new(0),
                 )]),
+                // Review S22 r1 LOW: a table's caption is written before its
+                // cells — a caption equation and a cell footnote sharing 24
+                // are reported in that order.
+                holder({
+                    let mut t = Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![para(vec![Run::control(
+                            Control::footnote_with_id(24, vec![text()]),
+                            CharShapeIndex::new(0),
+                        )])],
+                        unit(),
+                    )])]);
+                    t.caption = Some(Caption::new(
+                        vec![para(vec![Run::control(equation(24), CharShapeIndex::new(0))])],
+                        CaptionSide::Bottom,
+                    ));
+                    t
+                }),
                 // Review W0 r3 LOW: a group child equation is left out (lost
                 // content), so it shares 13 with no written object.
                 para(vec![
@@ -590,6 +627,7 @@ mod tests {
                 "2 objects share id 21: group, picture",
                 "2 objects share id 22: table, equation",
                 "2 objects share id 23: picture, table",
+                "2 objects share id 24: equation, footnote",
             ]
         );
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
@@ -597,6 +635,11 @@ mod tests {
         zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
         assert_eq!(objects_with_id(&xml, "7"), 2);
         assert_eq!(objects_with_id(&xml, "12"), 1, "the anchor's tables are not written");
+        // The order the warning follows is the output's: the caption equation
+        // comes before the cell's footnote.
+        let equation_24 = xml.find(r#"<hp:equation id="24""#).expect("caption equation");
+        let footnote_24 = xml.find(r#"instId="24""#).expect("cell footnote");
+        assert!(equation_24 < footnote_24);
         assert!(
             outcome_warnings.iter().any(|w| w.code() == "CONTENT_LOST"),
             "the group child equation is lost: {outcome_warnings:?}"

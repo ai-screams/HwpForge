@@ -47,6 +47,9 @@ pub(super) fn build_table(
     let col_cnt = placements.cols;
 
     let table_border_fill_id = table.border_fill_id.unwrap_or(TABLE_BORDER_FILL_ID);
+    // The caption is written before the cells but encoded after them: its
+    // diagnostic records go here (review S22 r1 LOW).
+    let caption_at = super::super::object_ids::mark();
     let rows = table
         .rows
         .iter()
@@ -72,6 +75,16 @@ pub(super) fn build_table(
             .first()
             .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
+
+    let caption_from = super::super::object_ids::mark();
+    let caption = table
+        .caption
+        .as_ref()
+        .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
+        .transpose()?;
+    // 이것을 실패시키는 것: 이 이동 삭제(캡션 수식과 셀 각주의 id 충돌 경고가
+    // "footnote, equation" 으로, `shared_core_id_is_kept_and_reported`).
+    super::super::object_ids::move_since(caption_from, caption_at);
 
     // §19.6 A: `None` = the placement this encoder has always written.
     // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
@@ -128,11 +141,7 @@ pub(super) fn build_table(
         // Core 승격값 우선 (W3a-2 의도된 delta) — None(우리 API 저작)은 기존
         // 기본값 유지로 바이트 불변.
         out_margin: Some(table.out_margin.map(encode_table_margin).unwrap_or(DEFAULT_OUT_MARGIN)),
-        caption: table
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
-            .transpose()?,
+        caption,
         in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
         // F: the cell zones, only when there are any.
         // 이것을 실패시키는 것: 미방출 · 행·열 뒤바꿈(`cell_zones_round_trip`).
