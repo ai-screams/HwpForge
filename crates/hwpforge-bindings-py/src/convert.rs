@@ -16,14 +16,15 @@ use crate::results::bytes_and_meta;
 ///
 /// Args:
 ///     data: The HWP5 (OLE2/CFB) document.
-///     carry_layout_cache: Whether to carry the line-layout cache over. It
-///         keeps the page breaks of the source, at the cost of caches that
-///         describe the source's own layout.
+///     carry_layout_cache: Whether to carry the line-layout cache over
+///         (default `True`). It keeps the line breaks of the source; a
+///         paragraph whose line starts cannot be placed exactly loses its
+///         cache with a warning.
 ///
 /// Returns:
 ///     The HWPX package and its `warnings`.
 #[pyfunction]
-#[pyo3(signature = (data, /, *, carry_layout_cache = false))]
+#[pyo3(signature = (data, /, *, carry_layout_cache = true))]
 pub(crate) fn convert_hwp5<'py>(
     py: Python<'py>,
     data: PyBackedBytes,

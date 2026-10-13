@@ -1027,12 +1027,12 @@ pub struct EncodeOptions {
     /// `true` 면 [`Paragraph::layout_cache`](hwpforge_core::paragraph::Paragraph::layout_cache)
     /// 를 `<hp:linesegarray>` 로 방출한다. 기본 `false`.
     ///
-    /// ⚠️ 이 opt-in 은 **PDF 재생/비교 파이프라인 전용**이다 (HWP5→HWPX
-    /// convert carry). 편집 표면은 절대 켜지 않는다 — 승격된 캐시를
-    /// 무검증 방출하면 `layout_carry` 의 "이미 있으면 스킵" 안전장치가
-    /// fail-open 이 된다. 또한 과거 convert 가 HWP5 lineseg 를 carry 했다가
-    /// 한컴에서 다중행 텍스트 겹침을 일으켜 제거한 이력이 있다 — 이
-    /// 산출물은 한컴 재개봉 용도가 아니다.
+    /// HWP5→HWPX 변환(기본 carry)과 PDF 재생 파이프라인이 켠다. 편집 표면은
+    /// 켜지 않는다 — 편집한 문단의 캐시를 무검증 방출하면 `layout_carry` 의
+    /// "이미 있으면 스킵" 안전장치가 fail-open 이 된다. 영-core 토큰 사이에서
+    /// 시작하는 줄은 줄 경계([`hwpforge_core::layout::LineBoundary`])로 그
+    /// 토큰 앞에 놓고, 정확히 놓을 수 없거나 줄 시작이 늘지 않는 문단은
+    /// 캐시를 버린다(경고) — 접힌 `[0,0]` 캐시는 쓰지 않는다(S22).
     ///
     /// 좌표 주의: HWPX 디코더가 승격한 캐시의 `textpos` 는 **보이는-텍스트
     /// 좌표로 정규화**돼 있다 (선행 컨트롤 8유닛 차감) — 방출값도 원본

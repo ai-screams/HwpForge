@@ -97,7 +97,7 @@ pub fn hwp5_to_hwpx(
 }
 
 /// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형 (W4 —
-/// CLI `convert-hwp5 --carry-layout-cache` 가 사용).
+/// CLI `convert-hwp5` 가 사용, `--no-layout-cache` 면 carry 끔).
 ///
 /// # Errors
 ///
@@ -141,17 +141,16 @@ pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<ConvertWarni
     hwp5_to_hwpx_bytes_with_options(bytes, ConvertOptions::default())
 }
 
-/// 변환 동작 옵션. [`Default`] 는 현행 변환 동작 그대로다.
-#[derive(Debug, Clone, Copy, Default)]
+/// 변환 동작 옵션.
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct ConvertOptions {
-    /// `true` 면 HWP5 조판 캐시(`PARA_LINE_SEG`)를 HWPX
-    /// `<hp:linesegarray>` 로 carry 한다. 기본 `false`.
-    ///
-    /// ⚠️ **PDF 재생/비교 파이프라인 전용** (같은 조건 비교의 성립 요건).
-    /// 과거 무조건 carry 는 한컴에서 다중행 텍스트 겹침을 일으켜 제거됐다
-    /// (`layout_hint_patch` 는 표 높이만 재생) — 이 opt-in 산출물은 한컴
-    /// 재개봉 용도가 아니다.
+    /// `true`(기본) 면 HWP5 조판 캐시(`PARA_LINE_SEG`)를 HWPX
+    /// `<hp:linesegarray>` 로 carry 한다 — 패키지가 원본의 줄 나눔 자리를
+    /// 담고 `to-pdf` 가 그것을 재생한다. 영-core 토큰 사이에서 시작하는 줄은 줄 경계
+    /// ([`hwpforge_core::layout::LineBoundary`])로 원본 자리를 그대로 옮기고,
+    /// 정확히 놓을 수 없는 문단만 캐시를 버린다(경고). `false` 면 캐시 없이
+    /// 쓰고, 줄 나눔은 여는 쪽이 다시 계산한다.
     ///
     /// W1b (이미지 에픽): HWP5 승격 경로가 wire→Core 좌표 ledger 로
     /// textpos 를 가시 좌표로 정규화하고, 인코더가 방출-통합 역변환으로
@@ -162,8 +161,14 @@ pub struct ConvertOptions {
     pub carry_layout_cache: bool,
 }
 
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self { carry_layout_cache: true }
+    }
+}
+
 impl ConvertOptions {
-    /// 조판 캐시 carry 여부를 설정한다 (기본 `false`).
+    /// 조판 캐시 carry 여부를 설정한다 (기본 `true`).
     #[must_use]
     pub fn with_carry_layout_cache(mut self, carry: bool) -> Self {
         self.carry_layout_cache = carry;

@@ -363,9 +363,8 @@ class Document:
 
         Rendering replays a layout stored in the document, so the document has
         to carry one. An HWPX Hancom saved does, and so does one converted from
-        HWP5 with the layout carried across: call
-        [`convert_hwp5`][hwpforge.convert_hwp5] with ``carry_layout_cache=True``
-        and render the document it returns. A document generated from Markdown
+        HWP5 by [`convert_hwp5`][hwpforge.convert_hwp5], which carries the
+        layout across by default. A document generated from Markdown
         or JSON carries no layout and is refused with ``PDF_RENDER_FAILED``.
 
         Args:

@@ -127,15 +127,17 @@ def from_json(text: str, *, base: Document | None = None) -> DocumentResult[Enco
 
 
 def convert_hwp5(
-    data: bytes, *, carry_layout_cache: bool = False
+    data: bytes, *, carry_layout_cache: bool = True
 ) -> DocumentResult[ConvertHwp5Report]:
     """Convert an old binary HWP5 document to HWPX.
 
     Args:
         data: The bytes of a `.hwp` file.
-        carry_layout_cache: Carry the line layout cache across, so a renderer
-            reproduces Hancom's own page breaks instead of laying the text out
-            again.
+        carry_layout_cache: Carry the line layout cache across (the default),
+            so the package holds the source's own line breaks, which the PDF
+            renderer replays instead of laying the text out again. A paragraph whose
+            line starts cannot be placed exactly loses its cache with a
+            warning. Pass ``False`` to leave the cache out.
 
     Returns:
         The converted document, and a report holding every warning from the

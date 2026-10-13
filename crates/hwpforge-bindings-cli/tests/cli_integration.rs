@@ -1465,19 +1465,32 @@ fn convert_hwp5_pagectl_native_fixtures_carry_newnum_and_pagehiding() {
 }
 
 #[test]
-fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
-    // W4: `--carry-layout-cache` 는 HWP5 조판 캐시를 HWPX linesegarray 로
-    // 실어 to-pdf 재생을 가능하게 한다 (기본 = 미방출 — 한컴 재개봉 안전).
+fn convert_hwp5_carries_the_layout_cache_unless_told_not_to() {
+    // The default carries the HWP5 line cache into HWPX linesegarray;
+    // `--no-layout-cache` leaves it out; the old `--carry-layout-cache`
+    // is still accepted (it asks for the default) but not with its opposite.
+    // 이것을 실패시키는 것: 디스패치를 `!no_layout_cache` 대신 `carry_layout_cache` 로.
     let tmp = test_tmp();
     let source = fixture("table_09c_page_break_none.hwp");
+    let default = tmp.join("carry_default.hwpx");
     let plain = tmp.join("carry_off.hwpx");
     let carried = tmp.join("carry_on.hwpx");
 
     let (val, _, code) =
-        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", plain.to_str().unwrap()]);
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", default.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert_eq!(val["status"], "ok");
     assert!(val["warning_details"].is_array(), "W4: JSON 에 경고 상세 채널");
+
+    let (val, _, code) = run_json(&[
+        "convert-hwp5",
+        source.to_str().unwrap(),
+        "-o",
+        plain.to_str().unwrap(),
+        "--no-layout-cache",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
 
     let (val, _, code) = run_json(&[
         "convert-hwp5",
@@ -1500,14 +1513,26 @@ fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
         .expect("read section xml");
         xml
     };
+    assert!(read_section(&default).contains("<hp:linesegarray>"), "기본은 linesegarray 방출");
     assert!(
         !read_section(&plain).contains("<hp:linesegarray>"),
-        "기본은 캐시 미방출 (한컴 재개봉 안전)"
+        "--no-layout-cache 는 캐시 미방출"
     );
-    assert!(
-        read_section(&carried).contains("<hp:linesegarray>"),
-        "--carry-layout-cache 는 linesegarray 방출"
+    assert_eq!(
+        std::fs::read(&default).unwrap(),
+        std::fs::read(&carried).unwrap(),
+        "--carry-layout-cache 는 기본과 같은 출력"
     );
+
+    let (_, stderr, code) = run(&[
+        "convert-hwp5",
+        source.to_str().unwrap(),
+        "-o",
+        tmp.join("both.hwpx").to_str().unwrap(),
+        "--no-layout-cache",
+        "--carry-layout-cache",
+    ]);
+    assert_ne!(code, 0, "두 플래그를 함께 주면 거부: {stderr}");
 }
 
 #[test]
@@ -6458,8 +6483,8 @@ fn hwp5_conversion_is_byte_stable_across_processes() {
                         tmp.join(format!("{}_{carry}_{run_index}.hwpx", name.replace('/', "_")));
                     let mut args =
                         vec!["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()];
-                    if carry {
-                        args.push("--carry-layout-cache");
+                    if !carry {
+                        args.push("--no-layout-cache");
                     }
                     let (_, stderr, code) = run(&args);
                     assert_eq!(code, 0, "{name}: {stderr}");

@@ -1644,7 +1644,7 @@ fn project_paragraph_with_images_flat(
 }
 
 /// HWP5 `PARA_LINE_SEG` 레코드(36바이트×N)를 Core 조판 캐시로 승격한다
-/// (decode-only — 인코더 방출은 convert opt-in 전용).
+/// (decode-only — 인코더는 HWP5 변환(기본 carry)과 PDF 재생에서만 방출한다).
 ///
 /// 필드 대응은 이름만 다르고 wire 의미는 HWPX `<hp:lineseg>` 와 동일하다.
 /// 세그먼트가 없으면 `None` (HWP5 네이티브 문단은 항상 1개 이상 보유 —

@@ -932,8 +932,9 @@ fn build_paragraph(
     // relied on accurate per-line data — causing character overlap for
     // multi-line paragraphs. Omitting it forces 한글 to compute properly.
     //
-    // Exception (opt-in, PDF 재생/비교 파이프라인 전용): emit_layout_cache
-    // 가 켜지면 Core 로 승격된 캐시를 되돌려 방출한다. wire 의 textpos 계약은
+    // Exception (opt-in — HWP5 변환 기본 carry·PDF 재생 파이프라인이 켬):
+    // emit_layout_cache 가 켜지면 Core 로 승격된 캐시를 되돌려 방출한다.
+    // wire 의 textpos 계약은
     // **한컴 스트림 좌표**(선행 확장 컨트롤 8유닛 포함)이므로, Core 의
     // 보이는-텍스트 좌표에 `cache_stream_offset`(이 문단에 인코더가 주입할
     // secPr/colPr/header/footer/pageNum ctrl 유닛 — build_section 이 계산)을

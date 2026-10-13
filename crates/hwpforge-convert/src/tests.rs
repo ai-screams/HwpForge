@@ -159,6 +159,18 @@ fn fixture_path(name: &str) -> PathBuf {
     found.into_iter().next().unwrap_or(direct)
 }
 
+/// The cache drop the default carry reports for the first paragraph of a
+/// note or caption: it opens with its number (`atno`), which projects to an
+/// inline page number of unknown kind that has no HWPX form, so the encoder
+/// skips it and drops that paragraph's line cache.
+fn is_number_paragraph_cache_drop(text: &str) -> bool {
+    text.contains("LayoutCacheDropped")
+        && ["Footnote", "Endnote", "Caption"]
+            .iter()
+            .any(|container| text.contains(&format!("{container}, NestedParagraph(0)])")))
+        && text.contains(r#"reason: "unencodable control skipped""#)
+}
+
 fn unique_temp_path(file_name: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2323,7 +2335,16 @@ fn hwp5_to_hwpx_user_sample_footnote_carries_four_footnotes() {
     let out = unique_temp_path("user-sample-field-footnote.hwpx");
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("user sample footnote conversion should succeed");
-    assert!(warnings.is_empty(), "footnote fixture should convert without warnings: {warnings:?}");
+    // The default carries the line cache; each note's first paragraph drops
+    // its cache (`is_number_paragraph_cache_drop`). That is the only warning
+    // this fixture gives. 이것을 실패시키는 것: 다른 경고, 또는 같은 drop 이
+    // 다른 자리·이유로 나는 것(인코더의 그 이유 문자열을 바꾸면 실패 확인).
+    let unexpected: Vec<_> =
+        warnings.iter().filter(|w| !is_number_paragraph_cache_drop(&format!("{w:?}"))).collect();
+    assert!(
+        unexpected.is_empty(),
+        "footnote fixture should convert without warnings: {warnings:?}"
+    );
 
     assert_valid_hwpx(&out);
 
@@ -2566,7 +2587,16 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
             .iter()
             .filter(|w| {
                 let text = format!("{w:?}");
+                // The default carries the line cache; a note's or caption's
+                // first paragraph drops it (`is_number_paragraph_cache_drop`),
+                // and so does the body paragraph holding the kind-5 number
+                // (`atno`) in the equation fixture.
                 let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || is_number_paragraph_cache_drop(&text)
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains(
+                            r#"BodyParagraph(1)]), reason: "unencodable control skipped""#,
+                        ))
                     || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
                         || relative.ends_with("sample-table-caption-4-refs.hwp"))
                         && text.contains("control.auto_number"));
@@ -2665,7 +2695,16 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
             .iter()
             .filter(|w| {
                 let text = format!("{w:?}");
+                // The default carries the line cache; a note's or caption's
+                // first paragraph drops it (`is_number_paragraph_cache_drop`),
+                // and so does the body paragraph holding the kind-5 number
+                // (`atno`) in the equation fixture.
                 let expected = text.contains("DroppedControl { control: \"caption\"")
+                    || is_number_paragraph_cache_drop(&text)
+                    || (relative.ends_with("sample-eq-caption-4-refs.hwp")
+                        && text.contains(
+                            r#"BodyParagraph(1)]), reason: "unencodable control skipped""#,
+                        ))
                     || ((relative.ends_with("sample-eq-caption-4-refs.hwp")
                         || relative.ends_with("sample-table-caption-4-refs.hwp"))
                         && text.contains("control.auto_number"));
@@ -4039,40 +4078,37 @@ fn hwp5_to_hwpx_carries_column_separator_line() {
     let _ = std::fs::remove_file(&out);
 }
 
-// ── W1d: HWP5 조판 캐시 opt-in carry ────────────────────────────────
+// ── W1d·S22: HWP5 조판 캐시 기본 carry ────────────────────────────────
 
-/// 기본 변환은 linesegarray 를 방출하지 않고(기존 불변), opt-in 은
-/// HWP5 LINE_SEG 를 `<hp:linesegarray>` 로 carry 하며 재디코드 시
-/// Core 캐시로 승격돼야 한다.
+/// 기본 변환은 HWP5 LINE_SEG 를 `<hp:linesegarray>` 로 carry 하며 재디코드
+/// 시 Core 캐시로 승격돼야 하고, opt-out 은 linesegarray 를 방출하지 않는다.
 #[test]
-fn carry_layout_cache_optin_emits_and_roundtrips() {
+fn carry_layout_cache_default_emits_and_roundtrips() {
     let path = fixture_path("hwp5/hwp5_00.hwp");
     if !path.exists() {
         return; // fixture-optional (suite 관례)
     }
     let bytes = std::fs::read(&path).expect("fixture read");
 
+    let off = crate::ConvertOptions::default().with_carry_layout_cache(false);
+    let (off_out, _) =
+        crate::hwp5_to_hwpx_bytes_with_options(&bytes, off).expect("opt-out convert");
+    let off_xml = {
+        let mut pkg = PackageReader::new(&off_out).expect("package");
+        pkg.read_section_xml(0).expect("section xml")
+    };
+    assert!(!off_xml.contains("linesegarray"), "opt-out 은 캐시를 방출하지 않는다");
+
+    // 기본 변환이 carry 한다 — 기본값을 false 로 되돌리면 실패한다.
     let (default_out, _) = hwp5_to_hwpx_bytes(&bytes).expect("default convert");
     let default_xml = {
         let mut pkg = PackageReader::new(&default_out).expect("package");
         pkg.read_section_xml(0).expect("section xml")
     };
-    assert!(
-        !default_xml.contains("linesegarray"),
-        "기본 변환은 캐시를 방출하지 않는다 (기존 불변)"
-    );
-
-    let options = crate::ConvertOptions::default().with_carry_layout_cache(true);
-    let (optin_out, _) =
-        crate::hwp5_to_hwpx_bytes_with_options(&bytes, options).expect("opt-in convert");
-    let optin_xml = {
-        let mut pkg = PackageReader::new(&optin_out).expect("package");
-        pkg.read_section_xml(0).expect("section xml")
-    };
-    assert!(optin_xml.contains("<hp:linesegarray>"), "opt-in 은 HWP5 LINE_SEG 를 carry 한다");
+    assert!(default_xml.contains("<hp:linesegarray>"), "기본은 HWP5 LINE_SEG 를 carry 한다");
 
     // 재디코드 → Core 캐시 승격 확인 (PDF 재생 소비 경로 성립)
-    let decoded = HwpxDecoder::decode(&optin_out).expect("decode opt-in output");
+    let decoded = HwpxDecoder::decode(&default_out).expect("decode default output");
     let mut cached = 0usize;
     let mut doc = decoded.document;
     doc.for_each_paragraph_mut(|p| {
@@ -4106,9 +4142,16 @@ fn hwp5_to_hwpx_image_treat_as_char_placement_golden_for_additional_fixtures() {
 
         let out = unique_temp_path(&format!("{}.hwpx", name.trim_end_matches(".hwp")));
         let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
+        // The default carries the line cache; the chart host paragraph's
+        // cache is dropped (chart emission reorders content) and reported.
+        // 이것을 실패시키는 것: 그 이유 문자열이 아닌 cache drop.
         assert!(
-            warnings.is_empty(),
-            "controlled image fixture should convert without warnings: {name}"
+            warnings.iter().all(|w| {
+                let text = format!("{w:?}");
+                text.contains("LayoutCacheDropped")
+                    && text.contains(r#"reason: "chart emission reorders content""#)
+            }),
+            "controlled image fixture should convert without warnings: {name}: {warnings:?}"
         );
         assert_valid_hwpx(&out);
 

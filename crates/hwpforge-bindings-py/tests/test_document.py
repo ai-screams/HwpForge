@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import pickle
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,7 +16,7 @@ import pytest
 from conftest import FONT_UNRESOLVED, all_paragraphs
 
 import hwpforge
-from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextResult
+from hwpforge import BytesResult, Document, DocumentResult, HwpForgeError, TextResult, _hwpforge
 
 if TYPE_CHECKING:
     from hwpforge._hwpforge import StampRequestV2
@@ -222,6 +224,19 @@ def test_convert_hwp5_reads_a_binary_document(hwp5_bytes: bytes) -> None:
 
     assert isinstance(result, DocumentResult)
     assert result.document.inspect()["sections"] >= 1
+
+
+def test_convert_hwp5_carries_the_layout_cache_by_default(hwp5_bytes: bytes) -> None:
+    # 이것을 실패시키는 것: 공개 기본값 또는 PyO3 기본값을 False 로 되돌리는 것.
+    def carries(data: bytes) -> bool:
+        with zipfile.ZipFile(io.BytesIO(data)) as package:
+            return b"<hp:linesegarray>" in package.read("Contents/section0.xml")
+
+    assert carries(hwpforge.convert_hwp5(hwp5_bytes).document.to_bytes())
+    assert carries(_hwpforge.convert_hwp5(hwp5_bytes)[0])
+    assert not carries(
+        hwpforge.convert_hwp5(hwp5_bytes, carry_layout_cache=False).document.to_bytes()
+    )
 
 
 def test_templates_and_schema_need_no_document() -> None:
