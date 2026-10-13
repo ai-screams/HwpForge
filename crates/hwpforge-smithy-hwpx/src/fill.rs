@@ -180,6 +180,9 @@ struct WireScan {
     caches: Vec<Vec<Range<usize>>>,
     para_list: Vec<usize>,
     list_host: Vec<Option<usize>>,
+    /// 무효화 수집이 걸은 사슬 단계와 살펴본 문단 수(선형성 시험용).
+    #[cfg(test)]
+    visits: std::cell::Cell<usize>,
 }
 
 impl WireScan {
@@ -195,11 +198,15 @@ impl WireScan {
         for paragraph in paragraphs {
             let mut at = Some(paragraph);
             while let Some(q) = at {
+                #[cfg(test)]
+                self.visits.set(self.visits.get() + 1);
                 let list = self.para_list[q];
                 from[list] = from[list].min(q);
                 at = self.list_host[list];
             }
         }
+        #[cfg(test)]
+        self.visits.set(self.visits.get() + self.caches.len());
         (0..self.caches.len())
             .filter(|&j| j >= from[self.para_list[j]])
             .flat_map(|j| self.caches[j].iter().cloned())
@@ -598,6 +605,8 @@ fn scan_click_here_fields(xml: &str) -> HwpxResult<WireScan> {
         caches: paragraphs,
         para_list,
         list_host,
+        #[cfg(test)]
+        visits: std::cell::Cell::new(0),
     })
 }
 
@@ -1297,7 +1306,13 @@ mod tests {
         assert_eq!(scan.stale_caches([scan.fields[N - 1].paragraph]).len(), 1);
         assert_eq!(scan.stale_caches([scan.fields[0].paragraph]).len(), N);
         let all: Vec<usize> = scan.fields.iter().map(|f| f.paragraph).collect();
+        // S22 r1: the collection itself stays linear, not only its result —
+        // one walk up each paragraph's host chain and one pass over the
+        // caches. 이것을 실패시키는 것: 바뀐 문단마다 캐시 전체를 다시 훑기
+        // (같은 결과, 살펴본 수 N²).
+        scan.visits.set(0);
         assert_eq!(scan.stale_caches(all).len(), N);
+        assert!(scan.visits.get() <= 3 * N, "{} visits for {N} fields", scan.visits.get());
     }
 
     /// W2 review: per container, filling the middle of three paragraphs
