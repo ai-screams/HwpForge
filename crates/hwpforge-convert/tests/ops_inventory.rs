@@ -112,6 +112,7 @@ const AUDITED: &[Audited] = &[
             ("ContentLost", "CONTENT_LOST"),
             ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
             ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
+            ("ObjectIdConflict", "OBJECT_ID_CONFLICT"),
         ],
     },
     Audited {

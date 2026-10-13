@@ -777,6 +777,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ObjectIdConflict",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

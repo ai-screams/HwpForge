@@ -9,10 +9,12 @@
 //! and endnotes), so a drawn id never equals an imported one.
 //!
 //! Imported ids are written as before, to the attribute their Core field
-//! maps to.
+//! maps to. Two objects sharing one Core id are kept as they are (which one
+//! a cross reference means is not ours to decide) and reported as
+//! [`super::EncodeWarning::ObjectIdConflict`].
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::document::Document;
@@ -143,6 +145,17 @@ fn push(out: &mut Vec<(&'static str, u64)>, kind: &'static str, id: Option<Objec
     if let Some(id) = id {
         out.push((kind, id.value()));
     }
+}
+
+/// Ids held by more than one object, with the holders' kinds in document
+/// order.
+pub(crate) fn conflicts(ids: &[(&'static str, u64)]) -> BTreeMap<u64, Vec<&'static str>> {
+    let mut by_id: BTreeMap<u64, Vec<&'static str>> = BTreeMap::new();
+    for &(kind, id) in ids {
+        by_id.entry(id).or_default().push(kind);
+    }
+    by_id.retain(|_, kinds| kinds.len() > 1);
+    by_id
 }
 
 #[cfg(test)]
@@ -296,5 +309,38 @@ mod tests {
 
     fn with_drawn_ids(n: usize) -> Section {
         Section::with_paragraphs((0..n).map(|_| holder(table(None))).collect(), PageSettings::a4())
+    }
+
+    /// W0: two tables with Core id 7 keep it (both written as 7) and give
+    /// one warning naming both; a third object with another id adds none.
+    /// 이것을 실패시키는 것: 경고 삭제 · 중복 판정을 `> 0` 으로(모든 id 경고).
+    #[test]
+    fn shared_core_id_is_kept_and_reported() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![holder(table(Some(7))), holder(table(Some(7))), holder(table(Some(8)))],
+            PageSettings::a4(),
+        ));
+        let outcome = HwpxEncoder::encode_with_diagnostics(
+            &doc.validate().unwrap(),
+            &store,
+            &ImageStore::new(),
+            crate::EncodeOptions::default(),
+        )
+        .unwrap();
+        let conflicts: Vec<_> = outcome
+            .warnings
+            .iter()
+            .filter(|w| w.code() == "OBJECT_ID_CONFLICT")
+            .map(crate::EncodeWarning::message)
+            .collect();
+        assert_eq!(conflicts, ["2 objects share id 7: table, table"]);
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(outcome.bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert_eq!(objects_with_id(&xml, "7"), 2);
     }
 }

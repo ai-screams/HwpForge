@@ -287,6 +287,7 @@ const WARNING_MAPPING: Table = &[
             ("ContentLost", "CONTENT_LOST"),
             ("PackageIdConflict", "PACKAGE_ID_CONFLICT"),
             ("ImageReferenceUnresolved", "IMAGE_REFERENCE_UNRESOLVED"),
+            ("ObjectIdConflict", "OBJECT_ID_CONFLICT"),
         ],
     ),
     (
@@ -763,6 +764,13 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     part: "Contents/header.xml".into(),
                     location: "hc:img@binaryItemIDRef".into(),
                     reference: "image1".into(),
+                }),
+            ),
+            (
+                "ObjectIdConflict",
+                OpsWarning::Encode(EncodeWarning::ObjectIdConflict {
+                    id: 7,
+                    kinds: vec!["table".into(), "picture".into()],
                 }),
             ),
         ],

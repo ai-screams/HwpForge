@@ -561,6 +561,16 @@ pub enum EncodeWarning {
         /// 해석되지 않은 `binaryItemIDRef` 값.
         reference: String,
     },
+    /// 개체 둘 이상이 같은 Core id(그림·표·수식·묶음·글맵시·각주·미주의
+    /// `inst_id`)를 갖는다 (W0). 상호 참조가 어느 개체를 가리키는지 정해지지
+    /// 않는다. 인코더는 재번호하지 않고 두 값을 그대로 쓴다 — 어느 쪽이 참조
+    /// 대상인지는 인코더가 정할 수 없다. 새로 뽑는 id 는 이 값을 피한다.
+    ObjectIdConflict {
+        /// 겹친 Core id.
+        id: u64,
+        /// 그 id 를 가진 개체 종류(`picture`·`table`·…), 문서 순서.
+        kinds: Vec<String>,
+    },
 }
 
 /// manifest 가 실리는 part 이름 — [`EncodeWarning::PackageIdConflict`] 의 자리.
@@ -593,6 +603,7 @@ impl EncodeWarning {
     /// | [`Self::PackageIdConflict`] | 예 | 참조가 어느 manifest 항목을 가리키는지 정해지지 않는다 |
     /// | [`Self::ImageReferenceUnresolved`] | 예 | 그림·채우기가 가리키는 자산이 패키지에 없다 |
     /// | [`Self::XmlForbiddenCharsRemoved`] | 아니오 | XML 이 담을 수 없는 문자만 지운다 (#198) |
+    /// | [`Self::ObjectIdConflict`] | 아니오 | 입력의 id 를 그대로 쓴다 — 모호함은 입력에 이미 있었고 이 인코드가 잃는 것은 없다 |
     /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
     ///
     /// # `LayoutCacheDropped` 가 비-의미 손상인 이유
@@ -620,7 +631,9 @@ impl EncodeWarning {
             | Self::ContentLost { .. }
             | Self::PackageIdConflict { .. }
             | Self::ImageReferenceUnresolved { .. } => true,
-            Self::LayoutCacheDropped { .. } | Self::XmlForbiddenCharsRemoved { .. } => false,
+            Self::LayoutCacheDropped { .. }
+            | Self::XmlForbiddenCharsRemoved { .. }
+            | Self::ObjectIdConflict { .. } => false,
         }
     }
 
@@ -651,6 +664,7 @@ impl EncodeWarning {
             Self::ContentLost { .. } => "CONTENT_LOST",
             Self::PackageIdConflict { .. } => "PACKAGE_ID_CONFLICT",
             Self::ImageReferenceUnresolved { .. } => "IMAGE_REFERENCE_UNRESOLVED",
+            Self::ObjectIdConflict { .. } => "OBJECT_ID_CONFLICT",
         }
     }
 
@@ -679,7 +693,8 @@ impl EncodeWarning {
             Self::LayoutCacheDropped { .. }
             | Self::NoteHeadSkipped { .. }
             | Self::TitleMarkSkipped { .. }
-            | Self::NoteRestartIgnored { .. } => None,
+            | Self::NoteRestartIgnored { .. }
+            | Self::ObjectIdConflict { .. } => None,
             Self::XmlForbiddenCharsRemoved { part, .. }
             | Self::ContentLost { part, .. }
             | Self::ImageReferenceUnresolved { part, .. } => Some(part),
@@ -716,6 +731,8 @@ impl EncodeWarning {
             }
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
             Self::PackageIdConflict { .. } => Some(format!("{CONTENT_HPF_PART} opf:item@id")),
+            // The holders can sit in different parts; the place is the value.
+            Self::ObjectIdConflict { id, .. } => Some(format!("object id/instid \"{id}\"")),
         }
     }
 
@@ -751,6 +768,9 @@ impl EncodeWarning {
             }
             Self::ImageReferenceUnresolved { reference, .. } => {
                 format!("binaryItemIDRef \"{reference}\" does not resolve to image or OLE data in the package")
+            }
+            Self::ObjectIdConflict { id, kinds } => {
+                format!("{} objects share id {id}: {}", kinds.len(), kinds.join(", "))
             }
         }
     }
@@ -834,6 +854,7 @@ impl std::fmt::Display for EncodeWarning {
                 "binaryItemIDRef \"{reference}\" at {location} in {part} does not resolve to \
                  image or OLE data in the package"
             ),
+            Self::ObjectIdConflict { .. } => f.write_str(&self.message()),
         }
     }
 }
@@ -878,6 +899,19 @@ mod is_semantic_loss_tests {
         );
     }
 
+    /// W0: a shared Core id is not a semantic loss — the encoder writes the
+    /// input's ids unchanged, so an editor does not refuse the document.
+    /// 이것을 실패시키는 것: `ObjectIdConflict` 를 `true` 갈래로 옮기기.
+    #[test]
+    fn object_id_conflict_is_not_semantic_loss() {
+        let warning = EncodeWarning::ObjectIdConflict {
+            id: 7,
+            kinds: vec!["table".into(), "picture".into()],
+        };
+        assert!(!warning.is_semantic_loss());
+        assert_eq!(warning.message(), "2 objects share id 7: table, picture");
+    }
+
     /// 이것을 실패시키는 것: 표본 목록에서 한 변형을 빼는 것 — 고유 코드 수가
     /// 갈래 수와 어긋난다.
     #[test]
@@ -894,6 +928,7 @@ mod is_semantic_loss_tests {
                 "LAYOUT_CACHE_DROPPED",
                 "NOTE_HEAD_SKIPPED",
                 "NOTE_RESTART_IGNORED",
+                "OBJECT_ID_CONFLICT",
                 "PACKAGE_ID_CONFLICT",
                 "TITLE_MARK_SKIPPED",
                 "XML_FORBIDDEN_CHARS_REMOVED",
@@ -959,6 +994,7 @@ mod is_semantic_loss_tests {
                     EncodeWarning::XmlForbiddenCharsRemoved { location, .. } => location.clone(),
                     EncodeWarning::PackageIdConflict { id, .. } => id.clone(),
                     EncodeWarning::ImageReferenceUnresolved { reference, .. } => reference.clone(),
+                    EncodeWarning::ObjectIdConflict { id, .. } => id.to_string(),
                 })
                 .collect::<Vec<_>>()
         };
@@ -1206,9 +1242,8 @@ impl HwpxEncoder {
         // W0: ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
-        let _ids = object_ids::IdScope::enter(
-            object_ids::core_object_ids(document).into_iter().map(|(_, id)| id).collect(),
-        );
+        let core_ids = object_ids::core_object_ids(document);
+        let _ids = object_ids::IdScope::enter(core_ids.iter().map(|&(_, id)| id).collect());
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
@@ -1216,6 +1251,14 @@ impl HwpxEncoder {
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
         let mut warnings: Vec<EncodeWarning> = Vec::new();
+        // W0: two objects with one Core id are written as they are, and
+        // reported. 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
+        for (id, kinds) in object_ids::conflicts(&core_ids) {
+            warnings.push(EncodeWarning::ObjectIdConflict {
+                id,
+                kinds: kinds.into_iter().map(str::to_string).collect(),
+            });
+        }
         // #198: a font face loses its forbidden characters (with the other
         // controls) to `clean_font_name` before serialization, so the part
         // scan below cannot see them; they are counted here instead.

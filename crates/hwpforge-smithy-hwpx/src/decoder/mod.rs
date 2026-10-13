@@ -389,6 +389,10 @@ pub mod warning_samples {
                 location: "hc:img@binaryItemIDRef".to_string(),
                 reference: "image1".to_string(),
             },
+            EncodeWarning::ObjectIdConflict {
+                id: 7,
+                kinds: vec!["table".to_string(), "picture".to_string()],
+            },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
@@ -401,7 +405,8 @@ pub mod warning_samples {
                 | EncodeWarning::XmlForbiddenCharsRemoved { .. }
                 | EncodeWarning::ContentLost { .. }
                 | EncodeWarning::PackageIdConflict { .. }
-                | EncodeWarning::ImageReferenceUnresolved { .. } => {}
+                | EncodeWarning::ImageReferenceUnresolved { .. }
+                | EncodeWarning::ObjectIdConflict { .. } => {}
             }
         }
         samples
