@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.11](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.10...hwpforge-bindings-mcp-v0.16.11) - 2026-10-13
+
+### Documentation
+
+- *(branding)* give each layer and frontend one forge name
+
+- show the Hancom notice in the CLI help, MCP server info and Python README
+
+- show the notice Hancom requires for using its public HWP documents
+
+
+### Fixed
+
+- *(bindings)* report the forge names the package descriptions use
+
+
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.5...hwpforge-bindings-mcp-v0.16.6) - 2026-09-22
 
 ### Added
