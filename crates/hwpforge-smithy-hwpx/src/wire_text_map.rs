@@ -98,8 +98,7 @@ pub(crate) struct WireTextMap {
 }
 
 impl WireTextMap {
-    /// wire 축 총길이 (현재 테스트 전용 — lib 소비자가 생기면 게이트 해제).
-    #[cfg(test)]
+    /// wire 축 총길이.
     pub(crate) fn wire_end(&self) -> u32 {
         self.wire_end
     }
@@ -216,6 +215,11 @@ impl WireMapBuilder {
         Self::default()
     }
 
+    /// 지금까지 기록한 `(wire, core)` 길이.
+    pub(crate) fn cursors(&self) -> (u32, u32) {
+        (self.wire_cursor, self.core_cursor)
+    }
+
     /// 1:1 구간 전진 (일반 텍스트 UTF-16 `units`).
     pub(crate) fn advance_identity(&mut self, units: u32) {
         match (self.wire_cursor.checked_add(units), self.core_cursor.checked_add(units)) {
@@ -285,6 +289,82 @@ impl WireMapBuilder {
             wire_end: self.wire_cursor,
             core_end: self.core_cursor,
         })
+    }
+}
+
+/// 영-core wire 토큰 하나 (S22) — 줄 경계의 종류 열을 적는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ZeroToken {
+    /// 토큰이 놓인 Core 위치.
+    pub core: u32,
+    /// wire 시작 위치.
+    pub wire_start: u32,
+    /// wire 길이.
+    pub wire_len: u32,
+    /// 종류.
+    pub kind: hwpforge_core::layout::WireTokenKind,
+}
+
+/// 문단의 영-core 토큰 목록, wire 순서 (S22). 좌표 맵([`WireTextMap`])과
+/// 나란히 기록하고 맵 자체는 바꾸지 않는다 — 경계 없는 줄은 지금처럼
+/// 변환된다.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TokenLedger {
+    tokens: Vec<ZeroToken>,
+}
+
+impl TokenLedger {
+    /// 토큰 하나를 더한다 (wire 순서대로).
+    pub(crate) fn push(&mut self, token: ZeroToken) {
+        self.tokens.push(token);
+    }
+
+    /// Core 위치 `core` 의 토큰들, wire 순서.
+    fn at(&self, core: u32) -> Vec<&ZeroToken> {
+        self.tokens.iter().filter(|t| t.core == core).collect()
+    }
+
+    /// 경계가 가리키는 줄 시작의 wire 위치. 종류 열이 맞지 않거나, 그 자리가
+    /// 토큰 안(접힌 필드 본문 등 — `to_core` 가 받지 않는 자리)이면 `Err`.
+    pub(crate) fn place(
+        &self,
+        map: &WireTextMap,
+        core: u32,
+        boundary: &hwpforge_core::layout::LineBoundary,
+    ) -> Result<u32, String> {
+        let here = self.at(core);
+        let k = boundary.skip.len();
+        let kinds: Vec<_> = here.iter().map(|t| t.kind).collect();
+        if kinds.len() < k || kinds[..k] != boundary.skip[..] {
+            return Err(format!(
+                "line boundary at core {core}: skip {:?} does not match the tokens {kinds:?}",
+                boundary.skip
+            ));
+        }
+        let wire = match boundary.next {
+            Some(next) => match here.get(k) {
+                Some(t) if t.kind == next => t.wire_start,
+                _ => {
+                    return Err(format!(
+                        "line boundary at core {core}: token {k} is not {next:?} ({kinds:?})"
+                    ))
+                }
+            },
+            None if k == kinds.len() => match k.checked_sub(1) {
+                Some(last) => here[last].wire_start + here[last].wire_len,
+                None => map.to_wire(core).map_err(|e| e.to_string())?,
+            },
+            None => {
+                return Err(format!(
+                    "line boundary at core {core}: {} token(s) left after skip ({kinds:?})",
+                    kinds.len() - k
+                ))
+            }
+        };
+        match map.to_core(wire) {
+            Ok(c) if c == core => Ok(wire),
+            _ => Err(format!("line boundary at core {core}: wire {wire} is inside a token")),
+        }
     }
 }
 

@@ -294,25 +294,71 @@ impl EncodeSink {
 /// [`mark_cache_inadmissible`]: EncoderLedger::mark_cache_inadmissible
 pub(crate) struct EncoderLedger {
     builder: crate::wire_text_map::WireMapBuilder,
+    /// S22: the zero-length tokens, with their kinds, in wire order.
+    tokens: crate::wire_text_map::TokenLedger,
+    /// Tokens the encoder injects into this paragraph after serialization
+    /// (column definition, headers, footers, page number), in the order they
+    /// are written. In a section's first paragraph they follow the section
+    /// definition; elsewhere they lead the paragraph.
+    injected: Vec<hwpforge_core::layout::WireTokenKind>,
     inadmissible: Option<String>,
 }
 
 impl EncoderLedger {
-    fn new(injected_leading_ctrls: usize) -> Self {
-        let mut builder = crate::wire_text_map::WireMapBuilder::new();
-        // 직렬화 후 문자열 주입되는 선행 ctrl (colPr/머리말/꼬리말/쪽번호)
-        // — 트리 밖 (8,0) 유닛 (전부 영-core 라 상호 순서 무관).
-        for _ in 0..injected_leading_ctrls {
-            builder.push_span(8, 0);
+    fn new(injected: Vec<hwpforge_core::layout::WireTokenKind>, after_sec_pr: bool) -> Self {
+        let mut ledger = Self {
+            builder: crate::wire_text_map::WireMapBuilder::new(),
+            tokens: crate::wire_text_map::TokenLedger::default(),
+            injected,
+            inadmissible: None,
+        };
+        if !after_sec_pr {
+            ledger.flush_injected();
         }
-        Self { builder, inadmissible: None }
+        ledger
+    }
+
+    /// Writes the injected tokens at the current position — their wire
+    /// order (S22). Each is an (8,0) unit, as before.
+    fn flush_injected(&mut self) {
+        for kind in std::mem::take(&mut self.injected) {
+            self.zero(8, kind);
+        }
+    }
+
+    /// One zero-length token of `kind` and wire length `wire`.
+    fn zero(&mut self, wire: u32, kind: hwpforge_core::layout::WireTokenKind) {
+        let (wire_start, core) = self.builder.cursors();
+        self.tokens.push(crate::wire_text_map::ZeroToken {
+            core,
+            wire_start,
+            wire_len: wire,
+            kind,
+        });
+        self.builder.push_span(wire, 0);
+    }
+
+    /// An (8,0) control token of `kind`. A token before the section
+    /// definition (which should not happen) still writes the injected
+    /// tokens first, as the ledger did before S22.
+    fn token(&mut self, kind: hwpforge_core::layout::WireTokenKind) {
+        self.flush_injected();
+        self.zero(8, kind);
+    }
+
+    /// The section definition, then the tokens injected after it.
+    fn sec_pr(&mut self) {
+        self.zero(8, hwpforge_core::layout::WireTokenKind::SectionDef);
+        self.flush_injected();
     }
 
     fn identity(&mut self, units: u32) {
+        self.flush_injected();
         self.builder.advance_identity(units);
     }
 
     fn span(&mut self, wire: u32, core: u32) {
+        self.flush_injected();
         self.builder.push_span(wire, core);
     }
 
@@ -322,11 +368,32 @@ impl EncoderLedger {
     /// Tab=(8,0) 과 대칭) — utf16 1:1 로 세면 필드가 tab 당 7유닛
     /// 좁아져 이후 lineseg 가 무음 표류한다.
     fn folded_field(&mut self, body: &str) {
-        let mut wire: u32 = 16; // begin + end
+        use hwpforge_core::layout::WireTokenKind;
+        self.flush_injected();
+        let mut body_wire: u32 = 0;
         for u in body.encode_utf16() {
-            wire += if u == u16::from(b'\t') { 8 } else { 1 };
+            body_wire += if u == u16::from(b'\t') { 8 } else { 1 };
         }
-        self.span(wire, 0);
+        // S22: the kinds are begin, body, end; the coordinate map keeps the
+        // whole field as one contraction (a line cannot start inside it).
+        let (start, core) = self.builder.cursors();
+        let mut at = start;
+        for (len, kind) in [
+            (8, WireTokenKind::FieldBegin),
+            (body_wire, WireTokenKind::Text),
+            (8, WireTokenKind::FieldEnd),
+        ] {
+            if len > 0 {
+                self.tokens.push(crate::wire_text_map::ZeroToken {
+                    core,
+                    wire_start: at,
+                    wire_len: len,
+                    kind,
+                });
+            }
+            at += len;
+        }
+        self.builder.push_span(16 + body_wire, 0);
     }
 
     /// 혼합 텍스트(탭/줄바꿈 sentinel 포함)의 문자 단위 재생.
@@ -347,11 +414,25 @@ impl EncoderLedger {
         }
     }
 
-    fn finish(self) -> Result<crate::wire_text_map::WireTextMap, String> {
+    /// The coordinate map and the zero-length tokens, with the paragraph
+    /// end (`End`, wire 1, core 0 — not written as bytes) last.
+    fn finish(
+        mut self,
+    ) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String>
+    {
         if let Some(reason) = self.inadmissible {
             return Err(reason);
         }
-        self.builder.finish().map_err(|e| e.to_string())
+        self.flush_injected();
+        let map = self.builder.finish().map_err(|e| e.to_string())?;
+        let (wire_end, core_end) = (map.wire_end(), map.core_end());
+        self.tokens.push(crate::wire_text_map::ZeroToken {
+            core: core_end,
+            wire_start: wire_end,
+            wire_len: 1,
+            kind: hwpforge_core::layout::WireTokenKind::End,
+        });
+        Ok((map, self.tokens))
     }
 }
 
@@ -692,15 +773,37 @@ fn build_section(
     // inject_header_footer_pagenum). secPr 는 typed 트리에 있어 ledger 가
     // 직접 본다. 전부 영-core (8,0) 이라 상호 순서는 map 에 무관. 뒤 문단에
     // 앵커된 것은 그 문단의 선행 run 으로 들어가 그 문단의 선행 ctrl 이다.
-    let injected_leading_ctrls: usize =
-        1 + anchored.first().copied().unwrap_or(0) + usize::from(section.page_number.is_some());
+    // S22: the kinds of those tokens, in the order they are written — the
+    // column definition, then headers and footers (headers first, each in
+    // section order), then the page number. A later paragraph's anchored
+    // headers and footers lead it.
+    let mut anchored_kinds: Vec<Vec<hwpforge_core::layout::WireTokenKind>> =
+        vec![Vec::new(); section.paragraphs.len()];
+    for (hf, kind) in
+        section.headers.iter().map(|h| (h, hwpforge_core::layout::WireTokenKind::Header)).chain(
+            section.footers.iter().map(|f| (f, hwpforge_core::layout::WireTokenKind::Footer)),
+        )
+    {
+        if let Some(slot) = anchored_kinds.get_mut(header_footer_anchor(hf)) {
+            slot.push(kind);
+        }
+    }
+    let mut first_kinds = vec![hwpforge_core::layout::WireTokenKind::ColumnDef];
+    first_kinds.extend(anchored_kinds.first().cloned().unwrap_or_default());
+    if section.page_number.is_some() {
+        first_kinds.push(hwpforge_core::layout::WireTokenKind::PageNumber);
+    }
+    debug_assert_eq!(
+        first_kinds.len(),
+        1 + anchored.first().copied().unwrap_or(0) + usize::from(section.page_number.is_some())
+    );
     let mut paragraphs = Vec::with_capacity(section.paragraphs.len());
     for (idx, para) in section.paragraphs.iter().enumerate() {
         let inject_sec_pr = idx == 0;
         let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
         // 이것을 실패시키는 것: 뒤 문단에 0 을 넘기기
         // (`anchored_footer_keeps_both_layout_caches`).
-        let leading = if inject_sec_pr { injected_leading_ctrls } else { anchored[idx] };
+        let leading = if inject_sec_pr { first_kinds.clone() } else { anchored_kinds[idx].clone() };
         sink.enter(crate::decoder::PathSeg::BodyParagraph(idx));
         let built = build_paragraph(
             para,
@@ -762,10 +865,10 @@ fn build_paragraph(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
-    injected_leading_ctrls: usize,
+    injected: Vec<hwpforge_core::layout::WireTokenKind>,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxParagraph> {
-    let mut ledger = EncoderLedger::new(injected_leading_ctrls);
+    let mut ledger = EncoderLedger::new(injected, inject_sec_pr && page_settings.is_some());
     let mut runs = build_runs(
         &para.runs,
         inject_sec_pr,
@@ -848,7 +951,7 @@ fn build_paragraph(
                     sink.cache_dropped(reason);
                     None
                 }
-                Ok(map) => {
+                Ok((map, tokens)) => {
                     // 자가검증 (독립 리뷰 hardening — 디코더·HWP5 choke 와
                     // 3중 대칭): ledger 의 Core 총길이 == 문단 가시 텍스트.
                     // 누락된 zero-core span(미계측 방출 사이트)을 방어한다.
@@ -867,7 +970,13 @@ fn build_paragraph(
                         ));
                     }
                     for l in cache.lines.iter().take_while(|_| !dropped) {
-                        match map.to_wire(l.textpos) {
+                        // S22: a line with a boundary starts before the token
+                        // it names; one without starts where it did before.
+                        let wire = match &l.boundary {
+                            Some(b) => tokens.place(&map, l.textpos, b),
+                            None => map.to_wire(l.textpos).map_err(|e| e.to_string()),
+                        };
+                        match wire {
                             Ok(textpos) => items.push(HxLineSeg {
                                 textpos,
                                 vertpos: l.vertpos,
@@ -962,7 +1071,7 @@ fn build_runs(
         if inject_sec_pr && !sec_pr_injected && run.content.is_control() {
             if let Some(ps) = page_settings {
                 sec_pr_injected = true;
-                ledger.span(8, 0);
+                ledger.sec_pr();
                 result.push(HxRun {
                     char_pr_id_ref: 0,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
@@ -994,7 +1103,7 @@ fn build_runs(
             None
         };
         if sec_pr.is_some() {
-            ledger.span(8, 0);
+            ledger.sec_pr();
         }
 
         let char_pr_id_ref = run.char_shape_id.get() as u32;
@@ -1046,11 +1155,11 @@ fn build_runs(
                 texts.push(HxText::new(marker));
             }
             RunContent::Table(t) => {
-                ledger.span(8, 0);
+                ledger.token(hwpforge_core::layout::WireTokenKind::Table);
                 tables.push(build_table(t, depth, hyperlink_entries, options, sink)?);
             }
             RunContent::Image(img) => {
-                ledger.span(8, 0);
+                ledger.token(hwpforge_core::layout::WireTokenKind::Picture);
                 pictures.push(build_picture(img, depth, hyperlink_entries, options, sink)?);
             }
             RunContent::Control(ctrl) => {
@@ -1059,14 +1168,18 @@ fn build_runs(
                         if let Some(hx_ctrl) =
                             encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
                         {
-                            ledger.span(8, 0);
+                            ledger.token(if matches!(ctrl.as_ref(), Control::Footnote { .. }) {
+                                hwpforge_core::layout::WireTokenKind::Footnote
+                            } else {
+                                hwpforge_core::layout::WireTokenKind::Endnote
+                            });
                             ctrls.push(hx_ctrl);
                         } else {
                             ledger.mark_cache_inadmissible("unencodable note control skipped");
                         }
                     }
                     Control::TextBox { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         rects.push(encode_textbox_to_rect(
                             ctrl,
                             depth,
@@ -1076,7 +1189,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Rect { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         rects.push(encode_rect_to_hx(
                             ctrl,
                             depth,
@@ -1086,7 +1199,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Line { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         lines.push(encode_line_to_hx(
                             ctrl,
                             depth,
@@ -1096,7 +1209,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Ellipse { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         ellipses.push(encode_ellipse_to_hx(
                             ctrl,
                             depth,
@@ -1106,7 +1219,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Polygon { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         polygons.push(encode_polygon_to_hx(
                             ctrl,
                             depth,
@@ -1116,7 +1229,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Arc { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         ellipses.push(encode_arc_to_hx(
                             ctrl,
                             depth,
@@ -1126,7 +1239,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Curve { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         curves.push(encode_curve_to_hx(
                             ctrl,
                             depth,
@@ -1136,7 +1249,7 @@ fn build_runs(
                         )?);
                     }
                     Control::ConnectLine { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         connect_lines.push(encode_connect_line_to_hx(
                             ctrl,
                             depth,
@@ -1146,7 +1259,7 @@ fn build_runs(
                         )?);
                     }
                     Control::Equation { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Equation);
                         equations.push(encode_equation_to_hx(ctrl)?);
                     }
                     Control::Chart { .. } | Control::EmbeddedChart { .. }
@@ -1259,7 +1372,7 @@ fn build_runs(
                         align,
                         metadata,
                     } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Other);
                         dutmals.push(encode_dutmal_to_hx(
                             main_text,
                             sub_text,
@@ -1276,7 +1389,7 @@ fn build_runs(
                         compose_type,
                         char_pr_ids,
                     } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Other);
                         composes.push(encode_compose_to_hx(
                             compose_text,
                             circle_type,
@@ -1292,7 +1405,18 @@ fn build_runs(
                         if let Some(hx_ctrl) =
                             encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
                         {
-                            ledger.span(8, 0);
+                            ledger.token(match ctrl.as_ref() {
+                                Control::NewNumber { .. } => {
+                                    hwpforge_core::layout::WireTokenKind::NewNumber
+                                }
+                                Control::PageHiding { .. } => {
+                                    hwpforge_core::layout::WireTokenKind::PageHiding
+                                }
+                                Control::Bookmark { .. } => {
+                                    hwpforge_core::layout::WireTokenKind::Bookmark
+                                }
+                                _ => hwpforge_core::layout::WireTokenKind::Other,
+                            });
                             ctrls.push(hx_ctrl);
                         } else {
                             // NewNumberKind::Unknown 등 — 방출 스킵 = 내용 손실
@@ -1309,7 +1433,7 @@ fn build_runs(
                     Control::Bookmark { name, bookmark_type }
                         if *bookmark_type == BookmarkType::SpanStart =>
                     {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::FieldBegin);
                         let field_id = hyperlink_entries.len();
                         bookmark_span_ids.insert(name.clone(), field_id);
                         let marker = next_marker("HWPBM", field_id);
@@ -1325,7 +1449,7 @@ fn build_runs(
                         if *bookmark_type == BookmarkType::SpanEnd =>
                     {
                         if let Some(&field_id) = bookmark_span_ids.get(name) {
-                            ledger.span(8, 0);
+                            ledger.token(hwpforge_core::layout::WireTokenKind::FieldEnd);
                             let marker = next_marker("HWPBE", field_id);
                             let real_xml =
                                 build_bookmark_span_end_run_xml(char_pr_id_ref, field_id);
@@ -1463,7 +1587,7 @@ fn build_runs(
                             ledger.mark_cache_inadmissible("unencodable control skipped");
                             continue;
                         };
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
@@ -1481,7 +1605,7 @@ fn build_runs(
                             ledger.mark_cache_inadmissible("unencodable control skipped");
                             continue;
                         };
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
@@ -1555,7 +1679,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::Group { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         // Group (묶음 객체) → <hp:container>. Serde cannot
                         // express the heterogeneous, z-ordered child shapes
                         // inside the container, so we build the full fragment
@@ -1581,7 +1705,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::TextArt { .. } => {
-                        ledger.span(8, 0);
+                        ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         // TextArt (글맵시) → <hp:textart>. Serde cannot express
                         // the fixed corner-point block + <hp:textartPr> shape
                         // and the scaMatrix entries are derived, so we build the
@@ -2157,7 +2281,7 @@ fn build_sublist(
                 0,
                 0,
                 options,
-                0, // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
+                Vec::new(), // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
                 sink,
             );
             sink.leave();
