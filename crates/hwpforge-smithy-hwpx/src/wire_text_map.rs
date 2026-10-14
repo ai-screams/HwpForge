@@ -29,6 +29,19 @@
 
 use std::fmt;
 
+#[cfg(test)]
+thread_local! {
+    /// 좌표 변환이 검사한 span 수 — 테스트가 시간 대신 일의 양으로 상한을
+    /// 건다(스레드별).
+    pub(crate) static SPAN_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// span 하나를 검사했다고 센다(테스트 빌드에서만).
+fn visit_span() {
+    #[cfg(test)]
+    SPAN_VISITS.with(|visits| visits.set(visits.get() + 1));
+}
+
 /// 비-1:1 wire 소비 구간 하나.
 ///
 /// `wire_len != core_len` 이 불변식이다 (1:1 은 span 이 아니라 구간).
@@ -95,6 +108,10 @@ pub(crate) struct WireTextMap {
     wire_end: u32,
     /// Core 축 총길이.
     core_end: u32,
+    /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
+    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// 훑지 않는다).
+    core_start: Vec<u32>,
 }
 
 impl WireTextMap {
@@ -126,22 +143,24 @@ impl WireTextMap {
         if wire > self.wire_end {
             return Err(CacheMapError::OutOfRange { pos: wire, end: self.wire_end });
         }
-        let mut wire_cursor = 0u32;
-        let mut core_cursor = 0u32;
-        for span in &self.spans {
-            if wire <= span.wire_start {
-                // 1:1 구간 (span 시작점 포함 — 시작점의 core 값은 구간
-                // 공식과 동일).
-                return Ok(core_cursor + (wire - wire_cursor));
-            }
-            let span_end = span.wire_start + span.wire_len;
-            if wire < span_end {
-                return Err(CacheMapError::InsideContraction { wire });
-            }
-            core_cursor += (span.wire_start - wire_cursor) + span.core_len;
-            wire_cursor = span_end;
+        // The last span that starts before `wire` decides: inside it is a
+        // contraction; at or after its end the rest is one to one (a `wire`
+        // at a span's start counts with the gap before it, as before).
+        // 이것을 실패시키는 것: span 을 앞에서부터 훑기
+        // (`conversions_after_many_spans_stay_logarithmic`).
+        let before = self.spans.partition_point(|span| {
+            visit_span();
+            span.wire_start < wire
+        });
+        let Some(last) = before.checked_sub(1) else {
+            return Ok(wire);
+        };
+        let span = &self.spans[last];
+        let span_end = span.wire_start + span.wire_len;
+        if wire < span_end {
+            return Err(CacheMapError::InsideContraction { wire });
         }
-        Ok(core_cursor + (wire - wire_cursor))
+        Ok(self.core_start[last] + span.core_len + (wire - span_end))
     }
 
     /// Core 좌표 → wire 좌표.
@@ -159,32 +178,37 @@ impl WireTextMap {
         if core == 0 {
             return Ok(0);
         }
-        let mut wire_cursor = 0u32;
-        let mut core_cursor = 0u32;
-        for span in &self.spans {
-            let gap_core_end = core_cursor + (span.wire_start - wire_cursor);
-            if core < gap_core_end {
-                // 1:1 열린 구간 — 유일 preimage.
-                return Ok(wire_cursor + (core - core_cursor));
-            }
-            if core == gap_core_end {
-                // 영-core span 경계 = 축약점: earliest preimage(= span
-                // 시작 = 직전 1:1 구간의 그 core 위치)로 확정 — 실측
-                // 규약 (한컴은 경계 lineseg 를 marker 시작에 쓴다).
-                // core 기여 span (tab 등)도 span 시작이 유일 preimage 라
-                // 같은 식이 성립한다.
-                return Ok(span.wire_start);
-            }
-            let span_core_end = gap_core_end + span.core_len;
-            if core < span_core_end {
-                // span core 기여의 strict interior (core_len ≥ 2 인 경우만
-                // 도달 가능 — 현재 알려진 span 종류엔 없음, 방어적 Err).
+        // The first span that starts at or after `core` decides (S22 r2:
+        // binary search, not a walk from the front).
+        // 이것을 실패시키는 것: span 을 앞에서부터 훑기
+        // (`conversions_after_many_spans_stay_logarithmic`).
+        let at = self.core_start.partition_point(|&start| {
+            visit_span();
+            start < core
+        });
+        if let Some(last) = at.checked_sub(1) {
+            // span core 기여의 strict interior (core_len ≥ 2 인 경우만
+            // 도달 가능 — 현재 알려진 span 종류엔 없음, 방어적 Err).
+            if core < self.core_start[last] + self.spans[last].core_len {
                 return Err(CacheMapError::AmbiguousPreimage { core });
             }
-            core_cursor = span_core_end;
-            wire_cursor = span.wire_start + span.wire_len;
         }
-        Ok(wire_cursor + (core - core_cursor))
+        if self.core_start.get(at) == Some(&core) {
+            // 영-core span 경계 = 축약점: earliest preimage(= span 시작 =
+            // 직전 1:1 구간의 그 core 위치)로 확정 — 실측 규약 (한컴은 경계
+            // lineseg 를 marker 시작에 쓴다). core 기여 span (tab 등)도 span
+            // 시작이 유일 preimage 라 같은 식이 성립한다.
+            return Ok(self.spans[at].wire_start);
+        }
+        // 1:1 열린 구간 — 유일 preimage.
+        Ok(match at.checked_sub(1) {
+            Some(last) => {
+                let span = &self.spans[last];
+                let core_after = self.core_start[last] + span.core_len;
+                span.wire_start + span.wire_len + (core - core_after)
+            }
+            None => core,
+        })
     }
 }
 
@@ -266,15 +290,17 @@ impl WireMapBuilder {
         }
         let mut expect_wire = 0u32;
         let mut expect_core = 0u32;
+        let mut core_start = Vec::with_capacity(self.spans.len());
         for span in &self.spans {
             if span.wire_start < expect_wire || span.wire_len == 0 || span.wire_len == span.core_len
             {
                 return Err(CacheMapError::InvalidSpans);
             }
-            expect_core = expect_core
+            let start = expect_core
                 .checked_add(span.wire_start - expect_wire)
-                .and_then(|c| c.checked_add(span.core_len))
                 .ok_or(CacheMapError::InvalidSpans)?;
+            core_start.push(start);
+            expect_core = start.checked_add(span.core_len).ok_or(CacheMapError::InvalidSpans)?;
             expect_wire =
                 span.wire_start.checked_add(span.wire_len).ok_or(CacheMapError::InvalidSpans)?;
         }
@@ -288,6 +314,7 @@ impl WireMapBuilder {
             spans: self.spans,
             wire_end: self.wire_cursor,
             core_end: self.core_cursor,
+            core_start,
         })
     }
 }
@@ -478,6 +505,117 @@ impl TokenLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
+        if map.wire_end.checked_add(1) == Some(wire) {
+            return Ok(map.core_end);
+        }
+        if wire > map.wire_end {
+            return Err(CacheMapError::OutOfRange { pos: wire, end: map.wire_end });
+        }
+        let (mut wire_cursor, mut core_cursor) = (0u32, 0u32);
+        for span in &map.spans {
+            if wire <= span.wire_start {
+                return Ok(core_cursor + (wire - wire_cursor));
+            }
+            let span_end = span.wire_start + span.wire_len;
+            if wire < span_end {
+                return Err(CacheMapError::InsideContraction { wire });
+            }
+            core_cursor += (span.wire_start - wire_cursor) + span.core_len;
+            wire_cursor = span_end;
+        }
+        Ok(core_cursor + (wire - wire_cursor))
+    }
+
+    /// The walk from the front `to_wire` used before (S22 r2), as the oracle.
+    fn walked_to_wire(map: &WireTextMap, core: u32) -> Result<u32, CacheMapError> {
+        if core > map.core_end {
+            return Err(CacheMapError::OutOfRange { pos: core, end: map.core_end });
+        }
+        if core == 0 {
+            return Ok(0);
+        }
+        let (mut wire_cursor, mut core_cursor) = (0u32, 0u32);
+        for span in &map.spans {
+            let gap_core_end = core_cursor + (span.wire_start - wire_cursor);
+            if core < gap_core_end {
+                return Ok(wire_cursor + (core - core_cursor));
+            }
+            if core == gap_core_end {
+                return Ok(span.wire_start);
+            }
+            let span_core_end = gap_core_end + span.core_len;
+            if core < span_core_end {
+                return Err(CacheMapError::AmbiguousPreimage { core });
+            }
+            core_cursor = span_core_end;
+            wire_cursor = span.wire_start + span.wire_len;
+        }
+        Ok(wire_cursor + (core - core_cursor))
+    }
+
+    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
+    /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
+    #[test]
+    fn binary_search_matches_the_walk_everywhere() {
+        let maps: Vec<WireTextMap> = vec![
+            WireMapBuilder::new().finish().unwrap(),
+            {
+                let mut b = WireMapBuilder::new();
+                b.push_span(8, 0);
+                b.push_span(8, 0);
+                b.advance_identity(3);
+                b.push_span(8, 1);
+                b.advance_identity(2);
+                b.push_span(8, 0);
+                b.push_span(1, 0);
+                b.advance_identity(4);
+                b.push_span(8, 0);
+                b.finish().unwrap()
+            },
+            {
+                let mut b = WireMapBuilder::new();
+                b.advance_identity(5);
+                b.push_span(8, 1);
+                b.push_span(8, 1);
+                b.push_span(8, 0);
+                b.finish().unwrap()
+            },
+        ];
+        for map in maps {
+            for wire in 0..=map.wire_end + 2 {
+                assert_eq!(map.to_core(wire), walked_to_core(&map, wire), "wire {wire}");
+            }
+            for core in 0..=map.core_end + 1 {
+                assert_eq!(map.to_wire(core), walked_to_wire(&map, core), "core {core}");
+            }
+        }
+    }
+
+    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// after it — each conversion searches the spans, it does not walk them.
+    /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
+    /// 되돌리기(검사한 span 수가 N² 로 는다).
+    #[test]
+    fn conversions_after_many_spans_stay_logarithmic() {
+        let n = 16_000u32;
+        let mut b = WireMapBuilder::new();
+        for _ in 0..n {
+            b.push_span(8, 0);
+        }
+        b.advance_identity(1);
+        let map = b.finish().unwrap();
+        SPAN_VISITS.with(|visits| visits.set(0));
+        for _ in 0..n {
+            assert_eq!(map.to_core(8 * n + 1), Ok(1));
+            assert_eq!(map.to_wire(1), Ok(8 * n + 1));
+        }
+        let visits = SPAN_VISITS.with(std::cell::Cell::get);
+        assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
+    }
 
     /// S22 r1: the per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².

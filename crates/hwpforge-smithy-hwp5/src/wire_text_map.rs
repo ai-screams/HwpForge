@@ -102,6 +102,10 @@ pub(crate) struct WireTextMap {
     wire_end: u32,
     /// Core 축 총길이.
     core_end: u32,
+    /// 각 span 시작의 Core 위치(span 순서, 비감소) — 좌표 변환은 이것과
+    /// `spans` 의 wire 시작을 이진 탐색한다(S22 r2: 줄마다 span 을 앞에서부터
+    /// 훑지 않는다).
+    core_start: Vec<u32>,
 }
 
 impl WireTextMap {
@@ -121,23 +125,24 @@ impl WireTextMap {
         if wire > self.wire_end {
             return Err(CacheMapError::OutOfRange { pos: wire, end: self.wire_end });
         }
-        let mut wire_cursor = 0u32;
-        let mut core_cursor = 0u32;
-        for span in &self.spans {
+        // The last span that starts before `wire` decides: inside it is a
+        // contraction; at or after its end the rest is one to one (a `wire`
+        // at a span's start counts with the gap before it, as before).
+        // 이것을 실패시키는 것: span 을 앞에서부터 훑기
+        // (`conversions_after_many_spans_stay_logarithmic`).
+        let before = self.spans.partition_point(|span| {
             visit_span();
-            if wire <= span.wire_start {
-                // 1:1 구간 (span 시작점 포함 — 시작점의 core 값은 구간
-                // 공식과 동일).
-                return Ok(core_cursor + (wire - wire_cursor));
-            }
-            let span_end = span.wire_start + span.wire_len;
-            if wire < span_end {
-                return Err(CacheMapError::InsideContraction { wire });
-            }
-            core_cursor += (span.wire_start - wire_cursor) + span.core_len;
-            wire_cursor = span_end;
+            span.wire_start < wire
+        });
+        let Some(last) = before.checked_sub(1) else {
+            return Ok(wire);
+        };
+        let span = &self.spans[last];
+        let span_end = span.wire_start + span.wire_len;
+        if wire < span_end {
+            return Err(CacheMapError::InsideContraction { wire });
         }
-        Ok(core_cursor + (wire - wire_cursor))
+        Ok(self.core_start[last] + span.core_len + (wire - span_end))
     }
 
     /// 오름차순 질의용 커서 — [`Self::to_core`] 와 같은 값을 내되, 앞 질의가
@@ -283,15 +288,17 @@ impl WireMapBuilder {
         }
         let mut expect_wire = 0u32;
         let mut expect_core = 0u32;
+        let mut core_start = Vec::with_capacity(self.spans.len());
         for span in &self.spans {
             if span.wire_start < expect_wire || span.wire_len == 0 || span.wire_len == span.core_len
             {
                 return Err(CacheMapError::InvalidSpans);
             }
-            expect_core = expect_core
+            let start = expect_core
                 .checked_add(span.wire_start - expect_wire)
-                .and_then(|c| c.checked_add(span.core_len))
                 .ok_or(CacheMapError::InvalidSpans)?;
+            core_start.push(start);
+            expect_core = start.checked_add(span.core_len).ok_or(CacheMapError::InvalidSpans)?;
             expect_wire =
                 span.wire_start.checked_add(span.wire_len).ok_or(CacheMapError::InvalidSpans)?;
         }
@@ -305,6 +312,7 @@ impl WireMapBuilder {
             spans: self.spans,
             wire_end: self.wire_cursor,
             core_end: self.core_cursor,
+            core_start,
         })
     }
 }
@@ -409,6 +417,83 @@ impl TokenLedger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk from the front `to_core` used before (S22 r2), as the oracle.
+    fn walked_to_core(map: &WireTextMap, wire: u32) -> Result<u32, CacheMapError> {
+        if wire > map.wire_end {
+            return Err(CacheMapError::OutOfRange { pos: wire, end: map.wire_end });
+        }
+        let (mut wire_cursor, mut core_cursor) = (0u32, 0u32);
+        for span in &map.spans {
+            if wire <= span.wire_start {
+                return Ok(core_cursor + (wire - wire_cursor));
+            }
+            let span_end = span.wire_start + span.wire_len;
+            if wire < span_end {
+                return Err(CacheMapError::InsideContraction { wire });
+            }
+            core_cursor += (span.wire_start - wire_cursor) + span.core_len;
+            wire_cursor = span_end;
+        }
+        Ok(core_cursor + (wire - wire_cursor))
+    }
+
+    /// S22 r2: the binary searches give the walk's answer at every position,
+    /// over maps that mix zero-width tokens, tabs, runs of tokens, and text.
+    /// 이것을 실패시키는 것: 탐색 경계를 한 칸 어긋나게(`<` 를 `<=` 로) 하는 것.
+    #[test]
+    fn binary_search_matches_the_walk_everywhere() {
+        let maps: Vec<WireTextMap> = vec![
+            WireMapBuilder::new().finish().unwrap(),
+            {
+                let mut b = WireMapBuilder::new();
+                b.push_span(8, 0);
+                b.push_span(8, 0);
+                b.advance_identity(3);
+                b.push_span(8, 1);
+                b.advance_identity(2);
+                b.push_span(8, 0);
+                b.push_span(1, 0);
+                b.advance_identity(4);
+                b.push_span(8, 0);
+                b.finish().unwrap()
+            },
+            {
+                let mut b = WireMapBuilder::new();
+                b.advance_identity(5);
+                b.push_span(8, 1);
+                b.push_span(8, 1);
+                b.push_span(8, 0);
+                b.finish().unwrap()
+            },
+        ];
+        for map in maps {
+            for wire in 0..=map.wire_end + 2 {
+                assert_eq!(map.to_core(wire), walked_to_core(&map, wire), "wire {wire}");
+            }
+        }
+    }
+
+    /// S22 r2: 16,000 zero-width tokens, one character, then 16,000 lines
+    /// after it — each conversion searches the spans, it does not walk them.
+    /// 이것을 실패시키는 것: 좌표 변환을 앞에서부터 span 을 훑는 것으로
+    /// 되돌리기(검사한 span 수가 N² 로 는다).
+    #[test]
+    fn conversions_after_many_spans_stay_logarithmic() {
+        let n = 16_000u32;
+        let mut b = WireMapBuilder::new();
+        for _ in 0..n {
+            b.push_span(8, 0);
+        }
+        b.advance_identity(1);
+        let map = b.finish().unwrap();
+        SPAN_VISITS.with(|visits| visits.set(0));
+        for _ in 0..n {
+            assert_eq!(map.to_core(8 * n + 1), Ok(1));
+        }
+        let visits = SPAN_VISITS.with(std::cell::Cell::get);
+        assert!(visits <= 40 * u64::from(n), "{visits} spans checked for {n} lines");
+    }
 
     /// S22 r1: the per-line lookups use the ledger's index — N lines over
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
