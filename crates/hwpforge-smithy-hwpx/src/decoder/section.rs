@@ -724,8 +724,9 @@ fn convert_paragraph(
     let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
         // S22 r2: the cached lines were laid out with text Core does not hold
         // — wherever a line starts, replaying them would place other text.
-        // Checked on the loss itself, so it stops firing once the body is
-        // carried.
+        // Checked on the loss itself: once a later change carries a dropped
+        // body, the Core control that then holds it must be added to the
+        // kept-text list in `convert_ctrl_child` for this to stop firing.
         // 이것을 실패시키는 것: 이 검사 삭제, 또는 본문 없이 열린 시작도 drop
         // (`a_field_across_paragraphs_keeps_its_one_to_one_caches`).
         if lost_field_body {
@@ -3571,7 +3572,9 @@ mod tests {
     /// A begin with no body text, and a closed field that keeps its text,
     /// keep the cache.
     /// 이것을 실패시키는 것: 두 번째 시작에서의 누적 삭제(중첩 경우가 캐시 유지),
-    /// 닫힌 필드에서의 누적 삭제(책갈피·FORMULA 경우가 캐시 유지).
+    /// 닫힌 필드에서의 누적 삭제(책갈피·FORMULA 경우가 캐시 유지), 보존 목록에
+    /// 상호참조·메모를 더하기(그 경우가 캐시 유지), 보존 목록에서 필드·요약·
+    /// 경로를 빼기(날짜·요약·경로 경우가 drop).
     #[test]
     fn a_field_body_lost_anywhere_in_its_run_drops_the_cache() {
         let lines = |starts: &[u32]| -> String {
@@ -3644,7 +3647,7 @@ mod tests {
 
         // A closed field whose control does not hold its text (begin 0, "abc"
         // folded 8..11, end 11..19, "def" from 19 — the line at 20 is "e").
-        for kind in ["BOOKMARK", "FORMULA"] {
+        for kind in ["BOOKMARK", "FORMULA", "CROSSREF", "MEMO"] {
             let (kept, drops) =
                 decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
             assert_eq!((kept, drops.len()), (vec![false], 1), "{kind}");
@@ -3657,7 +3660,7 @@ mod tests {
                 + &para(run(t("ef")) + &run(end(7)), &[0, 1]),
         );
         assert_eq!((kept, drops.len()), (vec![true, true], 0), "open begin without body");
-        for kind in [ch, "HYPERLINK"] {
+        for kind in [ch, "HYPERLINK", "DATE", "SUMMERY", "PATH"] {
             let (kept, drops) =
                 decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
             assert_eq!((kept, drops.len()), (vec![true], 0), "{kind}");
