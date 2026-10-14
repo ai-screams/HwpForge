@@ -22,7 +22,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 | 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                                     |
 | **커밋·푸시·테스트 실행 전**           | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정)                                                              |
 | 새 타입/API 설계 · 테스트 작성         | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스)                                           |
-| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1\~38; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립))              |
+| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1\~40; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립))              |
 | 릴리스·머지 큐·publish 검증            | `RELEASING.md` (canonical — §8 운영 함정 포함)                                                                         |
 | 에픽 정식 절차                         | `.claude/rules/epic-workflow.md` (자동 로드)                                                                           |
 | 에이전트 경계/크레이트 규칙            | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬 (미추적 로컬 파일 — worktree 에서는 메인 체크아웃 경로로 읽는다) |
