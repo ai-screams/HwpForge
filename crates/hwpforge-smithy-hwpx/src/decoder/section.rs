@@ -688,6 +688,17 @@ fn convert_paragraph(
         lost_field_body |= lost;
         runs.append(&mut converted_runs);
     }
+    // Branch review A1: the dropped field body is lost content whether or
+    // not the paragraph carries a line cache — editors that re-encode the
+    // decode refuse it (`DecodeWarning::is_content_loss`), readers report it.
+    // 이것을 실패시키는 것: 이 보고 삭제, 또는 캐시가 있을 때만 보고
+    // (`a_lost_field_body_is_refused_by_the_editors`).
+    if lost_field_body {
+        ctx.content_lost(
+            "field_body",
+            "field body text the reader drops (an open begin, a second begin, or a field kept without its text) is not carried",
+        );
+    }
 
     // Normalize empty paragraphs: HWPX files from 한글 can have empty paragraphs
     // (blank lines). Core's validate() requires at least 1 run per paragraph.
@@ -3524,7 +3535,7 @@ mod tests {
             para(run(click_here(7) + &t("abcd")) + &run(t("efgh")), &[0, 14]),
             para(run(t("ij")) + &run(end_ctrl(7)), &[0, 1]),
         ]);
-        assert_eq!(warnings, 1);
+        assert_eq!(warnings, 2, "a cache drop and the lost body");
         assert_eq!(out[0].0, None);
         assert_eq!(out[1].0, Some(vec![0, 1]));
 
@@ -3533,7 +3544,7 @@ mod tests {
             para(run(begin_ctrl(7) + &t("abcd")), &[0, 9]),
             para(run(t("efgh")) + &run(end_ctrl(7)), &[0, 2]),
         ]);
-        assert_eq!(warnings, 1);
+        assert_eq!(warnings, 2, "a cache drop and the lost body");
         assert_eq!(out[0].0, None);
         assert_eq!(out[1].0, Some(vec![0, 2]));
 
@@ -3607,7 +3618,7 @@ mod tests {
                 .warnings
                 .iter()
                 .map(|w| format!("{w:?}"))
-                .filter(|w| w.contains("field body text"))
+                .filter(|w| w.contains("LayoutCacheDropped") && w.contains("field body text"))
                 .collect();
             (kept, drops)
         };
