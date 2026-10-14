@@ -662,6 +662,9 @@ fn convert_paragraph(
     let body_runs = &hx.runs[..hx.runs.len() - usize::from(end_mark.is_some())];
 
     let mut runs = Vec::new();
+    // S22 r2: text the run conversion folded into a field whose end is not
+    // in the same run, then left out of Core.
+    let mut lost_field_body = false;
     let mut has_title_mark = false;
     for (run_idx, hx_run) in body_runs.iter().enumerate() {
         // Extract page settings from secPr in first paragraph
@@ -681,7 +684,8 @@ fn convert_paragraph(
         ctx.enter(super::PathSeg::Run(run_idx));
         let result = convert_run(hx_run, depth, ctx);
         ctx.leave();
-        let mut converted_runs = result?;
+        let (mut converted_runs, lost) = result?;
+        lost_field_body |= lost;
         runs.append(&mut converted_runs);
     }
 
@@ -718,6 +722,19 @@ fn convert_paragraph(
     // marker 문단을 무음 오절단 — 철폐). 실패 = fail-closed: 캐시 미승격
     // + `DecodeWarning::LayoutCacheDropped` (추측 좌표 승격 금지).
     let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
+        // S22 r2: the cached lines were laid out with text Core does not hold
+        // — wherever a line starts, replaying them would place other text.
+        // Checked on the loss itself, so it stops firing once the body is
+        // carried.
+        // 이것을 실패시키는 것: 이 검사 삭제, 또는 본문 없이 열린 시작도 drop
+        // (`a_field_across_paragraphs_keeps_its_one_to_one_caches`).
+        if lost_field_body {
+            ctx.cache_dropped(
+                "field body text after a begin whose end is not in the same run is not carried"
+                    .into(),
+            );
+            return None;
+        }
         let (map, tokens) = match build_paragraph_wire_map(hx) {
             Ok(ledger) => ledger,
             Err(reason) => {
@@ -830,7 +847,9 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
 /// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
 /// `<hp:ctrl>` (footnote/endnote), and `<hp:rect>` (textbox) elements.
 /// Each is converted to a separate Run with the same charPrIDRef.
-fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<Run>> {
+/// Also returns whether text after a field begin whose end is not in this
+/// run was left out of the runs (that body is not carried).
+fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec<Run>, bool)> {
     const MAX_STYLE_INDEX: u32 = 100_000;
     if hx.char_pr_id_ref > MAX_STYLE_INDEX {
         return Err(crate::error::HwpxError::InvalidStructure {
@@ -975,6 +994,8 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
         }
     }
 
+    // A begin left open at the run's end: its body text is not emitted.
+    let lost_body = field_begin.is_some() && !field_body.is_empty();
     // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
     if let Some(fb) = field_begin.take() {
         if fb.field_type == "BOOKMARK" {
@@ -988,7 +1009,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<
         }
     }
 
-    Ok(runs)
+    Ok((runs, lost_body))
 }
 
 /// `<hp:ctrl>` 자식 하나를 문서 순서 위치에서 변환한다 (W1a 분리 헬퍼).
@@ -3399,11 +3420,13 @@ mod tests {
     /// templates wrap the whole body in one "본문" click-here field). Its
     /// begin and end tokens are zero-width and the text around them is one to
     /// one, so every paragraph keeps its cache and each line lands on its own
-    /// character. A line inside a body folded into the begin's run is refused
-    /// by the coordinate map; a line inside a field closed within the
-    /// paragraph drops by the field rule; a line right after an end keeps.
+    /// character. A paragraph whose body text shares the begin's run loses
+    /// that text from Core, so it drops its cache wherever its lines start
+    /// (S22 r2); a line inside a field closed within the paragraph drops by
+    /// the field rule; a line right after an end keeps.
     /// 이것을 실패시키는 것: 끝이 다른 문단에 있는 필드의 시작·끝 문단 캐시를
-    /// 버리는 것(첫 경우의 두 문단이 캐시를 잃는다).
+    /// 버리는 것(첫 경우의 두 문단이 캐시를 잃는다), 본문 소실 검사 삭제(접힌
+    /// 본문 밖에서 시작하는 줄 `[0,14]` 의 캐시가 남는다).
     #[test]
     fn a_field_across_paragraphs_keeps_its_one_to_one_caches() {
         let lines = |starts: &[u32]| -> String {
@@ -3456,8 +3479,23 @@ mod tests {
         assert_eq!(out[0], (Some(vec![0, 1]), "abcd".to_string()));
         assert_eq!(out[1], (Some(vec![0, 2]), "efgh".to_string()));
 
-        // A body folded into the begin's run: a line inside it (wire 9) has
-        // no Core position.
+        // S22 r2: the body "abcd" folded into the begin's run is left out of
+        // Core ("efgh" stays), so the cache drops though no line starts
+        // inside the folded body (wire 0, and 14 = "g").
+        let click_here = |id: u32| {
+            format!(
+                r#"<ctrl><fieldBegin id="{id}" type="CLICK_HERE" name="본문" editable="1" dirty="1" zorder="-1" fieldid="{id}"/></ctrl>"#
+            )
+        };
+        let (out, warnings) = decode(vec![
+            para(run(click_here(7) + &t("abcd")) + &run(t("efgh")), &[0, 14]),
+            para(run(t("ij")) + &run(end_ctrl(7)), &[0, 1]),
+        ]);
+        assert_eq!(warnings, 1);
+        assert_eq!(out[0].0, None);
+        assert_eq!(out[1].0, Some(vec![0, 1]));
+
+        // The same with a line inside the folded body (wire 9).
         let (out, warnings) = decode(vec![
             para(run(begin_ctrl(7) + &t("abcd")), &[0, 9]),
             para(run(t("efgh")) + &run(end_ctrl(7)), &[0, 2]),
