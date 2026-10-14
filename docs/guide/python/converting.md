@@ -117,7 +117,7 @@ except hwpforge.HwpForgeError as exc:
 - `discovery`는 `font_dirs` 밖을 더 볼지의 선택입니다: `"explicit"`(기본, 결정적) · `"hancom"`(한컴 설치 글꼴 위치) · `"platform"`(OS 글꼴).
 - `font_dirs`는 시퀀스여야 합니다. 문자열 하나를 주면 한 글자짜리 디렉터리들로 읽히는 대신 `TypeError`로 거부됩니다.
 - `partial_cache_reject=True`는 캐시가 일부만 있는 문서를 다시 배치하지 않고 거부합니다.
-- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`는 캐시가 없는 경우(`NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`, 한컴 재저장)와 지원하지 않는 내용(`INVALID_CACHE`·`UNSUPPORTED_CONTENT`, 한컴에서 PDF 저장)만 가르고 그 밖에는 같은 문장이므로, 무엇을 할지는 `cause["code"]`로 가르세요: `FONT_UNRESOLVED`는 `font_dirs`·`discovery`, `NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`는 한컴에서 다시 저장, `INVALID_CACHE`·`UNSUPPORTED_CONTENT`는 위 표.
+- 실패의 두 번째 분류는 `exc.cause`에 옵니다(`stage`·`code`·`kind`·`location`). `exc.hint`는 캐시가 없는 경우(`NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`, 한컴 재저장), 지원하지 않는 내용(`UNSUPPORTED_CONTENT`, 한컴에서 PDF 저장), 캐시가 재생과 맞지 않는 경우(`INVALID_CACHE`, 재저장 또는 메시지가 가리키는 내용에 따라 한컴 PDF 저장)만 가르고 그 밖에는 같은 문장이므로, 무엇을 할지는 `cause["code"]`로 가르세요: `FONT_UNRESOLVED`는 `font_dirs`·`discovery`, `NO_RENDERABLE_CACHE`·`MISSING_LAYOUT_CACHE`는 한컴에서 다시 저장, `INVALID_CACHE`·`UNSUPPORTED_CONTENT`는 위 표.
 
 ## `templates` · `schema`
 

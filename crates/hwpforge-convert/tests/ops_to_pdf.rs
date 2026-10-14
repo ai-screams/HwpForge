@@ -530,4 +530,43 @@ fn the_hint_tells_a_missing_cache_from_unsupported_content() {
     assert_eq!(unsupported.cause(), Some(PdfErrorCode::UnsupportedContent), "{unsupported}");
     let hint = unsupported.hint().expect("a hint");
     assert!(hint.contains("re-saving in Hancom does not change that"), "{hint}");
+
+    // S22 r2: a cache out of order (lines at wire 0, 40, 30 — after the
+    // section and column definitions, inside the text) is an InvalidCache a
+    // re-save can rewrite — not unsupported content. The encoder never
+    // writes such a cache, so the section XML is edited.
+    let bytes = {
+        use std::io::{Read as _, Write as _};
+        let source = retyped("rules-justify.hwpx", false);
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(source)).expect("zip");
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).expect("entry");
+            let name = entry.name().to_string();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).expect("read");
+            if name == "Contents/section0.xml" {
+                let xml = String::from_utf8(data).expect("utf-8");
+                let start = xml.find("<hp:linesegarray>").expect("a cache");
+                let end = start + xml[start..].find("</hp:linesegarray>").expect("closed");
+                let first = &xml[start..end];
+                let seg = &first[first.find("<hp:lineseg ").expect("a line")..];
+                let seg = &seg[..seg.find("/>").expect("closed") + 2];
+                let at = seg.find("textpos=\"").expect("textpos") + 9;
+                let rest = &seg[at + seg[at..].find('"').expect("quote")..];
+                let lines: String =
+                    [0, 40, 30].iter().map(|t| format!("{}{t}{rest}", &seg[..at])).collect();
+                data = format!("{}<hp:linesegarray>{lines}{}", &xml[..start], &xml[end..])
+                    .into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).expect("start");
+            out.write_all(&data).expect("write");
+        }
+        out.finish().expect("finish").into_inner()
+    };
+    let invalid = to_pdf(&bytes, &options()).expect_err("an out-of-order cache is refused");
+    assert_eq!(invalid.cause(), Some(PdfErrorCode::InvalidCache), "{invalid}");
+    assert!(invalid.to_string().contains("not monotonic"), "{invalid}");
+    let hint = invalid.hint().expect("a hint");
+    assert!(hint.contains("re-saving in Hancom rewrites it"), "{hint}");
 }

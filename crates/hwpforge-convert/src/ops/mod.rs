@@ -295,15 +295,24 @@ impl ConvertOpsError {
         // S22 r1: a render failure names what helps — re-saving in Hancom
         // writes a missing layout cache, but does not make content the replay
         // does not support renderable.
-        // 이것을 실패시키는 것: 원인 분기 삭제(미지원 내용에도 재저장 안내,
-        // `the_hint_tells_a_missing_cache_from_unsupported_content`).
+        // 이것을 실패시키는 것: 원인 분기 삭제(미지원 내용에도 재저장 안내),
+        // `InvalidCache` 를 미지원 내용 안내로 합치기
+        // (`the_hint_tells_a_missing_cache_from_unsupported_content`).
         match self.cause() {
             Some(PdfErrorCode::MissingLayoutCache | PdfErrorCode::NoRenderableCache) => Some(
                 "paragraphs without a layout cache: re-saving the document in Hancom writes one",
             ),
-            Some(PdfErrorCode::UnsupportedContent | PdfErrorCode::InvalidCache) => Some(
+            Some(PdfErrorCode::UnsupportedContent) => Some(
                 "the replay does not support this content yet, and re-saving in Hancom does not \
                  change that: export the PDF from Hancom",
+            ),
+            // S22 r2: a cache the replay cannot use — out of order, or over
+            // content it cannot draw. A re-save rewrites the cache; the
+            // message says which it was.
+            Some(PdfErrorCode::InvalidCache) => Some(
+                "the layout cache does not fit what the replay expects: re-saving in Hancom \
+                 rewrites it; if the message names content the replay cannot draw, export the \
+                 PDF from Hancom",
             ),
             _ => hint_for(self.code()),
         }
