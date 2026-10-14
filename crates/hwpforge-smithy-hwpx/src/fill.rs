@@ -205,12 +205,20 @@ impl WireScan {
                 at = self.list_host[list];
             }
         }
-        #[cfg(test)]
-        self.visits.set(self.visits.get() + self.caches.len());
         (0..self.caches.len())
-            .filter(|&j| j >= from[self.para_list[j]])
+            .filter(|&j| self.is_stale(j, &from))
             .flat_map(|j| self.caches[j].iter().cloned())
             .collect()
+    }
+
+    /// Whether paragraph `j` is at or after its list's earliest invalidation
+    /// point — the one place a paragraph is examined, counted there in tests
+    /// (S22 r2: the count follows the examining, so a second pass over the
+    /// paragraphs counts too).
+    fn is_stale(&self, j: usize, from: &[usize]) -> bool {
+        #[cfg(test)]
+        self.visits.set(self.visits.get() + 1);
+        j >= from[self.para_list[j]]
     }
 }
 
