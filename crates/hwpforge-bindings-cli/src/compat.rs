@@ -819,10 +819,21 @@ fn semantic_loss_error(cmd: Command, warnings: &[WarningInfo]) -> Option<CliErro
 pub fn convert_error(cmd: Command, err: ConvertOpsError) -> CliError {
     let code = err.code();
     let message = err.to_string();
-    let (legacy, hint) = match lookup(cmd, |row| row.code == code) {
+    let (legacy, mut hint) = match lookup(cmd, |row| row.code == code) {
         Some(row) => (row.legacy, resolved_hint(row.hint, err.hint())),
         None => (code.as_str(), err.hint()),
     };
+    // `to-pdf PDF_RENDER_FAILED`'s frozen hint advised a Hancom re-save for
+    // every cause. For a missing or invalid layout cache and for content the
+    // replay does not support, the hint now names what helps — the same
+    // cause-specific text the library gives (`ConvertOpsError::hint`); every
+    // other cause keeps the frozen text. Recorded as a `dynamic:` row in
+    // `tests/data/new_codes.txt` (`HINT_MADE_PER_CAUSE`).
+    // 이것을 실패시키는 것: 이 분기 삭제
+    // (`to_pdf_hint_follows_the_render_cause`).
+    if cmd == Command::ToPdf && pdf_cause_has_its_own_hint(err.cause()) {
+        hint = err.hint();
+    }
     let base = match hint {
         Some(hint) => CliError::new(legacy, message).with_hint(hint),
         None => CliError::new(legacy, message),
@@ -859,7 +870,20 @@ const DYNAMIC_EXIT: &[(Command, &str, i32)] = &[
     (Command::Stamp, "STAMP_NAME_COLLISION", 1),
     (Command::Stamp, "STAMP_CANDIDATE_UNCOVERED", 1),
     (Command::SetCell, "TABLE_NOT_FOUND", 1),
+    (Command::ToPdf, "PDF_RENDER_FAILED", 2),
 ];
+
+/// Whether a `to-pdf` render failure's cause gets the library's
+/// cause-specific hint instead of the frozen general one.
+fn pdf_cause_has_its_own_hint(cause: Option<hwpforge_smithy_pdf::PdfErrorCode>) -> bool {
+    use hwpforge_smithy_pdf::PdfErrorCode as C;
+    matches!(
+        cause,
+        Some(
+            C::MissingLayoutCache | C::NoRenderableCache | C::InvalidCache | C::UnsupportedContent
+        )
+    )
+}
 
 /// The process exit code for `cmd`'s error `err` (its `code` field, as
 /// returned by [`cli_error`]/[`convert_error`]). Exit codes vary by command,
@@ -1054,7 +1078,14 @@ mod tests {
         ("patch", "SECTION_INDEX_MISMATCH"),
         ("stamp", "STAMP_CELL_NOT_ANCHOR"),
         ("set-cell", "TABLE_NOT_FOUND"),
+        ("to-pdf", "PDF_RENDER_FAILED"),
     ];
+
+    /// `(command, code)` pairs whose frozen literal hint became per-cause:
+    /// `legacy_codes.txt` keeps the literal as the historical record,
+    /// `new_codes.txt` records a `dynamic:` row describing today's choice,
+    /// and the pair is in [`DYNAMIC`].
+    const HINT_MADE_PER_CAUSE: &[(&str, &str)] = &[("to-pdf", "PDF_RENDER_FAILED")];
 
     /// `(command, legacy)` pairs that *have* an `OpsCode` in the shared
     /// vocabulary but are unreachable through the specific `ops` function
@@ -1337,6 +1368,91 @@ mod tests {
     /// [`HINT_ADDED_TO_A_HINTLESS_ROW`] name are excused, and
     /// [`superseded_legacy_hints_match_the_recorded_replacement`] proves
     /// each excuse is still doing work.
+    /// Each `HINT_MADE_PER_CAUSE` pair keeps its frozen literal in
+    /// `legacy_codes.txt`, has one `dynamic:` row in `new_codes.txt`, and is
+    /// in [`DYNAMIC`].
+    #[test]
+    fn hints_made_per_cause_are_recorded_on_both_sides() {
+        let legacy = rows_in(SNAPSHOT);
+        let new = rows_in(SNAPSHOT_NEW);
+        for (cmd, code) in HINT_MADE_PER_CAUSE {
+            assert!(
+                legacy.iter().any(|r| r.cmd == *cmd
+                    && r.code == *code
+                    && matches!(r.hint, SnapshotHint::Literal(_))),
+                "({cmd}, {code}) has no frozen literal in legacy_codes.txt"
+            );
+            let rows: Vec<_> = new.iter().filter(|r| r.cmd == *cmd && r.code == *code).collect();
+            assert!(
+                rows.len() == 1 && rows[0].hint == SnapshotHint::Dynamic,
+                "({cmd}, {code}) needs exactly one dynamic: row in new_codes.txt"
+            );
+            assert!(DYNAMIC.contains(&(*cmd, *code)), "({cmd}, {code}) is not in DYNAMIC");
+        }
+    }
+
+    /// `to-pdf`'s render-failure hint follows the cause: a missing layout
+    /// cache (and no renderable cache) asks for a re-save, an invalid cache
+    /// keeps a re-save open, content the replay does not support asks for a
+    /// PDF from Hancom, and any other cause keeps the frozen general hint.
+    /// The code, the exit code and the cause block are unchanged.
+    /// 이것을 실패시키는 것: `convert_error` 의 원인 분기 삭제(네 원인 모두
+    /// 옛 일반 힌트).
+    #[test]
+    fn to_pdf_hint_follows_the_render_cause() {
+        use hwpforge_smithy_pdf::PdfError;
+        let hint_of = |e: PdfError| {
+            let err = convert_error(Command::ToPdf, ConvertOpsError::Pdf(e));
+            assert_eq!(err.code, "PDF_RENDER_FAILED");
+            assert!(err.cause.is_some(), "the cause block stays");
+            err.hint.expect("a hint")
+        };
+        let frozen = legacy_hint("to-pdf", "PDF_RENDER_FAILED");
+        let missing = hint_of(PdfError::MissingLayoutCache { count: 1, first: "s0/p0".into() });
+        assert!(missing.contains("re-saving the document in Hancom writes one"), "{missing}");
+        let none = hint_of(PdfError::NoRenderableCache { section: 0 });
+        assert_eq!(none, missing);
+        let invalid = hint_of(PdfError::InvalidCache { detail: "textpos not monotonic".into() });
+        assert!(invalid.contains("re-saving in Hancom rewrites it"), "{invalid}");
+        let unsupported = hint_of(PdfError::UnsupportedContent {
+            kind: "non-default table position",
+            location: "s0/p0".into(),
+        });
+        assert!(unsupported.contains("export the PDF from Hancom"), "{unsupported}");
+        assert!(unsupported.contains("does not change that"), "{unsupported}");
+        let font = hint_of(PdfError::FontUnresolved { face: "함초롬바탕".into() });
+        assert_eq!(font, frozen);
+        for hint in [&missing, &invalid, &unsupported] {
+            assert_ne!(hint, &frozen);
+        }
+        assert_eq!(
+            exit_code(
+                Command::ToPdf,
+                &convert_error(
+                    Command::ToPdf,
+                    ConvertOpsError::Pdf(PdfError::UnsupportedContent {
+                        kind: "x",
+                        location: String::new()
+                    })
+                )
+            ),
+            2
+        );
+    }
+
+    /// The literal hint `legacy_codes.txt` froze for a pair.
+    fn legacy_hint(cmd: &str, code: &str) -> String {
+        rows_in(SNAPSHOT)
+            .into_iter()
+            .find_map(|r| match r.hint {
+                SnapshotHint::Literal(text) if r.cmd == cmd && r.code == code => {
+                    Some(text.to_string())
+                }
+                _ => None,
+            })
+            .expect("a frozen literal")
+    }
+
     #[test]
     fn legacy_and_new_snapshots_stay_disjoint() {
         fn pairs(text: &str) -> BTreeSet<(&str, &str)> {
@@ -1352,6 +1468,7 @@ mod tests {
             .iter()
             .map(|(cmd, code, _)| (*cmd, *code))
             .chain(HINT_ADDED_TO_A_HINTLESS_ROW.iter().copied())
+            .chain(HINT_MADE_PER_CAUSE.iter().copied())
             .collect();
         let legacy = pairs(SNAPSHOT);
         let new = pairs(SNAPSHOT_NEW);
