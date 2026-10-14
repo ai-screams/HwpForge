@@ -730,7 +730,7 @@ fn convert_paragraph(
         // (`a_field_across_paragraphs_keeps_its_one_to_one_caches`).
         if lost_field_body {
             ctx.cache_dropped(
-                "field body text after a begin whose end is not in the same run is not carried"
+                "field body text the reader drops (an open begin, a second begin, or a field kept without its text) is not carried"
                     .into(),
             );
             return None;
@@ -885,6 +885,10 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     let mut field_begin: Option<&HxFieldBegin> = None;
     let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
     let mut field_body = String::new();
+    // S22 r3: body text dropped without being emitted, wherever it is
+    // dropped in this run (a second begin over an open one, a closed field
+    // with no Core form, the run's end).
+    let mut lost_body = false;
 
     for &(kind, idx) in &order {
         match kind {
@@ -923,6 +927,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
                     &mut field_begin,
                     &mut field_begin_char_shape,
                     &mut field_body,
+                    &mut lost_body,
                     ctx,
                 )?;
             }
@@ -995,7 +1000,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     }
 
     // A begin left open at the run's end: its body text is not emitted.
-    let lost_body = field_begin.is_some() && !field_body.is_empty();
+    lost_body |= field_begin.is_some() && !field_body.is_empty();
     // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
     if let Some(fb) = field_begin.take() {
         if fb.field_type == "BOOKMARK" {
@@ -1025,6 +1030,7 @@ fn convert_ctrl_child<'a>(
     field_begin: &mut Option<&'a HxFieldBegin>,
     field_begin_char_shape: &mut CharShapeIndex,
     field_body: &mut String,
+    lost_body: &mut bool,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<()> {
     {
@@ -1058,6 +1064,10 @@ fn convert_ctrl_child<'a>(
         // Field begin: remember for pairing with fieldEnd — 사이드카 순서
         // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다 (W1a).
         if let Some(fb) = &ctrl.field_begin {
+            // S22 r3: a begin over one still open drops the open one's body.
+            // 이것을 실패시키는 것: 이 누적 삭제
+            // (`a_field_body_lost_anywhere_in_its_run_drops_the_cache`).
+            *lost_body |= field_begin.is_some() && !field_body.is_empty();
             *field_begin = Some(fb);
             *field_begin_char_shape = char_shape_id;
             field_body.clear();
@@ -1067,11 +1077,33 @@ fn convert_ctrl_child<'a>(
         // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
         if ctrl.field_end.is_some() {
             if let Some(fb) = field_begin.take() {
-                if let Some(run) =
-                    decode_field_control(fb, field_body, *field_begin_char_shape, depth, true, ctx)?
-                {
-                    runs.push(run);
-                }
+                let run = decode_field_control(
+                    fb,
+                    field_body,
+                    *field_begin_char_shape,
+                    depth,
+                    true,
+                    ctx,
+                )?;
+                // S22 r3: a closed field keeps its body only in the controls
+                // that hold it as text; any other (a bookmark span, a cross
+                // reference, a memo, a type with no Core form) drops it.
+                // 이것을 실패시키는 것: 이 누적 삭제
+                // (`a_field_body_lost_anywhere_in_its_run_drops_the_cache`).
+                let carried = run.as_ref().is_some_and(|r| {
+                    matches!(
+                        &r.content,
+                        RunContent::Control(c) if matches!(
+                            **c,
+                            Control::Hyperlink { .. }
+                                | Control::Field { .. }
+                                | Control::UnknownSummary { .. }
+                                | Control::PathField { .. }
+                        )
+                    )
+                });
+                *lost_body |= !carried && !field_body.is_empty();
+                runs.extend(run);
                 field_body.clear();
             }
         }
@@ -3529,6 +3561,107 @@ mod tests {
         let (out, warnings) =
             decode(vec![para(run(begin_ctrl(1) + &end_ctrl(1)) + &run(t("가나")), &[0, 16])]);
         assert_eq!((out[0].0.clone(), warnings), (Some(vec![0, 0]), 0));
+    }
+
+    /// S22 r3: field body text dropped anywhere in its run drops the
+    /// paragraph's cache — at the run's end, under a second begin (nested,
+    /// with the inner field open or closed in the same run), or in a closed
+    /// field whose control does not hold its text (a bookmark span, a type
+    /// with no Core form) — in a body paragraph, a table cell or a text box.
+    /// A begin with no body text, and a closed field that keeps its text,
+    /// keep the cache.
+    /// 이것을 실패시키는 것: 두 번째 시작에서의 누적 삭제(중첩 경우가 캐시 유지),
+    /// 닫힌 필드에서의 누적 삭제(책갈피·FORMULA 경우가 캐시 유지).
+    #[test]
+    fn a_field_body_lost_anywhere_in_its_run_drops_the_cache() {
+        let lines = |starts: &[u32]| -> String {
+            starts
+                .iter()
+                .map(|w| format!(r#"<lineseg textpos="{w}" vertpos="0" vertsize="1000"/>"#))
+                .collect()
+        };
+        let begin = |id: u32, kind: &str| {
+            format!(
+                r#"<ctrl><fieldBegin id="{id}" type="{kind}" name="f{id}" editable="1" dirty="1" zorder="-1" fieldid="{id}"/></ctrl>"#
+            )
+        };
+        let end = |id: u32| format!(r#"<ctrl><fieldEnd beginIDRef="{id}" fieldid="{id}"/></ctrl>"#);
+        let run = |inner: String| format!(r#"<run charPrIDRef="0">{inner}</run>"#);
+        let t = |s: &str| format!("<t>{s}</t>");
+        let para = |runs: String, starts: &[u32]| {
+            format!(
+                r#"<p paraPrIDRef="0">{runs}<linesegarray>{}</linesegarray></p>"#,
+                lines(starts)
+            )
+        };
+        // Body-paragraph caches, and the "field body" drop warnings' paths.
+        let decode = |body: String| {
+            let xml = format!("<sec>{body}</sec>");
+            let result = parse_section(&xml, 0, &HashMap::new()).unwrap();
+            let kept: Vec<bool> =
+                result.paragraphs.iter().map(|p| p.layout_cache.is_some()).collect();
+            let drops: Vec<String> = result
+                .warnings
+                .iter()
+                .map(|w| format!("{w:?}"))
+                .filter(|w| w.contains("field body text"))
+                .collect();
+            (kept, drops)
+        };
+        let ch = "CLICK_HERE";
+        // The review's case: begin 7, "abcd", begin 8 in one run (the second
+        // begin drops "abcd"), "efgh" in the next; the line at 22 is "g".
+        let nested = || {
+            para(run(begin(7, ch) + &t("abcd") + &begin(8, ch)) + &run(t("efgh")), &[0, 22])
+                + &para(run(t("ij")) + &run(end(8) + &end(7)), &[0, 1])
+        };
+        let (kept, drops) = decode(nested());
+        assert_eq!((kept, drops.len()), (vec![false, true], 1), "nested");
+
+        // The inner field closes in the same run: "abcd" is still dropped.
+        let (kept, drops) = decode(
+            para(
+                run(begin(7, ch) + &t("abcd") + &begin(8, ch) + &t("xy") + &end(8))
+                    + &run(t("efgh")),
+                &[0, 32],
+            ) + &para(run(t("ij")) + &run(end(7)), &[0, 1]),
+        );
+        assert_eq!((kept, drops.len()), (vec![false, true], 1), "inner closed");
+
+        // The same in a table cell and in a text box.
+        let cell = format!(
+            r#"<p paraPrIDRef="0"><run charPrIDRef="0"><tbl rowCnt="1" colCnt="1"><sz width="10000" height="2000"/><tr><tc><subList>{}</subList><cellAddr colAddr="0" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/><cellSz width="10000" height="2000"/></tc></tr></tbl></run></p>"#,
+            nested()
+        );
+        let (_, drops) = decode(cell);
+        assert!(drops.len() == 1 && drops[0].contains("TableCell"), "cell: {drops:?}");
+        let text_box = format!(
+            r#"<p paraPrIDRef="0"><run charPrIDRef="0"><rect id="1"><sz width="1000" height="1000"/><pos treatAsChar="1"/><drawText><subList>{}</subList></drawText></rect></run></p>"#,
+            nested()
+        );
+        let (_, drops) = decode(text_box);
+        assert!(drops.len() == 1 && drops[0].contains("TextBox"), "text box: {drops:?}");
+
+        // A closed field whose control does not hold its text (begin 0, "abc"
+        // folded 8..11, end 11..19, "def" from 19 — the line at 20 is "e").
+        for kind in ["BOOKMARK", "FORMULA"] {
+            let (kept, drops) =
+                decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
+            assert_eq!((kept, drops.len()), (vec![false], 1), "{kind}");
+        }
+
+        // Kept: a begin with no body text in its run, and closed fields
+        // whose controls hold their text.
+        let (kept, drops) = decode(
+            para(run(begin(7, ch)) + &run(t("abcd")), &[0, 9])
+                + &para(run(t("ef")) + &run(end(7)), &[0, 1]),
+        );
+        assert_eq!((kept, drops.len()), (vec![true, true], 0), "open begin without body");
+        for kind in [ch, "HYPERLINK"] {
+            let (kept, drops) =
+                decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
+            assert_eq!((kept, drops.len()), (vec![true], 0), "{kind}");
+        }
     }
 
     #[test]
