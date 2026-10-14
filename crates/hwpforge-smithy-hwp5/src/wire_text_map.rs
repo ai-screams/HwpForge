@@ -391,18 +391,16 @@ impl TokenLedger {
         core: u32,
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
-        let here: Vec<&ZeroToken> = self
-            .by_core
-            .get(&core)
-            .map(|indices| indices.iter().map(|&i| &self.tokens[i]).collect())
-            .unwrap_or_default();
-        #[cfg(test)]
-        self.visits.set(self.visits.get() + here.len());
-        let k = here.iter().take_while(|t| t.wire_start < wire).count();
+        // S22 r2: borrow the position's index and binary search for the
+        // tokens before `wire`; read only that prefix and the token after it.
+        let here = self.by_core.get(&core).map_or(&[][..], Vec::as_slice);
+        let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
         (k > 0).then(|| {
+            #[cfg(test)]
+            self.visits.set(self.visits.get() + k + 1);
             hwpforge_core::layout::LineBoundary::new(
-                here[..k].iter().map(|t| t.kind).collect(),
-                here.get(k).map(|t| t.kind),
+                here[..k].iter().map(|&i| self.tokens[i].kind).collect(),
+                here.get(k).map(|&i| self.tokens[i].kind),
             )
         })
     }
@@ -416,6 +414,27 @@ mod tests {
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
+    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// text, every line at 0) — each lookup reads only the prefix it needs,
+    /// not the whole position.
+    /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것
+    /// (살펴본 수 N²).
+    #[test]
+    fn lookups_at_one_crowded_position_stay_linear() {
+        use hwpforge_core::layout::WireTokenKind::Bookmark;
+        let n = 4096u32;
+        let mut ledger = TokenLedger::default();
+        for i in 0..n {
+            ledger.push(ZeroToken { core: 0, wire_start: 8 * i, kind: Bookmark });
+        }
+        for _ in 0..n {
+            assert_eq!(ledger.boundary_at(0, 0), None);
+            assert_eq!(ledger.boundary_at(0, 8).map(|b| b.skip.len()), Some(1));
+        }
+        let visits = ledger.visits.get();
+        assert!(visits <= 3 * n as usize, "{visits} lookups for {n} lines");
+    }
+
     #[test]
     fn per_line_lookups_stay_linear() {
         use hwpforge_core::layout::WireTokenKind::{Bookmark, FieldBegin, FieldEnd};

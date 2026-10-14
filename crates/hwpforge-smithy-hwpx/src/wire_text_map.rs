@@ -397,25 +397,28 @@ impl TokenLedger {
         wire: u32,
     ) -> Option<hwpforge_core::layout::LineBoundary> {
         let here = self.at(core);
-        let k = here.iter().take_while(|t| t.wire_start < wire).count();
+        // S22 r2: binary search for the tokens before `wire`, then read only
+        // that prefix and the token after it.
+        let k = here.partition_point(|&i| self.tokens[i].wire_start < wire);
         (k > 0).then(|| {
+            self.count_visits(k + 1);
             hwpforge_core::layout::LineBoundary::new(
-                here[..k].iter().map(|t| t.kind).collect(),
-                here.get(k).map(|t| t.kind),
+                here[..k].iter().map(|&i| self.tokens[i].kind).collect(),
+                here.get(k).map(|&i| self.tokens[i].kind),
             )
         })
     }
 
-    /// Core 위치 `core` 의 토큰들, wire 순서.
-    fn at(&self, core: u32) -> Vec<&ZeroToken> {
-        let here: Vec<&ZeroToken> = self
-            .by_core
-            .get(&core)
-            .map(|indices| indices.iter().map(|&i| &self.tokens[i]).collect())
-            .unwrap_or_default();
+    /// Core 위치 `core` 의 토큰 번호들, wire 순서 — 색인을 빌린다(복제하지
+    /// 않는다).
+    fn at(&self, core: u32) -> &[usize] {
+        self.by_core.get(&core).map_or(&[], Vec::as_slice)
+    }
+
+    /// 조회가 살펴본 토큰 수를 센다(선형성 시험용).
+    fn count_visits(&self, _n: usize) {
         #[cfg(test)]
-        self.visits.set(self.visits.get() + here.len());
-        here
+        self.visits.set(self.visits.get() + _n);
     }
 
     /// 경계가 가리키는 줄 시작의 wire 위치. 종류 열이 맞지 않거나, 그 자리가
@@ -428,30 +431,40 @@ impl TokenLedger {
     ) -> Result<u32, String> {
         let here = self.at(core);
         let k = boundary.skip.len();
-        let kinds: Vec<_> = here.iter().map(|t| t.kind).collect();
-        if kinds.len() < k || kinds[..k] != boundary.skip[..] {
+        let kinds = || -> Vec<_> { here.iter().map(|&i| self.tokens[i].kind).collect() };
+        // S22 r2: only the skipped prefix and the token after it are read.
+        self.count_visits(k.min(here.len()) + 1);
+        let matches = here.len() >= k
+            && here[..k].iter().zip(&boundary.skip).all(|(&i, kind)| self.tokens[i].kind == *kind);
+        if !matches {
             return Err(format!(
-                "line boundary at core {core}: skip {:?} does not match the tokens {kinds:?}",
-                boundary.skip
+                "line boundary at core {core}: skip {:?} does not match the tokens {:?}",
+                boundary.skip,
+                kinds()
             ));
         }
         let wire = match boundary.next {
-            Some(next) => match here.get(k) {
+            Some(next) => match here.get(k).map(|&i| &self.tokens[i]) {
                 Some(t) if t.kind == next => t.wire_start,
                 _ => {
                     return Err(format!(
-                        "line boundary at core {core}: token {k} is not {next:?} ({kinds:?})"
+                        "line boundary at core {core}: token {k} is not {next:?} ({:?})",
+                        kinds()
                     ))
                 }
             },
-            None if k == kinds.len() => match k.checked_sub(1) {
-                Some(last) => here[last].wire_start + here[last].wire_len,
+            None if k == here.len() => match k.checked_sub(1) {
+                Some(last) => {
+                    let t = &self.tokens[here[last]];
+                    t.wire_start + t.wire_len
+                }
                 None => map.to_wire(core).map_err(|e| e.to_string())?,
             },
             None => {
                 return Err(format!(
-                    "line boundary at core {core}: {} token(s) left after skip ({kinds:?})",
-                    kinds.len() - k
+                    "line boundary at core {core}: {} token(s) left after skip ({:?})",
+                    here.len() - k,
+                    kinds()
                 ))
             }
         };
@@ -470,6 +483,31 @@ mod tests {
     /// a paragraph of 3N tokens look at O(N) tokens and spans in all, not N².
     /// 이것을 실패시키는 것: `at` 를 전체 토큰 필터로, 또는 `inside_field` 를
     /// 질의마다 전체 토큰 순회로 되돌리는 것(살펴본 수가 N² 로 는다).
+    /// S22 r2: N tokens and N lines at one Core position (bookmarks with no
+    /// text, every line at 0) — each lookup reads only the prefix it needs,
+    /// not the whole position.
+    /// 이것을 실패시키는 것: 조회마다 그 위치의 토큰 전체를 복제·순회하는 것
+    /// (살펴본 수 N²).
+    #[test]
+    fn lookups_at_one_crowded_position_stay_linear() {
+        use hwpforge_core::layout::{LineBoundary, WireTokenKind::Bookmark};
+        let n = 4096u32;
+        let mut b = WireMapBuilder::new();
+        let mut ledger = TokenLedger::default();
+        for i in 0..n {
+            ledger.push(ZeroToken { core: 0, wire_start: 8 * i, wire_len: 8, kind: Bookmark });
+            b.push_span(8, 0);
+        }
+        let map = b.finish().expect("valid map");
+        let after_one = LineBoundary::new(vec![Bookmark], Some(Bookmark));
+        for _ in 0..n {
+            assert_eq!(ledger.boundary_at(0, 0), None);
+            assert_eq!(ledger.place(&map, 0, &after_one), Ok(8));
+        }
+        let visits = ledger.visits.get();
+        assert!(visits <= 3 * n as usize, "{visits} lookups for {n} lines");
+    }
+
     #[test]
     fn per_line_lookups_stay_linear() {
         use hwpforge_core::layout::WireTokenKind::{Bookmark, FieldBegin, FieldEnd};
