@@ -42,7 +42,7 @@
 //!   into [`Metadata`] values.
 //!
 //! Defense-in-depth caps mirror the HWPX decoder
-//! ([`crate::decoder::package`] constants): per-property allocation
+//! (`crate::decoder::package` constants): per-property allocation
 //! capped at 64 KiB, property count capped at 256.
 
 use hwpforge_core::metadata::Metadata;

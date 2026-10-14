@@ -39,7 +39,7 @@ use crate::cell_edit::normalize_label;
 use crate::fill::visit_section_fields;
 use crate::table_inventory::{for_each_table_mut, tables_in_document};
 
-/// One field created by [`commit_cells`].
+/// One field created by `commit_cells`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CellStampedField {

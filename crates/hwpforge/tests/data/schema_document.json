@@ -1537,7 +1537,7 @@
               "type": "object",
               "properties": {
                 "inst_id": {
-                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).",
+                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`].",
                   "anyOf": [
                     {
                       "$ref": "#/$defs/ObjectId"
@@ -1573,7 +1573,7 @@
               "type": "object",
               "properties": {
                 "inst_id": {
-                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).",
+                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`].",
                   "anyOf": [
                     {
                       "$ref": "#/$defs/ObjectId"
@@ -2729,7 +2729,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A cross-reference (상호참조) to a bookmark, footnote, endnote,\noutline heading, table/figure/equation caption.\n\nMaps to HWPX `fieldBegin type=\"CROSSREF\"` with parameters.\n\nWave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로\n변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로\n구분되어 caller 가 의미를 정확히 알 수 있음.\n\nWave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.\nHWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run\n으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display\ntext 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection\n이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.\n빈 문자열은 \"display text 없음\" 의미 (Hyperlink::text 와 동일).",
+          "description": "A cross-reference (상호참조) to a bookmark, footnote, endnote,\noutline heading, table/figure/equation caption.\n\nMaps to HWPX `fieldBegin type=\"CROSSREF\"` with parameters.\n\nWave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로\n변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로\n구분되어 caller 가 의미를 정확히 알 수 있음.\n\nWave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.\nHWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run\n으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display\ntext 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection\n이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.\n빈 문자열은 \"display text 없음\" 의미 (Hyperlink::text 와 동일).",
           "type": "object",
           "properties": {
             "CrossRef": {
@@ -3023,7 +3023,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A `nwno` **새 번호 지정** control — restarts a numbering counter\nfrom this position (HWPX `<hp:newNum num numType>`).\n\nHWP5 wire (native fixture 실측 2026-08-12): 10 bytes —\n`ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the\nparagraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로\n시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies\nfrom the **physical page containing the control** (PDF 실측:\n1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).",
+          "description": "A `nwno` **새 번호 지정** control — restarts a numbering counter\nfrom this position (HWPX `<hp:newNum num numType>`).\n\nHWP5 wire (native fixture 실측 2026-08-12): 10 bytes —\n`ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the\nparagraph text by a `0x15` inline marker. 한컴 \\[쪽\\]→\\[새 번호로\n시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies\nfrom the **physical page containing the control** (PDF 실측:\n1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).",
           "type": "object",
           "properties": {
             "NewNumber": {
@@ -3992,7 +3992,7 @@
       "type": "string"
     },
     "RefTarget": {
-      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`] with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
+      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
       "oneOf": [
         {
           "description": "사용자 지정 책갈피 이름 (Bookmark 전용).",

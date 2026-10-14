@@ -139,7 +139,7 @@ pub enum Control {
     /// suffix 의 typed 보존은 section note-format 승격(별도 승인) 대상.
     Footnote {
         /// Object identity for cross-ref linking (optional). Shares the
-        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        /// [`ObjectId`] space with [`RefTarget::Object`].
         inst_id: Option<ObjectId>,
         /// Paragraphs that form the footnote body.
         paragraphs: Vec<Paragraph>,
@@ -152,7 +152,7 @@ pub enum Control {
     /// 독립 카운터).
     Endnote {
         /// Object identity for cross-ref linking (optional). Shares the
-        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        /// [`ObjectId`] space with [`RefTarget::Object`].
         inst_id: Option<ObjectId>,
         /// Paragraphs that form the endnote body.
         paragraphs: Vec<Paragraph>,
@@ -628,7 +628,7 @@ pub enum Control {
     /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
     ///
     /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
-    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로
+    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (`#<id>`) 가 타입으로
     /// 구분되어 caller 가 의미를 정확히 알 수 있음.
     ///
     /// Wave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.
@@ -810,7 +810,7 @@ pub enum Control {
     ///
     /// HWP5 wire (native fixture 실측 2026-08-12): 10 bytes —
     /// `ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the
-    /// paragraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로
+    /// paragraph text by a `0x15` inline marker. 한컴 \[쪽\]→\[새 번호로
     /// 시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies
     /// from the **physical page containing the control** (PDF 실측:
     /// 1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).

@@ -54,7 +54,7 @@ impl PathFieldCommand {
 /// Cross-reference target identifier (Wave 12m Phase 2).
 ///
 /// Replaces the previous `target_name: String` field on
-/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
+/// [`Control::CrossRef`](crate::control::Control::CrossRef) with a type-safe enum that distinguishes the
 /// three observed wire forms in HWP5 `%xrf` Command strings:
 ///
 /// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).

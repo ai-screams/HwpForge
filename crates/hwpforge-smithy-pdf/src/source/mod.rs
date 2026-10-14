@@ -74,7 +74,7 @@ pub struct LineImage {
 ///    넘친 줄을 캐시에 방출하고 렌더에서 절단)이라 상시 clip.
 /// 3. **내부 줄 replay**: [`Self::inner_lines`] 각 줄을 **박스 원점 +
 ///    textMargin(기본 283, gotcha #29) + vertAlign 시프트** 를 더해 절대
-///    배치한다 (셀 replay 선례 — [`crate::source::table`]). 내부 캐시 v축은
+///    배치한다 (셀 replay 선례 — `crate::source::table`). 내부 캐시 v축은
 ///    문단 경계를 넘어 연속이다 (§8a). 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
 ///    `alignment`·`is_last_line` 이 텍스트/이미지 배치와 JUSTIFY 규칙을 준다.
 /// 4. **vertAlign 시프트**: 내부 캐시는 vertAlign 을 반영하지 않는다(3종
@@ -155,7 +155,7 @@ pub struct LaidLine {
     /// 줄 상자 높이 (HWPUNIT — `seg.vertsize`). sub-line 인라인 이미지의 세로
     /// 배치 공식이 쓰는 줄 높이다 (§10c-2): 이미지가 줄 높이보다 작으면
     /// baseline 에 얹혀 이미지 자체 descent 만큼 내려앉는다. baseline =
-    /// `baseline_y − top_y` 와 함께 [`crate::render`] 가 이미지 top 을 유도한다.
+    /// `baseline_y − top_y` 와 함께 `crate::render` 가 이미지 top 을 유도한다.
     pub vertsize: i32,
     /// 줄 가로 상자 (HWPUNIT — body 좌변 반영, 정렬 미적용 상태).
     pub line_box: LineBox,
@@ -243,7 +243,7 @@ pub struct LaidPageNumber {
 pub struct LaidAnchoredImage {
     /// 위치 보고용 경로 (`s{섹션}/p{문단}` — 진단·오류 payload).
     pub location: String,
-    /// canonical 스토어 키 ([`crate::render`] 의 `image_data` 조회 키).
+    /// canonical 스토어 키 (`crate::render` 의 `image_data` 조회 키).
     pub canonical_key: String,
     /// 좌상단 x (HWPUNIT, 쪽 좌상단 원점).
     pub x: i32,

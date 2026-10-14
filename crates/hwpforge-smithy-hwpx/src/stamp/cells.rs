@@ -215,8 +215,8 @@ pub struct CellPlan {
 
 /// Enumerates class-B cell candidates across all tables of the document.
 ///
-/// Read-only. A candidate is a [stampable empty](is_stampable_empty) anchor
-/// cell with at least one [adjacent label](adjacent_labels); orphan empty
+/// Read-only. A candidate is a stampable empty (`is_stampable_empty`) anchor
+/// cell with at least one adjacent label (`adjacent_labels`); orphan empty
 /// cells (53% in the government-form corpus — matrix interiors and spacers)
 /// are NOT candidates and can only be targeted by explicit specs. Tables
 /// whose grid cannot be built are reported in
