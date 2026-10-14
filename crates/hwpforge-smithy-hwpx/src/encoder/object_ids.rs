@@ -142,8 +142,15 @@ pub(crate) fn mark() -> usize {
 pub(crate) fn move_since(from: usize, to: usize) {
     SCOPES.with(|s| {
         if let Some(alloc) = s.borrow_mut().last_mut() {
-            let moved = alloc.written.len() - from;
-            alloc.written[to..].rotate_right(moved);
+            // A mark taken before the scope existed (`usize::MAX` — part
+            // builders called directly in unit tests, where the first drawn
+            // id opens the scope) moves nothing.
+            // 이것을 실패시키는 것: 이 검사 삭제(표 단위 시험이 범위 밖 색인으로
+            // panic).
+            if to <= from {
+                let moved = alloc.written.len() - from;
+                alloc.written[to..].rotate_right(moved);
+            }
         }
     });
 }
@@ -455,6 +462,47 @@ mod tests {
 
     fn with_drawn_ids(n: usize) -> Section {
         Section::with_paragraphs((0..n).map(|_| holder(table(None))).collect(), PageSettings::a4())
+    }
+
+    /// S22 r2: with no Core ids, a captioned table draws its own id after
+    /// its cells and before its caption's equation, as it always has — the
+    /// diagnostic's reordering does not change the ids written.
+    /// 이것을 실패시키는 것: 표 id 를 캡션 인코딩 뒤에 뽑기(표 2, 수식 1).
+    #[test]
+    fn drawn_ids_keep_the_table_before_its_caption() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        let mut t = table(None);
+        t.caption = Some(Caption::new(
+            vec![para(vec![Run::control(
+                Control::Equation {
+                    script: "a".into(),
+                    width: unit(),
+                    height: unit(),
+                    base_line: 85,
+                    text_color: hwpforge_foundation::Color::BLACK,
+                    font: "HancomEQN".into(),
+                    inst_id: None,
+                },
+                CharShapeIndex::new(0),
+            )])],
+            CaptionSide::Bottom,
+        ));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![holder(t)], PageSettings::a4()));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        zip.by_name("Contents/section0.xml").unwrap().read_to_string(&mut xml).unwrap();
+        let id_of = |tag: &str| {
+            let at = xml.find(tag).unwrap_or_else(|| panic!("{tag}"));
+            let head = &xml[at..at + xml[at..].find('>').unwrap()];
+            let v = &head[head.find(" id=\"").unwrap() + 5..];
+            v[..v.find('"').unwrap()].parse::<u64>().unwrap()
+        };
+        assert_eq!((id_of("<hp:tbl "), id_of("<hp:equation ")), (1, 2));
     }
 
     /// W0: two tables with Core id 7 keep it (both written as 7) and give

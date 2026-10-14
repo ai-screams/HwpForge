@@ -76,6 +76,13 @@ pub(super) fn build_table(
             .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
     });
 
+    // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
+    // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
+    // 없으면 sequential fallback — drawn after the cells and before the
+    // caption, the order this encoder has always drawn it in (S22 r2).
+    // 이것을 실패시키는 것: 이 줄을 캡션 인코딩 뒤로
+    // (`drawn_ids_keep_the_table_before_its_caption`).
+    let id = super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id);
     let caption_from = super::super::object_ids::mark();
     let caption = table
         .caption
@@ -90,10 +97,7 @@ pub(super) fn build_table(
     // 이것을 실패시키는 것: 고정값 복귀(`table_placement_round_trips`).
     let placement = table.placement.clone().unwrap_or_else(table_default_placement);
     Ok(HxTable {
-        // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
-        // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
-        // 없으면 sequential fallback.
-        id: super::super::object_ids::core_or_drawn_at(id_slot, "table", table.inst_id),
+        id,
         z_order: 0,
         numbering_type: "TABLE".to_string(),
         text_wrap: placement.text_wrap.as_hwpx_str().into_owned(),
