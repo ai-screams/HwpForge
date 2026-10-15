@@ -712,6 +712,23 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
             detail: format!("{tag} caption is not carried by the lossless encoder"),
         });
     }
+    // Core validation checks these only where it walks — not inside a
+    // picture caption or a nested text — so the encoder checks them itself:
+    // a text box without paragraphs would read back as the old form (one
+    // made-up paragraph) or not at all, and a polygon needs three points.
+    // 이것을 실패시키는 것: 두 거부 각각 지우기(`nested_empty_shapes_are_refused`).
+    let malformed = match shape {
+        Control::TextBox { paragraphs, .. } => paragraphs.is_empty(),
+        Control::Polygon { vertices, .. } => vertices.len() < 3,
+        _ => false,
+    };
+    if malformed {
+        return Err(MdError::UnsupportedStructure {
+            detail: format!(
+                "{tag} without paragraphs or points is not carried by the lossless encoder"
+            ),
+        });
+    }
     let mut out = format!("<{tag}");
     if let Some(cs) = char_shape {
         out.push_str(&format!(" {}=\"{cs}\"", g::CHAR_SHAPE));

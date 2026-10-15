@@ -511,3 +511,78 @@ fn w4_shapes_round_trip() {
         assert_eq!(round_trip(run.clone()), run);
     }
 }
+
+/// A text box without paragraphs (style or not) and a polygon with fewer
+/// than three points pass Core validation where it does not walk — a
+/// picture caption, a text box's text, a cell or a note in either — but
+/// would not come back as written: the encoder refuses them.
+///
+/// 이것을 실패시키는 것: 빈 글상자 거부 삭제 · 점 세 개 미만 다각형 거부 삭제.
+#[test]
+fn nested_empty_shapes_are_refused() {
+    let empty_box = |style: Option<ShapeStyle>| {
+        let mut tb = Control::text_box(Vec::new(), u(10), u(10));
+        if let Control::TextBox { style: s, .. } = &mut tb {
+            *s = style;
+        }
+        Run::control(tb, CharShapeIndex::new(0))
+    };
+    let flat_polygon = {
+        let mut p = Control::polygon(vec![
+            ShapePoint::new(0, 0),
+            ShapePoint::new(1, 0),
+            ShapePoint::new(0, 1),
+        ])
+        .unwrap();
+        if let Control::Polygon { vertices, .. } = &mut p {
+            vertices.clear();
+        }
+        Run::control(p, CharShapeIndex::new(0))
+    };
+    let in_caption = |leaf: Run| {
+        let mut image = Image::new("a", u(10), u(10), ImageFormat::Png);
+        image.caption = Some(Caption::new(vec![para(vec![leaf])], CaptionSide::Bottom));
+        Run::image(image, CharShapeIndex::new(0))
+    };
+    let in_box = |leaf: Run| {
+        Run::control(
+            Control::text_box(vec![para(vec![leaf])], u(10), u(10)),
+            CharShapeIndex::new(0),
+        )
+    };
+    let in_cell = |leaf: Run| {
+        Run::table(
+            Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![para(vec![in_box(leaf)])],
+                u(100),
+            )])]),
+            CharShapeIndex::new(0),
+        )
+    };
+    let in_note = |leaf: Run| {
+        Run::control(Control::footnote(vec![para(vec![in_box(leaf)])]), CharShapeIndex::new(0))
+    };
+    for leaf in [empty_box(None), empty_box(Some(ShapeStyle::default())), flat_polygon] {
+        for (name, run) in [
+            ("caption", in_caption(leaf.clone())),
+            ("box", in_box(leaf.clone())),
+            ("cell", in_cell(leaf.clone())),
+            ("note", in_note(leaf.clone())),
+        ] {
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![para(vec![run])], PageSettings::a4()));
+            let Ok(v) = d.validate() else { continue };
+            assert!(
+                matches!(MdEncoder::encode_lossless(&v), Err(MdError::UnsupportedStructure { .. })),
+                "{name}"
+            );
+        }
+    }
+    // At least the caption path reaches the encoder (validation does not walk it).
+    let mut d = Document::new();
+    d.add_section(Section::with_paragraphs(
+        vec![para(vec![in_caption(empty_box(None))])],
+        PageSettings::a4(),
+    ));
+    assert!(d.validate().is_ok());
+}
