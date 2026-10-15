@@ -18,7 +18,7 @@ use std::path::Path;
 
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
-use hwpforge_core::section::{BeginNum, Section};
+use hwpforge_core::section::{BeginNum, MasterPage, Section};
 use hwpforge_core::PageSettings;
 
 use crate::error::HwpxResult;
@@ -627,8 +627,12 @@ impl HwpxDecoder {
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
-        // Master page parts some section owns: file number → section.
-        let mut referenced_masterpages = std::collections::BTreeMap::new();
+        // Master page parts parsed so far, by file number, and the bytes
+        // their shared copies have used of the budget (all parts' size).
+        let mut parsed_masterpages: std::collections::BTreeMap<usize, MasterPage> =
+            std::collections::BTreeMap::new();
+        let share_budget: usize = masterpage_xmls.values().map(String::len).sum();
+        let mut share_spent = 0usize;
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
 
@@ -690,22 +694,34 @@ impl HwpxDecoder {
                         .push(lost(format!("masterPage idRef {id:?} names no master page part")));
                     continue;
                 };
-                // A part is one section's master page: a further reference to
-                // it (in this section or another) is not read again — each
-                // part is parsed once, so repeated references cannot multiply
-                // the decoded content (branch review r2 H1).
-                // 이것을 실패시키는 것: 다시 읽기(`a_master_page_part_is_read_once`).
-                if let Some(owner) = referenced_masterpages.get(&number) {
-                    warnings.push(lost(format!(
-                        "masterPage idRef {id:?} names master page {number}, already the master \
-                         page of section {owner}"
-                    )));
-                    continue;
-                }
-                let (master, mut mp_warnings) =
-                    section::parse_master_page(xml, i, number, &image_pixels)?;
-                warnings.append(&mut mp_warnings);
-                referenced_masterpages.insert(number, i);
+                // A part is parsed once. Further references to it (sections
+                // may share a master page: `masterPage@idRef` has no owner)
+                // get a copy, within a budget: the copies may add at most the
+                // size of all master page parts again, so repeated references
+                // cannot multiply the decoded content (branch review r2 H1,
+                // r3 H2). A reference past the budget is lost content.
+                // 이것을 실패시키는 것: 공유를 손실로 보기(`a_shared_master_page_is_kept`),
+                // 예산 없이 복제하기(`a_master_page_part_is_read_once`).
+                let master = match parsed_masterpages.get(&number) {
+                    Some(master) => {
+                        share_spent = share_spent.saturating_add(xml.len());
+                        if share_spent > share_budget {
+                            warnings.push(lost(format!(
+                                "masterPage idRef {id:?} repeats master page {number} past the \
+                                 sharing budget ({share_budget} bytes of copies)"
+                            )));
+                            continue;
+                        }
+                        Clone::clone(master)
+                    }
+                    None => {
+                        let (master, mut mp_warnings) =
+                            section::parse_master_page(xml, i, number, &image_pixels)?;
+                        warnings.append(&mut mp_warnings);
+                        parsed_masterpages.insert(number, master.clone());
+                        master
+                    }
+                };
                 owned.push(master);
             }
             let section_master_pages =
@@ -752,7 +768,7 @@ impl HwpxDecoder {
 
             document.add_section(section);
         }
-        for number in masterpage_xmls.keys().filter(|n| !referenced_masterpages.contains_key(*n)) {
+        for number in masterpage_xmls.keys().filter(|n| !parsed_masterpages.contains_key(*n)) {
             warnings.push(DecodeWarning::ContentLost {
                 part: format!("Contents/masterpage{number}.xml"),
                 path: ParagraphPath::default(),
@@ -1054,10 +1070,11 @@ mod tests {
         assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
     }
 
-    /// Branch review r2 H1: a master page part is read for its first
-    /// reference only. Fifty more references to section 0's part (from
-    /// section 1) add no master page and are each reported.
-    /// 이것을 실패시키는 것: 참조마다 다시 읽기(구역 1 이 바탕쪽 51 개를 받는다).
+    /// Branch review r2 H1 / r3 H2: copies of a shared part stay within a
+    /// budget (the size of all master page parts). Fifty more references to
+    /// section 0's part from section 1: a copy or two fit, the rest are
+    /// each reported.
+    /// 이것을 실패시키는 것: 예산 없이 참조마다 복제하기(구역 1 이 바탕쪽 51 개).
     #[test]
     fn a_master_page_part_is_read_once() {
         let own = r#"<hp:masterPage idRef="masterpage1"/>"#;
@@ -1068,11 +1085,28 @@ mod tests {
             str::to_string,
         );
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
-        assert_eq!(master_page_texts(&decoded), ["A", "B"]);
-        assert_eq!(decoded.document.sections()[1].master_pages.as_ref().unwrap().len(), 1);
+        // The budget is the two parts' size together: one or two copies of
+        // the first part fit, depending on which part is larger.
+        let kept = decoded.document.sections()[1].master_pages.as_ref().unwrap().len();
+        assert!((2..=3).contains(&kept), "{kept}");
         let lost = lost_messages(&decoded);
-        assert_eq!(lost.len(), 50, "{lost:?}");
-        assert!(lost.iter().all(|m| m.contains("already the master page of section 0")));
+        assert_eq!(lost.len(), 51 - kept, "{lost:?}");
+        assert!(lost.iter().all(|m| m.contains("past the sharing budget")));
+    }
+
+    /// Branch review r3 H2: two sections naming one master page part, once
+    /// each, both keep it — the schema gives a part no single owner.
+    /// 이것을 실패시키는 것: 두 번째 참조를 손실로 보기.
+    #[test]
+    fn a_shared_master_page_is_kept() {
+        let bytes = with_master_page_refs(&two_master_pages(), ["masterpage0", "masterpage0"]);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(master_page_texts(&decoded), ["A", "A"]);
+        // The part no section names is still reported.
+        let lost = lost_messages(&decoded);
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        let at = decoded.warnings.iter().find(|w| w.is_content_loss()).and_then(|w| w.location());
+        assert!(at.as_deref().is_some_and(|at| at.contains("masterpage1")), "{at:?}");
     }
 
     /// A reference that names no master page part, and the part no section
