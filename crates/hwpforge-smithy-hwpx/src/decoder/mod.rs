@@ -627,8 +627,8 @@ impl HwpxDecoder {
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
-        // Master page parts some section references, by file number.
-        let mut referenced_masterpages = std::collections::BTreeSet::new();
+        // Master page parts some section owns: file number → section.
+        let mut referenced_masterpages = std::collections::BTreeMap::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
 
@@ -668,18 +668,33 @@ impl HwpxDecoder {
             }
             let mut owned = Vec::with_capacity(refs.len());
             for id in &refs {
-                let part = manifest.get(id.as_str()).and_then(|href| masterpage_number(href));
-                match part.and_then(|n| masterpage_xmls.get(&n).map(|xml| (n, xml))) {
-                    Some((number, xml)) => {
-                        let (master, mut mp_warnings) =
-                            section::parse_master_page(xml, i, number, &image_pixels)?;
-                        warnings.append(&mut mp_warnings);
-                        referenced_masterpages.insert(number);
-                        owned.push(master);
+                let href = match manifest.get(id.as_str()) {
+                    Some(Some(href)) => href,
+                    Some(None) => {
+                        warnings.push(lost(format!(
+                            "masterPage idRef {id:?} names more than one manifest item"
+                        )));
+                        continue;
                     }
-                    None => warnings
-                        .push(lost(format!("masterPage idRef {id:?} names no master page part"))),
-                }
+                    None => {
+                        warnings.push(lost(format!(
+                            "masterPage idRef {id:?} names no master page part"
+                        )));
+                        continue;
+                    }
+                };
+                let part = masterpage_number(href)
+                    .and_then(|n| masterpage_xmls.get(&n).map(|xml| (n, xml)));
+                let Some((number, xml)) = part else {
+                    warnings
+                        .push(lost(format!("masterPage idRef {id:?} names no master page part")));
+                    continue;
+                };
+                let (master, mut mp_warnings) =
+                    section::parse_master_page(xml, i, number, &image_pixels)?;
+                warnings.append(&mut mp_warnings);
+                referenced_masterpages.insert(number, i);
+                owned.push(master);
             }
             let section_master_pages =
                 if owned.is_empty() { result.master_pages } else { Some(owned) };
@@ -725,7 +740,7 @@ impl HwpxDecoder {
 
             document.add_section(section);
         }
-        for number in masterpage_xmls.keys().filter(|n| !referenced_masterpages.contains(*n)) {
+        for number in masterpage_xmls.keys().filter(|n| !referenced_masterpages.contains_key(*n)) {
             warnings.push(DecodeWarning::ContentLost {
                 part: format!("Contents/masterpage{number}.xml"),
                 path: ParagraphPath::default(),
@@ -823,10 +838,11 @@ fn header_begin_num_warnings(header: Option<&BeginNum>) -> Vec<DecodeWarning> {
 /// Scans the raw XML for `masterPageCnt="N"` without re-parsing the full XML.
 /// Returns 0 if the attribute is absent or unparseable.
 /// `id → href` of every `<opf:item>` in a `content.hpf` manifest.
-fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, String> {
+fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, Option<String>> {
     use quick_xml::events::Event;
     let mut reader = quick_xml::Reader::from_str(xml);
-    let mut out = std::collections::HashMap::new();
+    let mut out: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == "item" => {
@@ -840,7 +856,18 @@ fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, String> {
                     )
                 };
                 if let (Some(id), Some(href)) = (attr("id"), attr("href")) {
-                    out.insert(id, href);
+                    // An id given to two different parts names neither: keep
+                    // that as `None` rather than letting the last item win
+                    // (branch review r2 H2).
+                    // 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기
+                    // (`an_ambiguous_manifest_id_is_lost_content`).
+                    out.entry(id)
+                        .and_modify(|seen| {
+                            if seen.as_deref() != Some(href.as_str()) {
+                                *seen = None;
+                            }
+                        })
+                        .or_insert(Some(href));
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -969,6 +996,50 @@ mod tests {
             crate::HwpxEncoder::encode(&validated, &decoded.style_store, &decoded.image_store)
                 .unwrap();
         assert_eq!(master_page_texts(&HwpxDecoder::decode(&again).unwrap()), ["B", "A"]);
+    }
+
+    /// `bytes` with `edit` applied to section 1 and to the manifest.
+    fn with_section1_and_manifest(
+        bytes: &[u8],
+        section1: impl Fn(&str) -> String,
+        manifest: impl Fn(&str) -> String,
+    ) -> Vec<u8> {
+        let mut pkg = crate::patch::RawPackage::read(bytes).unwrap();
+        let xml = pkg.read_text_entry("Contents/section1.xml").unwrap();
+        pkg.replace_text_entry("Contents/section1.xml", section1(&xml));
+        let hpf = pkg.read_text_entry("Contents/content.hpf").unwrap();
+        pkg.replace_text_entry("Contents/content.hpf", manifest(&hpf));
+        pkg.write().unwrap()
+    }
+
+    fn lost_messages(doc: &HwpxDocument) -> Vec<String> {
+        doc.warnings.iter().filter(|w| w.is_content_loss()).map(|w| w.message()).collect()
+    }
+
+    /// Branch review r2 H2: an id the manifest gives two parts names
+    /// neither. Both parts are also used by unambiguous ids, so no
+    /// unreferenced-part report hides the case.
+    /// 이것을 실패시키는 것: 마지막 항목으로 덮어쓰기(구역 1 이 B 를 하나 더 받는다).
+    #[test]
+    fn an_ambiguous_manifest_id_is_lost_content() {
+        let own = r#"<hp:masterPage idRef="masterpage1"/>"#;
+        let bytes = with_section1_and_manifest(
+            &two_master_pages(),
+            |xml| xml.replace(own, &format!(r#"{own}<hp:masterPage idRef="x"/>"#)),
+            |hpf| {
+                let at = hpf.find("<opf:item ").unwrap();
+                format!(
+                    r#"{}<opf:item id="x" href="Contents/masterpage0.xml" media-type="application/xml"/><opf:item id="x" href="Contents/masterpage1.xml" media-type="application/xml"/>{}"#,
+                    &hpf[..at],
+                    &hpf[at..]
+                )
+            },
+        );
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(master_page_texts(&decoded), ["A", "B"]);
+        let lost = lost_messages(&decoded);
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
     }
 
     /// A reference that names no master page part, and the part no section
