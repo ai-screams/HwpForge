@@ -315,7 +315,7 @@ pub fn export_section(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FromJsonOptions {
-    /// An existing package to inherit the image store from.
+    /// An existing package supplying images and trusted unchanged line caches.
     ///
     /// JSON carries image *references*, never image bytes, so a document
     /// whose JSON mentions images produces a package with broken references
@@ -324,7 +324,7 @@ pub struct FromJsonOptions {
 }
 
 impl FromJsonOptions {
-    /// Inherits images from an existing package.
+    /// Inherits images and trusted unchanged line caches from an existing package.
     #[must_use]
     pub fn with_base(mut self, base: impl Into<Vec<u8>>) -> Self {
         self.base = Some(base.into());
@@ -348,10 +348,10 @@ pub struct FromJsonOutput {
     /// counted before the encode consumes it (same reason as
     /// [`sections`](Self::sections)).
     pub paragraphs: usize,
-    /// Encode warnings, then one `LAYOUT_CACHE_DROPPED` per section whose
-    /// input JSON carried a non-empty layout cache that this encode did not
-    /// re-emit. Generation has no original meaning to preserve, so these are
-    /// reported, never fatal.
+    /// Encode and cache-selection warnings. Without a base, cache omission
+    /// is reported once per section carrying a non-empty JSON cache. With a
+    /// base, reasons distinguish intentional invalidation, missing trusted
+    /// correspondence and ledger failures. These warnings are never fatal.
     pub warnings: Vec<OpsWarning>,
 }
 
@@ -405,13 +405,16 @@ impl FromJsonOutput {
 ///
 /// # Warnings
 ///
-/// Besides the encoder's own diagnostics, one `LAYOUT_CACHE_DROPPED` per
-/// section whose JSON carried a non-empty layout cache — [`to_json`] exports
-/// each paragraph's promoted `linesegarray` cache, but this function always
-/// encodes with `emit_layout_cache` off (a stale cache after edits is worse than none). Without this warning
-/// the round trip is silently render-degraded: 한글 recomputes layout on
-/// open regardless, but `hwpforge`'s own PDF path needs the cache and would
-/// otherwise fail later with no link back to this step.
+/// With a base, unchanged paragraphs retain only the base's trusted caches,
+/// re-emitted through the encoder's coordinate ledger. Core content, referenced
+/// styles and page/container settings determine edits; the shared flow rule
+/// invalidates their tails and host chains. Structural changes admit only the
+/// identical prefix of an affected paragraph list. Supplied JSON caches are
+/// never trusted, including manual changes or removals.
+///
+/// Intentional invalidation, missing correspondence and ledger failures have
+/// distinct `LAYOUT_CACHE_DROPPED` reasons. Without a base, caches are omitted
+/// as before, with one warning per section carrying a non-empty JSON cache.
 ///
 /// The warning's `path` points at the *first* cached paragraph found,
 /// walking every paragraph the encoder would serialize — including
@@ -462,8 +465,7 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let paragraphs: usize =
         exported.document.sections().iter().map(|section| section.paragraphs.len()).sum();
 
-    // Same reason this must run before `validate()` consumes the tree: the
-    // encode below always runs with `emit_layout_cache` off, so
+    // Without a base, encode runs with `emit_layout_cache` off, so
     // a cache the input carried is dropped without a trace unless flagged
     // here. `first_layout_cache_path` walks every paragraph the encoder
     // would serialize (including image captions — see its doc), so one
@@ -480,14 +482,16 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         .filter_map(|(index, section)| {
             let offset = masterpage_offset;
             masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
-            first_layout_cache_path(section, index, offset).map(|path| {
-                OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
-                    path,
-                    reason: "layout cache present in the JSON was not re-emitted — from_json \
+            first_layout_cache_path(section, index, offset).filter(|_| opts.base.is_none()).map(
+                |path| {
+                    OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
+                        path,
+                        reason: "layout cache present in the JSON was not re-emitted — from_json \
                              encodes with emit_layout_cache off by design"
-                        .to_string(),
-                })
-            })
+                            .to_string(),
+                    })
+                },
+            )
         })
         .collect();
 
@@ -510,12 +514,16 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let outcome = HwpxEncoder::encode_with_diagnostics(
-        &validated,
-        &style_store,
-        &image_store,
-        EncodeOptions::default().with_memo_create_time(now),
-    )
+    let options = EncodeOptions::default().with_memo_create_time(now);
+    // 이것을 실패시키는 것: base가 있어도 일반 캐시 없는 인코더로 보내기.
+    let outcome = match &opts.base {
+        Some(base) => {
+            HwpxEncoder::encode_with_base(base, &validated, &style_store, &image_store, options)
+        }
+        None => {
+            HwpxEncoder::encode_with_diagnostics(&validated, &style_store, &image_store, options)
+        }
+    }
     .map_err(OpsError::encode)?;
 
     let mut warnings: Vec<OpsWarning> =

@@ -1196,6 +1196,89 @@ fn memo_anchor_tables(
 pub struct HwpxEncoder;
 
 impl HwpxEncoder {
+    /// Encodes an edited Core document, retaining trusted base line caches
+    /// for unchanged paragraphs outside an edit's flow tail and host chain.
+    ///
+    /// `base` is the original HWPX package. Paragraph content, referenced
+    /// styles and container/page settings are compared in Core. Lists with
+    /// changed lengths retain only their identical prefix; paragraph ids are
+    /// not used as identities. Caches supplied in `document` are ignored:
+    /// only decoded base caches may pass through the encoder's token ledger.
+    /// `options.emit_layout_cache` is overridden by this selective policy.
+    /// Images come from `image_store`, as in [`Self::encode_with_diagnostics`].
+    ///
+    /// The outcome distinguishes intentional edit invalidation from missing
+    /// base correspondence and ledger failures on otherwise unchanged caches.
+    /// Base decoder content losses are also reported, including containers
+    /// whose paragraphs never reached Core.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the base cannot be decoded, the prepared Core
+    /// document cannot be validated, or encoding/package I/O fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use hwpforge_smithy_hwpx::{EncodeOptions, HwpxDecoder, HwpxEncoder};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let base = std::fs::read("original.hwpx")?;
+    /// let decoded = HwpxDecoder::decode(&base)?;
+    /// let edited = decoded.document.validate()?;
+    /// let result = HwpxEncoder::encode_with_base(
+    ///     &base, &edited, &decoded.style_store, &decoded.image_store,
+    ///     EncodeOptions::default(),
+    /// )?;
+    /// std::fs::write("edited.hwpx", result.bytes)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn encode_with_base(
+        base: &[u8],
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<EncodeOutcome> {
+        let decoded = crate::HwpxDecoder::decode(base)?;
+        let (prepared, mut warnings) =
+            crate::layout_edit::prepare(&decoded, document, style_store)?;
+        warnings.extend(decoded.warnings.into_iter().filter_map(|warning| match warning {
+            crate::DecodeWarning::LayoutCacheDropped { path, reason } => {
+                Some(EncodeWarning::LayoutCacheDropped {
+                    path,
+                    reason: format!("base decode: {reason}"),
+                })
+            }
+            // A container the base decoder cannot carry may own paragraphs
+            // absent from Core altogether. Keep that provenance loss visible.
+            crate::DecodeWarning::ContentLost { part, path, kind, reason } => {
+                Some(EncodeWarning::ContentLost {
+                    part,
+                    path,
+                    kind,
+                    reason: format!("base decode: {reason}"),
+                })
+            }
+            _ => None,
+        }));
+        let output = Self::encode_with_diagnostics(
+            &prepared,
+            style_store,
+            image_store,
+            options.with_emit_layout_cache(false),
+        )?;
+        let source = crate::layout_carry::cache_source_with_options(
+            &prepared,
+            style_store,
+            image_store,
+            options,
+        )?;
+        let mut outcome = crate::layout_carry::carry_prepared(&output.bytes, source)?;
+        outcome.warnings.splice(0..0, warnings);
+        Ok(outcome)
+    }
+
     /// Encodes a validated document with its style store and images to HWPX bytes.
     ///
     /// The returned bytes form a valid ZIP archive that can be written

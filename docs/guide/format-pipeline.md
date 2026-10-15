@@ -178,7 +178,7 @@ hwpforge inspect report.hwpx --json
 # HWPX → JSON → 편집 → HWPX 라운드트립
 hwpforge to-json report.hwpx -o report.json
 # (AI 에이전트가 JSON 편집)
-hwpforge from-json report.json -o updated.hwpx
+hwpforge from-json report.json --base report.hwpx -o updated.hwpx
 
 # HWPX → Markdown (읽기용)
 hwpforge to-md report.hwpx
@@ -186,6 +186,14 @@ hwpforge to-md report.hwpx
 # HWPX/HWP5 → PDF
 hwpforge to-pdf report.hwpx -o report.pdf
 ```
+
+`from-json --base`는 원본 이미지와 미편집 문단의 줄 캐시를 보존합니다.
+Core의 문단 내용·참조 스타일·쪽/컨테이너 설정이 바뀌면 해당 문단과 같은 흐름의
+후속 문단, 이를 담는 host 사슬의 캐시를 무효화합니다. 문단 추가·삭제 시에는
+영향받은 목록에서 동일한 앞부분만 대응시키며, 재배열된 문단을 텍스트로 찾아
+다시 연결하지 않습니다. JSON의 `layout_cache`를 직접 수정하거나 삭제해도 그
+값을 신뢰하지 않고 base 캐시를 사용합니다. 대응 불가·의도적 무효화·좌표 검증
+실패는 각각 경고로 보고합니다. `--base`가 없으면 기존처럼 캐시를 생략하고 경고합니다.
 
 HWPX → Markdown은 Rust API(`MdEncoder::encode_lossy(&validated)`)로도 할 수 있습니다.
 

@@ -172,7 +172,8 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
 
-        /// Base HWPX file to inherit images from (for round-trip fidelity).
+        /// Original HWPX supplying images and trusted unchanged line caches.
+        /// Edited paragraphs and their flow tails lose caches; JSON caches are not trusted.
         #[arg(long)]
         base: Option<PathBuf>,
     },

@@ -350,6 +350,7 @@ pub(crate) fn carry_line_segs(
 pub(crate) struct CacheSource {
     bytes: Vec<u8>,
     dropped: Vec<Vec<crate::EncodeWarning>>,
+    warnings: Vec<crate::EncodeWarning>,
 }
 
 /// The section index of a `Contents/sectionN.xml` part name.
@@ -367,10 +368,71 @@ pub(crate) fn cache_source(
     style_store: &crate::style_store::HwpxStyleStore,
     image_store: &hwpforge_core::image::ImageStore,
 ) -> HwpxResult<CacheSource> {
-    let mut options = crate::EncodeOptions::default().with_emit_layout_cache(true);
+    cache_source_with_options(document, style_store, image_store, crate::EncodeOptions::default())
+}
+
+/// The same ledger-backed source, preserving caller-controlled memo times.
+pub(crate) fn cache_source_with_options(
+    document: &hwpforge_core::Document<hwpforge_core::Validated>,
+    style_store: &crate::style_store::HwpxStyleStore,
+    image_store: &hwpforge_core::image::ImageStore,
+    options: crate::EncodeOptions,
+) -> HwpxResult<CacheSource> {
+    let mut options = options.with_emit_layout_cache(true);
     options.mark_dropped_caches = true;
     crate::HwpxEncoder::encode_reporting_dropped_caches(document, style_store, image_store, options)
-        .map(|(outcome, dropped)| CacheSource { bytes: outcome.bytes, dropped })
+        .map(|(outcome, dropped)| CacheSource {
+            bytes: outcome.bytes,
+            dropped,
+            warnings: outcome.warnings,
+        })
+}
+
+/// Carries a source whose Core caches have already been selected by
+/// `layout_edit`. The ordinary splice still verifies token identity and
+/// removes ledger-failure markers. All source drops now concern retained
+/// candidates, so none are suppressed as intentional edit invalidations.
+pub(crate) fn carry_prepared(
+    output: &[u8],
+    source: CacheSource,
+) -> HwpxResult<crate::EncodeOutcome> {
+    let src = RawPackage::read(&source.bytes)?;
+    let mut out = RawPackage::read(output)?;
+    let paths: Vec<String> = out
+        .entry_paths()
+        .filter(|p| {
+            (p.starts_with("Contents/section") || p.starts_with("Contents/masterpage"))
+                && p.ends_with(".xml")
+        })
+        .map(str::to_string)
+        .collect();
+    let mut warnings = source.warnings;
+    for path in paths {
+        let output = out.read_text_entry(&path)?;
+        let source = src.read_text_entry(&path)?;
+        // 이것을 실패시키는 것: 출처/출력 토큰 검증 없이 캐시를 삽입하기.
+        if let Some((spliced, _)) = splice_section(&output, &output, &source) {
+            out.replace_text_entry(&path, spliced);
+        } else {
+            warnings.push(crate::EncodeWarning::LayoutCacheDropped {
+                path: crate::ParagraphPath(
+                    section_index(&path)
+                        .map(crate::PathSeg::Section)
+                        .or_else(|| {
+                            path.strip_prefix("Contents/masterpage")?
+                                .strip_suffix(".xml")?
+                                .parse()
+                                .ok()
+                                .map(crate::PathSeg::MasterPage)
+                        })
+                        .into_iter()
+                        .collect(),
+                ),
+                reason: format!("cache source cannot be aligned with encoded part {path}"),
+            });
+        }
+    }
+    Ok(crate::EncodeOutcome { bytes: out.write()?, warnings })
 }
 
 #[cfg(test)]
@@ -630,5 +692,86 @@ mod tests {
         // open order: before, host, c0, c1, c2, after.
         let cached: Vec<bool> = slices.iter().map(|s| s.line_seg.is_some()).collect();
         assert_eq!(cached, [true, false, true, false, false, false]);
+    }
+    // 이것을 실패시키는 것: ledger 실패 표지를 내보내거나 그 문단의 진단을 버리기.
+    #[test]
+    fn prepared_carry_drops_only_the_failed_paragraph_and_keeps_its_diagnostic() {
+        use hwpforge_core::layout::{LayoutCache, LineBoundary, LineSeg, WireTokenKind};
+        use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let para = |bad: bool| {
+            let mut p = Paragraph::with_runs(
+                vec![Run::text("AB", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            );
+            let mut line = LineSeg::default();
+            line.vertsize = 1000;
+            if bad {
+                line.textpos = 1;
+                line.boundary = Some(LineBoundary::new(vec![WireTokenKind::Table], None));
+            }
+            p.layout_cache = Some(LayoutCache::new(vec![line]));
+            p
+        };
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![para(false), para(true), para(false)],
+            PageSettings::a4(),
+        ));
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::image::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let result = carry_prepared(&output, source).unwrap();
+        assert_eq!(result.warnings.len(), 1);
+        let crate::EncodeWarning::LayoutCacheDropped { path, reason } = &result.warnings[0] else {
+            panic!("cache warning")
+        };
+        assert_eq!(path.to_string(), "section[0].para[1]");
+        assert!(!reason.contains("intentionally"));
+        let xml = RawPackage::read(&result.bytes)
+            .unwrap()
+            .read_text_entry("Contents/section0.xml")
+            .unwrap();
+        assert_eq!(
+            scan_paragraphs(&xml).unwrap().iter().map(|p| p.line_seg.is_some()).collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        assert!(!xml.contains(&format!("textpos=\"{}\"", crate::encoder::DROPPED_CACHE_MARK)));
+    }
+
+    // 이것을 실패시키는 것: 출처와 출력이 캐시 외에도 다를 때 출처를 그대로 사용하기.
+    #[test]
+    fn prepared_carry_reports_a_source_token_mismatch() {
+        use hwpforge_core::{Document, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("original", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::image::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let mut source = cache_source(&doc, &styles, &images).unwrap();
+        let mut pkg = RawPackage::read(&source.bytes).unwrap();
+        let xml =
+            pkg.read_text_entry("Contents/section0.xml").unwrap().replace("original", "different");
+        pkg.replace_text_entry("Contents/section0.xml", xml);
+        source.bytes = pkg.write().unwrap();
+        let result = carry_prepared(&output, source).unwrap();
+        assert!(result.warnings.iter().any(|w| w.message().contains("cannot be aligned")));
+        assert_eq!(
+            RawPackage::read(&result.bytes)
+                .unwrap()
+                .read_text_entry("Contents/section0.xml")
+                .unwrap(),
+            RawPackage::read(&output).unwrap().read_text_entry("Contents/section0.xml").unwrap()
+        );
     }
 }
