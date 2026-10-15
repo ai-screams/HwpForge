@@ -690,6 +690,18 @@ impl HwpxDecoder {
                         .push(lost(format!("masterPage idRef {id:?} names no master page part")));
                     continue;
                 };
+                // A part is one section's master page: a further reference to
+                // it (in this section or another) is not read again — each
+                // part is parsed once, so repeated references cannot multiply
+                // the decoded content (branch review r2 H1).
+                // 이것을 실패시키는 것: 다시 읽기(`a_master_page_part_is_read_once`).
+                if let Some(owner) = referenced_masterpages.get(&number) {
+                    warnings.push(lost(format!(
+                        "masterPage idRef {id:?} names master page {number}, already the master \
+                         page of section {owner}"
+                    )));
+                    continue;
+                }
                 let (master, mut mp_warnings) =
                     section::parse_master_page(xml, i, number, &image_pixels)?;
                 warnings.append(&mut mp_warnings);
@@ -1040,6 +1052,27 @@ mod tests {
         let lost = lost_messages(&decoded);
         assert_eq!(lost.len(), 1, "{lost:?}");
         assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
+    }
+
+    /// Branch review r2 H1: a master page part is read for its first
+    /// reference only. Fifty more references to section 0's part (from
+    /// section 1) add no master page and are each reported.
+    /// 이것을 실패시키는 것: 참조마다 다시 읽기(구역 1 이 바탕쪽 51 개를 받는다).
+    #[test]
+    fn a_master_page_part_is_read_once() {
+        let own = r#"<hp:masterPage idRef="masterpage1"/>"#;
+        let more = r#"<hp:masterPage idRef="masterpage0"/>"#.repeat(50);
+        let bytes = with_section1_and_manifest(
+            &two_master_pages(),
+            |xml| xml.replace(own, &format!("{own}{more}")),
+            str::to_string,
+        );
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(master_page_texts(&decoded), ["A", "B"]);
+        assert_eq!(decoded.document.sections()[1].master_pages.as_ref().unwrap().len(), 1);
+        let lost = lost_messages(&decoded);
+        assert_eq!(lost.len(), 50, "{lost:?}");
+        assert!(lost.iter().all(|m| m.contains("already the master page of section 0")));
     }
 
     /// A reference that names no master page part, and the part no section
