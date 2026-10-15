@@ -18,7 +18,7 @@ use std::path::Path;
 
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
-use hwpforge_core::section::{BeginNum, MasterPage, Section};
+use hwpforge_core::section::{BeginNum, Section};
 use hwpforge_core::PageSettings;
 
 use crate::error::HwpxResult;
@@ -612,17 +612,23 @@ impl HwpxDecoder {
         // Step 3: Extract chart XMLs from ZIP
         let chart_xmls = pkg.read_chart_xmls()?;
 
-        // Step 4: Extract masterpage XMLs from ZIP, in file-number order.
-        // Each is decoded below by the section that owns it.
-        let mut masterpage_xmls: Vec<(usize, String)> =
+        // Step 4: Extract masterpage XMLs from ZIP, by file number, and the
+        // manifest ids that name them (`secPr/masterPage@idRef` resolves
+        // through `content.hpf`, branch review C2).
+        // Ordered by file number, so the unreferenced-part warnings come in a
+        // fixed order.
+        let masterpage_xmls: std::collections::BTreeMap<usize, String> =
             pkg.read_masterpage_xmls()?.into_iter().collect();
-        masterpage_xmls.sort_by_key(|(idx, _)| *idx);
+        let manifest = pkg
+            .read_text_entry("Contents/content.hpf")
+            .map(|xml| manifest_hrefs(&xml))
+            .unwrap_or_default();
 
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
-        // Track how many masterpages have been assigned across sections
-        let mut masterpage_cursor = 0usize;
+        // Master page parts some section references, by file number.
+        let mut referenced_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
 
@@ -639,28 +645,44 @@ impl HwpxDecoder {
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
 
-            // Determine how many masterpages this section owns by scanning
-            // the section XML for masterPageCnt attribute (avoids modifying section.rs).
-            // Fall back to result.master_pages (parsed inline) if no ZIP files were found.
-            let mp_cnt = extract_master_page_cnt(&section_xml);
-            let section_master_pages: Option<Vec<MasterPage>> = if mp_cnt > 0 {
-                let end = (masterpage_cursor + mp_cnt).min(masterpage_xmls.len());
-                let mut slice = Vec::with_capacity(end - masterpage_cursor);
-                for (global, xml) in &masterpage_xmls[masterpage_cursor..end] {
-                    let (master, mut mp_warnings) =
-                        section::parse_master_page(xml, i, *global, &image_pixels)?;
-                    warnings.append(&mut mp_warnings);
-                    slice.push(master);
-                }
-                masterpage_cursor = end;
-                if slice.is_empty() {
-                    result.master_pages
-                } else {
-                    Some(slice)
-                }
-            } else {
-                result.master_pages
+            // The master pages this section owns are the parts its
+            // `masterPage@idRef`s name — not the next ones in file order
+            // (branch review C2: two sections whose references were swapped
+            // read each other's master page, and a re-encode made it
+            // permanent). A reference that names no master page part is lost
+            // content; `masterPageCnt` only checks the count.
+            // 이것을 실패시키는 것: 파일 순서로 배정(`swapped_master_page_references_follow_the_ids`),
+            // 미해결 참조 무시(`an_unresolved_master_page_reference_is_lost_content`).
+            let section_part = format!("Contents/section{i}.xml");
+            let lost = |reason: String| DecodeWarning::ContentLost {
+                part: section_part.clone(),
+                path: ParagraphPath(vec![PathSeg::Section(i)]),
+                kind: "master_page".into(),
+                reason,
             };
+            let refs = master_page_refs(&section_xml);
+            let mp_cnt = extract_master_page_cnt(&section_xml);
+            if refs.is_empty() && mp_cnt > 0 {
+                warnings
+                    .push(lost(format!("masterPageCnt {mp_cnt} without a masterPage reference")));
+            }
+            let mut owned = Vec::with_capacity(refs.len());
+            for id in &refs {
+                let part = manifest.get(id.as_str()).and_then(|href| masterpage_number(href));
+                match part.and_then(|n| masterpage_xmls.get(&n).map(|xml| (n, xml))) {
+                    Some((number, xml)) => {
+                        let (master, mut mp_warnings) =
+                            section::parse_master_page(xml, i, number, &image_pixels)?;
+                        warnings.append(&mut mp_warnings);
+                        referenced_masterpages.insert(number);
+                        owned.push(master);
+                    }
+                    None => warnings
+                        .push(lost(format!("masterPage idRef {id:?} names no master page part"))),
+                }
+            }
+            let section_master_pages =
+                if owned.is_empty() { result.master_pages } else { Some(owned) };
 
             let section = Section {
                 paragraphs: result.paragraphs,
@@ -702,6 +724,14 @@ impl HwpxDecoder {
             };
 
             document.add_section(section);
+        }
+        for number in masterpage_xmls.keys().filter(|n| !referenced_masterpages.contains(*n)) {
+            warnings.push(DecodeWarning::ContentLost {
+                part: format!("Contents/masterpage{number}.xml"),
+                path: ParagraphPath::default(),
+                kind: "master_page".into(),
+                reason: "no section references this master page".into(),
+            });
         }
         drop_cell_zones_with_unknown_border_fill(&mut document, &style_store, &mut warnings);
 
@@ -792,6 +822,63 @@ fn header_begin_num_warnings(header: Option<&BeginNum>) -> Vec<DecodeWarning> {
 ///
 /// Scans the raw XML for `masterPageCnt="N"` without re-parsing the full XML.
 /// Returns 0 if the attribute is absent or unparseable.
+/// `id → href` of every `<opf:item>` in a `content.hpf` manifest.
+fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
+    let mut out = std::collections::HashMap::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == "item" => {
+                let attr = |key: &str| {
+                    e.attributes().flatten().find(|a| a.key.local_name().as_ref() == key).and_then(
+                        |a| {
+                            a.normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                                .ok()
+                                .map(|v| v.into_owned())
+                        },
+                    )
+                };
+                if let (Some(id), Some(href)) = (attr("id"), attr("href")) {
+                    out.insert(id, href);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The `idRef` of every `<masterPage>` in a section XML, in order.
+fn master_page_refs(section_xml: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(section_xml);
+    let mut out = Vec::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if e.local_name().as_ref() == "masterPage" => {
+                if let Some(id) = e
+                    .attributes()
+                    .flatten()
+                    .find(|a| a.key.local_name().as_ref() == "idRef")
+                    .and_then(|a| a.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok())
+                {
+                    out.push(id.into_owned());
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The file number of a `Contents/masterpageN.xml` href.
+fn masterpage_number(href: &str) -> Option<usize> {
+    href.strip_prefix("Contents/masterpage")?.strip_suffix(".xml")?.parse().ok()
+}
+
 fn extract_master_page_cnt(section_xml: &str) -> usize {
     let needle = "masterPageCnt=\"";
     if let Some(pos) = section_xml.find(needle) {
@@ -807,6 +894,113 @@ fn extract_master_page_cnt(section_xml: &str) -> usize {
 mod tests {
     use super::*;
     use hwpforge_foundation::{HeadingType, NumberFormatType};
+
+    /// Two sections owning master pages "A" and "B", encoded.
+    fn two_master_pages() -> Vec<u8> {
+        use hwpforge_core::run::Run;
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_core::{PageSettings, Paragraph};
+        use hwpforge_foundation::{ApplyPageType, CharShapeIndex, ParaShapeIndex};
+        let para = |t: &str| {
+            Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+        };
+        let mut doc = Document::new();
+        for name in ["A", "B"] {
+            let mut section = Section::with_paragraphs(vec![para("본문")], PageSettings::a4());
+            section.master_pages =
+                Some(vec![MasterPage::new(ApplyPageType::Both, vec![para(name)])]);
+            doc.add_section(section);
+        }
+        let store = crate::style_store_for_preset("default").unwrap();
+        crate::HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &store,
+            &hwpforge_core::image::ImageStore::new(),
+        )
+        .unwrap()
+    }
+
+    /// `bytes` with each section's `masterPage@idRef` set to `ids[i]`.
+    fn with_master_page_refs(bytes: &[u8], ids: [&str; 2]) -> Vec<u8> {
+        let mut pkg = crate::patch::RawPackage::read(bytes).unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            let path = format!("Contents/section{i}.xml");
+            let xml = pkg.read_text_entry(&path).unwrap();
+            let own = format!(r#"<hp:masterPage idRef="masterpage{i}"/>"#);
+            assert!(xml.contains(&own), "{xml}");
+            pkg.replace_text_entry(
+                &path,
+                xml.replace(&own, &format!(r#"<hp:masterPage idRef="{id}"/>"#)),
+            );
+        }
+        pkg.write().unwrap()
+    }
+
+    fn master_page_texts(doc: &HwpxDocument) -> Vec<String> {
+        doc.document
+            .sections()
+            .iter()
+            .map(|s| {
+                s.master_pages.as_ref().map_or(String::new(), |mps| {
+                    mps.iter()
+                        .flat_map(|mp| &mp.paragraphs)
+                        .flat_map(|p| &p.runs)
+                        .filter_map(|r| r.content.as_text().map(str::to_string))
+                        .collect()
+                })
+            })
+            .collect()
+    }
+
+    /// Branch review C2: each section owns the master page its `idRef`
+    /// names. With the two references swapped, section 0 owns B and section
+    /// 1 owns A — and a re-encode keeps it that way.
+    /// 이것을 실패시키는 것: 파일 순서로 배정(A·B 로 읽힌다).
+    #[test]
+    fn swapped_master_page_references_follow_the_ids() {
+        let plain = HwpxDecoder::decode(&two_master_pages()).unwrap();
+        assert_eq!(master_page_texts(&plain), ["A", "B"]);
+        let swapped = with_master_page_refs(&two_master_pages(), ["masterpage1", "masterpage0"]);
+        let decoded = HwpxDecoder::decode(&swapped).unwrap();
+        assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+        assert_eq!(master_page_texts(&decoded), ["B", "A"]);
+        let validated = decoded.document.clone().validate().unwrap();
+        let again =
+            crate::HwpxEncoder::encode(&validated, &decoded.style_store, &decoded.image_store)
+                .unwrap();
+        assert_eq!(master_page_texts(&HwpxDecoder::decode(&again).unwrap()), ["B", "A"]);
+    }
+
+    /// A reference that names no master page part, and the part no section
+    /// references, are lost content (editors refuse the input).
+    /// 이것을 실패시키는 것: 미해결 참조 무시 · 참조 없는 바탕쪽 무시.
+    #[test]
+    fn an_unresolved_master_page_reference_is_lost_content() {
+        let bytes = with_master_page_refs(&two_master_pages(), ["masterpage0", "nosuch"]);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(master_page_texts(&decoded), ["A", ""]);
+        let lost: Vec<String> = decoded
+            .warnings
+            .iter()
+            .filter(|w| w.is_content_loss())
+            .map(|w| format!("{} {}", w.location().unwrap_or_default(), w.message()))
+            .collect();
+        assert_eq!(lost.len(), 2, "{lost:?}");
+        assert!(lost[0].contains("section1") && lost[0].contains("nosuch"), "{lost:?}");
+        assert!(lost[1].contains("masterpage1"), "{lost:?}");
+
+        // A count without any reference is lost too.
+        let mut pkg = crate::patch::RawPackage::read(&two_master_pages()).unwrap();
+        let xml = pkg.read_text_entry("Contents/section1.xml").unwrap();
+        pkg.replace_text_entry(
+            "Contents/section1.xml",
+            xml.replace(r#"<hp:masterPage idRef="masterpage1"/>"#, ""),
+        );
+        let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+        let lost: Vec<String> =
+            decoded.warnings.iter().filter(|w| w.is_content_loss()).map(|w| w.message()).collect();
+        assert!(lost.iter().any(|m| m.contains("without a masterPage reference")), "{lost:?}");
+    }
 
     /// Review r2 HIGH: a package whose picture-caption table names a border
     /// fill the header lacks decodes with that zone dropped and reported.
