@@ -107,7 +107,7 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 | `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                                    |
 | `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                                    |
 | `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                             |
-| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"` refuses what it cannot carry)                                   |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"`: see the note below)                                            |
 | `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                |
 | `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                       |
 | `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                   |
@@ -116,6 +116,11 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 | `delete_para(*, section, indexes)`                                | `DocumentResult[StructuralReport]` | `PARAGRAPH_OUT_OF_RANGE`, `INPUT_ENTRIES_NOT_CARRIED`                                              |
 | `stamp(request, *, manifest=True)`                                | `DocumentResult[StampReport]`      | `INPUT_ENTRIES_NOT_CARRIED`, `ENCODE_SEMANTIC_LOSS`                                                |
 | `restyle(*, preset)`                                              | `DocumentResult[RestyleReport]`    | `PRESET_NOT_FOUND`, `ENCODE_SEMANTIC_LOSS`                                                         |
+
+`to_md(mode="lossless")` keeps what the preservation scope lists, raises `ENCODE_FAILED` for
+an object the scope lists as refused, and may leave out anything else (paragraph styles,
+headers and footers …) without an error — the scope is the "Lossless 보존 범위" section of the
+[Markdown bridge guide](https://ai-scream.ai/HwpForge/guide/markdown-bridge.html#lossless-보존-범위).
 
 Constructors and accessors beside these: `Document.open(path)` (bounded at 100 MB, raising
 `INPUT_TOO_LARGE` beyond it), `Document.from_bytes(data)` (no bound — the caller already holds

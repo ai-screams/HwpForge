@@ -342,11 +342,11 @@ class Document:
         Args:
             mode: How much to carry across. ``"styled"`` keeps the style
                 frontmatter, ``"lossy"`` drops what Markdown cannot express and
-                warns about it, ``"lossless"`` carries what its preservation
-                scope covers and refuses a document holding an object it
-                cannot carry (the scope is listed in the Markdown bridge
-                guide, "Lossless 보존 범위"; values outside it, such as
-                paragraph styles or headers, are left out without an error).
+                warns about it, ``"lossless"`` keeps what its preservation
+                scope lists, raises for an object the scope lists as refused,
+                and may leave out anything else, such as paragraph styles or
+                headers, without an error (the scope is the "Lossless 보존
+                범위" section of the Markdown bridge guide).
 
         Returns:
             The Markdown text, and a report holding the mode, the images the
