@@ -1043,7 +1043,17 @@ pub struct EncodeOptions {
     /// 않는다 — 같은 문서는 늘 같은 바이트(W0). 사용자가 새로 쓰는 문서의
     /// 진입점(`from-json` 등)이 현재 시각을 넣는다.
     pub memo_create_time: Option<u64>,
+    /// Crate-internal (the carry's cache source, `layout_carry`): with
+    /// `emit_layout_cache`, a paragraph whose cache cannot be placed gets a
+    /// marker cache — one line at `textpos` [`DROPPED_CACHE_MARK`] whose
+    /// `vertpos` is the index of its `LayoutCacheDropped` warning — so the
+    /// carry can tell that drop from a paragraph without a cache.
+    pub(crate) mark_dropped_caches: bool,
 }
+
+/// `textpos` of the marker line [`EncodeOptions::mark_dropped_caches`]
+/// writes — no real line starts there.
+pub(crate) const DROPPED_CACHE_MARK: u32 = u32::MAX;
 
 impl EncodeOptions {
     /// 캐시 방출 여부를 설정한다 (기본 `false`).

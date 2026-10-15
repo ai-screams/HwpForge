@@ -944,6 +944,7 @@ fn build_paragraph(
     // 소유한다 (별도 match 복제 금지 — §1g v5 변경 4). to_wire(0)=0
     // canonicalization 으로 첫 lineseg 는 native 불변식(항상 0)을 따른다.
     // 실패(축약점 모호·inadmissible 방출 등) = 캐시 미방출 + 경고.
+    let drops_before = sink.warnings.len();
     let linesegarray = if options.emit_layout_cache {
         match &para.layout_cache {
             None => None,
@@ -1027,6 +1028,30 @@ fn build_paragraph(
         }
     } else {
         None
+    };
+    // The carry's cache source marks a dropped cache with the index of the
+    // warning that says why (`EncodeOptions::mark_dropped_caches`).
+    // 이것을 실패시키는 것: 표지 삭제(`an_untouched_cache_the_encoder_cannot_place_is_reported`).
+    let linesegarray = match linesegarray {
+        None if options.mark_dropped_caches
+            && para.layout_cache.is_some()
+            && sink.warnings.len() > drops_before =>
+        {
+            Some(HxLineSegArray {
+                items: vec![HxLineSeg {
+                    textpos: super::DROPPED_CACHE_MARK,
+                    vertpos: i32::try_from(sink.warnings.len() - 1).unwrap_or(i32::MAX),
+                    vertsize: 0,
+                    textheight: 0,
+                    baseline: 0,
+                    spacing: 0,
+                    horzpos: 0,
+                    horzsize: 0,
+                    flags: 0,
+                }],
+            })
+        }
+        other => other,
     };
 
     // §19.22 D5 (S17): the paragraph-end mark's char shape is an empty last

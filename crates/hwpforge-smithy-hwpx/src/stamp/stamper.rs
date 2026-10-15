@@ -402,8 +402,9 @@ impl HwpxStamper {
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
-        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
+        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
             .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+        encode_warnings.extend(dropped);
 
         // ── manifest from the OUTPUT (re-decode is the source of truth) ─
         let fields = HwpxFiller::list_fields(&bytes)
@@ -506,8 +507,9 @@ impl HwpxStamper {
         // document reflow/repagination in the renderer).
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
-        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
+        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
             .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
+        encode_warnings.extend(dropped);
 
         // ── post-encode verification on the re-decoded OUTPUT ───────
         let d2 = HwpxDecoder::decode(&bytes)

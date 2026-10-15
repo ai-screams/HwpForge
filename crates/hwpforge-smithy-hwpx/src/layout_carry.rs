@@ -178,7 +178,13 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
 /// input omitted — moved every line start after it). Returns `None` when
 /// the carry cannot be aligned (paragraph count mismatch, scan anomaly, or
 /// a `source` that differs from `output` by more than its caches).
-fn splice_section(baseline: &str, output: &str, source: &str) -> Option<String> {
+///
+/// Alongside the spliced section come the indices (into the source
+/// encode's warnings) of the caches the encoder could not place for a
+/// paragraph that would have kept its cache — the drops the caller reports;
+/// a paragraph the edit changed or moved loses its cache on purpose and is
+/// not among them.
+fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String, Vec<usize>)> {
     let base = scan_paragraphs(baseline)?;
     let out = scan_paragraphs(output)?;
     let src = scan_paragraphs(source)?;
@@ -214,18 +220,29 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<String> 
     );
 
     let mut inserts: Vec<(usize, &str)> = Vec::new();
+    let mut dropped = Vec::new();
     for i in 0..out.len() {
         let Some((seg_start, seg_end)) = src[i].line_seg else {
             continue;
         };
         let unchanged = !changed[i] && !stale[i];
         let has_close = out[i].content_end < out[i].end;
+        let seg = &source[seg_start..seg_end];
+        // Branch review r2 M1: a marker cache is a drop with its reason.
+        // 이것을 실패시키는 것: 표지를 캐시로 넣거나 보고하지 않기
+        // (`an_untouched_cache_the_encoder_cannot_place_is_reported`).
+        if let Some(warning) = dropped_mark(seg) {
+            if unchanged && has_close {
+                dropped.push(warning);
+            }
+            continue;
+        }
         if unchanged && has_close {
-            inserts.push((out[i].content_end, &source[seg_start..seg_end]));
+            inserts.push((out[i].content_end, seg));
         }
     }
     if inserts.is_empty() {
-        return Some(output.to_string());
+        return Some((output.to_string(), dropped));
     }
 
     inserts.sort_by_key(|(pos, _)| *pos);
@@ -238,7 +255,18 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<String> 
         cursor = pos;
     }
     result.push_str(&output[cursor..]);
-    Some(result)
+    Some((result, dropped))
+}
+
+/// The warning index a marker cache ([`crate::encoder::DROPPED_CACHE_MARK`])
+/// carries, or `None` for a real cache.
+fn dropped_mark(seg: &str) -> Option<usize> {
+    let mark = format!(r#"textpos="{}""#, crate::encoder::DROPPED_CACHE_MARK);
+    if !seg.contains(&mark) {
+        return None;
+    }
+    let at = seg.find(r#"vertpos=""#)? + r#"vertpos=""#.len();
+    seg[at..].split('"').next()?.parse().ok()
 }
 
 /// `xml` without the `<hp:linesegarray>` ranges its `slices` found.
@@ -261,17 +289,22 @@ fn without_caches(xml: &str, slices: &[ParaSlice]) -> String {
 /// taking each cache from `source` ([`cache_source`]). A cache the decoder
 /// dropped is not in Core, so it is not in `source` and is not revived.
 ///
+/// The warnings returned are the source encode's `LayoutCacheDropped` for
+/// each untouched paragraph whose cache it could not place, so that drop is
+/// reported; caches the edit made stale are dropped without one.
+///
 /// Fail-open: sections that cannot be aligned are left as-is; the function
 /// only errors on package-level I/O problems.
 pub(crate) fn carry_line_segs(
     original: &[u8],
     baseline: &[u8],
     output: &[u8],
-    source: &[u8],
-) -> HwpxResult<Vec<u8>> {
+    source: &CacheSource,
+) -> HwpxResult<(Vec<u8>, Vec<crate::EncodeWarning>)> {
+    let mut reported = Vec::new();
     let orig_pkg = RawPackage::read(original)?;
     let base_pkg = RawPackage::read(baseline)?;
-    let src_pkg = RawPackage::read(source)?;
+    let src_pkg = RawPackage::read(&source.bytes)?;
     let mut out_pkg = RawPackage::read(output)?;
 
     let section_paths: Vec<String> = out_pkg
@@ -293,7 +326,8 @@ pub(crate) fn carry_line_segs(
         if !orig_xml.contains("<hp:linesegarray") {
             continue;
         }
-        if let Some(spliced) = splice_section(&base_xml, &out_xml, &src_xml) {
+        if let Some((spliced, dropped)) = splice_section(&base_xml, &out_xml, &src_xml) {
+            reported.extend(dropped.into_iter().filter_map(|i| source.warnings.get(i).cloned()));
             if spliced != out_xml {
                 out_pkg.replace_text_entry(&path, spliced);
                 changed = true;
@@ -301,29 +335,30 @@ pub(crate) fn carry_line_segs(
         }
     }
 
-    if changed {
-        out_pkg.write()
-    } else {
-        Ok(output.to_vec())
-    }
+    let bytes = if changed { out_pkg.write()? } else { output.to_vec() };
+    Ok((bytes, reported))
+}
+
+/// The cache source of [`carry_line_segs`]: the encoded bytes (dropped
+/// caches marked) and the encode's warnings, which the marks index.
+pub(crate) struct CacheSource {
+    bytes: Vec<u8>,
+    warnings: Vec<crate::EncodeWarning>,
 }
 
 /// The edited document encoded with its Core line caches emitted: the
 /// cache source of [`carry_line_segs`]. A cache the encoder cannot place is
-/// left out (`LayoutCacheDropped`); those warnings are not returned — the
-/// paragraph then simply keeps no cache, as an edited one does.
+/// written as a marker naming its `LayoutCacheDropped` warning, which the
+/// carry reports when the paragraph was untouched.
 pub(crate) fn cache_source(
     document: &hwpforge_core::Document<hwpforge_core::Validated>,
     style_store: &crate::style_store::HwpxStyleStore,
     image_store: &hwpforge_core::image::ImageStore,
-) -> HwpxResult<Vec<u8>> {
-    crate::HwpxEncoder::encode_with_diagnostics(
-        document,
-        style_store,
-        image_store,
-        crate::EncodeOptions::default().with_emit_layout_cache(true),
-    )
-    .map(|outcome| outcome.bytes)
+) -> HwpxResult<CacheSource> {
+    let mut options = crate::EncodeOptions::default().with_emit_layout_cache(true);
+    options.mark_dropped_caches = true;
+    crate::HwpxEncoder::encode_with_diagnostics(document, style_store, image_store, options)
+        .map(|outcome| CacheSource { bytes: outcome.bytes, warnings: outcome.warnings })
 }
 
 #[cfg(test)]
@@ -384,7 +419,7 @@ mod tests {
         let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("수정됨", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", true));
 
-        let spliced = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
         // 첫 문단: 캐시 복원. 둘째 문단: 편집됨 → 캐시 없음.
         assert_eq!(spliced, format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", false)));
     }
@@ -393,7 +428,7 @@ mod tests {
     fn splice_noop_roundtrip_restores_everything() {
         let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘", true));
-        let spliced = splice_section(&baseline, &baseline, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &baseline, &source).unwrap();
         assert_eq!(spliced, source, "무편집 왕복은 방출한 캐시로 완전 복원");
     }
 
@@ -417,10 +452,85 @@ mod tests {
         let output = section("b", false);
         let source = section("b", true);
         crate::work::WORK.with(|w| w.set(0));
-        let spliced = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
         let work = crate::work::WORK.with(std::cell::Cell::get);
         assert_eq!(spliced, output);
         assert!(work <= 3 * N, "{work} work units for {N} paragraphs");
+    }
+
+    /// Branch review r2 M1: an untouched paragraph whose cache the encoder
+    /// could not place (a marker in the source) is reported by its warning
+    /// index; a changed paragraph's marker is not, and no marker is spliced
+    /// in.
+    /// 이것을 실패시키는 것: 표지를 캐시로 넣기 · 보고하지 않기 · 바뀐 문단도 보고하기.
+    #[test]
+    fn an_untouched_cache_the_encoder_cannot_place_is_reported() {
+        let mark = |i: usize| {
+            format!(
+                r#"<hp:p id="0"><hp:run charPrIDRef="0"><hp:t>{{}}</hp:t></hp:run><hp:linesegarray><hp:lineseg textpos="{}" vertpos="{i}"/></hp:linesegarray></hp:p>"#,
+                crate::encoder::DROPPED_CACHE_MARK
+            )
+        };
+        let marked = |i: usize, body: &str| mark(i).replace("{}", body);
+        let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
+        let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("바뀜", false));
+        let source = format!("<hs:sec>{}{}</hs:sec>", marked(3, "하나"), marked(5, "바뀜"));
+        let (spliced, dropped) = splice_section(&baseline, &output, &source).unwrap();
+        assert_eq!(spliced, output);
+        assert_eq!(dropped, [3]);
+    }
+
+    /// The cache source marks a cache the encoder cannot place — here a
+    /// line said to start after a table where the paragraph has none — with
+    /// the index of the warning that says why.
+    /// 이것을 실패시키는 것: 인코더 표지 삭제(캐시 없는 문단과 구별되지 않는다).
+    #[test]
+    fn the_cache_source_marks_a_cache_it_cannot_place() {
+        use hwpforge_core::layout::{LayoutCache, LineBoundary, LineSeg, WireTokenKind};
+        use hwpforge_core::run::Run;
+        use hwpforge_core::{Document, PageSettings, Paragraph, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let line = |textpos: u32, boundary: Option<LineBoundary>| {
+            let mut l = LineSeg::default();
+            l.textpos = textpos;
+            l.vertsize = 1000;
+            l.horzsize = 42520;
+            l.boundary = boundary;
+            l
+        };
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("AB", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![
+            line(0, None),
+            line(1, Some(LineBoundary::new(vec![WireTokenKind::Table], None))),
+        ]));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![
+                Paragraph::with_runs(
+                    vec![Run::text("앞", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                ),
+                para,
+            ],
+            PageSettings::a4(),
+        ));
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let source = cache_source(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+        )
+        .unwrap();
+        let xml = RawPackage::read(&source.bytes)
+            .unwrap()
+            .read_text_entry("Contents/section0.xml")
+            .unwrap();
+        let at = xml.rfind("<hp:linesegarray").unwrap();
+        let index = dropped_mark(&xml[at..]).expect("a marker cache");
+        assert!(matches!(source.warnings[index], crate::EncodeWarning::LayoutCacheDropped { .. }));
     }
 
     /// Branch review A2: the cache source must hold the output's tokens
@@ -450,7 +560,7 @@ mod tests {
         let baseline = section("c1", false);
         let output = section("c1 이 여러 줄로 길어졌다", false);
         let source = section("c1 이 여러 줄로 길어졌다", true);
-        let spliced = splice_section(&baseline, &output, &source).unwrap();
+        let (spliced, _) = splice_section(&baseline, &output, &source).unwrap();
         let slices = scan_paragraphs(&spliced).unwrap();
         // open order: before, host, c0, c1, c2, after.
         let cached: Vec<bool> = slices.iter().map(|s| s.line_seg.is_some()).collect();

@@ -678,8 +678,9 @@ impl HwpxCellEditor {
         // renderer does not reflow (and repaginate) the whole document.
         let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
-        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
+        let (bytes, dropped) = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        encode_warnings.extend(dropped);
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },
             decode_warnings,
