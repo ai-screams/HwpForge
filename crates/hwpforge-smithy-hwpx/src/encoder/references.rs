@@ -72,7 +72,7 @@ pub(crate) fn manifest_id_conflicts(items: &[(String, String)]) -> Vec<EncodeWar
     let mut by_id: Vec<(&str, Vec<String>)> = Vec::new();
     let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (item_id, item_href) in items {
-        crate::cache_flow::tick();
+        crate::work::tick();
         match index.get(item_id.as_str()) {
             Some(&at) => by_id[at].1.push(item_href.clone()),
             None => {
@@ -134,7 +134,7 @@ pub(crate) fn unresolved_references(
                 let reference = attr
                     .normalized_value(XmlVersion::Explicit1_0)
                     .map_err(|e| parse_error(e.to_string()))?;
-                crate::cache_flow::tick();
+                crate::work::tick();
                 if reference.is_empty()
                     || binary.contains(reference.as_ref())
                     || !reported.insert(reference.to_string())
@@ -178,11 +178,11 @@ mod tests {
             .chain((0..N).map(|i| format!(r#"<p binaryItemIDRef="missing{i}"/>"#)))
             .chain(std::iter::once("</r>".to_string()))
             .collect();
-        crate::cache_flow::WORK.with(|w| w.set(0));
+        crate::work::WORK.with(|w| w.set(0));
         assert!(manifest_id_conflicts(&items).is_empty());
         let unresolved = unresolved_references(&items, &[("Contents/section0.xml", &xml)]).unwrap();
         assert_eq!(unresolved.len(), N);
-        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        let work = crate::work::WORK.with(std::cell::Cell::get);
         assert!(work <= 3 * N, "{work} work units for {N} items and references");
     }
 

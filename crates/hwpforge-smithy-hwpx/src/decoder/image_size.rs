@@ -29,7 +29,7 @@ pub(crate) fn pixel_sizes_by_reference(
     // Stem → the one stored name with it, `None` when several share it.
     let mut stems: HashMap<&str, Option<&str>> = HashMap::new();
     for (key, _) in store.iter() {
-        crate::cache_flow::tick();
+        crate::work::tick();
         if let Some((stem, _)) = key.rsplit_once('.') {
             stems.entry(stem).and_modify(|only| *only = None).or_insert(Some(key));
         }
@@ -39,7 +39,7 @@ pub(crate) fn pixel_sizes_by_reference(
     for (key, _) in store.iter() {
         let stem = key.rsplit_once('.').map(|(stem, _)| stem);
         for reference in std::iter::once(key).chain(stem) {
-            crate::cache_flow::tick();
+            crate::work::tick();
             // `resolve_image_key`: the exact name first, else a stem only one
             // image has.
             let stripped = reference.strip_prefix("BinData/").unwrap_or(reference);
@@ -148,9 +148,9 @@ mod tests {
         for i in 0..N {
             store.insert(format!("image{i}.png"), png(1, 1));
         }
-        crate::cache_flow::WORK.with(|w| w.set(0));
+        crate::work::WORK.with(|w| w.set(0));
         assert_eq!(pixel_sizes_by_reference(&store).len(), 2 * N);
-        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        let work = crate::work::WORK.with(std::cell::Cell::get);
         assert!(work <= 3 * N, "{work} work units for {N} images");
     }
 

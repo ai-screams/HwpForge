@@ -212,7 +212,7 @@ fn ordinals(paths: &[&[PathSeg]]) -> Vec<usize> {
     paths
         .iter()
         .map(|path| {
-            crate::cache_flow::tick();
+            crate::work::tick();
             let count = seen.entry(path).or_insert(0);
             *count += 1;
             *count - 1
@@ -300,13 +300,13 @@ fn locate_changed_paragraph_caches(
     let mut wire_at: std::collections::HashMap<(&[PathSeg], usize), usize> =
         std::collections::HashMap::with_capacity(wire.len());
     for (j, path) in wire_paths.iter().enumerate() {
-        crate::cache_flow::tick();
+        crate::work::tick();
         wire_at.entry((*path, wire_ordinals[j])).or_insert(j);
     }
     let mut partner: Vec<usize> = Vec::with_capacity(expected.len());
     let mut paired = vec![false; wire.len()];
     for (i, field) in expected.iter().enumerate() {
-        crate::cache_flow::tick();
+        crate::work::tick();
         match wire_at.get(&(field.path.as_slice(), expected_ordinals[i])).copied() {
             Some(j) if wire[j].locator.name == field.name => {
                 partner.push(j);
@@ -1317,10 +1317,10 @@ mod tests {
             .collect();
         let inventory = BTreeMap::from([(0, locators)]);
         let changed: Vec<(usize, usize)> = (0..N).map(|i| (0, i)).collect();
-        crate::cache_flow::WORK.with(|w| w.set(0));
+        crate::work::WORK.with(|w| w.set(0));
         let out =
             strip_linesegarray_for_changed_fields(&bytes, &inventory, &changed).expect("strip");
-        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        let work = crate::work::WORK.with(std::cell::Cell::get);
         assert!(caches(&section_xml(&out)).is_empty());
         assert!(work <= 10 * N, "{work} work units for {N} fields");
     }

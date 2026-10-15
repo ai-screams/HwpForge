@@ -77,6 +77,7 @@ pub mod style_store;
 mod table_inventory;
 mod wire_text_map;
 mod wire_xml;
+mod work;
 
 pub use cell_edit::{
     apply_set_cells, CellEditError, CellEditResult, CellResolution, CellSpec, CellTarget,
