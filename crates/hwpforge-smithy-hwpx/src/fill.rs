@@ -186,39 +186,19 @@ struct WireScan {
 }
 
 impl WireScan {
-    /// 값이 바뀐 필드 문단들이 낡게 만드는 캐시(W2, 설계 3.5): 각 문단부터
-    /// 같은 목록 끝까지, 이어서 그 목록을 품은 host 문단부터 host 목록 끝까지
-    /// — 구역 본문까지. 목록마다 가장 이른 무효화 지점만 남겨 합친 뒤 캐시를
-    /// 한 번 모은다.
-    /// 이것을 실패시키는 것: 꼬리 대신 문단 하나만 · host 사슬 생략 · 목록
-    /// 처음부터(`cell_fill_drops_the_flow_tail_and_the_host_chain`,
-    /// `each_container_drops_its_flow_tail_and_host_chain`).
+    /// 값이 바뀐 필드 문단들이 낡게 만드는 캐시 — 정의는 patch 와 같은
+    /// [`crate::cache_flow::stale_caches`] 하나다.
     fn stale_caches(&self, paragraphs: impl IntoIterator<Item = usize>) -> Vec<Range<usize>> {
-        let mut from = vec![usize::MAX; self.list_host.len()];
-        for paragraph in paragraphs {
-            let mut at = Some(paragraph);
-            while let Some(q) = at {
+        crate::cache_flow::stale_caches(
+            &self.caches,
+            &self.para_list,
+            &self.list_host,
+            paragraphs,
+            &mut || {
                 #[cfg(test)]
                 self.visits.set(self.visits.get() + 1);
-                let list = self.para_list[q];
-                from[list] = from[list].min(q);
-                at = self.list_host[list];
-            }
-        }
-        (0..self.caches.len())
-            .filter(|&j| self.is_stale(j, &from))
-            .flat_map(|j| self.caches[j].iter().cloned())
-            .collect()
-    }
-
-    /// Whether paragraph `j` is at or after its list's earliest invalidation
-    /// point — the one place a paragraph is examined, counted there in tests
-    /// (S22 r2: the count follows the examining, so a second pass over the
-    /// paragraphs counts too).
-    fn is_stale(&self, j: usize, from: &[usize]) -> bool {
-        #[cfg(test)]
-        self.visits.set(self.visits.get() + 1);
-        j >= from[self.para_list[j]]
+            },
+        )
     }
 }
 

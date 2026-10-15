@@ -26,10 +26,10 @@ A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 ent
 
 ## Two write-back modes
 
-| Mode      | Command            | Can do                                                                                          | Cannot do                                                                                                                             |
-| --------- | ------------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves the package and layout caches | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                   |
-| Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                          | keep 한컴 package entries, layout caches, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
+| Mode      | Command            | Can do                                                                                                                                      | Cannot do                                                                                                                             |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Text-only | `patch`            | change text in existing paragraphs **and table cells**; preserves the package and the layout caches of paragraphs the change does not reach | add/remove paragraphs (`PATCH_FAILED … structural change detected`)                                                                   |
+| Rebuild   | `from-json --base` | add/remove paragraphs, any structural change; `--base` inherits images                                                                      | keep 한컴 package entries, layout caches, or elements HwpForge does not model (form controls, master pages, some advanced formatting) |
 
 ## Steps
 

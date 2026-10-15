@@ -49,6 +49,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(unsafe_code)]
 
+mod cache_flow;
 pub mod cell_edit;
 mod color;
 pub mod decoder;

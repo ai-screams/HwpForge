@@ -339,16 +339,30 @@ impl HwpxPatcher {
             edits.push((&preserved_slot.locator, new_text.as_str()));
         }
 
-        // Apply from the last byte offset back so an edit never shifts a span
-        // that is still to be applied. Slot order is the Core visit order,
-        // which is not always byte order: an ellipse or polygon visits its
-        // inner paragraphs before its caption, but the XML writes the caption
-        // first (field order of `HxEllipse` and `HxPolygon`).
-        edits.sort_by_key(|(locator, _)| std::cmp::Reverse(text_locator_start(locator)));
-        let mut patched_section_xml = base_section_xml.clone();
-        for (locator, text) in edits {
-            patched_section_xml = apply_text_locator(&patched_section_xml, locator, text)?;
+        // Branch review A3: a changed text slot makes its paragraph's line
+        // cache stale, and the caches of the later paragraphs of its flow and
+        // of the host chain — the same set `fill` drops (`cache_flow`). Text
+        // replacements and cache removals are written in one pass, which
+        // refuses overlapping spans.
+        // 이것을 실패시키는 것: 이 제거 삭제(`patch_drops_the_changed_flow_tail_and_host_chain`,
+        // `a_shortened_patch_drops_the_stale_line_start`).
+        let mut replacements = Vec::with_capacity(edits.len());
+        if !edits.is_empty() {
+            let flow = crate::cache_flow::ParagraphFlow::scan(&base_section_xml)?;
+            let mut changed = Vec::with_capacity(edits.len());
+            for (locator, text) in &edits {
+                let at = text_locator_start(locator);
+                changed.push(flow.paragraph_at(at).ok_or_else(|| HwpxError::InvalidStructure {
+                    detail: format!(
+                        "text slot at byte {at} of '{expected_section_path}' is outside every paragraph"
+                    ),
+                })?);
+                replacements.push(text_locator_replacement(&base_section_xml, locator, text)?);
+            }
+            replacements
+                .extend(flow.stale_caches(changed).into_iter().map(|range| (range, String::new())));
         }
+        let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)?;
 
         if patched_section_xml == base_section_xml {
             return Ok(crate::diagnostics::WithCodecWarnings::new(
@@ -1866,25 +1880,32 @@ fn text_locator_start(locator: &TextLocator) -> usize {
     }
 }
 
+#[cfg(test)]
 fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxResult<String> {
+    let (range, replacement) = text_locator_replacement(xml, locator, new_text)?;
     let mut patched = xml.to_string();
+    patched.replace_range(range, &replacement);
+    Ok(patched)
+}
+
+/// The span of `xml` a [`TextLocator`] replaces and what goes there.
+fn text_locator_replacement(
+    xml: &str,
+    locator: &TextLocator,
+    new_text: &str,
+) -> HwpxResult<(Range<usize>, String)> {
     match locator {
         TextLocator::TextElement { element_start, element_end, content_start, content_end } => {
             if let (Some(start), Some(end)) = (*content_start, *content_end) {
-                patched.replace_range(start..end, &encode_text_inner(new_text)?);
-                Ok(patched)
+                Ok((start..end, encode_text_inner(new_text)?))
             } else {
-                let original = &patched[*element_start..*element_end];
-                let replaced = patch_text_element_xml(original, new_text)?;
-                patched.replace_range(*element_start..*element_end, &replaced);
-                Ok(patched)
+                let original = &xml[*element_start..*element_end];
+                Ok((*element_start..*element_end, patch_text_element_xml(original, new_text)?))
             }
         }
         TextLocator::EmptyRun { run_start, run_end } => {
-            let original = &patched[*run_start..*run_end];
-            let replaced = patch_text_run_xml(original, new_text)?;
-            patched.replace_range(*run_start..*run_end, &replaced);
-            Ok(patched)
+            let original = &xml[*run_start..*run_end];
+            Ok((*run_start..*run_end, patch_text_run_xml(original, new_text)?))
         }
     }
 }
