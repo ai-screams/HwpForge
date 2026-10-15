@@ -244,16 +244,19 @@ fn original_size_error(
 /// The first unwritable object frame in `run` — its own object, a group's
 /// shapes and pictures, a table, and every paragraph nested in it (picture
 /// captions included), as [`run_corner_ratio_over_50`] walks.
+///
+/// Each object is checked once: nested paragraphs come from the one
+/// paragraph walk (which enters group pictures' captions), and only a run
+/// picture's caption, which that walk does not enter, is searched from its
+/// run (branch review B-H1: a group picture's caption searched from the
+/// picture *and* by the walk doubled the work at every nesting level).
 fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
     fn image_error(
         image: &crate::image::Image,
     ) -> Option<(&'static str, &'static str, &'static str)> {
-        if let Some(o) = image.frame.original_size {
-            if let Some(reason) = original_size_error(o, image.width, image.height) {
-                return Some(("picture", "original_size", reason));
-            }
-        }
-        image.caption.as_ref()?.paragraphs.iter().flat_map(|p| &p.runs).find_map(run_frame_error)
+        let o = image.frame.original_size?;
+        original_size_error(o, image.width, image.height)
+            .map(|reason| ("picture", "original_size", reason))
     }
     fn control_error(control: &Control) -> Option<(&'static str, &'static str, &'static str)> {
         if let (Some(frame), Some(size)) = (control.frame(), control.effective_original_size()) {
@@ -305,9 +308,20 @@ fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str,
         }
     }
     fn own_error(run: &crate::run::Run) -> Option<(&'static str, &'static str, &'static str)> {
+        #[cfg(test)]
+        FRAME_CHECKS.with(|n| n.set(n.get() + 1));
         match &run.content {
             RunContent::Control(control) => control_error(control),
-            RunContent::Image(image) => image_error(image),
+            // 이것을 실패시키는 것: 캡션 검색 삭제(`run_picture_caption_frame_is_checked`).
+            RunContent::Image(image) => image_error(image).or_else(|| {
+                image
+                    .caption
+                    .as_ref()?
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .find_map(run_frame_error)
+            }),
             // 이것을 실패시키는 것: 표 검사를 지우기(`table_original_size_is_rejected`).
             RunContent::Table(table) => table.frame.original_size.is_some().then_some((
                 "table",
@@ -324,6 +338,12 @@ fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str,
         }
     });
     found
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many runs [`run_frame_error`] checked on this thread.
+    static FRAME_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Validates a single run's content recursively.
@@ -1026,6 +1046,81 @@ mod tests {
             ApplyPageType::Both,
         ));
         assert!(frame_err(section).is_some());
+    }
+
+    /// A run picture's caption is not entered by the paragraph walk, so it is
+    /// searched from its run; a group picture's caption is reached by the
+    /// walk.
+    /// 이것을 실패시키는 것: run 그림 캡션 검색 삭제 · 묶음 그림 캡션을 어디서도 보지 않기.
+    #[test]
+    fn run_picture_caption_frame_is_checked() {
+        let w = HwpUnit::new(850).unwrap();
+        let bad = Paragraph::with_runs(
+            vec![framed(Control::ellipse(w, w), size(-5, 5))],
+            ParaShapeIndex::new(0),
+        );
+        let captioned = || {
+            crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png)
+                .with_caption(crate::caption::Caption::new(
+                    vec![bad.clone()],
+                    crate::caption::CaptionSide::Bottom,
+                ))
+        };
+        let run_picture = Run::image(captioned(), CharShapeIndex::new(0));
+        assert_eq!(frame_err(section_with(run_picture)).map(|e| e.0), Some("ellipse"));
+        let group = Control::Group {
+            children: vec![GroupChild::Picture(captioned())],
+            width: w,
+            height: w,
+            frame: crate::frame::ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        let in_group = Run::control(group, CharShapeIndex::new(0));
+        assert_eq!(frame_err(section_with(in_group)).map(|e| e.0), Some("ellipse"));
+    }
+
+    /// Branch review B-H1: groups nested through their pictures' captions
+    /// are checked once per object — the count grows with the depth, not
+    /// twice per level.
+    /// 이것을 실패시키는 것: 묶음 그림 캡션을 그림에서도 다시 찾기(검사 수 2^깊이).
+    #[test]
+    fn nested_picture_captions_are_checked_once() {
+        let w = HwpUnit::new(850).unwrap();
+        let nest = |depth: usize| {
+            let mut run = Run::control(Control::ellipse(w, w), CharShapeIndex::new(0));
+            for _ in 0..depth {
+                let picture =
+                    crate::image::Image::new("BinData/a.png", w, w, crate::image::ImageFormat::Png)
+                        .with_caption(crate::caption::Caption::new(
+                            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                            crate::caption::CaptionSide::Bottom,
+                        ));
+                run = Run::control(
+                    Control::Group {
+                        children: vec![GroupChild::Picture(picture)],
+                        width: w,
+                        height: w,
+                        frame: crate::frame::ObjectFrame::new(),
+                        placement: None,
+                        inst_id: None,
+                    },
+                    CharShapeIndex::new(0),
+                );
+            }
+            run
+        };
+        let counts: Vec<usize> = [8, 16]
+            .iter()
+            .map(|&depth| {
+                let run = nest(depth);
+                FRAME_CHECKS.with(|n| n.set(0));
+                assert!(run_frame_error(&run).is_none());
+                FRAME_CHECKS.with(std::cell::Cell::get)
+            })
+            .collect();
+        // One check per run: the groups and the innermost ellipse.
+        assert_eq!(counts, [9, 17]);
     }
 
     /// A size lock on a group child (shape, picture, nested group) is
