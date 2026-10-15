@@ -200,7 +200,18 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<String> 
     let changed: Vec<bool> = (0..out.len())
         .map(|i| baseline[base[i].start..base[i].end] != output[out[i].start..out[i].end])
         .collect();
-    let stale = flow_tails(&out, &changed);
+    // The rule `fill` and `patch` use (`cache_flow::stale_paragraphs`), one
+    // pass over the paragraphs (branch review r2 M4: walking to the end of
+    // the list from every changed paragraph was quadratic in a batch edit).
+    // 이것을 실패시키는 것: 바뀐 문단마다 끝까지 훑기(`carry_stays_linear`).
+    let para_list: Vec<usize> = out.iter().map(|s| s.list).collect();
+    let lists = para_list.iter().max().map_or(0, |m| m + 1);
+    let stale = crate::cache_flow::stale_paragraphs(
+        &para_list,
+        &vec![None; lists],
+        (0..out.len()).filter(|&i| changed[i]),
+        &mut || {},
+    );
 
     let mut inserts: Vec<(usize, &str)> = Vec::new();
     for i in 0..out.len() {
@@ -242,22 +253,6 @@ fn without_caches(xml: &str, slices: &[ParaSlice]) -> String {
     }
     out.push_str(&xml[cursor..]);
     out
-}
-
-/// The paragraphs whose cache an edit makes stale: each changed paragraph
-/// and the paragraphs after it in its list. The host chain needs no walk
-/// here: a host paragraph's slice contains the edited paragraph, so the
-/// host is itself changed and its own tail follows.
-fn flow_tails(slices: &[ParaSlice], changed: &[bool]) -> Vec<bool> {
-    let mut stale = vec![false; slices.len()];
-    for (q, _) in changed.iter().enumerate().filter(|(_, c)| **c) {
-        for (j, s) in slices.iter().enumerate().skip(q) {
-            if s.list == slices[q].list {
-                stale[j] = true;
-            }
-        }
-    }
-    stale
 }
 
 /// Carries `<hp:linesegarray>` caches into `output` for every section entry
@@ -407,6 +402,25 @@ mod tests {
         let one = format!("<hs:sec>{}</hs:sec>", p("하나", true));
         let two = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         assert!(splice_section(&two, &two, &one).is_none());
+    }
+
+    /// Branch review r2 M4: a batch edit changing every one of N paragraphs
+    /// costs work linear in N.
+    #[test]
+    fn carry_stays_linear() {
+        const N: usize = 2000;
+        let section = |text: &str, lsa: bool| {
+            let body: String = (0..N).map(|i| p(&format!("{text}{i}"), lsa)).collect();
+            format!("<hs:sec>{body}</hs:sec>")
+        };
+        let baseline = section("a", false);
+        let output = section("b", false);
+        let source = section("b", true);
+        crate::work::WORK.with(|w| w.set(0));
+        let spliced = splice_section(&baseline, &output, &source).unwrap();
+        let work = crate::work::WORK.with(std::cell::Cell::get);
+        assert_eq!(spliced, output);
+        assert!(work <= 3 * N, "{work} work units for {N} paragraphs");
     }
 
     /// Branch review A2: the cache source must hold the output's tokens

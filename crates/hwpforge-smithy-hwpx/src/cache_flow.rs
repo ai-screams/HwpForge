@@ -33,6 +33,24 @@ pub(crate) fn stale_caches(
     paragraphs: impl IntoIterator<Item = usize>,
     tick: &mut impl FnMut(),
 ) -> Vec<Range<usize>> {
+    stale_paragraphs(para_list, list_host, paragraphs, tick)
+        .into_iter()
+        .zip(caches)
+        .filter(|(stale, _)| *stale)
+        .flat_map(|(_, spans)| spans.iter().cloned())
+        .collect()
+}
+
+/// Which paragraphs a set of changed `paragraphs` makes stale — the rule of
+/// [`stale_caches`], one flag per paragraph. Also the rule of the
+/// re-encoding editors' cache carry (`layout_carry`), which passes no hosts:
+/// there a host holding an edit is itself changed.
+pub(crate) fn stale_paragraphs(
+    para_list: &[usize],
+    list_host: &[Option<usize>],
+    paragraphs: impl IntoIterator<Item = usize>,
+    tick: &mut impl FnMut(),
+) -> Vec<bool> {
     let mut from = vec![usize::MAX; list_host.len()];
     for paragraph in paragraphs {
         let mut at = Some(paragraph);
@@ -44,13 +62,12 @@ pub(crate) fn stale_caches(
             at = list_host[list];
         }
     }
-    (0..caches.len())
-        .filter(|&j| {
+    (0..para_list.len())
+        .map(|j| {
             tick();
             crate::work::tick();
             j >= from[para_list[j]]
         })
-        .flat_map(|j| caches[j].iter().cloned())
         .collect()
 }
 
