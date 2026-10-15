@@ -15,24 +15,47 @@ use hwpforge_core::image::ImageFormat;
 /// given the size of the image it resolves to and no other; when that
 /// image's header cannot be read, or the reference resolves to none, it
 /// gets no size.
+///
+/// The rule is applied through one index of the stored names and stems, and
+/// each image's header is read once, so the work grows with the image count
+/// (branch review B-M2: resolving every reference by scanning the store was
+/// quadratic).
+/// 이것을 실패시키는 것: 참조마다 저장소 훑기(`sizes_stay_linear`), 해석 규칙
+/// 어긋남(`references_resolve_by_the_image_rule`).
 pub(crate) fn pixel_sizes_by_reference(
     store: &hwpforge_core::image::ImageStore,
 ) -> std::collections::HashMap<String, (u32, u32)> {
-    let mut candidates: Vec<&str> = Vec::new();
+    use std::collections::HashMap;
+    // Stem → the one stored name with it, `None` when several share it.
+    let mut stems: HashMap<&str, Option<&str>> = HashMap::new();
     for (key, _) in store.iter() {
-        candidates.push(key);
+        crate::cache_flow::tick();
         if let Some((stem, _)) = key.rsplit_once('.') {
-            candidates.push(stem);
+            stems.entry(stem).and_modify(|only| *only = None).or_insert(Some(key));
         }
     }
-    candidates
-        .into_iter()
-        .filter_map(|reference| {
-            let key = crate::style_lookup_bridge::resolve_image_key(store, reference)?;
-            let size = pixel_size(store.get(key)?)?;
-            Some((reference.to_string(), size))
-        })
-        .collect()
+    let mut sizes: HashMap<&str, Option<(u32, u32)>> = HashMap::new();
+    let mut out = HashMap::new();
+    for (key, _) in store.iter() {
+        let stem = key.rsplit_once('.').map(|(stem, _)| stem);
+        for reference in std::iter::once(key).chain(stem) {
+            crate::cache_flow::tick();
+            // `resolve_image_key`: the exact name first, else a stem only one
+            // image has.
+            let stripped = reference.strip_prefix("BinData/").unwrap_or(reference);
+            let resolved = match store.get(stripped) {
+                Some(_) => Some(stripped),
+                None => stems.get(stripped).copied().flatten(),
+            };
+            let Some(resolved) = resolved else { continue };
+            let size =
+                *sizes.entry(resolved).or_insert_with(|| store.get(resolved).and_then(pixel_size));
+            if let Some(size) = size {
+                out.insert(reference.to_string(), size);
+            }
+        }
+    }
+    out
 }
 
 /// `(width, height)` in pixels, or `None` when the header cannot be read.
@@ -95,6 +118,40 @@ mod tests {
         b.extend_from_slice(&w.to_be_bytes());
         b.extend_from_slice(&h.to_be_bytes());
         b
+    }
+
+    /// The index gives each reference what `resolve_image_key` gives it:
+    /// the exact name, a unique stem, nothing for a shared stem.
+    #[test]
+    fn references_resolve_by_the_image_rule() {
+        let mut store = hwpforge_core::image::ImageStore::new();
+        store.insert("a.png", png(1, 2));
+        store.insert("a.jpg", png(3, 4));
+        store.insert("b.png", png(5, 6));
+        store.insert("c", png(7, 8));
+        store.insert("c.png", png(9, 10));
+        let sizes = pixel_sizes_by_reference(&store);
+        let mut keys: Vec<&String> = sizes.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["a.jpg", "a.png", "b", "b.png", "c", "c.png"]);
+        for key in keys {
+            let resolved = crate::style_lookup_bridge::resolve_image_key(&store, key).unwrap();
+            assert_eq!(sizes[key], pixel_size(store.get(resolved).unwrap()).unwrap(), "{key}");
+        }
+    }
+
+    /// Branch review B-M2: constant work per image.
+    #[test]
+    fn sizes_stay_linear() {
+        const N: usize = 2000;
+        let mut store = hwpforge_core::image::ImageStore::new();
+        for i in 0..N {
+            store.insert(format!("image{i}.png"), png(1, 1));
+        }
+        crate::cache_flow::WORK.with(|w| w.set(0));
+        assert_eq!(pixel_sizes_by_reference(&store).len(), 2 * N);
+        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        assert!(work <= 3 * N, "{work} work units for {N} images");
     }
 
     /// 이것을 실패시키는 것: 각 형식의 너비·높이 위치를 바꾸는 변이(형식마다 따로).
