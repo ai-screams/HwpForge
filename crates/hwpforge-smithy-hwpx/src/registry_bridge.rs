@@ -7,14 +7,11 @@
 //! registry-local indices before encode.
 
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_core::caption::Caption;
-use hwpforge_core::control::Control;
 use hwpforge_core::document::{Document, Draft, Validated};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
-use hwpforge_core::table::Table;
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
 use crate::default_styles::HancomStyleSet;
@@ -114,12 +111,31 @@ impl HwpxRegistryBridge {
 
     fn rebind_paragraphs(&self, paragraphs: &mut [Paragraph]) -> HwpxResult<()> {
         for paragraph in paragraphs {
-            self.rebind_paragraph(paragraph)?;
+            self.rebind_paragraph_tree(paragraph)?;
         }
         Ok(())
     }
 
-    fn rebind_paragraph(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
+    /// Rebinds `paragraph` and every paragraph nested in it, through Core's
+    /// one paragraph traversal ([`Paragraph::for_each_paragraph_mut`]) — so a
+    /// container Core walks (group children, nested groups, …) cannot be
+    /// missed here (branch review C3: the group arm used to be skipped).
+    /// That traversal does not enter run pictures' captions; those are
+    /// rebound from their run ([`Self::rebind_own`]). Each paragraph is
+    /// visited once — the mapping is not idempotent.
+    fn rebind_paragraph_tree(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
+        let mut first_error = None;
+        paragraph.for_each_paragraph_mut(|p| {
+            if first_error.is_none() {
+                first_error = self.rebind_own(p).err();
+            }
+        });
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// The style references of `paragraph` itself and its runs — not of the
+    /// paragraphs nested in them, which the traversal visits on its own.
+    fn rebind_own(&self, paragraph: &mut Paragraph) -> HwpxResult<()> {
         paragraph.para_shape_id = self.map_para_shape(paragraph.para_shape_id)?;
         // §19.22 D5: the end mark's char shape is a char shape reference too.
         // 이것을 실패시키는 것: 이 다시 매기기를 지우기
@@ -128,81 +144,10 @@ impl HwpxRegistryBridge {
             paragraph.end_char_shape = Some(self.map_char_shape(end)?);
         }
         for run in &mut paragraph.runs {
-            self.rebind_run(run)?;
-        }
-        Ok(())
-    }
-
-    fn rebind_run(&self, run: &mut Run) -> HwpxResult<()> {
-        run.char_shape_id = self.map_char_shape(run.char_shape_id)?;
-        match &mut run.content {
-            RunContent::Table(table) => self.rebind_table(table)?,
-            RunContent::Image(image) => self.rebind_image(image)?,
-            RunContent::Control(control) => self.rebind_control(control)?,
-            // Text-bearing variants carry no style refs themselves
-            // — the run's `char_shape_id` is rebound above and the
-            // text payload (including `InlineText` segments) is
-            // self-contained. Explicit no-op rather than `_` wildcard
-            // so the intent stays visible; see debug doc §3a-A8.
-            RunContent::Text(_) | RunContent::InlineText(_) => {}
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn rebind_table(&self, table: &mut Table) -> HwpxResult<()> {
-        for row in &mut table.rows {
-            for cell in &mut row.cells {
-                self.rebind_paragraphs(&mut cell.paragraphs)?;
+            run.char_shape_id = self.map_char_shape(run.char_shape_id)?;
+            if let RunContent::Image(Image { caption: Some(caption), .. }) = &mut run.content {
+                self.rebind_paragraphs(&mut caption.paragraphs)?;
             }
-        }
-        self.rebind_caption(table.caption.as_mut())
-    }
-
-    fn rebind_image(&self, image: &mut Image) -> HwpxResult<()> {
-        self.rebind_caption(image.caption.as_mut())
-    }
-
-    fn rebind_control(&self, control: &mut Control) -> HwpxResult<()> {
-        match control {
-            Control::TextBox { paragraphs, caption, .. } => {
-                self.rebind_paragraphs(paragraphs)?;
-                self.rebind_caption(caption.as_mut())?;
-            }
-            Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
-                self.rebind_paragraphs(paragraphs)?;
-            }
-            Control::Ellipse { paragraphs, caption, .. }
-            | Control::Polygon { paragraphs, caption, .. } => {
-                self.rebind_paragraphs(paragraphs)?;
-                self.rebind_caption(caption.as_mut())?;
-            }
-            Control::Rect { caption, .. }
-            | Control::Line { caption, .. }
-            | Control::Arc { caption, .. }
-            | Control::Curve { caption, .. }
-            | Control::ConnectLine { caption, .. } => {
-                self.rebind_caption(caption.as_mut())?;
-            }
-            Control::Memo { content, .. } => self.rebind_paragraphs(content)?,
-            Control::Hyperlink { .. }
-            | Control::Equation { .. }
-            | Control::Chart { .. }
-            | Control::Dutmal { .. }
-            | Control::Compose { .. }
-            | Control::Bookmark { .. }
-            | Control::CrossRef { .. }
-            | Control::Field { .. }
-            | Control::IndexMark { .. }
-            | Control::Unknown { .. } => {}
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn rebind_caption(&self, caption: Option<&mut Caption>) -> HwpxResult<()> {
-        if let Some(caption) = caption {
-            self.rebind_paragraphs(&mut caption.paragraphs)?;
         }
         Ok(())
     }
@@ -372,6 +317,63 @@ mod tests {
         let rebound = bridge.rebind_draft_document(document).unwrap();
         let table = rebound.sections()[0].paragraphs[0].runs[1].content.as_table().unwrap();
         assert_eq!(table.rows[0].cells[0].paragraphs[0].end_char_shape, Some(expected));
+    }
+
+    /// Branch review C3: a group's picture caption and a text box inside a
+    /// nested group are rebound too (char shape, end mark and para shape).
+    /// 이것을 실패시키는 것: 묶음을 건너뛰기 · 중첩 묶음으로 내려가지 않기 ·
+    /// 같은 문단을 두 번 다시 매기기(매핑이 항등이 아니라 값이 어긋난다).
+    #[test]
+    fn group_children_are_rebound() {
+        use hwpforge_core::control::GroupChild;
+        let (registry, body_cs, body_ps) = body_registry();
+        let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
+        let expected_char = bridge.char_shape_map[body_cs.get()];
+        let expected_para = bridge.para_shape_map[body_ps.get()];
+        assert_ne!(expected_char, body_cs, "the test needs a remapped id");
+        let mm = |v: f64| HwpUnit::from_mm(v).unwrap();
+        let mut captioned = simple_paragraph(body_cs, body_ps);
+        captioned.end_char_shape = Some(body_cs);
+        let picture = Image::new("BinData/image1.png", mm(10.0), mm(10.0), ImageFormat::Png)
+            .with_caption(Caption::new(vec![captioned], CaptionSide::Bottom));
+        let group = |children| Control::Group {
+            frame: hwpforge_core::ObjectFrame::new(),
+            children,
+            width: mm(20.0),
+            height: mm(20.0),
+            placement: None,
+            inst_id: None,
+        };
+        let inner = group(vec![GroupChild::Shape(Control::text_box(
+            vec![simple_paragraph(body_cs, body_ps)],
+            mm(10.0),
+            mm(10.0),
+        ))]);
+        let outer = group(vec![GroupChild::Picture(picture), GroupChild::Shape(inner)]);
+        let mut root = simple_paragraph(body_cs, body_ps);
+        root.add_run(Run::control(outer, body_cs));
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(vec![root], PageSettings::a4()));
+
+        let rebound = bridge.rebind_draft_document(document).unwrap();
+        let Some(Control::Group { children, .. }) =
+            rebound.sections()[0].paragraphs[0].runs[1].content.as_control()
+        else {
+            panic!("group");
+        };
+        let GroupChild::Picture(picture) = &children[0] else { panic!("picture") };
+        let caption = &picture.caption.as_ref().unwrap().paragraphs[0];
+        assert_eq!(caption.para_shape_id, expected_para);
+        assert_eq!(caption.runs[0].char_shape_id, expected_char);
+        assert_eq!(caption.end_char_shape, Some(expected_char));
+        let GroupChild::Shape(Control::Group { children: nested, .. }) = &children[1] else {
+            panic!("nested group")
+        };
+        let GroupChild::Shape(Control::TextBox { paragraphs, .. }) = &nested[0] else {
+            panic!("text box")
+        };
+        assert_eq!(paragraphs[0].para_shape_id, expected_para);
+        assert_eq!(paragraphs[0].runs[0].char_shape_id, expected_char);
     }
 
     #[test]
