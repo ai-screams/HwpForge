@@ -173,6 +173,9 @@ pub(crate) struct SectionEncodeResult {
     pub xml: String,
     /// 인코드 경고 (캐시 드롭 등 — W1b).
     pub warnings: Vec<super::EncodeWarning>,
+    /// With [`super::EncodeOptions::mark_dropped_caches`]: the warning of
+    /// each marked cache, by the marker's ordinal.
+    pub dropped_caches: Vec<super::EncodeWarning>,
     /// Chart entries: (ZIP path, OOXML chart XML content).
     pub charts: Vec<(String, String)>,
     /// Master page entries: (ZIP path, masterpage XML content).
@@ -202,6 +205,9 @@ pub(crate) struct SectionEncodeResult {
 /// 인코드 경고 sink + 현재 문단 경로 (W1b — 디코더 `DecodeCtx` 대칭).
 pub(crate) struct EncodeSink {
     pub(crate) warnings: Vec<super::EncodeWarning>,
+    /// The warnings of the caches marked so far in this part (see
+    /// [`super::EncodeOptions::mark_dropped_caches`]), by marker ordinal.
+    pub(crate) dropped_caches: Vec<super::EncodeWarning>,
     path: Vec<crate::decoder::PathSeg>,
     /// 지금 쓰는 패키지 part 의 실제 이름 — 이 sink 의 모든 part 경고가 쓴다.
     part: String,
@@ -213,6 +219,7 @@ impl EncodeSink {
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
             warnings: Vec::new(),
+            dropped_caches: Vec::new(),
             path: vec![crate::decoder::PathSeg::Section(section_index)],
             part: format!("Contents/section{section_index}.xml"),
             in_master_page: false,
@@ -224,6 +231,7 @@ impl EncodeSink {
     pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
         Self {
             warnings: Vec::new(),
+            dropped_caches: Vec::new(),
             path: vec![
                 crate::decoder::PathSeg::Section(section_index),
                 crate::decoder::PathSeg::MasterPage(global),
@@ -558,6 +566,7 @@ pub(crate) fn encode_section_with_note_counters(
     Ok(SectionEncodeResult {
         xml,
         warnings: sink.warnings,
+        dropped_caches: sink.dropped_caches,
         charts: chart_entries,
         master_pages,
         embedded_oles,
@@ -1029,8 +1038,9 @@ fn build_paragraph(
     } else {
         None
     };
-    // The carry's cache source marks a dropped cache with the index of the
-    // warning that says why (`EncodeOptions::mark_dropped_caches`).
+    // The carry's cache source marks a dropped cache with an ordinal, and
+    // keeps the warning that says why beside the output under that ordinal
+    // (`EncodeOptions::mark_dropped_caches`) — the wire holds no diagnostic.
     // 이것을 실패시키는 것: 표지 삭제(`an_untouched_cache_the_encoder_cannot_place_is_reported`).
     let linesegarray = match linesegarray {
         None if options.mark_dropped_caches
@@ -1040,7 +1050,11 @@ fn build_paragraph(
             Some(HxLineSegArray {
                 items: vec![HxLineSeg {
                     textpos: super::DROPPED_CACHE_MARK,
-                    vertpos: i32::try_from(sink.warnings.len() - 1).unwrap_or(i32::MAX),
+                    vertpos: {
+                        let warning = sink.warnings.last().cloned().expect("a drop was warned");
+                        sink.dropped_caches.push(warning);
+                        i32::try_from(sink.dropped_caches.len() - 1).unwrap_or(i32::MAX)
+                    },
                     vertsize: 0,
                     textheight: 0,
                     baseline: 0,

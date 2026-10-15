@@ -1046,8 +1046,10 @@ pub struct EncodeOptions {
     /// Crate-internal (the carry's cache source, `layout_carry`): with
     /// `emit_layout_cache`, a paragraph whose cache cannot be placed gets a
     /// marker cache — one line at `textpos` [`DROPPED_CACHE_MARK`] whose
-    /// `vertpos` is the index of its `LayoutCacheDropped` warning — so the
-    /// carry can tell that drop from a paragraph without a cache.
+    /// `vertpos` is an ordinal within its section — so the carry can find
+    /// that paragraph; the warning that says why is returned beside the
+    /// output under that ordinal
+    /// ([`HwpxEncoder::encode_reporting_dropped_caches`]).
     pub(crate) mark_dropped_caches: bool,
 }
 
@@ -1270,6 +1272,19 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
+        Self::encode_reporting_dropped_caches(document, style_store, image_store, options)
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// [`Self::encode_with_diagnostics`], plus, for
+    /// [`EncodeOptions::mark_dropped_caches`], the warning of each marked
+    /// cache by section index and marker ordinal.
+    pub(crate) fn encode_reporting_dropped_caches(
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
         refuse_unknown_cell_zone_fills(document, style_store)?;
         // W0: ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
@@ -1331,6 +1346,8 @@ impl HwpxEncoder {
             embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
+        let dropped_caches: Vec<Vec<EncodeWarning>> =
+            section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
         for r in &mut section_results {
             warnings.append(&mut r.warnings);
         }
@@ -1422,7 +1439,7 @@ impl HwpxEncoder {
             &embedded_oles,
         )?;
         warnings.extend(package_warnings);
-        Ok(EncodeOutcome { bytes, warnings })
+        Ok((EncodeOutcome { bytes, warnings }, dropped_caches))
     }
 
     /// Encodes a validated document and writes it to a file.

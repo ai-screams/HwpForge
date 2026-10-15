@@ -179,9 +179,9 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
 /// the carry cannot be aligned (paragraph count mismatch, scan anomaly, or
 /// a `source` that differs from `output` by more than its caches).
 ///
-/// Alongside the spliced section come the indices (into the source
-/// encode's warnings) of the caches the encoder could not place for a
-/// paragraph that would have kept its cache — the drops the caller reports;
+/// Alongside the spliced section come the marker ordinals (within this
+/// section) of the caches the encoder could not place for a paragraph that
+/// would have kept its cache — the drops the caller reports;
 /// a paragraph the edit changed or moved loses its cache on purpose and is
 /// not among them.
 fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String, Vec<usize>)> {
@@ -258,8 +258,8 @@ fn splice_section(baseline: &str, output: &str, source: &str) -> Option<(String,
     Some((result, dropped))
 }
 
-/// The warning index a marker cache ([`crate::encoder::DROPPED_CACHE_MARK`])
-/// carries, or `None` for a real cache.
+/// The ordinal a marker cache ([`crate::encoder::DROPPED_CACHE_MARK`])
+/// carries within its section, or `None` for a real cache.
 fn dropped_mark(seg: &str) -> Option<usize> {
     let mark = format!(r#"textpos="{}""#, crate::encoder::DROPPED_CACHE_MARK);
     if !seg.contains(&mark) {
@@ -327,7 +327,12 @@ pub(crate) fn carry_line_segs(
             continue;
         }
         if let Some((spliced, dropped)) = splice_section(&base_xml, &out_xml, &src_xml) {
-            reported.extend(dropped.into_iter().filter_map(|i| source.warnings.get(i).cloned()));
+            // r3 M1: a marker's ordinal counts within its own section.
+            // 이것을 실패시키는 것: 문서 전체 번호로 읽기(`drops_in_two_sections_are_each_reported`).
+            let section_drops = section_index(&path).and_then(|i| source.dropped.get(i));
+            reported.extend(
+                dropped.into_iter().filter_map(|i| section_drops.and_then(|d| d.get(i)).cloned()),
+            );
             if spliced != out_xml {
                 out_pkg.replace_text_entry(&path, spliced);
                 changed = true;
@@ -340,16 +345,23 @@ pub(crate) fn carry_line_segs(
 }
 
 /// The cache source of [`carry_line_segs`]: the encoded bytes (dropped
-/// caches marked) and the encode's warnings, which the marks index.
+/// caches marked) and, per section, the warning of each marked cache by its
+/// marker ordinal.
 pub(crate) struct CacheSource {
     bytes: Vec<u8>,
-    warnings: Vec<crate::EncodeWarning>,
+    dropped: Vec<Vec<crate::EncodeWarning>>,
+}
+
+/// The section index of a `Contents/sectionN.xml` part name.
+fn section_index(part: &str) -> Option<usize> {
+    part.strip_prefix("Contents/section")?.strip_suffix(".xml")?.parse().ok()
 }
 
 /// The edited document encoded with its Core line caches emitted: the
 /// cache source of [`carry_line_segs`]. A cache the encoder cannot place is
-/// written as a marker naming its `LayoutCacheDropped` warning, which the
-/// carry reports when the paragraph was untouched.
+/// written as a marker with an ordinal, and its `LayoutCacheDropped`
+/// warning kept under that ordinal; the carry reports it when the paragraph
+/// was untouched.
 pub(crate) fn cache_source(
     document: &hwpforge_core::Document<hwpforge_core::Validated>,
     style_store: &crate::style_store::HwpxStyleStore,
@@ -357,8 +369,8 @@ pub(crate) fn cache_source(
 ) -> HwpxResult<CacheSource> {
     let mut options = crate::EncodeOptions::default().with_emit_layout_cache(true);
     options.mark_dropped_caches = true;
-    crate::HwpxEncoder::encode_with_diagnostics(document, style_store, image_store, options)
-        .map(|outcome| CacheSource { bytes: outcome.bytes, warnings: outcome.warnings })
+    crate::HwpxEncoder::encode_reporting_dropped_caches(document, style_store, image_store, options)
+        .map(|(outcome, dropped)| CacheSource { bytes: outcome.bytes, dropped })
 }
 
 #[cfg(test)]
@@ -530,7 +542,60 @@ mod tests {
             .unwrap();
         let at = xml.rfind("<hp:linesegarray").unwrap();
         let index = dropped_mark(&xml[at..]).expect("a marker cache");
-        assert!(matches!(source.warnings[index], crate::EncodeWarning::LayoutCacheDropped { .. }));
+        assert!(matches!(
+            source.dropped[0][index],
+            crate::EncodeWarning::LayoutCacheDropped { .. }
+        ));
+    }
+
+    /// Branch review r3 M1: an untouched cache the encoder cannot place in
+    /// each of two sections is reported once each, with its own section's
+    /// path — the marker ordinals count within a section.
+    /// 이것을 실패시키는 것: 표지 번호를 문서 전체 번호로 읽기(구역 0 의 경고가
+    /// 두 번, 구역 1 은 빠진다).
+    #[test]
+    fn drops_in_two_sections_are_each_reported() {
+        use hwpforge_core::layout::{LayoutCache, LineBoundary, LineSeg, WireTokenKind};
+        use hwpforge_core::run::Run;
+        use hwpforge_core::{Document, PageSettings, Paragraph, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+        let line = |textpos: u32, boundary: Option<LineBoundary>| {
+            let mut l = LineSeg::default();
+            l.textpos = textpos;
+            l.vertsize = 1000;
+            l.boundary = boundary;
+            l
+        };
+        let text = |t: &str| {
+            Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+        };
+        let mut doc = Document::new();
+        for _ in 0..2 {
+            let mut bad = text("AB");
+            bad.layout_cache = Some(LayoutCache::new(vec![
+                line(0, None),
+                line(1, Some(LineBoundary::new(vec![WireTokenKind::Table], None))),
+            ]));
+            doc.add_section(Section::with_paragraphs(vec![text("앞"), bad], PageSettings::a4()));
+        }
+        let doc = doc.validate().unwrap();
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let images = hwpforge_core::image::ImageStore::new();
+        let output = crate::HwpxEncoder::encode(&doc, &styles, &images).unwrap();
+        let source = cache_source(&doc, &styles, &images).unwrap();
+        let (_, reported) = carry_line_segs(&source.bytes, &output, &output, &source).unwrap();
+        let paths: Vec<String> = reported
+            .iter()
+            .map(|w| match w {
+                crate::EncodeWarning::LayoutCacheDropped { path, .. } => path.to_string(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(paths.len(), 2, "{paths:?}");
+        assert!(
+            paths[0].starts_with("section[0]") && paths[1].starts_with("section[1]"),
+            "{paths:?}"
+        );
     }
 
     /// Branch review A2: the cache source must hold the output's tokens
