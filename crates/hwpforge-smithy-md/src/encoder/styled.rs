@@ -12,6 +12,7 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::UnderlineType;
 
+use super::guard::{Block, Source};
 use super::list_format::{format_list_continuation, format_list_item};
 use super::markup::{Cell, Html, Md};
 use super::Part;
@@ -54,8 +55,16 @@ struct ListContinuationContext {
 /// met at note depth 0 outside a memo are registered (see [`Ctx`]).
 struct FootnoteCollector {
     /// Per-note body paragraphs (multi-paragraph definitions).
-    footnotes: Vec<Vec<Md>>,
-    endnotes: Vec<Vec<Md>>,
+    footnotes: Vec<Note>,
+    endnotes: Vec<Note>,
+}
+
+/// A note definition: its body, and its raw text and place for the final
+/// check's plain-text fallback ([`super::guard`]).
+struct Note {
+    body: Vec<Md>,
+    raw: String,
+    at: (usize, usize),
 }
 
 impl FootnoteCollector {
@@ -64,14 +73,14 @@ impl FootnoteCollector {
     }
 
     /// Adds a footnote body and returns the inline marker `[^N]`.
-    fn add_footnote(&mut self, body_paragraphs: Vec<Md>) -> Md {
-        self.footnotes.push(body_paragraphs);
+    fn add_footnote(&mut self, body: Vec<Md>, raw: String, at: (usize, usize)) -> Md {
+        self.footnotes.push(Note { body, raw, at });
         note_marker("", self.footnotes.len())
     }
 
     /// Adds an endnote body and returns the inline marker `[^eN]`.
-    fn add_endnote(&mut self, body_paragraphs: Vec<Md>) -> Md {
-        self.endnotes.push(body_paragraphs);
+    fn add_endnote(&mut self, body: Vec<Md>, raw: String, at: (usize, usize)) -> Md {
+        self.endnotes.push(Note { body, raw, at });
         note_marker("e", self.endnotes.len())
     }
 
@@ -82,15 +91,21 @@ impl FootnoteCollector {
     /// and 4-space indentation on **every** physical line of continuation
     /// paragraphs. Line-start block markers are escaped so a body that
     /// *looks* like a list stays plain text on re-parse (H6, probe P14).
-    fn render_definitions(&self) -> String {
-        let mut blocks = Vec::new();
-        for (i, body) in self.footnotes.iter().enumerate() {
-            blocks.push(render_definition(&format!("{}", i + 1), body));
-        }
-        for (i, body) in self.endnotes.iter().enumerate() {
-            blocks.push(render_definition(&format!("e{}", i + 1), body));
-        }
-        blocks.join("\n\n")
+    fn render_definitions(self) -> Vec<Block> {
+        let labels = (1..).map(|i| i.to_string());
+        let footnotes = self.footnotes.into_iter().zip(labels);
+        let endnotes = self.endnotes.into_iter().zip((1..).map(|i| format!("e{i}")));
+        footnotes
+            .chain(endnotes)
+            .map(|(note, label)| Block {
+                markdown: render_definition(&label, &note.body),
+                source: Some(Source {
+                    prefix: format!("[^{label}]: "),
+                    texts: vec![note.raw],
+                    at: vec![note.at],
+                }),
+            })
+            .collect()
     }
 }
 
@@ -335,27 +350,40 @@ fn emit_picture_html(
 /// Queries the provided [`StyleLookup`] for character/paragraph/style
 /// properties to emit inline formatting and heading markers.
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
-    let mut blocks = Vec::new();
+    super::markup::start_recording();
+    let mut blocks: Vec<Block> = Vec::new();
     let mut st = State::new();
+    // The plain-text fallback of a block: its paragraphs' raw text.
+    let source = |texts: Vec<String>, at: Vec<(usize, usize)>| {
+        Some(Source { prefix: String::new(), texts, at })
+    };
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
-            blocks.push(SECTION_MARKER_COMMENT.to_string());
+            blocks.push(Block { markdown: SECTION_MARKER_COMMENT.to_string(), source: None });
         }
 
-        let mut code_block_lines: Vec<String> = Vec::new();
+        // A code block's lines and their paragraphs.
+        let mut code: Vec<(String, (usize, usize))> = Vec::new();
+        let flush_code = |code: &mut Vec<(String, (usize, usize))>, blocks: &mut Vec<Block>| {
+            if !code.is_empty() {
+                let lines: Vec<String> = code.iter().map(|(t, _)| t.clone()).collect();
+                let at = code.iter().map(|(_, at)| *at).collect();
+                blocks.push(Block {
+                    markdown: Md::code_block(&lines.join("\n")).into_string(),
+                    source: source(lines, at),
+                });
+                code.clear();
+            }
+        };
         let mut continuation: Option<ListContinuationContext> = None;
 
         for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
             st.at = (section_index, paragraph_index);
             // Page break
             if paragraph.page_break {
-                // Flush code block first
-                if !code_block_lines.is_empty() {
-                    blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
-                    code_block_lines.clear();
-                }
-                blocks.push("---".to_string());
+                flush_code(&mut code, &mut blocks);
+                blocks.push(Block { markdown: "---".to_string(), source: None });
                 continuation = None;
             }
 
@@ -370,31 +398,33 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     .filter_map(|r| r.content.plain_text())
                     .map(|cow| cow.into_owned())
                     .collect::<String>();
-                code_block_lines.push(text);
+                code.push((text, st.at));
                 continuation = None;
                 continue;
             }
-
-            // Flush accumulated code block
-            if !code_block_lines.is_empty() {
-                blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
-                code_block_lines.clear();
-            }
+            flush_code(&mut code, &mut blocks);
 
             let continuation_level = continuation
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
             let markdown = encode_paragraph_styled(paragraph, styles, &mut st);
             if !markdown.trim().is_empty() {
-                if let Some(level) = continuation_level {
-                    let indented = format_list_continuation(&markdown, level);
-                    if let Some(last) = blocks.last_mut() {
-                        last.push_str("\n\n");
-                        last.push_str(&indented);
-                    } else {
-                        blocks.push(indented);
+                let text = super::guard::deep_text(paragraph);
+                match (continuation_level, blocks.last_mut()) {
+                    (Some(level), Some(last)) => {
+                        last.markdown.push_str("\n\n");
+                        last.markdown.push_str(&format_list_continuation(&markdown, level));
+                        if let Some(src) = &mut last.source {
+                            src.texts.push(text);
+                            src.at.push(st.at);
+                        }
                     }
-                } else {
-                    blocks.push(markdown);
+                    (level, _) => {
+                        let markdown = match level {
+                            Some(level) => format_list_continuation(&markdown, level),
+                            None => markdown,
+                        };
+                        blocks.push(Block { markdown, source: source(vec![text], vec![st.at]) });
+                    }
                 }
             }
 
@@ -404,18 +434,18 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         }
 
         // Flush remaining code block at section end
-        if !code_block_lines.is_empty() {
-            blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
-        }
+        flush_code(&mut code, &mut blocks);
     }
 
-    // Append footnote/endnote definitions
-    let definitions = st.notes.render_definitions();
-    let mut markdown = blocks.join("\n\n");
-    if !definitions.is_empty() {
-        markdown.push_str("\n\n");
-        markdown.push_str(&definitions);
-    }
+    // Footnote/endnote definitions at the end.
+    let notes = std::mem::replace(&mut st.notes, FootnoteCollector::new());
+    blocks.extend(notes.render_definitions());
+
+    // The finished Markdown, parsed again, may hold only what styled writes.
+    let destinations = super::markup::recorded();
+    let allowed =
+        super::guard::Allowed { tags: super::guard::STYLED_TAGS, destinations: &destinations };
+    let markdown = super::guard::checked(blocks, &allowed, &mut st.warnings);
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
@@ -592,10 +622,8 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
                 md.push(Md::join(body, " "));
                 md.push_syntax(")");
                 md
-            } else if matches!(control, Control::Footnote { .. }) {
-                st.notes.add_footnote(body)
             } else {
-                st.notes.add_endnote(body)
+                note_definition(control, body, paragraphs, st)
             }
         }
         Control::TextBox { paragraphs, .. }
@@ -633,11 +661,11 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // else the target's display form in brackets (Name → "bookmark1",
         // SystemId → "#5"). Markdown has no anchor link here: text only.
         Control::CrossRef { target, display_text, .. } => {
+            // The brackets are text too: as syntax they made a link with a
+            // following `(…)` (review r5). 이것을 실패시키는 것: 대괄호를 문법으로
+            // 쓰기(`markup_safety` 의 빈 상호 참조).
             if display_text.is_empty() {
-                let mut md = Md::syntax("[");
-                md.push(Md::text(&target.as_display()));
-                md.push_syntax("]");
-                md
+                Md::text(&format!("[{}]", target.as_display()))
             } else {
                 Md::text(display_text)
             }
@@ -684,12 +712,7 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             } else {
                 // A definition is Markdown; its marker is written as it is.
                 let body = extract_note_body(paragraphs, styles, st, ctx);
-                let marker = if matches!(control, Control::Footnote { .. }) {
-                    st.notes.add_footnote(body)
-                } else {
-                    st.notes.add_endnote(body)
-                };
-                Html::text(marker.as_str())
+                Html::text(note_definition(control, body, paragraphs, st).as_str())
             }
         }
         Control::TextBox { paragraphs, .. }
@@ -725,6 +748,22 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
         }
         Control::Unknown { tag, .. } => Html::text(&format!("`[{tag}]`")),
         _ => Html::new(),
+    }
+}
+
+/// Registers a note definition (its raw text and place kept for the final
+/// check) and returns its marker.
+fn note_definition(
+    control: &Control,
+    body: Vec<Md>,
+    paragraphs: &[Paragraph],
+    st: &mut State,
+) -> Md {
+    let raw = paragraphs.iter().map(super::guard::deep_text).collect::<Vec<_>>().join(" ");
+    if matches!(control, Control::Footnote { .. }) {
+        st.notes.add_footnote(body, raw, st.at)
+    } else {
+        st.notes.add_endnote(body, raw, st.at)
     }
 }
 
@@ -2766,7 +2805,8 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert!(
-            output.markdown.contains("[anchor1]"),
+            // Brackets as text (escaped), so they cannot open a link.
+            output.markdown.contains("\\[anchor1\\]"),
             "empty display_text should produce bracketed fallback, got: {}",
             output.markdown
         );

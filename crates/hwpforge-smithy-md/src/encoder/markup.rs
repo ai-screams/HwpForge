@@ -18,7 +18,35 @@
 //! (CommonMark reads each as one) and are written as `\n`, or as `<br>` in
 //! a cell or in HTML.
 
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt::Write as _;
+
+thread_local! {
+    /// The link and image destinations written since [`start_recording`]:
+    /// what the final check ([`super::guard`]) accepts as the encoder's own.
+    static DESTINATIONS: RefCell<HashSet<String>> = RefCell::default();
+}
+
+/// Starts a fresh record of the destinations an encode writes.
+pub(crate) fn start_recording() {
+    DESTINATIONS.with(|d| d.borrow_mut().clear());
+}
+
+/// The destinations written since [`start_recording`].
+pub(crate) fn recorded() -> HashSet<String> {
+    DESTINATIONS.with(|d| std::mem::take(&mut *d.borrow_mut()))
+}
+
+/// A Markdown destination as a parser reads it back from [`destination`]:
+/// the URL itself, its line endings percent-encoded.
+fn read_back(url: &str) -> String {
+    url.replace('\n', "%0A").replace('\r', "%0D")
+}
+
+fn record(dest: &str) {
+    DESTINATIONS.with(|d| d.borrow_mut().insert(dest.to_string()));
+}
 
 /// Markdown the encoder made.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -104,16 +132,17 @@ impl Md {
         Self(out)
     }
 
-    /// Document text for the lossy view: escaped only where CommonMark
-    /// reads markup ([`escape_inline_markup`]), judged against `after`.
-    pub(crate) fn lossy(raw: &str, after: Option<char>) -> Self {
-        Self(escape_inline_markup(&lines(raw), false, false, after))
+    /// A lossy paragraph: its document text escaped only where CommonMark
+    /// reads markup, judged in one pass over the whole paragraph — the
+    /// markup the encoder made included, as context ([`escape_pieces`]).
+    pub(crate) fn lossy_paragraph(pieces: Vec<Piece<Md>>) -> Self {
+        Self(escape_pieces(pieces.into_iter().map(|p| p.map(|m| m.0)).collect(), false))
     }
 
     /// A lossy link label or alt text: [`Md::lossy`] with every `\`, `[`,
     /// `]` and `` ` `` escaped too, so it cannot close early.
     pub(crate) fn lossy_label(raw: &str) -> Self {
-        Self(escape_inline_markup(&lines(raw), true, false, None))
+        Self(escape_label(&lines(raw)))
     }
 
     /// `[label](url)` — the destination written so it is exactly `url`
@@ -121,11 +150,13 @@ impl Md {
     /// line would break the link apart).
     /// 이것을 실패시키는 것: 줄 끝을 공백으로 바꾸기 삭제(`markup_safety`).
     pub(crate) fn link(label: Md, url: &str) -> Self {
+        record(&read_back(url));
         Self(format!("[{}]({})", label.0.replace('\n', " "), destination(url)))
     }
 
     /// `![alt](path)`, the alt's line endings as spaces, as in [`Md::link`].
     pub(crate) fn image(alt: Md, path: &str) -> Self {
+        record(&read_back(path));
         Self(format!("![{}]({})", alt.0.replace('\n', " "), destination(path)))
     }
 
@@ -243,10 +274,10 @@ impl Cell {
         Self::default()
     }
 
-    /// Document text in a lossy cell: [`Md::lossy`] plus the cell's own
-    /// escapes in the same pass (every `\` doubled, `|`, line endings).
-    pub(crate) fn lossy(raw: &str, after: Option<char>) -> Self {
-        Self(escape_inline_markup(&lines(raw), false, true, after))
+    /// [`Md::lossy_paragraph`] in a lossy cell, with the cell's own escapes
+    /// in the same pass (every `\` doubled, `|`, line endings).
+    pub(crate) fn lossy_paragraph(pieces: Vec<Piece<Cell>>) -> Self {
+        Self(escape_pieces(pieces.into_iter().map(|p| p.map(|c| c.0)).collect(), true))
     }
 
     /// Appends cell markup ([`join`]).
@@ -287,11 +318,6 @@ impl Cell {
     /// The markup.
     pub(crate) fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Whether nothing was written.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -354,11 +380,13 @@ impl Html {
 
     /// `<a href="url">label</a>`.
     pub(crate) fn link(label: &str, url: &str) -> Self {
+        record(url);
         Self(format!("<a href=\"{}\">{}</a>", escape_attr(url), Html::text(label).0))
     }
 
     /// `<img src="key" alt="alt"/>`.
     pub(crate) fn image(key: &str, alt: &str) -> Self {
+        record(key);
         Self(format!("<img src=\"{}\" alt=\"{}\"/>", escape_attr(key), escape_attr(alt)))
     }
 
@@ -474,9 +502,30 @@ fn longest_run(s: &str, c: char) -> usize {
     best
 }
 
-/// Document text for the lossy view, escaped only where CommonMark would
-/// read it as markup rather than text; everything else is written as it is
-/// (`<붙임>`, `<표 1>`, `[참고]`, `AT&T`, `*`, `#` stay). Escaped with `\`:
+/// One piece of a lossy paragraph: document text, or markup the encoder
+/// made for the place (`M` = [`Md`] or [`Cell`]).
+pub(crate) enum Piece<M> {
+    /// Document text.
+    Text(String),
+    /// The encoder's markup, written as it is.
+    Markup(M),
+}
+
+impl<M> Piece<M> {
+    fn map<N>(self, f: impl FnOnce(M) -> N) -> Piece<N> {
+        match self {
+            Piece::Text(t) => Piece::Text(t),
+            Piece::Markup(m) => Piece::Markup(f(m)),
+        }
+    }
+}
+
+/// A lossy paragraph's pieces written out: the document text escaped only
+/// where CommonMark would read it as markup rather than text, everything
+/// else as it is (`<붙임>`, `<표 1>`, `[참고]`, `AT&T`, `*`, `#` stay). The
+/// rules look at the whole paragraph — markup included — so text on both
+/// sides of a link is judged together (`<img title='` · link · `' onerror…>`
+/// is one tag). Escaped with `\`:
 ///
 /// - `<` that starts raw HTML or an autolink ([`markup_after_lt`]): a
 ///   complete tag, a closing tag, a comment, `<?`, a declaration or CDATA,
@@ -485,28 +534,56 @@ fn longest_run(s: &str, c: char) -> usize {
 /// - `&` that begins an entity or character reference (`&name;`, `&#…;`,
 ///   `&#x…;`), which would be read as another character;
 /// - `]` before `(` — the end of an inline link or image label;
-/// - outside a cell, `[` at the start of a line (after at most three
-///   spaces) whose line has a later `]:` — a link reference definition.
-///
-/// `after` is the character the output continues with (the markup written
-/// next), so a tag name at the end is judged by what follows it.
+/// - outside a cell, `[` that may open a link reference definition: at a
+///   line start after any container prefix (up to three spaces, `>`, list
+///   markers), with a `]:` later before a blank line — the label may span
+///   lines ([`definition_at`]);
+/// - text right before markup: a `!` before a link (an image otherwise), a
+///   lone `\` before punctuation (an escape otherwise);
+/// - a backtick before markup (a code span opened there could close past
+///   it — an escaped backtick still closes one), and a code fence at a
+///   line's start ([`fence_at`]).
 ///
 /// A backslash run just before an escaped character is doubled, so it stays
-/// text and the escape still applies. With `label`, every `\`, `[`, `]` and
-/// `` ` `` is escaped (a link label or alt text, which must not close early
-/// or open a code span over the link). With `cell`, the
-/// text is a GFM table cell's: every `\` is escaped, `|` is `\|` and a
-/// line break `<br>` — in one pass, so no escape is escaped again. The text
-/// has `\n` line endings ([`lines`]).
+/// text and the escape still applies. With `cell`, the text is a GFM table
+/// cell's: every `\` is escaped, `|` is `\|` and a line break `<br>` — in
+/// one pass, so no escape is escaped again. The text has `\n` line endings.
 /// 이것을 실패시키는 것: 규칙 하나씩 삭제 · 역슬래시 겹치기 삭제 · 칸에서 두 번
-/// escape 하기 (`lossy_text_escapes_only_markup`).
-fn escape_inline_markup(text: &str, label: bool, cell: bool, after: Option<char>) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut line_start = 0;
+/// escape 하기 · 링크 너머 글자를 따로 판정하기
+/// (`lossy_text_escapes_only_markup`, `markup_safety`).
+fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
+    let mut chars: Vec<char> = Vec::new();
+    let mut markup: Vec<bool> = Vec::new();
+    for piece in &pieces {
+        let (s, is_markup) = match piece {
+            Piece::Text(t) => (lines(t).into_owned(), false),
+            Piece::Markup(m) => (m.clone(), true),
+        };
+        for c in s.chars() {
+            chars.push(c);
+            markup.push(is_markup);
+        }
+    }
+    let mut out = String::with_capacity(chars.len());
     for (i, &c) in chars.iter().enumerate() {
-        if i > 0 && chars[i - 1] == '\n' {
-            line_start = i;
+        if markup[i] {
+            // Text right before markup: a `!` before a link and a lone `\`
+            // before punctuation would change it.
+            if i > 0 && !markup[i - 1] {
+                // In a cell every `\` is escaped, so a run is never odd there.
+                let run = out.chars().rev().take_while(|&b| b == '\\').count();
+                if run % 2 == 1 && c.is_ascii_punctuation() {
+                    out.push('\\');
+                } else if c == '[' && run == 0 && out.ends_with('!') {
+                    let bang = out.len() - 1;
+                    let before = out[..bang].chars().rev().take_while(|&b| b == '\\').count();
+                    if before % 2 == 0 {
+                        out.insert(bang, '\\');
+                    }
+                }
+            }
+            out.push(c);
+            continue;
         }
         if cell && c == '\n' {
             out.push_str("<br>");
@@ -514,27 +591,23 @@ fn escape_inline_markup(text: &str, label: bool, cell: bool, after: Option<char>
         }
         let next = chars.get(i + 1).copied();
         let escape = match c {
-            '\\' => label || cell,
+            '\\' => cell,
             '|' => cell,
-            '[' | ']' | '`' if label => true,
-            '<' => markup_after_lt(&chars[i + 1..], after),
+            '`' | '~' if !cell && fence_at(&chars, i) => true,
+            // A code span opened here could close past the markup after it
+            // (an escaped backtick still closes a span), so before markup
+            // every backtick is escaped. 이것을 실패시키는 것: 이 갈래 삭제
+            // (`markup_safety` 의 링크 앞뒤 백틱).
+            '`' => markup[i + 1..].iter().any(|&m| m),
+            '<' => markup_after_lt(&chars[i + 1..]),
             '&' => entity_follows(&chars[i + 1..]),
             ']' => next == Some('('),
-            '[' => {
-                !cell
-                    && i - line_start <= 3
-                    && chars[line_start..i].iter().all(|&s| s == ' ')
-                    && chars[i + 1..]
-                        .iter()
-                        .take_while(|&&n| n != '\n')
-                        .collect::<String>()
-                        .contains("]:")
-            }
+            '[' => !cell && definition_at(&chars, i),
             _ => false,
         };
         if escape {
             // Where every backslash is escaped on its own there is no run.
-            if !(label || cell) {
+            if !cell {
                 let run = out.chars().rev().take_while(|&b| b == '\\').count();
                 out.extend(std::iter::repeat_n('\\', run));
             }
@@ -545,9 +618,103 @@ fn escape_inline_markup(text: &str, label: bool, cell: bool, after: Option<char>
     out
 }
 
-/// Whether the text after a `<` makes CommonMark read raw HTML or an
-/// autolink there (`after` = what follows the text). Approximated on the
-/// safe side where the exact rule needs more than the text holds:
+/// Whether the `` ` `` or `~` at `i` is in a code fence: a run of three or
+/// more at a line's start after up to three spaces (the fence would take in
+/// everything after it, markup included). Every one of the run is escaped,
+/// so no shorter run is left to open a code span.
+/// 이것을 실패시키는 것: 이 검사 삭제(`markup_safety` 의 링크 앞 울타리).
+fn fence_at(chars: &[char], i: usize) -> bool {
+    let c = chars[i];
+    let start = chars[..i].iter().rposition(|&x| x != c).map_or(0, |p| p + 1);
+    let line_start = chars[..start].iter().rposition(|&x| x == '\n').map_or(0, |p| p + 1);
+    let indent = &chars[line_start..start];
+    indent.len() <= 3
+        && indent.iter().all(|&x| x == ' ')
+        && chars[start..].iter().take_while(|&&x| x == c).count() >= 3
+}
+
+/// Whether the `[` at `i` may open a link reference definition: only
+/// container prefixes stand between it and its line's start (up to three
+/// spaces, `>` with an optional space, list markers `-`·`+`·`*`·`1.`·`1)`
+/// with a space), and a `]:` follows before a blank line (a label may span
+/// lines). 이것을 실패시키는 것: 접두사 건너뛰기 삭제 · 여러 줄 라벨을 첫 줄만 보기
+/// (`markup_safety` 의 인용문·목록·여러 줄 라벨).
+fn definition_at(chars: &[char], i: usize) -> bool {
+    let line_start = chars[..i].iter().rposition(|&c| c == '\n').map_or(0, |p| p + 1);
+    let prefix: String = chars[line_start..i].iter().collect();
+    let mut rest = prefix.as_str();
+    loop {
+        let trimmed = rest.trim_start_matches(' ');
+        if rest.len() - trimmed.len() > 3 && !trimmed.is_empty() {
+            return false;
+        }
+        rest = trimmed;
+        if rest.is_empty() {
+            break;
+        }
+        if let Some(r) = rest.strip_prefix('>') {
+            rest = r;
+            continue;
+        }
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let marker = if matches!(rest.as_bytes().first(), Some(b'-' | b'+' | b'*')) {
+            1
+        } else if (1..=9).contains(&digits)
+            && matches!(rest.as_bytes().get(digits), Some(b'.' | b')'))
+        {
+            digits + 1
+        } else {
+            return false;
+        };
+        match rest[marker..].strip_prefix(' ') {
+            Some(r) => rest = r,
+            None if rest.len() == marker => rest = "",
+            None => return false,
+        }
+    }
+    // A `]:` before a blank line.
+    let after: String = chars[i + 1..].iter().collect();
+    let block_end = blank_line(&after).unwrap_or(after.len());
+    after[..block_end].contains("]:")
+}
+
+/// Where the first blank line (a line of only spaces and tabs) starts.
+fn blank_line(s: &str) -> Option<usize> {
+    let mut pos = 0;
+    for line in s.split_inclusive('\n') {
+        if pos > 0 && line.trim().is_empty() {
+            return Some(pos);
+        }
+        pos += line.len();
+    }
+    None
+}
+
+/// A lossy link label or alt text: every `\`, `[`, `]` and `` ` `` escaped
+/// (so it cannot close early or open a code span over the link), plus the
+/// paragraph rules for `<` and `&`.
+/// 이것을 실패시키는 것: 라벨 escape 삭제(`markup_safety`).
+fn escape_label(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let escape = match c {
+            '\\' | '[' | ']' | '`' => true,
+            '<' => markup_after_lt(&chars[i + 1..]),
+            '&' => entity_follows(&chars[i + 1..]),
+            _ => false,
+        };
+        if escape {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Whether the text after a `<` (the rest of the paragraph, markup
+/// included) makes CommonMark read raw HTML or an autolink there.
+/// Approximated on the safe side where the exact rule needs more:
 ///
 /// - `!--`, `?`, `!` + ASCII letter, `![CDATA[` — comment, processing
 ///   instruction, declaration, CDATA (their closing is not looked for);
@@ -561,7 +728,7 @@ fn escape_inline_markup(text: &str, label: bool, cell: bool, after: Option<char>
 /// - `local@` (`[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]`) — an email autolink.
 ///
 /// 이것을 실패시키는 것: 갈래 하나씩 삭제(`lossy_text_escapes_only_markup`).
-fn markup_after_lt(rest: &[char], after: Option<char>) -> bool {
+fn markup_after_lt(rest: &[char]) -> bool {
     // HTML block start conditions 1 and 6 (CommonMark 0.31).
     #[rustfmt::skip]
     const BLOCK: &[&str] = &[
@@ -573,7 +740,7 @@ fn markup_after_lt(rest: &[char], after: Option<char>) -> bool {
         "optgroup", "option", "p", "param", "search", "section", "summary", "table", "tbody",
         "td", "tfoot", "th", "thead", "title", "tr", "track", "ul"
     ];
-    let at = |i: usize| rest.get(i).copied().or(if i == rest.len() { after } else { None });
+    let at = |i: usize| rest.get(i).copied();
     match rest {
         ['!', '-', '-', ..] | ['?', ..] | ['!', '[', 'C', 'D', 'A', 'T', 'A', '[', ..] => {
             return true;

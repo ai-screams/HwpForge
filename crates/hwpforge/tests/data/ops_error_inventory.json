@@ -1193,6 +1193,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "MarkupWrittenAsText",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

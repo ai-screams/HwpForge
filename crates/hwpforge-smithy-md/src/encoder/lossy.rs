@@ -7,7 +7,7 @@ use hwpforge_core::{
 };
 
 use super::list_format::{format_list_continuation, format_list_item};
-use super::markup::{Cell, Md};
+use super::markup::{Cell, Md, Piece};
 use super::Part;
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
@@ -75,12 +75,14 @@ fn encode_body(
     registry: Option<&StyleRegistry>,
     warnings: &mut Vec<super::MdWarning>,
 ) -> String {
-    let mut blocks = Vec::new();
+    use super::guard::{Block, Source};
+    super::markup::start_recording();
+    let mut blocks: Vec<Block> = Vec::new();
     let mut continuation_level: Option<u8> = None;
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
-            blocks.push(SECTION_MARKER_COMMENT.to_string());
+            blocks.push(Block { markdown: SECTION_MARKER_COMMENT.to_string(), source: None });
             continuation_level = None;
         }
 
@@ -99,16 +101,26 @@ fn encode_body(
                 }
             }
             if !markdown.trim().is_empty() {
-                if let Some(level) = current_continuation_level {
-                    let indented = format_list_continuation(&markdown, level);
-                    if let Some(last) = blocks.last_mut() {
-                        last.push_str("\n\n");
-                        last.push_str(&indented);
-                    } else {
-                        blocks.push(indented);
+                let text = super::guard::deep_text(paragraph);
+                let at = (section_index, paragraph_index);
+                match (current_continuation_level, blocks.last_mut()) {
+                    (Some(level), Some(last)) => {
+                        last.markdown.push_str("\n\n");
+                        last.markdown.push_str(&format_list_continuation(&markdown, level));
+                        if let Some(src) = &mut last.source {
+                            src.texts.push(text);
+                            src.at.push(at);
+                        }
                     }
-                } else {
-                    blocks.push(markdown);
+                    (level, _) => {
+                        let markdown = match level {
+                            Some(level) => format_list_continuation(&markdown, level),
+                            None => markdown,
+                        };
+                        let source =
+                            Source { prefix: String::new(), texts: vec![text], at: vec![at] };
+                        blocks.push(Block { markdown, source: Some(source) });
+                    }
                 }
             }
 
@@ -120,7 +132,11 @@ fn encode_body(
         }
     }
 
-    blocks.join("\n\n")
+    // The finished Markdown, parsed again, may hold only what lossy writes.
+    let destinations = super::markup::recorded();
+    let allowed =
+        super::guard::Allowed { tags: super::guard::LOSSY_TAGS, destinations: &destinations };
+    super::guard::checked(blocks, &allowed, warnings)
 }
 
 fn encode_paragraph(
@@ -229,17 +245,16 @@ fn raw_text(paragraph: &Paragraph) -> String {
 }
 
 /// Where lossy markup is written: Markdown ([`Md`], outside tables) or a
-/// GFM cell ([`Cell`], inside one). Document text goes in through
-/// [`Sink::text`] only, so it is escaped once for the place it lands.
-trait Sink: Default {
-    /// Document text, judged against `after` (the next markup's first char).
-    fn text(&mut self, raw: &str, after: Option<char>);
-    /// Markup the encoder made.
-    fn md(&mut self, md: Md);
-    /// Markup already written for this place.
+/// GFM cell ([`Cell`], inside one). Document text goes in only through a
+/// paragraph's pieces ([`Sink::from_pieces`]), escaped once for the place
+/// it lands.
+trait Sink: Default + Sized {
+    /// The paragraph written from its pieces.
+    fn from_pieces(pieces: Vec<Piece<Self>>) -> Self;
+    /// Markup the encoder made, for this place.
+    fn from_md(md: Md) -> Self;
+    /// Markup already written for this place, appended.
     fn append(&mut self, other: Self);
-    /// Whether nothing was written.
-    fn is_empty(&self) -> bool;
     /// The markup written (blank checks).
     fn as_str(&self) -> &str;
     /// A table of `rows` written for this place.
@@ -247,17 +262,14 @@ trait Sink: Default {
 }
 
 impl Sink for Md {
-    fn text(&mut self, raw: &str, after: Option<char>) {
-        self.push(Md::lossy(raw, after));
+    fn from_pieces(pieces: Vec<Piece<Self>>) -> Self {
+        Md::lossy_paragraph(pieces)
     }
-    fn md(&mut self, md: Md) {
-        self.push(md);
+    fn from_md(md: Md) -> Self {
+        md
     }
     fn append(&mut self, other: Self) {
         self.push(other);
-    }
-    fn is_empty(&self) -> bool {
-        Md::is_empty(self)
     }
     fn as_str(&self) -> &str {
         Md::as_str(self)
@@ -268,17 +280,14 @@ impl Sink for Md {
 }
 
 impl Sink for Cell {
-    fn text(&mut self, raw: &str, after: Option<char>) {
-        self.push(Cell::lossy(raw, after));
+    fn from_pieces(pieces: Vec<Piece<Self>>) -> Self {
+        Cell::lossy_paragraph(pieces)
     }
-    fn md(&mut self, md: Md) {
-        self.push_md(md);
+    fn from_md(md: Md) -> Self {
+        md.into_cell()
     }
     fn append(&mut self, other: Self) {
         self.push(other);
-    }
-    fn is_empty(&self) -> bool {
-        Cell::is_empty(self)
     }
     fn as_str(&self) -> &str {
         Cell::as_str(self)
@@ -301,23 +310,25 @@ const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
 /// [`paragraph_text_markdown`] inside `depth` tables, written for `S` —
 /// a cell's markup when `depth > 0`.
 ///
-/// The document's text is gathered in `pending` and written
-/// ([`Sink::text`]) when markup follows it or the paragraph ends, so a
-/// sequence split across runs (`[a]` then `(javascript:…)`) is judged
-/// whole, and against the markup's first character.
+/// The paragraph is gathered as pieces — document text and the encoder's
+/// markup — and written in one pass ([`Sink::from_pieces`]), so a sequence
+/// split across runs (`[a]` then `(javascript:…)`) or around markup
+/// (`<img title='` · link · `' onerror…>`) is judged whole.
 fn paragraph_text_at<S: Sink>(
     paragraph: &Paragraph,
     warnings: &mut Vec<super::MdWarning>,
     depth: usize,
 ) -> S {
-    let mut output = S::default();
-    let mut pending = String::new();
-    // Writes the gathered text, judged against `after`.
-    let flush = |output: &mut S, pending: &mut String, after: Option<char>| {
-        if !pending.is_empty() {
-            output.text(pending, after);
-            pending.clear();
-        }
+    let mut pieces: Vec<Piece<S>> = Vec::new();
+    let text = |pieces: &mut Vec<Piece<S>>, t: &str| match pieces.last_mut() {
+        Some(Piece::Text(last)) => last.push_str(t),
+        _ => pieces.push(Piece::Text(t.to_string())),
+    };
+    let written = |pieces: &[Piece<S>]| {
+        pieces.iter().any(|p| match p {
+            Piece::Text(t) => !t.is_empty(),
+            Piece::Markup(m) => !m.as_str().is_empty(),
+        })
     };
 
     // A group is drawn as its children (WS): body, table cells and captions
@@ -332,18 +343,16 @@ fn paragraph_text_at<S: Sink>(
             // §3a-A4.
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
-                    pending.push_str(&cow);
+                    text(&mut pieces, &cow);
                 }
             }
             Part::Image(image) => {
-                let sep = !output.is_empty() || !pending.is_empty();
-                flush(&mut output, &mut pending, Some(' '));
-                if sep {
-                    output.md(Md::syntax(" "));
+                if written(&pieces) {
+                    pieces.push(Piece::Markup(S::from_md(Md::syntax(" "))));
                 }
                 let alt = Md::lossy_label(&image_alt_text(&image.path));
-                output.md(Md::image(alt, &image.path));
-                output.append(lossy_caption(image.caption.as_ref(), warnings, depth));
+                pieces.push(Piece::Markup(S::from_md(Md::image(alt, &image.path))));
+                pieces.push(Piece::Markup(lossy_caption(image.caption.as_ref(), warnings, depth)));
             }
             Part::Control(control) => match control {
                 // Only an allowed URL is written as a link (the text otherwise).
@@ -352,10 +361,10 @@ fn paragraph_text_at<S: Sink>(
                 // destination reads back as the URL.
                 Control::Hyperlink { text: label, url } => {
                     if super::link_url_allowed(url) {
-                        flush(&mut output, &mut pending, Some('['));
-                        output.md(Md::link(Md::lossy_label(label), url));
+                        let link = Md::link(Md::lossy_label(label), url);
+                        pieces.push(Piece::Markup(S::from_md(link)));
                     } else {
-                        pending.push_str(label);
+                        text(&mut pieces, label);
                     }
                 }
                 Control::Footnote { paragraphs, .. } => {
@@ -364,7 +373,7 @@ fn paragraph_text_at<S: Sink>(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    pending.push_str(&format!("(footnote: {})", footnote.trim()));
+                    text(&mut pieces, &format!("(footnote: {})", footnote.trim()));
                 }
                 Control::Endnote { paragraphs, .. } => {
                     let endnote = paragraphs
@@ -372,7 +381,7 @@ fn paragraph_text_at<S: Sink>(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    pending.push_str(&format!("(endnote: {})", endnote.trim()));
+                    text(&mut pieces, &format!("(endnote: {})", endnote.trim()));
                 }
                 Control::TextBox { paragraphs, .. } => {
                     let body = paragraphs
@@ -380,11 +389,11 @@ fn paragraph_text_at<S: Sink>(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    pending.push_str(body.trim());
+                    text(&mut pieces, body.trim());
                 }
                 Control::Unknown { tag, .. } => {
-                    flush(&mut output, &mut pending, Some('`'));
-                    output.md(Md::code_span(&format!("[{tag}]")));
+                    let code = Md::code_span(&format!("[{tag}]"));
+                    pieces.push(Piece::Markup(S::from_md(code)));
                 }
                 Control::Line { .. } => {
                     // Lines have no text content to render in lossy mode
@@ -397,38 +406,34 @@ fn paragraph_text_at<S: Sink>(
                         .collect::<Vec<_>>()
                         .join(" ");
                     if !body.trim().is_empty() {
-                        pending.push_str(body.trim());
+                        text(&mut pieces, body.trim());
                     }
                 }
                 Control::Dutmal { main_text, sub_text, .. } => {
-                    pending.push_str(&format!("{main_text}({sub_text})"));
+                    text(&mut pieces, &format!("{main_text}({sub_text})"));
                 }
                 Control::Compose { compose_text, .. } => {
-                    pending.push_str(compose_text);
+                    text(&mut pieces, compose_text);
                 }
                 Control::NewNumber { .. } | Control::PageHiding { .. } => {
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
                     // no-op (W2·W3).
                 }
                 Control::AutoNumber { num, format, .. } => {
-                    pending.push_str(&super::auto_number_text(*num, format));
+                    text(&mut pieces, &super::auto_number_text(*num, format));
                 }
                 _ => {}
             },
             Part::Table(table) => {
-                let sep = !output.is_empty() || !pending.is_empty();
-                flush(&mut output, &mut pending, Some(if depth > 0 { '<' } else { '\n' }));
-                if sep {
-                    output.md(Md::syntax("\n"));
+                if written(&pieces) {
+                    pieces.push(Piece::Markup(S::from_md(Md::syntax("\n"))));
                 }
-                output.append(table_to_markdown(table, warnings, depth));
-                output.append(lossy_caption(table.caption.as_ref(), warnings, depth));
+                pieces.push(Piece::Markup(table_to_markdown(table, warnings, depth)));
+                pieces.push(Piece::Markup(lossy_caption(table.caption.as_ref(), warnings, depth)));
             }
         }
     }
-    flush(&mut output, &mut pending, None);
-
-    output
+    S::from_pieces(pieces)
 }
 
 /// A picture's or table's caption as a paragraph after it, empty without
@@ -446,7 +451,7 @@ fn lossy_caption<S: Sink>(
     for p in &caption.paragraphs {
         let text: S = paragraph_text_at(p, warnings, depth);
         if !text.as_str().trim().is_empty() {
-            out.md(Md::syntax("\n\n"));
+            out.append(S::from_md(Md::syntax("\n\n")));
             out.append(text);
         }
     }
@@ -474,9 +479,7 @@ fn table_to_markdown<S: Sink>(
             section: 0,
             paragraph: 0,
         });
-        let mut out = S::default();
-        out.md(Md::syntax(TABLE_TOO_DEEP));
-        return out;
+        return S::from_md(Md::syntax(TABLE_TOO_DEEP));
     }
     if table.rows.is_empty() {
         return S::table(vec![vec![]], 1);

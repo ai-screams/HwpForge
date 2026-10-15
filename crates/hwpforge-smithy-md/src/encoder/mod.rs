@@ -1,5 +1,6 @@
 //! Core -> Markdown encoders.
 
+mod guard;
 mod list_format;
 mod lossless;
 mod lossy;
@@ -65,6 +66,17 @@ pub enum MdWarning {
         /// Index of the section's top-level paragraph holding it.
         paragraph: usize,
     },
+    /// HWPX→MD (readable views): the finished Markdown, parsed again, held
+    /// markup the encoder does not write (raw HTML, a link or image it did
+    /// not make, a link reference definition) in this top-level paragraph,
+    /// so the paragraph was written as plain text, every punctuation mark
+    /// escaped. The escaping rules are meant to make this never happen.
+    MarkupWrittenAsText {
+        /// Index of the section holding it.
+        section: usize,
+        /// Index of the section's top-level paragraph.
+        paragraph: usize,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -82,6 +94,11 @@ impl core::fmt::Display for MdWarning {
                 f,
                 "{container} nested deeper than {limit} levels left out \
                  (section {section}, paragraph {paragraph})"
+            ),
+            Self::MarkupWrittenAsText { section, paragraph } => write!(
+                f,
+                "paragraph written as plain text: its Markdown held markup the encoder \
+                 does not write (section {section}, paragraph {paragraph})"
             ),
             Self::EquationAsText { section, paragraph } => write!(
                 f,
