@@ -13,6 +13,9 @@
 //! - styled: the attack's text comes back whole as text (not for line
 //!   breaks, which become breaks, or equations, which have their own test).
 //!
+//! - the final check (re-parsing the output) never has to step in: the
+//!   escaping rules hold on their own (`MarkupWrittenAsText` fails it).
+//!
 //! Lossy writes `*`, `#` and the like as they are (decision of 2026-10-15:
 //! only what CommonMark reads as raw HTML, links, images or entities is
 //! escaped), so only the safety properties are checked for it.
@@ -27,12 +30,13 @@ use hwpforge_core::{
     Validated,
 };
 use hwpforge_foundation::{CharShapeIndex, FieldType, HwpUnit, ParaShapeIndex, UnderlineType};
-use hwpforge_smithy_md::MdEncoder;
+use hwpforge_smithy_md::{MdEncoder, MdWarning};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 /// Attack strings: each tries to make the output write markup.
 const ATTACKS: &[&str] = &[
     "<img src=x onerror=alert(1)>",
+    "<img title='' src=x onerror=alert(1)>",
     "`<img src=x onerror=alert(1)>`",
     "<script>alert(1)</script>",
     "<b>bold</b>",
@@ -49,6 +53,11 @@ const ATTACKS: &[&str] = &[
     "<https://evil.invalid>",
     "<a@evil.invalid>",
     "[a]: javascript:alert(1)",
+    "> [a]: javascript:alert(1)",
+    "- [a]: javascript:alert(1)",
+    "1. > [a]: javascript:alert(1)",
+    "[a\nb]: javascript:alert(1)",
+    "(javascript:alert(1))",
     "`",
     "``x``",
     "```",
@@ -135,6 +144,13 @@ enum Carrier {
     LinkUrl,
     /// A raw `!` text run, then a link whose label is the attack.
     BangThenLink,
+    /// The attack split at every point around a link (`t`, an allowed URL).
+    AroundLink,
+    /// The attack split at every point around a cross reference with no
+    /// display text (written as `[b]`).
+    AroundCrossRef,
+    /// The attack split at every point into plain then underlined text.
+    FormatSplit,
     PicturePath,
     Compose,
     DutmalMain,
@@ -155,6 +171,9 @@ const CARRIERS: &[Carrier] = &[
     Carrier::LinkLabel,
     Carrier::LinkUrl,
     Carrier::BangThenLink,
+    Carrier::AroundLink,
+    Carrier::AroundCrossRef,
+    Carrier::FormatSplit,
     Carrier::PicturePath,
     Carrier::Compose,
     Carrier::DutmalMain,
@@ -183,6 +202,23 @@ fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
         Carrier::LinkLabel => vec![vec![ctrl(Control::hyperlink(attack, URL))]],
         Carrier::LinkUrl => vec![vec![ctrl(Control::hyperlink("t", &format!("{URL}{attack}")))]],
         Carrier::BangThenLink => vec![vec![text("!"), ctrl(Control::hyperlink(attack, URL))]],
+        Carrier::AroundLink | Carrier::AroundCrossRef | Carrier::FormatSplit => {
+            let mut points: Vec<usize> = attack.char_indices().map(|(i, _)| i).collect();
+            points.push(attack.len());
+            points
+                .into_iter()
+                .map(|i| {
+                    let (l, r) = attack.split_at(i);
+                    match carrier {
+                        Carrier::AroundLink => {
+                            vec![text(l), ctrl(Control::hyperlink("t", URL)), text(r)]
+                        }
+                        Carrier::AroundCrossRef => vec![text(l), ctrl(empty_cross_ref()), text(r)],
+                        _ => vec![text(l), Run::text(r, cs(UNDERLINE))],
+                    }
+                })
+                .collect()
+        }
         Carrier::PicturePath => {
             vec![vec![Run::image(picture(&format!("BinData/{attack}.png")), cs(PLAIN))]]
         }
@@ -190,11 +226,7 @@ fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
         Carrier::DutmalMain => vec![vec![ctrl(Control::dutmal(attack, "s"))]],
         Carrier::DutmalSub => vec![vec![ctrl(Control::dutmal("m", attack))]],
         Carrier::CrossRef => {
-            let mut c = Control::cross_ref(
-                RefTarget::Name("b".into()),
-                Default::default(),
-                Default::default(),
-            );
+            let mut c = empty_cross_ref();
             if let Control::CrossRef { display_text, .. } = &mut c {
                 *display_text = attack.to_string();
             }
@@ -216,6 +248,11 @@ fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
         Carrier::Footnote => vec![vec![ctrl(Control::footnote(vec![para(vec![text(attack)])]))]],
         Carrier::Equation => vec![vec![ctrl(Control::equation(attack))]],
     }
+}
+
+/// A cross reference to bookmark `b` with no display text.
+fn empty_cross_ref() -> Control {
+    Control::cross_ref(RefTarget::Name("b".into()), Default::default(), Default::default())
 }
 
 /// Where the carrying paragraph is put.
@@ -281,7 +318,7 @@ fn document(container: Container, runs: Vec<Run>) -> Document<Validated> {
     };
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(
-        vec![top, para(vec![text("[a]")])],
+        vec![top, para(vec![text("[a] [a b]")])],
         PageSettings::a4(),
     ));
     doc.validate().expect("valid")
@@ -473,10 +510,17 @@ struct Expect {
     link: bool,
 }
 
+/// A warning from the final check (`MarkupWrittenAsText`): the escaping
+/// rules let markup through, and only the check kept it out. The rules
+/// must hold on their own, so this fails the test too.
+fn guarded(w: &MdWarning) -> bool {
+    matches!(w, MdWarning::MarkupWrittenAsText { .. })
+}
+
 /// Whether the carrier writes a link (an allowed URL).
 fn linked(carrier: Carrier, urls: &BTreeSet<String>, attack: &str) -> bool {
     match carrier {
-        Carrier::LinkLabel | Carrier::BangThenLink => true,
+        Carrier::LinkLabel | Carrier::BangThenLink | Carrier::AroundLink => true,
         Carrier::LinkUrl => urls.contains(&format!("{URL}{attack}")),
         _ => false,
     }
@@ -491,11 +535,16 @@ fn asset_key(path: &str) -> String {
 
 /// Whether the styled view's text for `attack` in `carrier` must come back.
 fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> bool {
+    // A list marker at a paragraph's start makes a list in styled too (a
+    // known gap, not markup made from text: followups).
+    let list_start = attack.starts_with("- ") || attack.starts_with("1. ");
     !attack.contains(['\n', '\r'])
+        && !list_start
         && !matches!(container, Container::Memo)
         && matches!(
             carrier,
             Carrier::Split
+                | Carrier::FormatSplit
                 | Carrier::Underline
                 | Carrier::Bold
                 | Carrier::Code
@@ -527,6 +576,15 @@ fn readable_views_write_no_markup_from_text() {
                     let doc = document(container, runs.clone());
 
                     let styled = MdEncoder::encode_styled(&doc, &Styles);
+                    if styled.warnings.iter().any(guarded) {
+                        problems.push(fail(
+                            "styled",
+                            container,
+                            carrier,
+                            attack,
+                            "the final check had to write plain text".into(),
+                        ));
+                    }
                     // The picture has no bytes, so its key is not in
                     // `images`: the key the encoder gives it.
                     let mut assets: BTreeSet<String> = styled.images.keys().cloned().collect();
@@ -558,7 +616,17 @@ fn readable_views_write_no_markup_from_text() {
                         ));
                     }
 
-                    let lossy = MdEncoder::encode_lossy(&doc).expect("lossy");
+                    let (lossy, lossy_warnings) =
+                        MdEncoder::encode_lossy_with_report(&doc).expect("lossy");
+                    if lossy_warnings.iter().any(guarded) {
+                        problems.push(fail(
+                            "lossy",
+                            container,
+                            carrier,
+                            attack,
+                            "the final check had to write plain text".into(),
+                        ));
+                    }
                     // A line ending cannot stand in a destination: it is
                     // percent-encoded, the one change to the path.
                     let path: BTreeSet<String> =
