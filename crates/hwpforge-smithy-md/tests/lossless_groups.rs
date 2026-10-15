@@ -312,9 +312,11 @@ fn object_attribute_grammar_errors() {
 }
 
 /// A cell background reads only six ASCII hex digits: `#가나` (six bytes,
-/// two characters) is an error, not a panic, and red stays red.
+/// two characters) is an error, not a panic, and red stays red; a color
+/// with its reserved high byte set is refused on the way out.
 ///
-/// 이것을 실패시키는 것: ASCII 검사 삭제(`#가나` panic) · 색 R·B 뒤바꿈.
+/// 이것을 실패시키는 것: ASCII 검사 삭제(`#가나` panic) · 색 R·B 뒤바꿈 ·
+/// 배경색 예약 바이트 검사 삭제.
 #[test]
 fn cell_background_color_is_read_strictly() {
     let body = |bg: &str| {
@@ -338,4 +340,13 @@ fn cell_background_color_is_read_strictly() {
     assert!(encode(vec![Run::table(blue, CharShapeIndex::new(0))])
         .unwrap()
         .contains(r##"data-background="#0000FF""##));
+    let reserved = Table::new(vec![TableRow::new(vec![TableCell::new(
+        vec![para(vec![Run::text("t", CharShapeIndex::new(0))])],
+        u(9000),
+    )
+    .with_background(hwpforge_foundation::Color::from_raw(0x0100_00FF))])]);
+    assert!(matches!(
+        encode(vec![Run::table(reserved, CharShapeIndex::new(0))]),
+        Err(MdError::UnsupportedStructure { .. })
+    ));
 }

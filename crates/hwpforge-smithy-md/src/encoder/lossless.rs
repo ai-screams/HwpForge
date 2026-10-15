@@ -329,8 +329,11 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             if let Some(wrap) = g::line_wrap_str(cell.line_wrap)? {
                 out.push_str(&format!(" {}=\"{wrap}\"", g::LINE_WRAP));
             }
+            // `#RRGGBB` has no place for the color's reserved high byte:
+            // such a color is refused, not written without it.
+            // 이것을 실패시키는 것: 이 검사를 지우기(`cell_background_color_is_read_strictly`).
             if let Some(background) = cell.background {
-                out.push_str(&format!(" data-background=\"{}\"", background));
+                out.push_str(&format!(" data-background=\"{}\"", g::color_str(background)?));
             }
             out.push('>');
 
