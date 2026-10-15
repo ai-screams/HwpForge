@@ -1118,6 +1118,7 @@ fn convert_ctrl_child<'a>(
                                 | Control::Field { .. }
                                 | Control::UnknownSummary { .. }
                                 | Control::PathField { .. }
+                                | Control::CrossRef { .. }
                         )
                     )
                 });
@@ -2181,16 +2182,17 @@ fn decode_field_control(
             } else {
                 hwpforge_core::control::RefTarget::Raw(target_str.clone())
             };
-            // Display text capture from fieldBegin/fieldEnd body siblings
-            // is a follow-up. HWPX-native decode currently leaves it
-            // empty; the HWPX encoder falls back to target.as_display()
-            // for an empty display_text so round-trip stays readable.
+            // Branch review r2 M2: the field body is the text the reference
+            // displays — kept, so the encoder writes it back (before, it was
+            // dropped and the encoder wrote the target's name instead). Only
+            // a body read whole (its begin and end in one run) is kept.
+            // 이것을 실패시키는 것: 본문을 버리기(`a_closed_cross_reference_keeps_its_text`).
             Control::CrossRef {
                 target,
                 ref_type: rt,
                 content_type: ct,
                 as_hyperlink: hl,
-                display_text: String::new(),
+                display_text: if unambiguous_body { text.to_string() } else { String::new() },
             }
         }
         "MEMO" => {
@@ -3591,8 +3593,8 @@ mod tests {
     /// keep the cache.
     /// 이것을 실패시키는 것: 두 번째 시작에서의 누적 삭제(중첩 경우가 캐시 유지),
     /// 닫힌 필드에서의 누적 삭제(책갈피·FORMULA 경우가 캐시 유지), 보존 목록에
-    /// 상호참조·메모를 더하기(그 경우가 캐시 유지), 보존 목록에서 필드·요약·
-    /// 경로를 빼기(날짜·요약·경로 경우가 drop).
+    /// 메모를 더하기(그 경우가 캐시 유지), 보존 목록에서 필드·요약·경로·상호참조를
+    /// 빼기(날짜·요약·경로·상호참조 경우가 drop).
     #[test]
     fn a_field_body_lost_anywhere_in_its_run_drops_the_cache() {
         let lines = |starts: &[u32]| -> String {
@@ -3665,7 +3667,7 @@ mod tests {
 
         // A closed field whose control does not hold its text (begin 0, "abc"
         // folded 8..11, end 11..19, "def" from 19 — the line at 20 is "e").
-        for kind in ["BOOKMARK", "FORMULA", "CROSSREF", "MEMO"] {
+        for kind in ["BOOKMARK", "FORMULA", "MEMO"] {
             let (kept, drops) =
                 decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
             assert_eq!((kept, drops.len()), (vec![false], 1), "{kind}");
@@ -3678,11 +3680,44 @@ mod tests {
                 + &para(run(t("ef")) + &run(end(7)), &[0, 1]),
         );
         assert_eq!((kept, drops.len()), (vec![true, true], 0), "open begin without body");
-        for kind in [ch, "HYPERLINK", "DATE", "SUMMERY", "PATH"] {
+        for kind in [ch, "HYPERLINK", "DATE", "SUMMERY", "PATH", "CROSSREF"] {
             let (kept, drops) =
                 decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
             assert_eq!((kept, drops.len()), (vec![true], 0), "{kind}");
         }
+    }
+
+    /// Branch review r2 M2: a cross reference closed in its run keeps its
+    /// field body as its display text, and the encoder writes that text —
+    /// even where it differs from the target's name — so nothing is lost.
+    /// 이것을 실패시키는 것: 본문을 버리기(표시가 대상 이름 `anchor` 로 바뀐다).
+    #[test]
+    fn a_closed_cross_reference_keeps_its_text() {
+        let xml = r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><ctrl><fieldBegin id="7" type="CROSSREF" name="" editable="0" dirty="0" zorder="-1" fieldid="7"><parameters cnt="2" name=""><stringParam name="RefPath">?#anchor</stringParam><stringParam name="RefType">TARGET_BOOKMARK</stringParam></parameters></fieldBegin></ctrl><t>그림 3</t><ctrl><fieldEnd beginIDRef="7" fieldid="7"/></ctrl></run></p></sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let control = result.paragraphs[0].runs.iter().find_map(|r| r.content.as_control());
+        let Some(hwpforge_core::Control::CrossRef { target, display_text, .. }) = control else {
+            panic!("{control:?}");
+        };
+        assert_eq!((target.as_display().as_str(), display_text.as_str()), ("anchor", "그림 3"));
+        let mut doc = hwpforge_core::Document::new();
+        doc.add_section(hwpforge_core::Section::with_paragraphs(
+            result.paragraphs,
+            hwpforge_core::PageSettings::a4(),
+        ));
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let bytes = crate::HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+        )
+        .unwrap();
+        let out = crate::patch::RawPackage::read(&bytes)
+            .unwrap()
+            .read_text_entry("Contents/section0.xml")
+            .unwrap();
+        assert!(out.contains("그림 3"), "{out}");
     }
 
     #[test]

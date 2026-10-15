@@ -1,6 +1,6 @@
 # Grid and Paragraph Edits (`set-cell`, `insert-para`, `delete-para`)
 
-These surfaces edit cells and top-level paragraphs without a JSON round-trip and preserve every other byte. They re-encode the package, so **a 한컴-saved document is refused** (`INPUT_ENTRIES_NOT_CARRIED` / `UNCARRIED_ZIP_ENTRIES`, exit 1) — use `fill` or `to-json --section N` → `patch` there ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — a cross-reference's displayed text), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
+These surfaces edit cells and top-level paragraphs without a JSON round-trip and preserve every other byte. They re-encode the package, so **a 한컴-saved document is refused** (`INPUT_ENTRIES_NOT_CARRIED` / `UNCARRIED_ZIP_ENTRIES`, exit 1) — use `fill` or `to-json --section N` → `patch` there ([editing-workflow.md](editing-workflow.md)). They accept documents HwpForge produced and `convert-hwp5` output; `set-cell` refuses one whose reading loses content (`INPUT_NOT_ROUNDTRIP_SAFE`, `CONTENT_LOST field_body` — text inside a bookmark span or a memo field), and `patch` edits it instead. Write to a new file and run the verify loop in SKILL.md after each.
 
 ## `set-cell` — table cells by grid address
 
