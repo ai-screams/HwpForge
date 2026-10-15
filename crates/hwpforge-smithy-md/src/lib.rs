@@ -34,6 +34,7 @@ mod eqn;
 pub mod error;
 pub mod frontmatter;
 mod internal_styles;
+mod lossless_grammar;
 mod mapper;
 
 pub use assets::{

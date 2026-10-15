@@ -1,9 +1,13 @@
 //! Lossless markdown encoder (frontmatter + HTML-like body).
 
+use hwpforge_core::control::GroupChild;
+use hwpforge_core::image::{Image, ImageFormat};
+use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_core::{Control, Document, Paragraph, RunContent, Table, Validated};
 
 use crate::error::{MdError, MdResult};
 use crate::frontmatter::{from_metadata, render_frontmatter};
+use crate::lossless_grammar as g;
 
 pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
     // §19.16 J (review r1): the grammar has no place for a caption number,
@@ -136,17 +140,16 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 refuse_out_margin(image.placement.as_ref())?;
                 let frame = frame_attrs(&image.frame);
                 // The picture's link, when it has one (`Image::hyperlink`).
-                let link = image
-                    .hyperlink
-                    .as_deref()
-                    .map(|url| format!(" data-hyperlink=\"{}\"", escape_html(url)))
-                    .unwrap_or_default();
+                let link = match image.hyperlink.as_deref() {
+                    Some(url) => format!(" data-hyperlink=\"{}\"", g::escape_attr(url)?),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
                     "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{frame}{link} />",
                     run.char_shape_id.get(),
-                    escape_html(&image.path),
-                    escape_html(&image.path),
-                    escape_html(&image.format.to_string()),
+                    g::escape_attr(&image.path)?,
+                    g::escape_attr(&image.path)?,
+                    g::escape_attr(&image.format.to_string())?,
                     image.width.as_i32(),
                     image.height.as_i32(),
                     image.width.to_mm(),
@@ -158,7 +161,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     out.push_str(&format!(
                         "<a data-char-shape=\"{}\" href=\"{}\">{}</a>",
                         run.char_shape_id.get(),
-                        escape_html(url),
+                        g::escape_attr(url)?,
                         escape_html(text)
                     ));
                 }
@@ -232,7 +235,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     out.push_str(&format!(
                         "<control data-char-shape=\"{}\" data-kind=\"{}\">{}</control>",
                         run.char_shape_id.get(),
-                        escape_html(tag),
+                        g::escape_attr(tag)?,
                         escape_html(data.as_deref().unwrap_or(""))
                     ));
                 }
@@ -295,6 +298,9 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(compose_text)
                     ));
                 }
+                Control::Group { .. } => {
+                    out.push_str(&encode_group(control, Some(run.char_shape_id.get()))?);
+                }
                 _ => {
                     return Err(MdError::UnsupportedStructure {
                         detail: "unsupported Control variant for lossless encoder".to_string(),
@@ -351,6 +357,16 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
         ));
     }
     if let Some(caption) = table.caption.as_ref() {
+        // A table caption is written as its text only, so an object anywhere
+        // under it (a note, a text box, a cell on the way) would vanish:
+        // refused instead. 이것을 실패시키는 것: 이 거부를 지우기
+        // (`table_caption_object_is_refused` — 캡션 → 각주 → 그림이 사라진 채 성공).
+        if holds_object(&caption.paragraphs) {
+            return Err(MdError::UnsupportedStructure {
+                detail: "object inside a table caption is not carried by the lossless encoder"
+                    .to_string(),
+            });
+        }
         let text: String = caption
             .paragraphs
             .iter()
@@ -364,7 +380,7 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
         // caption's markup is the one written before.
         // 이것을 실패시키는 것: 빈 캡션 생략 · 측·`fullSz`·`lastWidth` 방출 삭제
         // (`table_caption_attributes_round_trip`).
-        out.push_str(&format!(" data-caption=\"{}\"", escape_html(&text)));
+        out.push_str(&format!(" data-caption=\"{}\"", g::escape_attr(&text)?));
         let side = match caption.side {
             hwpforge_core::caption::CaptionSide::Top => Some("top"),
             hwpforge_core::caption::CaptionSide::Left => Some("left"),
@@ -428,6 +444,199 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
     }
 
     out.push_str("</table>");
+    Ok(out)
+}
+
+/// Whether a picture, a group or a drawing shape sits anywhere under
+/// `paragraphs` — notes, text boxes, cells, captions and memo anchors
+/// included (a picture is itself one, so its caption need not be entered).
+fn holds_object(paragraphs: &[Paragraph]) -> bool {
+    fn is_object(run: &hwpforge_core::Run) -> bool {
+        match &run.content {
+            RunContent::Image(_) => true,
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Group { .. }
+                | Control::Line { .. }
+                | Control::Rect { .. }
+                | Control::Ellipse { .. }
+                | Control::Arc { .. }
+                | Control::Polygon { .. }
+                | Control::Curve { .. }
+                | Control::ConnectLine { .. }
+                | Control::TextBox { .. } => true,
+                Control::Memo { anchor_runs, .. } => anchor_runs.iter().any(is_object),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let mut found = false;
+    for p in paragraphs {
+        p.for_each_paragraph(|q| found |= q.runs.iter().any(is_object));
+    }
+    found
+}
+
+/// BOX: the displayed size, with its readable millimetres.
+fn box_attrs(width: hwpforge_foundation::HwpUnit, height: hwpforge_foundation::HwpUnit) -> String {
+    format!(
+        " {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\"",
+        g::WIDTH,
+        width.as_i32(),
+        g::HEIGHT,
+        height.as_i32(),
+        g::BOX_MM[0],
+        g::mm(width),
+        g::BOX_MM[1],
+        g::mm(height)
+    )
+}
+
+/// PLACE and OUTMARGIN of an object, nothing for `None`.
+/// 이것을 실패시키는 것: PLACE 방출 삭제 · 바깥 여백 방출 삭제
+/// (`group_round_trips_every_field`).
+fn place_attrs(placement: Option<&ObjectPlacement>) -> MdResult<String> {
+    let Some(p) = placement else { return Ok(String::new()) };
+    let mut out = format!(
+        " {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{}\"",
+        g::TEXT_WRAP,
+        g::text_wrap_str(&p.text_wrap)?,
+        g::TEXT_FLOW,
+        g::text_flow_str(&p.text_flow)?,
+        g::TREAT_AS_CHAR,
+        g::bool_str(p.treat_as_char),
+        g::FLOW_WITH_TEXT,
+        g::bool_str(p.flow_with_text),
+        g::ALLOW_OVERLAP,
+        g::bool_str(p.allow_overlap),
+        g::VERT_REL_TO,
+        g::rel_to_str(&p.vert_rel_to)?,
+        g::HORZ_REL_TO,
+        g::rel_to_str(&p.horz_rel_to)?,
+        g::VERT_OFFSET,
+        p.vert_offset.as_i32(),
+        g::HORZ_OFFSET,
+        p.horz_offset.as_i32(),
+        g::PLACE_MM[0],
+        g::mm(p.vert_offset),
+        g::PLACE_MM[1],
+        g::mm(p.horz_offset),
+        g::VERT_ALIGN,
+        g::vert_align_str(&p.vert_align)?,
+        g::HORZ_ALIGN,
+        g::horz_align_str(&p.horz_align)?,
+        g::AFFECT_LINE_SPACING,
+        g::bool_str(p.affect_line_spacing),
+        g::HOLD_ANCHOR,
+        g::bool_str(p.hold_anchor_and_so),
+    );
+    if let Some(m) = p.out_margin {
+        for (name, v) in g::OUT_MARGIN.iter().zip([m.left, m.right, m.top, m.bottom]) {
+            out.push_str(&format!(" {name}=\"{}\"", v.as_i32()));
+        }
+    }
+    Ok(out)
+}
+
+/// `data-inst-id`, when the object has one.
+fn inst_id_attr(id: Option<hwpforge_core::ObjectId>) -> String {
+    id.map(|id| format!(" {}=\"{}\"", g::INST_ID, id.value())).unwrap_or_default()
+}
+
+/// A group (`<group>`): `char_shape` under a paragraph, `None` as a group
+/// child. Every child is written exactly or the document is refused — no
+/// partial group.
+fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> {
+    let Control::Group { children, width, height, frame, placement, inst_id, .. } = group else {
+        unreachable!("encode_group takes a group")
+    };
+    let mut out = String::from("<group");
+    if let Some(cs) = char_shape {
+        out.push_str(&format!(" {}=\"{cs}\"", g::CHAR_SHAPE));
+    }
+    out.push_str(&box_attrs(*width, *height));
+    out.push_str(&frame_attrs(frame));
+    out.push_str(&place_attrs(placement.as_ref())?);
+    out.push_str(&inst_id_attr(*inst_id));
+    if children.is_empty() {
+        out.push_str(" />");
+        return Ok(out);
+    }
+    out.push('>');
+    for child in children {
+        match child {
+            GroupChild::Picture(image) => out.push_str(&encode_group_picture(image)?),
+            GroupChild::Shape(shape @ Control::Group { .. }) => {
+                out.push_str(&encode_group(shape, None)?)
+            }
+            // Drawing shapes as children come with their own grammar later;
+            // until then the group is refused whole.
+            // 이것을 실패시키는 것: 이 거부를 지우고 자식을 건너뛰기
+            // (`group_with_a_shape_child_is_refused`).
+            GroupChild::Shape(shape) => {
+                return Err(MdError::UnsupportedStructure {
+                    detail: format!(
+                        "group child {} is not carried by the lossless encoder",
+                        shape.kind_name()
+                    ),
+                })
+            }
+            _ => {
+                return Err(MdError::UnsupportedStructure {
+                    detail: "group child is not carried by the lossless encoder".to_string(),
+                })
+            }
+        }
+    }
+    out.push_str("</group>");
+    Ok(out)
+}
+
+/// A picture inside a group: every field of the picture, or refused.
+fn encode_group_picture(image: &Image) -> MdResult<String> {
+    // 이것을 실패시키는 것: 이 거부를 지우기(`group_picture_caption_is_refused`).
+    if image.caption.is_some() {
+        return Err(MdError::UnsupportedStructure {
+            detail: "group picture caption is not carried by the lossless encoder".to_string(),
+        });
+    }
+    let mut out = format!(
+        "<img {}=\"{}\" {}=\"{}\" {}=\"{}\"",
+        g::SRC,
+        g::escape_attr(&image.path)?,
+        g::ALT,
+        g::escape_attr(&image.path)?,
+        g::FORMAT,
+        g::escape_attr(&image.format.to_string())?
+    );
+    // The Display form lower-cases an unknown format (`BIN0001` → `bin0001`),
+    // so its raw spelling goes along. 이것을 실패시키는 것: 이 방출 삭제
+    // (`group_round_trips_every_field` 의 `BIN0001`).
+    if let ImageFormat::Unknown(raw) = &image.format {
+        out.push_str(&format!(" {}=\"{}\"", g::FORMAT_RAW, g::escape_attr(raw)?));
+    }
+    out.push_str(&box_attrs(image.width, image.height));
+    out.push_str(&frame_attrs(&image.frame));
+    out.push_str(&place_attrs(image.placement.as_ref())?);
+    out.push_str(&inst_id_attr(image.inst_id));
+    if let Some(c) = image.crop {
+        for (name, v) in g::CROP.iter().zip([c.left, c.top, c.right, c.bottom]) {
+            out.push_str(&format!(" {name}=\"{}\"", v.as_i32()));
+        }
+    }
+    if let Some((w, h)) = image.image_extent {
+        out.push_str(&format!(
+            " {}=\"{}\" {}=\"{}\"",
+            g::EXTENT[0],
+            w.as_i32(),
+            g::EXTENT[1],
+            h.as_i32()
+        ));
+    }
+    if let Some(url) = image.hyperlink.as_deref() {
+        out.push_str(&format!(" {}=\"{}\"", g::HYPERLINK, g::escape_attr(url)?));
+    }
+    out.push_str(" />");
     Ok(out)
 }
 

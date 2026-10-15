@@ -1,5 +1,6 @@
 //! Lossless body decoder.
 
+use hwpforge_core::control::GroupChild;
 use hwpforge_core::{
     Control, Image, ImageFormat, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
 };
@@ -9,6 +10,7 @@ use quick_xml::reader::Reader;
 use quick_xml::XmlVersion;
 
 use crate::error::{MdError, MdResult};
+use crate::lossless_grammar as g;
 
 const ROOT_TAG: &str = "hwpforge-lossless-root";
 
@@ -106,6 +108,7 @@ enum OpenNode {
     TextBox(TextBoxNode),
     Footnote(FootnoteNode),
     UnknownControl(UnknownControlNode),
+    Group(Box<GroupNode>),
 }
 
 impl OpenNode {
@@ -121,6 +124,7 @@ impl OpenNode {
             Self::TextBox(_) => "textbox",
             Self::Footnote(_) => "footnote",
             Self::UnknownControl(_) => "control",
+            Self::Group(_) => "group",
         }
     }
 }
@@ -193,6 +197,13 @@ struct FootnoteNode {
     paragraphs: Vec<Paragraph>,
 }
 
+/// An open `<group>`: its own fields, and its children as they close.
+#[derive(Debug)]
+struct GroupNode {
+    char_shape_id: Option<CharShapeIndex>,
+    control: Control,
+}
+
 #[derive(Debug)]
 struct UnknownControlNode {
     char_shape_id: CharShapeIndex,
@@ -245,6 +256,7 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
             text: String::new(),
             paragraphs: Vec::new(),
         })),
+        "group" => Ok(OpenNode::Group(Box::new(parse_group(start, stack)?))),
         "control" => Ok(OpenNode::UnknownControl(UnknownControlNode {
             char_shape_id: parse_index_attr(start, "control", "data-char-shape")?,
             kind: required_attr(start, "control", "data-kind")?,
@@ -262,17 +274,15 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
     validate_parent(tag, stack)?;
     match tag {
         "img" => {
-            let frame = parse_frame_attrs(empty, "img", true)?;
-            let char_shape_id = parse_index_attr(empty, "img", "data-char-shape")?;
-            let src = required_attr(empty, "img", "src")?;
-            let format = parse_image_format(&required_attr(empty, "img", "data-format")?);
-            let width = parse_length_attr(empty, "img", "data-width-unit", "data-width-mm")?;
-            let height = parse_length_attr(empty, "img", "data-height-unit", "data-height-mm")?;
-
-            let mut image = Image::new(src, width, height, format);
-            image.frame = frame;
-            image.hyperlink = attr_value(empty, "data-hyperlink")?;
-            push_run_to_parent(stack, Run::image(image, char_shape_id))
+            let (char_shape_id, image) = parse_picture(empty, stack)?;
+            match char_shape_id {
+                Some(cs) => push_run_to_parent(stack, Run::image(image, cs)),
+                None => push_group_child(stack, GroupChild::Picture(image)),
+            }
+        }
+        "group" => {
+            let node = parse_group(empty, stack)?;
+            attach_group(node, stack)
         }
         "span" => {
             let char_shape_id = parse_index_attr(empty, "span", "data-char-shape")?;
@@ -304,9 +314,8 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
         "table" => matches!(parent, Some("p")),
         "tr" => matches!(parent, Some("table")),
         "td" => matches!(parent, Some("tr")),
-        "span" | "img" | "a" | "textbox" | "footnote" | "control" => {
-            matches!(parent, Some("p"))
-        }
+        "span" | "a" | "textbox" | "footnote" | "control" => matches!(parent, Some("p")),
+        "img" | "group" => matches!(parent, Some("p" | "group")),
         _ => true,
     };
 
@@ -512,6 +521,7 @@ fn attach_closed_node(
                 ),
             )
         }
+        OpenNode::Group(group) => attach_group(*group, stack),
         OpenNode::UnknownControl(control) => push_run_to_parent(
             stack,
             Run::control(
@@ -523,6 +533,248 @@ fn attach_closed_node(
             ),
         ),
     }
+}
+
+/// Hands a finished group to its parent: a run under `<p>`, a child under
+/// `<group>`.
+fn attach_group(group: GroupNode, stack: &mut [OpenNode]) -> MdResult<()> {
+    match group.char_shape_id {
+        Some(cs) => push_run_to_parent(stack, Run::control(group.control, cs)),
+        None => push_group_child(stack, GroupChild::Shape(group.control)),
+    }
+}
+
+fn push_group_child(stack: &mut [OpenNode], child: GroupChild) -> MdResult<()> {
+    match stack.last_mut() {
+        Some(OpenNode::Group(node)) if matches!(node.control, Control::Group { .. }) => {
+            let Control::Group { children, .. } = &mut node.control else { unreachable!() };
+            children.push(child);
+            Ok(())
+        }
+        _ => {
+            Err(MdError::LosslessParse { detail: "group child must be inside <group>".to_string() })
+        }
+    }
+}
+
+/// The attributes of one object element, read once (P5b closed grammar): a
+/// name outside `allowed` or a name met twice is refused before any value
+/// is looked at.
+struct Attrs {
+    element: &'static str,
+    values: std::collections::BTreeMap<&'static str, String>,
+}
+
+impl Attrs {
+    /// 이것을 실패시키는 것: 허용 목록 검사 삭제 · 중복 검사 삭제
+    /// (`object_attribute_grammar_errors`).
+    fn read(
+        start: &BytesStart<'_>,
+        element: &'static str,
+        allowed: &[&'static str],
+    ) -> MdResult<Self> {
+        let mut values = std::collections::BTreeMap::new();
+        let mut attributes = start.attributes();
+        attributes.with_checks(false);
+        for attr in attributes {
+            let attr = attr.map_err(|err| MdError::LosslessParse {
+                detail: format!("attribute decode error: {err}"),
+            })?;
+            let key: &str = attr.key.as_ref();
+            let Some(name) = allowed.iter().copied().find(|n| *n == key) else {
+                return Err(MdError::LosslessParse {
+                    detail: format!("<{element}> has unknown attribute {key}"),
+                });
+            };
+            let value = attr.normalized_value(XmlVersion::Explicit1_0).map_err(|err| {
+                MdError::LosslessParse {
+                    detail: format!("attribute value decode error ({name}): {err}"),
+                }
+            })?;
+            if values.insert(name, value.into_owned()).is_some() {
+                return Err(MdError::LosslessParse {
+                    detail: format!("<{element}> repeats {name}"),
+                });
+            }
+        }
+        Ok(Self { element, values })
+    }
+
+    fn get(&self, name: &'static str) -> Option<&str> {
+        self.values.get(name).map(String::as_str)
+    }
+
+    fn required(&self, name: &'static str) -> MdResult<&str> {
+        self.get(name)
+            .ok_or(MdError::LosslessMissingAttribute { element: self.element, attribute: name })
+    }
+
+    fn invalid(&self, name: &'static str, value: &str) -> MdError {
+        MdError::LosslessInvalidAttribute {
+            element: self.element,
+            attribute: name,
+            value: value.to_string(),
+        }
+    }
+
+    fn unit(&self, name: &'static str) -> MdResult<HwpUnit> {
+        parse_unit_value(self.element, name, self.required(name)?.to_string())
+    }
+
+    fn flag(&self, name: &'static str) -> MdResult<bool> {
+        match self.required(name)? {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            other => Err(self.invalid(name, other)),
+        }
+    }
+
+    fn spelled<T>(&self, name: &'static str, read: fn(&str) -> Option<T>) -> MdResult<T> {
+        let value = self.required(name)?;
+        read(value).ok_or_else(|| self.invalid(name, value))
+    }
+
+    /// Whether all of `names` are present, none is, or (an error) only some.
+    fn all_or_none(&self, names: &[&'static str]) -> MdResult<bool> {
+        let present = names.iter().filter(|n| self.values.contains_key(*n)).count();
+        if present == 0 {
+            return Ok(false);
+        }
+        if let Some(missing) = names.iter().find(|n| !self.values.contains_key(*n)) {
+            return Err(MdError::LosslessMissingAttribute {
+                element: self.element,
+                attribute: missing,
+            });
+        }
+        Ok(true)
+    }
+
+    /// CS: required when the parent is `<p>`, refused inside `<group>`.
+    /// 이것을 실패시키는 것: 묶음 자식의 `data-char-shape` 허용
+    /// (`object_attribute_grammar_errors`).
+    fn char_shape(&self, stack: &[OpenNode]) -> MdResult<Option<CharShapeIndex>> {
+        let under_paragraph = matches!(stack.last(), Some(OpenNode::Paragraph(_)));
+        match (under_paragraph, self.get(g::CHAR_SHAPE)) {
+            (true, Some(v)) => v
+                .parse::<usize>()
+                .map(|i| Some(CharShapeIndex::new(i)))
+                .map_err(|_| self.invalid(g::CHAR_SHAPE, v)),
+            (true, None) => Err(MdError::LosslessMissingAttribute {
+                element: self.element,
+                attribute: g::CHAR_SHAPE,
+            }),
+            (false, None) => Ok(None),
+            (false, Some(_)) => Err(MdError::LosslessParse {
+                detail: format!("<{}> inside <group> has data-char-shape", self.element),
+            }),
+        }
+    }
+
+    /// PLACE (all thirteen or none) and OUTMARGIN (all four or none, only
+    /// with PLACE).
+    /// 이것을 실패시키는 것: PLACE 읽기 삭제 · 일부만 허용 · 모르는 값을 기본값으로 ·
+    /// 부호 없는 offset 파싱(`group_round_trips_every_field`,
+    /// `object_attribute_grammar_errors`).
+    fn placement(&self) -> MdResult<Option<hwpforge_core::placement::ObjectPlacement>> {
+        let has_margin = self.all_or_none(&g::OUT_MARGIN)?;
+        if !self.all_or_none(&g::PLACE)? {
+            if has_margin {
+                return Err(MdError::LosslessMissingAttribute {
+                    element: self.element,
+                    attribute: g::TEXT_WRAP,
+                });
+            }
+            return Ok(None);
+        }
+        let mut p = hwpforge_core::placement::ObjectPlacement::legacy_inline_defaults();
+        p.text_wrap = self.spelled(g::TEXT_WRAP, g::text_wrap_from)?;
+        p.text_flow = self.spelled(g::TEXT_FLOW, g::text_flow_from)?;
+        p.treat_as_char = self.flag(g::TREAT_AS_CHAR)?;
+        p.flow_with_text = self.flag(g::FLOW_WITH_TEXT)?;
+        p.allow_overlap = self.flag(g::ALLOW_OVERLAP)?;
+        p.vert_rel_to = self.spelled(g::VERT_REL_TO, g::rel_to_from)?;
+        p.horz_rel_to = self.spelled(g::HORZ_REL_TO, g::rel_to_from)?;
+        p.vert_offset = self.unit(g::VERT_OFFSET)?;
+        p.horz_offset = self.unit(g::HORZ_OFFSET)?;
+        p.vert_align = self.spelled(g::VERT_ALIGN, g::vert_align_from)?;
+        p.horz_align = self.spelled(g::HORZ_ALIGN, g::horz_align_from)?;
+        p.affect_line_spacing = self.flag(g::AFFECT_LINE_SPACING)?;
+        p.hold_anchor_and_so = self.flag(g::HOLD_ANCHOR)?;
+        if has_margin {
+            p.out_margin = Some(hwpforge_core::table::TableMargin {
+                left: self.unit(g::OUT_MARGIN[0])?,
+                right: self.unit(g::OUT_MARGIN[1])?,
+                top: self.unit(g::OUT_MARGIN[2])?,
+                bottom: self.unit(g::OUT_MARGIN[3])?,
+            });
+        }
+        Ok(Some(p))
+    }
+
+    fn inst_id(&self) -> MdResult<Option<hwpforge_core::ObjectId>> {
+        self.get(g::INST_ID)
+            .map(|v| {
+                v.parse::<u64>()
+                    .map(hwpforge_core::ObjectId::new)
+                    .map_err(|_| self.invalid(g::INST_ID, v))
+            })
+            .transpose()
+    }
+}
+
+/// `<group>` (P5b W1): CS·BOX·FRAME·PLACE·ID.
+fn parse_group(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<GroupNode> {
+    let attrs = Attrs::read(start, "group", &g::group_attributes())?;
+    let char_shape_id = attrs.char_shape(stack)?;
+    let control = Control::Group {
+        children: Vec::new(),
+        width: attrs.unit(g::WIDTH)?,
+        height: attrs.unit(g::HEIGHT)?,
+        frame: parse_frame_attrs(start, "group", true)?,
+        placement: attrs.placement()?,
+        inst_id: attrs.inst_id()?,
+    };
+    Ok(GroupNode { char_shape_id, control })
+}
+
+/// `<img>`: the picture under a paragraph (`Some` char shape) or in a
+/// group (`None`). An old file's picture without `-unit` sizes reads its
+/// `-mm` ones.
+fn parse_picture(
+    start: &BytesStart<'_>,
+    stack: &[OpenNode],
+) -> MdResult<(Option<CharShapeIndex>, Image)> {
+    let attrs = Attrs::read(start, "img", &g::picture_attributes())?;
+    let char_shape_id = attrs.char_shape(stack)?;
+    // `alt` repeats the path and is not read (an old file may lack it).
+    let src = attrs.required(g::SRC)?.to_string();
+    // 이것을 실패시키는 것: 원문 읽기 삭제(`BIN0001` → `bin0001`).
+    let format = match attrs.get(g::FORMAT_RAW) {
+        Some(raw) => {
+            attrs.required(g::FORMAT)?;
+            ImageFormat::Unknown(raw.to_string())
+        }
+        None => parse_image_format(attrs.required(g::FORMAT)?),
+    };
+    let width = parse_length_attr(start, "img", g::WIDTH, g::BOX_MM[0])?;
+    let height = parse_length_attr(start, "img", g::HEIGHT, g::BOX_MM[1])?;
+    let mut image = Image::new(src, width, height, format);
+    image.frame = parse_frame_attrs(start, "img", true)?;
+    image.hyperlink = attrs.get(g::HYPERLINK).map(str::to_string);
+    image.placement = attrs.placement()?;
+    image.inst_id = attrs.inst_id()?;
+    if attrs.all_or_none(&g::CROP)? {
+        image.crop = Some(hwpforge_core::image::ImageCrop {
+            left: attrs.unit(g::CROP[0])?,
+            top: attrs.unit(g::CROP[1])?,
+            right: attrs.unit(g::CROP[2])?,
+            bottom: attrs.unit(g::CROP[3])?,
+        });
+    }
+    if attrs.all_or_none(&g::EXTENT)? {
+        image.image_extent = Some((attrs.unit(g::EXTENT[0])?, attrs.unit(g::EXTENT[1])?));
+    }
+    Ok((char_shape_id, image))
 }
 
 fn push_run_to_parent(stack: &mut [OpenNode], run: Run) -> MdResult<()> {
@@ -1029,25 +1281,7 @@ fn parse_optional_color_attr(
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<Option<Color>> {
-    match attr_value(start, attribute)? {
-        Some(value) => {
-            let hex = value.strip_prefix('#').unwrap_or(value.as_str());
-            if hex.len() != 6 {
-                return Err(MdError::LosslessInvalidAttribute { element, attribute, value });
-            }
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| {
-                MdError::LosslessInvalidAttribute { element, attribute, value: hex.to_string() }
-            })?;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| {
-                MdError::LosslessInvalidAttribute { element, attribute, value: hex.to_string() }
-            })?;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| {
-                MdError::LosslessInvalidAttribute { element, attribute, value: hex.to_string() }
-            })?;
-            Ok(Some(Color::from_rgb(r, g, b)))
-        }
-        None => Ok(None),
-    }
+    attr_value(start, attribute)?.map(|v| g::parse_hex_color(element, attribute, &v)).transpose()
 }
 
 #[cfg(test)]
