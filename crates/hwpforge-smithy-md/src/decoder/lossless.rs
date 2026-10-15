@@ -1,6 +1,6 @@
 //! Lossless body decoder.
 
-use hwpforge_core::control::GroupChild;
+use hwpforge_core::control::{Fill, GroupChild, ShapePoint, ShapeStyle};
 use hwpforge_core::{
     Control, Image, ImageFormat, PageSettings, Paragraph, Run, Section, Table, TableCell, TableRow,
 };
@@ -105,7 +105,7 @@ enum OpenNode {
     Cell(CellNode),
     Span(SpanNode),
     Link(LinkNode),
-    TextBox(TextBoxNode),
+    Shape(Box<ShapeNode>),
     Footnote(FootnoteNode),
     UnknownControl(UnknownControlNode),
     Group(Box<GroupNode>),
@@ -123,7 +123,7 @@ impl OpenNode {
             Self::Cell(_) => "td",
             Self::Span(_) => "span",
             Self::Link(_) => "a",
-            Self::TextBox(_) => "textbox",
+            Self::Shape(node) => node.tag,
             Self::Footnote(_) => "footnote",
             Self::UnknownControl(_) => "control",
             Self::Group(_) => "group",
@@ -185,14 +185,18 @@ struct LinkNode {
     text: String,
 }
 
+/// An open drawing shape (`<textbox>`, `<ellipse>`, `<polygon>`): its
+/// fields, its paragraphs as they close, and — for an old-form text box —
+/// its bare text.
 #[derive(Debug)]
-struct TextBoxNode {
-    char_shape_id: CharShapeIndex,
-    frame: hwpforge_core::ObjectFrame,
-    width: HwpUnit,
-    height: HwpUnit,
+struct ShapeNode {
+    tag: &'static str,
+    char_shape_id: Option<CharShapeIndex>,
+    control: Control,
     text: String,
-    paragraphs: Vec<Paragraph>,
+    /// No attribute an old encoder could not write: a text box without `<p>`
+    /// reads its text the old way.
+    old_form: bool,
 }
 
 #[derive(Debug)]
@@ -255,15 +259,9 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
             href: required_attr(start, "a", "href")?,
             text: String::new(),
         })),
-        "textbox" => Ok(OpenNode::TextBox(TextBoxNode {
-            // FRAME first: its full scan judges duplicates before any lookup.
-            frame: parse_frame_attrs(start, "textbox", true)?,
-            char_shape_id: parse_index_attr(start, "textbox", "data-char-shape")?,
-            width: parse_length_attr(start, "textbox", "data-width-unit", "data-width-mm")?,
-            height: parse_length_attr(start, "textbox", "data-height-unit", "data-height-mm")?,
-            text: String::new(),
-            paragraphs: Vec::new(),
-        })),
+        "textbox" | "ellipse" | "polygon" => {
+            Ok(OpenNode::Shape(Box::new(parse_shape(start, stack)?)))
+        }
         "footnote" => Ok(OpenNode::Footnote(FootnoteNode {
             char_shape_id: parse_index_attr(start, "footnote", "data-char-shape")?,
             text: String::new(),
@@ -299,6 +297,10 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
             let node = parse_group(empty, stack)?;
             attach_group(node, stack)
         }
+        "textbox" | "ellipse" | "polygon" | "line" => {
+            let node = parse_shape(empty, stack)?;
+            attach_shape(node, stack)
+        }
         "caption" => {
             let caption = parse_caption(empty)?;
             attach_caption(caption, stack)
@@ -329,12 +331,17 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
     let parent = stack.last().map(OpenNode::tag_name);
     let valid = match tag {
         "section" => parent.is_none(),
-        "p" => matches!(parent, Some("section" | "td" | "textbox" | "footnote" | "caption")),
+        "p" => matches!(
+            parent,
+            Some("section" | "td" | "textbox" | "ellipse" | "polygon" | "footnote" | "caption")
+        ),
         "table" => matches!(parent, Some("p")),
         "tr" => matches!(parent, Some("table")),
         "td" => matches!(parent, Some("tr")),
-        "span" | "a" | "textbox" | "footnote" | "control" => matches!(parent, Some("p")),
-        "img" | "group" => matches!(parent, Some("p" | "group")),
+        "span" | "a" | "footnote" | "control" => matches!(parent, Some("p")),
+        "img" | "group" | "textbox" | "line" | "ellipse" | "polygon" => {
+            matches!(parent, Some("p" | "group"))
+        }
         _ => true,
     };
 
@@ -377,7 +384,7 @@ fn append_text(stack: &mut [OpenNode], text: &str) -> MdResult<()> {
         match node {
             OpenNode::Span(span) => span.text.push_str(text),
             OpenNode::Link(link) => link.text.push_str(text),
-            OpenNode::TextBox(text_box) => text_box.text.push_str(text),
+            OpenNode::Shape(node) if node.tag == "textbox" => node.text.push_str(text),
             OpenNode::Footnote(footnote) => footnote.text.push_str(text),
             OpenNode::UnknownControl(control) => control.data.push_str(text),
             _ => {
@@ -495,34 +502,7 @@ fn attach_closed_node(
                 link.char_shape_id,
             ),
         ),
-        OpenNode::TextBox(text_box) => {
-            let paragraphs = if text_box.paragraphs.is_empty() {
-                vec![Paragraph::with_runs(
-                    vec![Run::text(text_box.text, CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )]
-            } else {
-                text_box.paragraphs
-            };
-
-            push_run_to_parent(
-                stack,
-                Run::control(
-                    Control::TextBox {
-                        frame: text_box.frame,
-                        text_margin: None,
-                        paragraphs,
-                        width: text_box.width,
-                        height: text_box.height,
-                        placement: None,
-                        caption: None,
-                        style: None,
-                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
-                    },
-                    text_box.char_shape_id,
-                ),
-            )
-        }
+        OpenNode::Shape(node) => attach_shape(*node, stack),
         OpenNode::Footnote(footnote) => {
             let paragraphs = if footnote.paragraphs.is_empty() {
                 vec![Paragraph::with_runs(
@@ -554,6 +534,166 @@ fn attach_closed_node(
                 control.char_shape_id,
             ),
         ),
+    }
+}
+
+/// `<textbox>`, `<line>`, `<ellipse>`, `<polygon>` (P5b W3): CS·BOX·FRAME·
+/// PLACE·STYLE, the defining points, VALIGN (shapes with text) and the text
+/// margin (text box). A text box's `-mm` sizes are read when its `-unit`
+/// ones are missing (an old file).
+fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode> {
+    let name = start.name();
+    let tag: &'static str = match name.as_ref() {
+        "textbox" => "textbox",
+        "line" => "line",
+        "ellipse" => "ellipse",
+        _ => "polygon",
+    };
+    let mut allowed = g::shape_attributes();
+    match tag {
+        "line" => allowed.extend(g::START.into_iter().chain(g::END)),
+        "ellipse" => allowed.extend(g::CENTER.into_iter().chain(g::AXIS1).chain(g::AXIS2)),
+        "polygon" => allowed.push(g::POINTS),
+        _ => allowed.extend(g::TEXT_MARGIN),
+    }
+    if tag != "line" {
+        allowed.push(g::TEXT_VALIGN);
+    }
+    let attrs = Attrs::read(start, tag, &allowed)?;
+    let char_shape_id = attrs.char_shape(stack)?;
+    let (width, height) = if tag == "textbox" {
+        (
+            parse_length_attr(start, tag, g::WIDTH, g::BOX_MM[0])?,
+            parse_length_attr(start, tag, g::HEIGHT, g::BOX_MM[1])?,
+        )
+    } else {
+        (attrs.unit(g::WIDTH)?, attrs.unit(g::HEIGHT)?)
+    };
+    let frame = parse_frame_attrs(start, tag, true)?;
+    let placement = attrs.placement()?;
+    let style = attrs.style()?;
+    let valign = match attrs.get(g::TEXT_VALIGN) {
+        None => hwpforge_foundation::VerticalAlign::Top,
+        Some(_) => attrs.spelled(g::TEXT_VALIGN, g::valign_from)?,
+    };
+    let point = |names: [&'static str; 2]| -> MdResult<ShapePoint> {
+        let coord = |n: &'static str| {
+            let v = attrs.required(n)?;
+            v.parse::<i32>().map_err(|_| attrs.invalid(n, v))
+        };
+        Ok(ShapePoint::new(coord(names[0])?, coord(names[1])?))
+    };
+    // 이것을 실패시키는 것: 네 조건 중 하나를 지우기(`shape_grammar_errors` 의 문단 없는
+    // 새 형식 글상자 네 가지).
+    let old_form = placement.is_none()
+        && style.is_none()
+        && attrs.get(g::TEXT_VALIGN).is_none()
+        && !attrs.all_or_none(&g::TEXT_MARGIN)?;
+    let control = match tag {
+        "line" => Control::Line {
+            start: point(g::START)?,
+            end: point(g::END)?,
+            width,
+            height,
+            frame,
+            placement,
+            caption: None,
+            style,
+        },
+        "ellipse" => Control::Ellipse {
+            center: point(g::CENTER)?,
+            axis1: point(g::AXIS1)?,
+            axis2: point(g::AXIS2)?,
+            width,
+            height,
+            frame,
+            placement,
+            paragraphs: Vec::new(),
+            caption: None,
+            style,
+            text_vertical_align: valign,
+        },
+        "polygon" => Control::Polygon {
+            vertices: parse_points(&attrs, g::POINTS)?,
+            width,
+            height,
+            frame,
+            placement,
+            paragraphs: Vec::new(),
+            caption: None,
+            style,
+            text_vertical_align: valign,
+        },
+        _ => Control::TextBox {
+            paragraphs: Vec::new(),
+            width,
+            height,
+            frame,
+            placement,
+            caption: None,
+            style,
+            text_vertical_align: valign,
+            text_margin: if attrs.all_or_none(&g::TEXT_MARGIN)? {
+                Some(hwpforge_core::table::TableMargin {
+                    left: attrs.unit(g::TEXT_MARGIN[0])?,
+                    right: attrs.unit(g::TEXT_MARGIN[1])?,
+                    top: attrs.unit(g::TEXT_MARGIN[2])?,
+                    bottom: attrs.unit(g::TEXT_MARGIN[3])?,
+                })
+            } else {
+                None
+            },
+        },
+    };
+    Ok(ShapeNode { tag, char_shape_id, control, text: String::new(), old_form })
+}
+
+/// `x,y;x,y…` — an empty value is no points (how many a shape needs is
+/// left to Core validation).
+/// 이것을 실패시키는 것: 빈 값 거부 · 쌍이 아닌 항목 허용(`shape_grammar_errors`).
+fn parse_points(attrs: &Attrs, name: &'static str) -> MdResult<Vec<ShapePoint>> {
+    let value = attrs.required(name)?;
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(';')
+        .map(|pair| {
+            let (x, y) = pair.split_once(',').ok_or_else(|| attrs.invalid(name, value))?;
+            Ok(ShapePoint::new(
+                x.parse().map_err(|_| attrs.invalid(name, value))?,
+                y.parse().map_err(|_| attrs.invalid(name, value))?,
+            ))
+        })
+        .collect()
+}
+
+/// Hands a finished shape to its parent. A text box needs `<p>` children —
+/// except the old form (no new attribute), whose bare text becomes one
+/// paragraph as before; `<p>` mixed with text is refused.
+/// 이것을 실패시키는 것: 옛 형식 거부 · `p` 와 텍스트 섞임 허용
+/// (`old_text_box_form_reads`, `shape_grammar_errors`).
+fn attach_shape(mut node: ShapeNode, stack: &mut [OpenNode]) -> MdResult<()> {
+    if let Control::TextBox { paragraphs, .. } = &mut node.control {
+        if paragraphs.is_empty() {
+            if !node.old_form {
+                return Err(MdError::LosslessParse {
+                    detail: "<textbox> needs at least one <p>".to_string(),
+                });
+            }
+            paragraphs.push(Paragraph::with_runs(
+                vec![Run::text(std::mem::take(&mut node.text), CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            ));
+        } else if !node.text.trim().is_empty() {
+            return Err(MdError::LosslessParse {
+                detail: "<textbox> mixes <p> with bare text".to_string(),
+            });
+        }
+    }
+    match node.char_shape_id {
+        Some(cs) => push_run_to_parent(stack, Run::control(node.control, cs)),
+        None => push_group_child(stack, GroupChild::Shape(node.control)),
     }
 }
 
@@ -786,6 +926,149 @@ impl Attrs {
         Ok(Some(p))
     }
 
+    fn optional<T>(
+        &self,
+        name: &'static str,
+        read: impl Fn(&str) -> Option<T>,
+    ) -> MdResult<Option<T>> {
+        self.get(name).map(|v| read(v).ok_or_else(|| self.invalid(name, v))).transpose()
+    }
+
+    fn color(&self, name: &'static str) -> MdResult<Option<Color>> {
+        self.get(name).map(|v| g::parse_hex_color(self.element, name, v)).transpose()
+    }
+
+    fn arrow(
+        &self,
+        names: [&'static str; 3],
+    ) -> MdResult<Option<hwpforge_core::control::ArrowStyle>> {
+        if !self.all_or_none(&names)? {
+            return Ok(None);
+        }
+        Ok(Some(hwpforge_core::control::ArrowStyle {
+            arrow_type: self.spelled(names[0], g::arrow_type_from)?,
+            size: self.spelled(names[1], g::arrow_size_from)?,
+            filled: self.flag(names[2])?,
+        }))
+    }
+
+    /// STYLE: `None` without the marker (any other STYLE attribute is then
+    /// refused); with it, each field from its attribute and the fill from
+    /// its kind, whose attributes must be exactly that kind's.
+    /// 이것을 실패시키는 것: 표지 없는 속성 허용 · 화살표 일부 허용 · Solid 에 gradient
+    /// 섞임 허용 · 빈 stops 거부 · 비유한 rotation 허용 · 부호 있는 `line_width`
+    /// (`shape_style_round_trips`, `shape_grammar_errors`).
+    fn style(&self) -> MdResult<Option<ShapeStyle>> {
+        let others = g::style_attributes();
+        match self.get(g::STYLE) {
+            None => {
+                if let Some(name) = others.iter().find(|n| self.values.contains_key(*n)) {
+                    return Err(MdError::LosslessParse {
+                        detail: format!("<{}> has {name} without data-style", self.element),
+                    });
+                }
+                return Ok(None);
+            }
+            Some("true") => {}
+            Some(other) => return Err(self.invalid(g::STYLE, other)),
+        }
+        let mut st = ShapeStyle {
+            line_color: self.color(g::LINE_COLOR)?,
+            line_width: self.optional(g::LINE_WIDTH, |v| v.parse::<u32>().ok())?,
+            line_style: self.optional(g::LINE_STYLE, g::line_style_from)?,
+            fill_color: self.color(g::FILL_COLOR)?,
+            rotation: self
+                .optional(g::ROTATION, |v| v.parse::<f32>().ok().filter(|r| r.is_finite()))?,
+            flip: self.optional(g::FLIP, g::flip_from)?,
+            head_arrow: self.arrow(g::HEAD_ARROW)?,
+            tail_arrow: self.arrow(g::TAIL_ARROW)?,
+            ..ShapeStyle::default()
+        };
+        if let Some(d) = self.optional(g::DROP_CAP, g::drop_cap_from)? {
+            st.drop_cap_style = d;
+        }
+        st.corner_ratio = self.optional(g::CORNER_RATIO, |v| v.parse::<u8>().ok())?;
+        let kind = self.get(g::FILL_KIND);
+        let (solid, gradient, pattern) = match kind {
+            None | Some("None") => (false, false, false),
+            Some("Solid") => (true, false, false),
+            Some("Gradient") => (false, true, false),
+            Some("Pattern") => (false, false, true),
+            Some(other) => return Err(self.invalid(g::FILL_KIND, other)),
+        };
+        let stray = |present: bool, names: &[&'static str]| -> MdResult<()> {
+            match names.iter().find(|n| self.values.contains_key(*n)) {
+                Some(name) if !present => Err(MdError::LosslessParse {
+                    detail: format!("<{}> has {name} for another fill kind", self.element),
+                }),
+                _ => Ok(()),
+            }
+        };
+        stray(solid, &[g::FILL_SOLID_COLOR])?;
+        stray(gradient, &g::GRADIENT)?;
+        stray(gradient, &g::GRADIENT_OPTIONAL)?;
+        stray(pattern, &g::PATTERN)?;
+        st.fill = match kind {
+            None => None,
+            Some("None") => Some(Fill::None),
+            Some("Solid") => Some(Fill::Solid {
+                color: g::parse_hex_color(
+                    self.element,
+                    g::FILL_SOLID_COLOR,
+                    self.required(g::FILL_SOLID_COLOR)?,
+                )?,
+            }),
+            Some("Gradient") => {
+                let stops = self.required(g::GRADIENT[2])?;
+                let colors = if stops.is_empty() {
+                    Vec::new()
+                } else {
+                    stops
+                        .split(';')
+                        .map(|stop| {
+                            let (c, at) = stop
+                                .split_once('@')
+                                .ok_or_else(|| self.invalid(g::GRADIENT[2], stops))?;
+                            Ok((
+                                g::parse_hex_color(self.element, g::GRADIENT[2], c)?,
+                                at.parse::<u32>()
+                                    .map_err(|_| self.invalid(g::GRADIENT[2], stops))?,
+                            ))
+                        })
+                        .collect::<MdResult<Vec<_>>>()?
+                };
+                let int = |n: &'static str| self.optional(n, |v| v.parse::<i32>().ok());
+                let uint = |n: &'static str| self.optional(n, |v| v.parse::<u32>().ok());
+                Some(Fill::Gradient {
+                    gradient_type: self.spelled(g::GRADIENT[0], g::gradient_type_from)?,
+                    angle: {
+                        let v = self.required(g::GRADIENT[1])?;
+                        v.parse::<i32>().map_err(|_| self.invalid(g::GRADIENT[1], v))?
+                    },
+                    colors,
+                    center_x: int(g::GRADIENT_OPTIONAL[0])?,
+                    center_y: int(g::GRADIENT_OPTIONAL[1])?,
+                    step: uint(g::GRADIENT_OPTIONAL[2])?,
+                    step_center: uint(g::GRADIENT_OPTIONAL[3])?,
+                })
+            }
+            _ => Some(Fill::Pattern {
+                pattern_type: self.spelled(g::PATTERN[0], g::pattern_type_from)?,
+                fg_color: g::parse_hex_color(
+                    self.element,
+                    g::PATTERN[1],
+                    self.required(g::PATTERN[1])?,
+                )?,
+                bg_color: g::parse_hex_color(
+                    self.element,
+                    g::PATTERN[2],
+                    self.required(g::PATTERN[2])?,
+                )?,
+            }),
+        };
+        Ok(Some(st))
+    }
+
     fn inst_id(&self) -> MdResult<Option<hwpforge_core::ObjectId>> {
         self.get(g::INST_ID)
             .map(|v| {
@@ -877,10 +1160,17 @@ fn push_paragraph_to_parent(stack: &mut [OpenNode], paragraph: Paragraph) -> MdR
                 cell.paragraphs.push(paragraph);
                 Ok(())
             }
-            OpenNode::TextBox(text_box) => {
-                text_box.paragraphs.push(paragraph);
-                Ok(())
-            }
+            OpenNode::Shape(node) => match &mut node.control {
+                Control::TextBox { paragraphs, .. }
+                | Control::Ellipse { paragraphs, .. }
+                | Control::Polygon { paragraphs, .. } => {
+                    paragraphs.push(paragraph);
+                    Ok(())
+                }
+                _ => Err(MdError::LosslessParse {
+                    detail: format!("<p> cannot be nested inside <{}>", node.tag),
+                }),
+            },
             OpenNode::Footnote(footnote) => {
                 footnote.paragraphs.push(paragraph);
                 Ok(())

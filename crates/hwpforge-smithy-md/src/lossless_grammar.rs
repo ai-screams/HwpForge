@@ -4,11 +4,14 @@
 //! through these same tables, so the two cannot drift apart.
 
 use hwpforge_core::caption::CaptionSide;
+use hwpforge_core::control::LineStyle;
 use hwpforge_core::placement::{
     HorzAlign, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
 };
 use hwpforge_core::table::CellLineWrap;
-use hwpforge_foundation::Color;
+use hwpforge_foundation::{
+    ArrowSize, ArrowType, Color, DropCapStyle, Flip, GradientType, PatternType, VerticalAlign,
+};
 
 use crate::error::{MdError, MdResult};
 
@@ -121,6 +124,271 @@ pub(crate) fn caption_side_from(s: &str) -> Option<CaptionSide> {
         "Right" => CaptionSide::Right,
         "Top" => CaptionSide::Top,
         "Bottom" => CaptionSide::Bottom,
+        _ => return None,
+    })
+}
+
+/// STYLE (`ShapeStyle`): the marker `data-style="true"` stands for
+/// `Some(style)`; every other STYLE attribute needs it. Each `Option` field
+/// is written only when `Some`.
+pub(crate) const STYLE: &str = "data-style";
+pub(crate) const LINE_COLOR: &str = "data-line-color";
+pub(crate) const LINE_WIDTH: &str = "data-line-width-unit";
+pub(crate) const LINE_STYLE: &str = "data-line-style";
+pub(crate) const FILL_COLOR: &str = "data-fill-color";
+pub(crate) const ROTATION: &str = "data-rotation";
+pub(crate) const FLIP: &str = "data-flip";
+/// Head and tail arrows: type, size, filled — all three or none, each.
+pub(crate) const HEAD_ARROW: [&str; 3] =
+    ["data-head-arrow-type", "data-head-arrow-size", "data-head-arrow-filled"];
+pub(crate) const TAIL_ARROW: [&str; 3] =
+    ["data-tail-arrow-type", "data-tail-arrow-size", "data-tail-arrow-filled"];
+/// The fill (`ShapeStyle::fill`): its kind, then that kind's attributes only.
+pub(crate) const FILL_KIND: &str = "data-fill-kind";
+pub(crate) const FILL_SOLID_COLOR: &str = "data-fill-solid-color";
+/// Gradient: type, angle and stops required; the centre and steps each
+/// written when `Some`.
+pub(crate) const GRADIENT: [&str; 3] =
+    ["data-fill-gradient-type", "data-fill-gradient-angle", "data-fill-gradient-stops"];
+pub(crate) const GRADIENT_OPTIONAL: [&str; 4] = [
+    "data-fill-gradient-center-x",
+    "data-fill-gradient-center-y",
+    "data-fill-gradient-step",
+    "data-fill-gradient-step-center",
+];
+/// Pattern: type and the two colors.
+pub(crate) const PATTERN: [&str; 3] =
+    ["data-fill-pattern-type", "data-fill-pattern-fg-color", "data-fill-pattern-bg-color"];
+pub(crate) const DROP_CAP: &str = "data-drop-cap";
+pub(crate) const CORNER_RATIO: &str = "data-corner-ratio";
+/// VALIGN: the text's vertical alignment inside a shape, when not `Top`.
+pub(crate) const TEXT_VALIGN: &str = "data-text-valign";
+/// TEXTMARGIN (`TextBox::text_margin`): all four or none.
+pub(crate) const TEXT_MARGIN: [&str; 4] = [
+    "data-text-margin-left-unit",
+    "data-text-margin-right-unit",
+    "data-text-margin-top-unit",
+    "data-text-margin-bottom-unit",
+];
+/// Defining points.
+pub(crate) const START: [&str; 2] = ["data-start-x", "data-start-y"];
+pub(crate) const END: [&str; 2] = ["data-end-x", "data-end-y"];
+pub(crate) const CENTER: [&str; 2] = ["data-cx", "data-cy"];
+pub(crate) const AXIS1: [&str; 2] = ["data-ax1-x", "data-ax1-y"];
+pub(crate) const AXIS2: [&str; 2] = ["data-ax2-x", "data-ax2-y"];
+pub(crate) const POINTS: &str = "data-points";
+
+/// Every STYLE attribute.
+pub(crate) fn style_attributes() -> Vec<&'static str> {
+    let mut v = vec![
+        STYLE,
+        LINE_COLOR,
+        LINE_WIDTH,
+        LINE_STYLE,
+        FILL_COLOR,
+        ROTATION,
+        FLIP,
+        FILL_KIND,
+        FILL_SOLID_COLOR,
+        DROP_CAP,
+        CORNER_RATIO,
+    ];
+    v.extend(HEAD_ARROW);
+    v.extend(TAIL_ARROW);
+    v.extend(GRADIENT);
+    v.extend(GRADIENT_OPTIONAL);
+    v.extend(PATTERN);
+    v
+}
+
+/// What a drawing shape carries besides its own defining points: CS, BOX,
+/// FRAME, PLACE, OUTMARGIN and STYLE.
+pub(crate) fn shape_attributes() -> Vec<&'static str> {
+    let mut v = vec![CHAR_SHAPE, WIDTH, HEIGHT];
+    v.extend(BOX_MM);
+    v.extend(FRAME);
+    v.extend(PLACE);
+    v.extend(PLACE_MM);
+    v.extend(OUT_MARGIN);
+    v.extend(style_attributes());
+    v
+}
+
+/// A color STYLE writes: `#RRGGBB`; a color with its reserved high byte set
+/// has no spelling and is refused.
+pub(crate) fn color_str(c: Color) -> MdResult<String> {
+    if c.to_raw() >> 24 != 0 {
+        return Err(unsupported("color with reserved bits"));
+    }
+    Ok(c.to_string())
+}
+
+pub(crate) fn line_style_str(v: LineStyle) -> MdResult<&'static str> {
+    Ok(match v {
+        LineStyle::Solid => "Solid",
+        LineStyle::Dash => "Dash",
+        LineStyle::Dot => "Dot",
+        LineStyle::DashDot => "DashDot",
+        LineStyle::DashDotDot => "DashDotDot",
+        LineStyle::None => "None",
+        _ => return Err(unsupported("line style")),
+    })
+}
+
+pub(crate) fn line_style_from(s: &str) -> Option<LineStyle> {
+    Some(match s {
+        "Solid" => LineStyle::Solid,
+        "Dash" => LineStyle::Dash,
+        "Dot" => LineStyle::Dot,
+        "DashDot" => LineStyle::DashDot,
+        "DashDotDot" => LineStyle::DashDotDot,
+        "None" => LineStyle::None,
+        _ => return None,
+    })
+}
+
+pub(crate) fn flip_str(v: Flip) -> MdResult<&'static str> {
+    Ok(match v {
+        Flip::None => "None",
+        Flip::Horizontal => "Horizontal",
+        Flip::Vertical => "Vertical",
+        Flip::Both => "Both",
+        _ => return Err(unsupported("flip")),
+    })
+}
+
+pub(crate) fn flip_from(s: &str) -> Option<Flip> {
+    Some(match s {
+        "None" => Flip::None,
+        "Horizontal" => Flip::Horizontal,
+        "Vertical" => Flip::Vertical,
+        "Both" => Flip::Both,
+        _ => return None,
+    })
+}
+
+pub(crate) fn arrow_type_str(v: ArrowType) -> MdResult<&'static str> {
+    Ok(match v {
+        ArrowType::None => "None",
+        ArrowType::Normal => "Normal",
+        ArrowType::Arrow => "Arrow",
+        ArrowType::Concave => "Concave",
+        ArrowType::Diamond => "Diamond",
+        ArrowType::Oval => "Oval",
+        ArrowType::Open => "Open",
+        _ => return Err(unsupported("arrow type")),
+    })
+}
+
+pub(crate) fn arrow_type_from(s: &str) -> Option<ArrowType> {
+    Some(match s {
+        "None" => ArrowType::None,
+        "Normal" => ArrowType::Normal,
+        "Arrow" => ArrowType::Arrow,
+        "Concave" => ArrowType::Concave,
+        "Diamond" => ArrowType::Diamond,
+        "Oval" => ArrowType::Oval,
+        "Open" => ArrowType::Open,
+        _ => return None,
+    })
+}
+
+pub(crate) fn arrow_size_str(v: ArrowSize) -> MdResult<&'static str> {
+    Ok(match v {
+        ArrowSize::Small => "Small",
+        ArrowSize::Medium => "Medium",
+        ArrowSize::Large => "Large",
+        _ => return Err(unsupported("arrow size")),
+    })
+}
+
+pub(crate) fn arrow_size_from(s: &str) -> Option<ArrowSize> {
+    Some(match s {
+        "Small" => ArrowSize::Small,
+        "Medium" => ArrowSize::Medium,
+        "Large" => ArrowSize::Large,
+        _ => return None,
+    })
+}
+
+pub(crate) fn gradient_type_str(v: GradientType) -> MdResult<&'static str> {
+    Ok(match v {
+        GradientType::Linear => "Linear",
+        GradientType::Radial => "Radial",
+        GradientType::Square => "Square",
+        GradientType::Conical => "Conical",
+        _ => return Err(unsupported("gradient type")),
+    })
+}
+
+pub(crate) fn gradient_type_from(s: &str) -> Option<GradientType> {
+    Some(match s {
+        "Linear" => GradientType::Linear,
+        "Radial" => GradientType::Radial,
+        "Square" => GradientType::Square,
+        "Conical" => GradientType::Conical,
+        _ => return None,
+    })
+}
+
+pub(crate) fn pattern_type_str(v: PatternType) -> MdResult<&'static str> {
+    Ok(match v {
+        PatternType::Horizontal => "Horizontal",
+        PatternType::Vertical => "Vertical",
+        PatternType::BackSlash => "BackSlash",
+        PatternType::Slash => "Slash",
+        PatternType::Cross => "Cross",
+        PatternType::CrossDiagonal => "CrossDiagonal",
+        _ => return Err(unsupported("pattern type")),
+    })
+}
+
+pub(crate) fn pattern_type_from(s: &str) -> Option<PatternType> {
+    Some(match s {
+        "Horizontal" => PatternType::Horizontal,
+        "Vertical" => PatternType::Vertical,
+        "BackSlash" => PatternType::BackSlash,
+        "Slash" => PatternType::Slash,
+        "Cross" => PatternType::Cross,
+        "CrossDiagonal" => PatternType::CrossDiagonal,
+        _ => return None,
+    })
+}
+
+/// A drop cap other than `None` (which is not written).
+pub(crate) fn drop_cap_str(v: DropCapStyle) -> MdResult<Option<&'static str>> {
+    Ok(match v {
+        DropCapStyle::None => None,
+        DropCapStyle::DoubleLine => Some("DoubleLine"),
+        DropCapStyle::TripleLine => Some("TripleLine"),
+        DropCapStyle::Margin => Some("Margin"),
+        _ => return Err(unsupported("drop cap")),
+    })
+}
+
+pub(crate) fn drop_cap_from(s: &str) -> Option<DropCapStyle> {
+    Some(match s {
+        "DoubleLine" => DropCapStyle::DoubleLine,
+        "TripleLine" => DropCapStyle::TripleLine,
+        "Margin" => DropCapStyle::Margin,
+        _ => return None,
+    })
+}
+
+/// A shape's text vertical alignment other than `Top` (not written).
+pub(crate) fn valign_str(v: VerticalAlign) -> MdResult<Option<&'static str>> {
+    Ok(match v {
+        VerticalAlign::Top => None,
+        VerticalAlign::Center => Some("Center"),
+        VerticalAlign::Bottom => Some("Bottom"),
+        _ => return Err(unsupported("text vertical align")),
+    })
+}
+
+pub(crate) fn valign_from(s: &str) -> Option<VerticalAlign> {
+    Some(match s {
+        "Center" => VerticalAlign::Center,
+        "Bottom" => VerticalAlign::Bottom,
         _ => return None,
     })
 }

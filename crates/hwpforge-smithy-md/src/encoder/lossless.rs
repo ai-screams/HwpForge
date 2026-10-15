@@ -1,6 +1,6 @@
 //! Lossless markdown encoder (frontmatter + HTML-like body).
 
-use hwpforge_core::control::GroupChild;
+use hwpforge_core::control::{Fill, GroupChild, ShapePoint, ShapeStyle};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_core::{Control, Document, Paragraph, RunContent, Table, Validated};
@@ -68,23 +68,6 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     Ok(output)
 }
 
-/// An object's outer margin (S18) has no place in the grammar yet (P5b):
-/// refused rather than dropped.
-/// 이것을 실패시키는 것: 이 거부를 지우기(`object_outer_margin_is_refused`).
-fn refuse_out_margin(
-    placement: Option<&hwpforge_core::placement::ObjectPlacement>,
-) -> MdResult<()> {
-    if placement
-        .and_then(|p| p.out_margin)
-        .is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 0))
-    {
-        return Err(MdError::UnsupportedStructure {
-            detail: "object outer margin is not carried by the lossless encoder".to_string(),
-        });
-    }
-    Ok(())
-}
-
 /// The object frame (S20, design §19.23.21 FRAME): the original box as
 /// `data-original-width-unit`/`-height-unit` (with readable `-mm`) when it
 /// is set, and `data-size-protect="true"` when the size is locked. A default
@@ -148,51 +131,11 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(text)
                     ));
                 }
-                Control::TextBox {
-                    paragraphs,
-                    width,
-                    height,
-                    style,
-                    text_margin,
-                    placement,
-                    frame,
-                    ..
-                } => {
-                    refuse_out_margin(placement.as_ref())?;
-                    // §19.22 D4: nor for a text margin other than 283 (P5b).
-                    // 이것을 실패시키는 것: 이 거부를 지우기
-                    // (`text_box_margin_is_refused`).
-                    if text_margin.is_some_and(|m| {
-                        [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() != 283)
-                    }) {
-                        return Err(MdError::UnsupportedStructure {
-                            detail: "text box text margin is not carried by the lossless encoder"
-                                .to_string(),
-                        });
-                    }
-                    // §19.5 1c (review r1): the lossless grammar has no place
-                    // for a rounded corner yet (P5b) — refuse rather than
-                    // write a square box. 이것을 실패시키는 것: 이 거부를 지우기
-                    // (`rounded_text_box_is_refused`).
-                    if style.as_ref().is_some_and(|s| s.corner_ratio.is_some()) {
-                        return Err(MdError::UnsupportedStructure {
-                            detail: "text box corner ratio is not carried by the lossless encoder"
-                                .to_string(),
-                        });
-                    }
-                    out.push_str(&format!(
-                        "<textbox data-char-shape=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{}>",
-                        run.char_shape_id.get(),
-                        width.as_i32(),
-                        height.as_i32(),
-                        width.to_mm(),
-                        height.to_mm(),
-                        frame_attrs(frame)
-                    ));
-                    for paragraph in paragraphs {
-                        out.push_str(&encode_paragraph(paragraph)?);
-                    }
-                    out.push_str("</textbox>");
+                Control::TextBox { .. }
+                | Control::Line { .. }
+                | Control::Ellipse { .. }
+                | Control::Polygon { .. } => {
+                    out.push_str(&encode_shape(control, Some(run.char_shape_id.get()))?);
                 }
                 Control::Footnote { paragraphs, .. } => {
                     out.push_str(&format!(
@@ -221,45 +164,6 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         g::escape_attr(tag)?,
                         escape_html(data.as_deref().unwrap_or(""))
                     ));
-                }
-                Control::Line { start, end, width, height, frame, .. } => {
-                    out.push_str(&format!(
-                        "<line data-char-shape=\"{}\" data-start-x=\"{}\" data-start-y=\"{}\" data-end-x=\"{}\" data-end-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}/>",
-                        run.char_shape_id.get(),
-                        start.x, start.y, end.x, end.y,
-                        width.as_i32(), height.as_i32(),
-                        frame_attrs(frame)
-                    ));
-                }
-                Control::Ellipse {
-                    center, axis1, axis2, width, height, paragraphs, frame, ..
-                } => {
-                    out.push_str(&format!(
-                        "<ellipse data-char-shape=\"{}\" data-cx=\"{}\" data-cy=\"{}\" data-ax1-x=\"{}\" data-ax1-y=\"{}\" data-ax2-x=\"{}\" data-ax2-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}>",
-                        run.char_shape_id.get(),
-                        center.x, center.y, axis1.x, axis1.y, axis2.x, axis2.y,
-                        width.as_i32(), height.as_i32(),
-                        frame_attrs(frame)
-                    ));
-                    for paragraph in paragraphs {
-                        out.push_str(&encode_paragraph(paragraph)?);
-                    }
-                    out.push_str("</ellipse>");
-                }
-                Control::Polygon { vertices, width, height, paragraphs, frame, .. } => {
-                    let pts: Vec<String> =
-                        vertices.iter().map(|v| format!("{},{}", v.x, v.y)).collect();
-                    out.push_str(&format!(
-                        "<polygon data-char-shape=\"{}\" data-points=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"{}>",
-                        run.char_shape_id.get(),
-                        pts.join(";"),
-                        width.as_i32(), height.as_i32(),
-                        frame_attrs(frame)
-                    ));
-                    for paragraph in paragraphs {
-                        out.push_str(&encode_paragraph(paragraph)?);
-                    }
-                    out.push_str("</polygon>");
                 }
                 Control::Dutmal { main_text, sub_text, sz_ratio, position, align, .. } => {
                     out.push_str(&format!(
@@ -551,6 +455,12 @@ fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> 
             GroupChild::Shape(shape @ Control::Group { .. }) => {
                 out.push_str(&encode_group(shape, None)?)
             }
+            GroupChild::Shape(
+                shape @ (Control::TextBox { .. }
+                | Control::Line { .. }
+                | Control::Ellipse { .. }
+                | Control::Polygon { .. }),
+            ) => out.push_str(&encode_shape(shape, None)?),
             // Drawing shapes as children come with their own grammar later;
             // until then the group is refused whole.
             // 이것을 실패시키는 것: 이 거부를 지우고 자식을 건너뛰기
@@ -637,6 +547,191 @@ fn encode_picture(image: &Image, char_shape: Option<usize>) -> MdResult<String> 
     Ok(out)
 }
 
+/// STYLE: nothing for `None`; the marker and each `Some` field otherwise.
+/// 이것을 실패시키는 것: 표지 삭제 · 필드 방출 각각 삭제 · 채우기 종류 섞기
+/// (`shape_style_round_trips`, `shape_markup_spells_core_names`).
+fn style_attrs(style: Option<&ShapeStyle>) -> MdResult<String> {
+    let Some(st) = style else { return Ok(String::new()) };
+    let mut out = format!(" {}=\"true\"", g::STYLE);
+    let mut put = |name: &str, value: String| out.push_str(&format!(" {name}=\"{value}\""));
+    if let Some(c) = st.line_color {
+        put(g::LINE_COLOR, g::color_str(c)?);
+    }
+    if let Some(w) = st.line_width {
+        put(g::LINE_WIDTH, w.to_string());
+    }
+    if let Some(ls) = st.line_style {
+        put(g::LINE_STYLE, g::line_style_str(ls)?.to_string());
+    }
+    if let Some(c) = st.fill_color {
+        put(g::FILL_COLOR, g::color_str(c)?);
+    }
+    if let Some(r) = st.rotation {
+        // Display writes the shortest text that reads back to the same
+        // bits (`-0` included); a value that is not finite has no form.
+        // 이것을 실패시키는 것: `{:.2}` 로 쓰기 · 비유한값 통과(`rotation_is_written_exactly`).
+        if !r.is_finite() {
+            return Err(MdError::UnsupportedStructure {
+                detail: "shape rotation that is not finite has no lossless form".to_string(),
+            });
+        }
+        put(g::ROTATION, r.to_string());
+    }
+    if let Some(f) = st.flip {
+        put(g::FLIP, g::flip_str(f)?.to_string());
+    }
+    for (names, arrow) in [(g::HEAD_ARROW, st.head_arrow), (g::TAIL_ARROW, st.tail_arrow)] {
+        if let Some(a) = arrow {
+            put(names[0], g::arrow_type_str(a.arrow_type)?.to_string());
+            put(names[1], g::arrow_size_str(a.size)?.to_string());
+            put(names[2], g::bool_str(a.filled).to_string());
+        }
+    }
+    match &st.fill {
+        None => {}
+        Some(Fill::Solid { color }) => {
+            put(g::FILL_KIND, "Solid".to_string());
+            put(g::FILL_SOLID_COLOR, g::color_str(*color)?);
+        }
+        Some(Fill::Gradient {
+            gradient_type,
+            angle,
+            colors,
+            center_x,
+            center_y,
+            step,
+            step_center,
+        }) => {
+            put(g::FILL_KIND, "Gradient".to_string());
+            put(g::GRADIENT[0], g::gradient_type_str(*gradient_type)?.to_string());
+            put(g::GRADIENT[1], angle.to_string());
+            let stops = colors
+                .iter()
+                .map(|(c, at)| Ok(format!("{}@{at}", g::color_str(*c)?)))
+                .collect::<MdResult<Vec<_>>>()?;
+            put(g::GRADIENT[2], stops.join(";"));
+            let optional = [
+                center_x.map(|v| v.to_string()),
+                center_y.map(|v| v.to_string()),
+                step.map(|v| v.to_string()),
+                step_center.map(|v| v.to_string()),
+            ];
+            for (name, value) in g::GRADIENT_OPTIONAL.iter().zip(optional) {
+                if let Some(v) = value {
+                    put(name, v);
+                }
+            }
+        }
+        Some(Fill::Pattern { pattern_type, fg_color, bg_color }) => {
+            put(g::FILL_KIND, "Pattern".to_string());
+            put(g::PATTERN[0], g::pattern_type_str(*pattern_type)?.to_string());
+            put(g::PATTERN[1], g::color_str(*fg_color)?);
+            put(g::PATTERN[2], g::color_str(*bg_color)?);
+        }
+        Some(Fill::None) => put(g::FILL_KIND, "None".to_string()),
+        // An image fill refers to a picture the lossless view does not
+        // carry (user decision 2026-10-15). 이것을 실패시키는 것: 이 거부를
+        // 지우기(`image_fill_is_refused`).
+        Some(_) => {
+            return Err(MdError::UnsupportedStructure {
+                detail: "image fill is not carried by the lossless encoder".to_string(),
+            })
+        }
+    }
+    if let Some(d) = g::drop_cap_str(st.drop_cap_style)? {
+        put(g::DROP_CAP, d.to_string());
+    }
+    if let Some(r) = st.corner_ratio {
+        put(g::CORNER_RATIO, r.to_string());
+    }
+    Ok(out)
+}
+
+fn point_attrs(names: [&str; 2], p: ShapePoint) -> String {
+    format!(" {}=\"{}\" {}=\"{}\"", names[0], p.x, names[1], p.y)
+}
+
+/// A drawing shape with this wave's grammar (`<textbox>`, `<line>`,
+/// `<ellipse>`, `<polygon>`): `char_shape` under a paragraph, `None` as a
+/// group child. Its text is an exact subtree; a caption has no place yet
+/// and is refused.
+fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> {
+    let (tag, width, height, frame, placement, caption, style) = match shape {
+        Control::TextBox { width, height, frame, placement, caption, style, .. } => {
+            ("textbox", width, height, frame, placement, caption, style)
+        }
+        Control::Line { width, height, frame, placement, caption, style, .. } => {
+            ("line", width, height, frame, placement, caption, style)
+        }
+        Control::Ellipse { width, height, frame, placement, caption, style, .. } => {
+            ("ellipse", width, height, frame, placement, caption, style)
+        }
+        Control::Polygon { width, height, frame, placement, caption, style, .. } => {
+            ("polygon", width, height, frame, placement, caption, style)
+        }
+        _ => unreachable!("encode_shape takes a text box, line, ellipse or polygon"),
+    };
+    // 이것을 실패시키는 것: 이 거부를 지우기(`shape_caption_is_refused`).
+    if caption.is_some() {
+        return Err(MdError::UnsupportedStructure {
+            detail: format!("{tag} caption is not carried by the lossless encoder"),
+        });
+    }
+    let mut out = format!("<{tag}");
+    if let Some(cs) = char_shape {
+        out.push_str(&format!(" {}=\"{cs}\"", g::CHAR_SHAPE));
+    }
+    match shape {
+        Control::Line { start, end, .. } => {
+            out.push_str(&point_attrs(g::START, *start));
+            out.push_str(&point_attrs(g::END, *end));
+        }
+        Control::Ellipse { center, axis1, axis2, .. } => {
+            out.push_str(&point_attrs(g::CENTER, *center));
+            out.push_str(&point_attrs(g::AXIS1, *axis1));
+            out.push_str(&point_attrs(g::AXIS2, *axis2));
+        }
+        Control::Polygon { vertices, .. } => {
+            let pts: Vec<String> = vertices.iter().map(|v| format!("{},{}", v.x, v.y)).collect();
+            out.push_str(&format!(" {}=\"{}\"", g::POINTS, pts.join(";")));
+        }
+        _ => {}
+    }
+    out.push_str(&box_attrs(*width, *height));
+    out.push_str(&frame_attrs(frame));
+    out.push_str(&place_attrs(placement.as_ref())?);
+    out.push_str(&style_attrs(style.as_ref())?);
+    let (valign, paragraphs) = match shape {
+        Control::TextBox { text_vertical_align, paragraphs, text_margin, .. } => {
+            if let Some(m) = text_margin {
+                for (name, v) in g::TEXT_MARGIN.iter().zip([m.left, m.right, m.top, m.bottom]) {
+                    out.push_str(&format!(" {name}=\"{}\"", v.as_i32()));
+                }
+            }
+            (Some(*text_vertical_align), paragraphs.as_slice())
+        }
+        Control::Ellipse { text_vertical_align, paragraphs, .. }
+        | Control::Polygon { text_vertical_align, paragraphs, .. } => {
+            (Some(*text_vertical_align), paragraphs.as_slice())
+        }
+        _ => (None, &[][..]),
+    };
+    if let Some(v) = valign.map(g::valign_str).transpose()?.flatten() {
+        out.push_str(&format!(" {}=\"{v}\"", g::TEXT_VALIGN));
+    }
+    if paragraphs.is_empty() {
+        out.push_str(" />");
+        return Ok(out);
+    }
+    admit_exact(paragraphs)?;
+    out.push('>');
+    for paragraph in paragraphs {
+        out.push_str(&encode_paragraph(paragraph)?);
+    }
+    out.push_str(&format!("</{tag}>"));
+    Ok(out)
+}
+
 /// A caption (`<caption>`): side, gap, width, full-size flag and saved
 /// width, then its paragraphs — an exact subtree, so what this wave cannot
 /// write exactly inside it refuses the document.
@@ -678,10 +773,10 @@ fn encode_caption(caption: &hwpforge_core::caption::Caption) -> MdResult<String>
     Ok(out)
 }
 
-/// The admission of an exact subtree (a picture caption): the objects it
-/// holds at any depth must be ones this grammar writes exactly — pictures
-/// and groups — and no list may be empty where the decoder would make
-/// content up (a paragraph without runs, a table without rows, a cell or a
+/// The admission of an exact subtree (a picture caption, a shape's text):
+/// the objects it holds at any depth must be ones this grammar writes
+/// exactly — pictures, groups, text boxes, lines, ellipses and polygons —
+/// and no list may be empty where the decoder would make content up (a paragraph without runs, a table without rows, a cell or a
 /// note without paragraphs). Checked before anything is written, so a
 /// later comparison of paragraphs by projection cannot hide a lost object.
 /// 이것을 실패시키는 것: 도형 거부 삭제 · 빈 목록 거부 각각 삭제
@@ -723,14 +818,12 @@ fn admit_exact(paragraphs: &[Paragraph]) -> MdResult<()> {
                         }
                         admit_exact(paragraphs)?;
                     }
-                    Control::Line { .. }
-                    | Control::Rect { .. }
-                    | Control::Ellipse { .. }
+                    // Shapes written exactly are admitted here; their own
+                    // paragraphs are admitted when they are written.
+                    Control::Rect { .. }
                     | Control::Arc { .. }
-                    | Control::Polygon { .. }
                     | Control::Curve { .. }
-                    | Control::ConnectLine { .. }
-                    | Control::TextBox { .. } => return refuse(c.kind_name()),
+                    | Control::ConnectLine { .. } => return refuse(c.kind_name()),
                     _ => {}
                 },
                 _ => {}
@@ -792,7 +885,7 @@ mod tests {
     /// A text box with a rounded corner is refused (the grammar cannot
     /// carry it yet); a square one is written.
     #[test]
-    fn rounded_text_box_is_refused() {
+    fn rounded_text_box_round_trips() {
         use hwpforge_core::control::ShapeStyle;
         let doc = |ratio: Option<u8>| {
             let unit = hwpforge_foundation::HwpUnit::new(3000).unwrap();
@@ -812,18 +905,19 @@ mod tests {
             d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
             d.validate().unwrap()
         };
-        assert!(matches!(
-            encode_lossless(&doc(Some(20))),
-            Err(MdError::UnsupportedStructure { .. })
-        ));
-        assert!(encode_lossless(&doc(None)).is_ok());
+        // Carried since W3 (STYLE `data-corner-ratio`).
+        for ratio in [Some(20), Some(0), None] {
+            let d = doc(ratio);
+            let back = round_trip(&d);
+            assert_eq!(back.sections()[0].paragraphs[0].runs, d.sections()[0].paragraphs[0].runs);
+        }
     }
-    /// S18: a text box with an outer margin is refused; without one it is
-    /// written. A picture's margin round-trips (W2).
+    /// S18: a picture's (W2) and a text box's (W3) outer margin round-trip,
+    /// zero or not.
     ///
-    /// 이것을 실패시키는 것: 글상자 거부 지우기 · 그림 바깥 여백 방출 삭제.
+    /// 이것을 실패시키는 것: 바깥 여백 방출 삭제.
     #[test]
-    fn object_outer_margin_is_carried_or_refused() {
+    fn object_outer_margin_round_trips() {
         use hwpforge_core::placement::ObjectPlacement;
         use hwpforge_core::table::TableMargin;
         let with_margin = |bottom: i32| {
@@ -857,12 +951,9 @@ mod tests {
             if let Control::TextBox { placement, .. } = &mut tb {
                 *placement = Some(with_margin(bottom));
             }
-            let r = encode_lossless(&doc(Run::control(tb, CharShapeIndex::new(0))));
-            assert_eq!(
-                matches!(r, Err(MdError::UnsupportedStructure { .. })),
-                bottom != 0,
-                "text box"
-            );
+            let run = Run::control(tb, CharShapeIndex::new(0));
+            let back = round_trip(&doc(run.clone()));
+            assert_eq!(back.sections()[0].paragraphs[0].runs[0], run, "text box");
         }
     }
 
@@ -1227,12 +1318,11 @@ mod tests {
         );
     }
 
-    /// Lines, ellipses and polygons write their frame (the decoder reads
-    /// these tags only from WS W3 on, so the document still fails to decode
-    /// — no silent loss). A line shown flat with a flat original box is a
-    /// valid frame (Core, built directly).
+    /// Lines, ellipses and polygons carry their frame and read it back
+    /// (W3). A line shown flat with a flat original box is a valid frame
+    /// (Core, built directly).
     #[test]
-    fn write_only_shapes_carry_the_frame() {
+    fn shapes_carry_the_frame() {
         use hwpforge_core::control::ShapePoint;
         let mut line =
             Control::line(ShapePoint { x: 0, y: 0 }, ShapePoint { x: 1000, y: 0 }).unwrap();
@@ -1253,29 +1343,29 @@ mod tests {
         for (control, expected) in [
             (
                 line,
-                r#" data-original-width-unit="1000" data-original-height-unit="0" data-original-width-mm="3.53" data-original-height-mm="0.00" data-size-protect="true"/>"#,
+                r#" data-original-width-unit="1000" data-original-height-unit="0" data-original-width-mm="3.53" data-original-height-mm="0.00" data-size-protect="true" />"#,
             ),
             (
                 ellipse,
-                r#" data-original-width-unit="560" data-original-height-unit="560" data-original-width-mm="1.98" data-original-height-mm="1.98" data-size-protect="true">"#,
+                r#" data-original-width-unit="560" data-original-height-unit="560" data-original-width-mm="1.98" data-original-height-mm="1.98" data-size-protect="true" />"#,
             ),
             (
                 polygon,
-                r#" data-original-width-unit="100" data-original-height-unit="100" data-original-width-mm="0.35" data-original-height-mm="0.35">"#,
+                r#" data-original-width-unit="100" data-original-height-unit="100" data-original-width-mm="0.35" data-original-height-mm="0.35" />"#,
             ),
         ] {
-            let md =
-                encode_lossless(&frame_doc(vec![Run::control(control, CharShapeIndex::new(0))]))
-                    .unwrap();
+            let run = Run::control(control, CharShapeIndex::new(0));
+            let md = encode_lossless(&frame_doc(vec![run.clone()])).unwrap();
             assert!(md.contains(expected), "{md}");
-            assert!(crate::MdDecoder::decode_lossless(&md).is_err(), "{md}");
+            let back = crate::MdDecoder::decode_lossless(&md).unwrap();
+            assert_eq!(back.sections()[0].paragraphs[0].runs[0], run, "{md}");
         }
     }
 
     /// A text box whose margin is not 283 everywhere is refused (§19.22 D4);
     /// 283 everywhere is written.
     #[test]
-    fn text_box_margin_is_refused() {
+    fn text_box_margin_round_trips() {
         use hwpforge_core::table::TableMargin;
         let doc = |v: i32| {
             let unit = HwpUnit::new(3000).unwrap();
@@ -1301,8 +1391,12 @@ mod tests {
             d.add_section(Section::with_paragraphs(vec![para], hwpforge_core::PageSettings::a4()));
             d.validate().unwrap()
         };
-        assert!(matches!(encode_lossless(&doc(400)), Err(MdError::UnsupportedStructure { .. })));
-        assert!(encode_lossless(&doc(283)).is_ok());
+        // Carried since W3 (TEXTMARGIN).
+        for v in [400, 283, 0] {
+            let d = doc(v);
+            let back = round_trip(&d);
+            assert_eq!(back.sections()[0].paragraphs[0].runs, d.sections()[0].paragraphs[0].runs);
+        }
     }
 
     /// §19.22 D3: every cell line wrap comes back as written; the default
@@ -1652,7 +1746,8 @@ mod tests {
         assert!(out.contains("<ellipse"));
         assert!(out.contains("data-cx=\"500\""));
         assert!(out.contains("data-cy=\"300\""));
-        assert!(out.contains("</ellipse>"));
+        // Without text it is an empty element (W3).
+        assert!(out.contains(" />") && !out.contains("</ellipse>"));
     }
 
     #[test]
@@ -1712,7 +1807,8 @@ mod tests {
         let out = encode_lossless(&doc).unwrap();
         assert!(out.contains("<polygon"));
         assert!(out.contains("data-points=\"0,1000;500,0;1000,1000\""));
-        assert!(out.contains("</polygon>"));
+        // Without text it is an empty element (W3).
+        assert!(out.contains(" />") && !out.contains("</polygon>"));
     }
 
     #[test]
