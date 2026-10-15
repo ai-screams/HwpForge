@@ -676,7 +676,9 @@ impl HwpxCellEditor {
         encode_warnings.extend(others);
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
-        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
+        let source = crate::layout_carry::cache_source(&validated, &style_store, &image_store)
+            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes, &source)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
         Ok(crate::diagnostics::WithCodecWarnings::new(
             CellEditResult { bytes, outcome },

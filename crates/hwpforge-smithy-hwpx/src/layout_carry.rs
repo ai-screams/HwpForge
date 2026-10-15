@@ -7,19 +7,27 @@
 //! paragraph from scratch, and on real government forms the accumulated
 //! drift moves page breaks (blank-HPC: 9 → 8 pages in PDF export).
 //!
-//! The carry is a wire-order splice, not a Core change:
+//! The carry is a wire-order splice:
 //!
-//! 1. scan the ORIGINAL section XML: one slot per `<hp:p>` in open order,
-//!    each with its raw `<hp:linesegarray>…</hp:linesegarray>` slice;
-//! 2. scan the BASELINE (no-op re-encode of the pristine document, already
-//!    produced by the admission gate) and the OUTPUT the same way;
+//! 1. scan the BASELINE (no-op re-encode of the pristine document, already
+//!    produced by the admission gate) and the OUTPUT: one slot per `<hp:p>`
+//!    in open order;
+//! 2. scan the SOURCE — the edited document encoded once more with its Core
+//!    caches emitted ([`cache_source`]), which must equal the OUTPUT but for
+//!    those caches;
 //! 3. a paragraph whose OUTPUT slice is byte-identical to its BASELINE
-//!    slice was not touched by the edit → re-inject the original cache
-//!    before its `</hp:p>` — unless it comes after a changed paragraph in
-//!    the same flow, or after a changed paragraph's host in the host's flow
-//!    (its position moved; W2). Anything else (edited paragraphs,
-//!    paragraphs containing edited nested paragraphs, id-shifted elements)
-//!    stays cache-less and the renderer reflows just those.
+//!    slice was not touched by the edit → take its cache from the SOURCE
+//!    and insert it before its `</hp:p>` — unless it comes after a changed
+//!    paragraph in the same flow, or after a changed paragraph's host in
+//!    the host's flow (its position moved; W2). Anything else (edited
+//!    paragraphs, paragraphs containing edited nested paragraphs,
+//!    id-shifted elements) stays cache-less and the renderer reflows just
+//!    those.
+//!
+//! The cache comes from the encoder, not from the original XML: its line
+//! starts are written for the tokens the OUTPUT holds (the encoder may add
+//! one the input omitted, such as a `colPr`), and a cache the decoder
+//! dropped is not in Core, so it is not revived (branch review A2).
 //!
 //! Fail-open by design: any count mismatch or scan anomaly disables the
 //! carry for that section — the result is the current (reflowed) behavior,
@@ -161,14 +169,25 @@ fn scan_paragraphs(xml: &str) -> Option<Vec<ParaSlice>> {
     }
 }
 
-/// Splices the original line-layout caches into `output` for paragraphs
-/// whose slice is byte-identical to the baseline's. Returns `None` when the
-/// carry cannot be aligned (paragraph count mismatch, scan anomaly).
-fn splice_section(original: &str, baseline: &str, output: &str) -> Option<String> {
-    let orig = scan_paragraphs(original)?;
+/// Splices line-layout caches into `output` for paragraphs whose slice is
+/// byte-identical to the baseline's, taking each cache from `source` — the
+/// same edited document encoded with its Core caches emitted, so every line
+/// start is written through the encoder's own token ledger for exactly the
+/// tokens `output` holds (branch review A2: the original cache XML counted
+/// the original's tokens, and an encoder that adds one — a `colPr` the
+/// input omitted — moved every line start after it). Returns `None` when
+/// the carry cannot be aligned (paragraph count mismatch, scan anomaly, or
+/// a `source` that differs from `output` by more than its caches).
+fn splice_section(baseline: &str, output: &str, source: &str) -> Option<String> {
     let base = scan_paragraphs(baseline)?;
     let out = scan_paragraphs(output)?;
-    if orig.len() != base.len() || base.len() != out.len() {
+    let src = scan_paragraphs(source)?;
+    if base.len() != out.len() || src.len() != out.len() {
+        return None;
+    }
+    // The caches are the only difference: same tokens, same coordinates.
+    // 이것을 실패시키는 것: 이 검사 삭제(`splice_bails_when_the_source_differs_beyond_caches`).
+    if without_caches(source, &src) != output {
         return None;
     }
 
@@ -184,15 +203,14 @@ fn splice_section(original: &str, baseline: &str, output: &str) -> Option<String
     let stale = flow_tails(&out, &changed);
 
     let mut inserts: Vec<(usize, &str)> = Vec::new();
-    for i in 0..orig.len() {
-        let Some((seg_start, seg_end)) = orig[i].line_seg else {
+    for i in 0..out.len() {
+        let Some((seg_start, seg_end)) = src[i].line_seg else {
             continue;
         };
         let unchanged = !changed[i] && !stale[i];
         let has_close = out[i].content_end < out[i].end;
-        let already = output[out[i].start..out[i].end].contains("<hp:linesegarray");
-        if unchanged && has_close && !already {
-            inserts.push((out[i].content_end, &original[seg_start..seg_end]));
+        if unchanged && has_close {
+            inserts.push((out[i].content_end, &source[seg_start..seg_end]));
         }
     }
     if inserts.is_empty() {
@@ -212,6 +230,20 @@ fn splice_section(original: &str, baseline: &str, output: &str) -> Option<String
     Some(result)
 }
 
+/// `xml` without the `<hp:linesegarray>` ranges its `slices` found.
+fn without_caches(xml: &str, slices: &[ParaSlice]) -> String {
+    let mut ranges: Vec<(usize, usize)> = slices.iter().filter_map(|s| s.line_seg).collect();
+    ranges.sort_unstable();
+    let mut out = String::with_capacity(xml.len());
+    let mut cursor = 0;
+    for (start, end) in ranges {
+        out.push_str(&xml[cursor..start]);
+        cursor = end;
+    }
+    out.push_str(&xml[cursor..]);
+    out
+}
+
 /// The paragraphs whose cache an edit makes stale: each changed paragraph
 /// and the paragraphs after it in its list. The host chain needs no walk
 /// here: a host paragraph's slice contains the edited paragraph, so the
@@ -228,9 +260,11 @@ fn flow_tails(slices: &[ParaSlice], changed: &[bool]) -> Vec<bool> {
     stale
 }
 
-/// Carries `<hp:linesegarray>` caches from `original` into `output` for
-/// every section entry, comparing against `baseline` (the pristine no-op
-/// re-encode) to decide which paragraphs an edit left untouched.
+/// Carries `<hp:linesegarray>` caches into `output` for every section entry
+/// whose `original` held any, comparing against `baseline` (the pristine
+/// no-op re-encode) to decide which paragraphs an edit left untouched and
+/// taking each cache from `source` ([`cache_source`]). A cache the decoder
+/// dropped is not in Core, so it is not in `source` and is not revived.
 ///
 /// Fail-open: sections that cannot be aligned are left as-is; the function
 /// only errors on package-level I/O problems.
@@ -238,9 +272,11 @@ pub(crate) fn carry_line_segs(
     original: &[u8],
     baseline: &[u8],
     output: &[u8],
+    source: &[u8],
 ) -> HwpxResult<Vec<u8>> {
     let orig_pkg = RawPackage::read(original)?;
     let base_pkg = RawPackage::read(baseline)?;
+    let src_pkg = RawPackage::read(source)?;
     let mut out_pkg = RawPackage::read(output)?;
 
     let section_paths: Vec<String> = out_pkg
@@ -251,17 +287,18 @@ pub(crate) fn carry_line_segs(
 
     let mut changed = false;
     for path in section_paths {
-        let (Ok(orig_xml), Ok(base_xml), Ok(out_xml)) = (
+        let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml)) = (
             orig_pkg.read_text_entry(&path),
             base_pkg.read_text_entry(&path),
             out_pkg.read_text_entry(&path),
+            src_pkg.read_text_entry(&path),
         ) else {
             continue;
         };
         if !orig_xml.contains("<hp:linesegarray") {
             continue;
         }
-        if let Some(spliced) = splice_section(&orig_xml, &base_xml, &out_xml) {
+        if let Some(spliced) = splice_section(&base_xml, &out_xml, &src_xml) {
             if spliced != out_xml {
                 out_pkg.replace_text_entry(&path, spliced);
                 changed = true;
@@ -274,6 +311,24 @@ pub(crate) fn carry_line_segs(
     } else {
         Ok(output.to_vec())
     }
+}
+
+/// The edited document encoded with its Core line caches emitted: the
+/// cache source of [`carry_line_segs`]. A cache the encoder cannot place is
+/// left out (`LayoutCacheDropped`); those warnings are not returned — the
+/// paragraph then simply keeps no cache, as an edited one does.
+pub(crate) fn cache_source(
+    document: &hwpforge_core::Document<hwpforge_core::Validated>,
+    style_store: &crate::style_store::HwpxStyleStore,
+    image_store: &hwpforge_core::image::ImageStore,
+) -> HwpxResult<Vec<u8>> {
+    crate::HwpxEncoder::encode_with_diagnostics(
+        document,
+        style_store,
+        image_store,
+        crate::EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .map(|outcome| outcome.bytes)
 }
 
 #[cfg(test)]
@@ -328,44 +383,39 @@ mod tests {
 
     #[test]
     fn splice_restores_cache_for_unchanged_paragraphs_only() {
-        // original = 캐시 있는 2문단, baseline = 캐시 없는 동일 문서(no-op
-        // 재인코드), output = 둘째 문단만 편집된 재인코드.
-        let original = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘", true));
+        // baseline = 캐시 없는 no-op 재인코드, output = 둘째 문단만 편집된
+        // 재인코드, source = output 에 Core 캐시를 방출한 것.
         let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
         let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("수정됨", false));
+        let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", true));
 
-        let spliced = splice_section(&original, &baseline, &output).unwrap();
+        let spliced = splice_section(&baseline, &output, &source).unwrap();
         // 첫 문단: 캐시 복원. 둘째 문단: 편집됨 → 캐시 없음.
-        let first = spliced.find(LSA).unwrap();
-        assert!(
-            spliced[first..].find(LSA).map(|r| r == 0).unwrap_or(false)
-                || spliced.matches(LSA).count() == 1
-        );
-        assert!(spliced.contains("수정됨"));
-        assert!(spliced.find("하나").unwrap() < first);
+        assert_eq!(spliced, format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("수정됨", false)));
     }
 
     #[test]
     fn splice_noop_roundtrip_restores_everything() {
-        let original = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘", true));
         let baseline = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
-        let spliced = splice_section(&original, &baseline, &baseline).unwrap();
-        assert_eq!(spliced, original, "무편집 왕복은 원본 wire 로 완전 복원");
+        let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘", true));
+        let spliced = splice_section(&baseline, &baseline, &source).unwrap();
+        assert_eq!(spliced, source, "무편집 왕복은 방출한 캐시로 완전 복원");
     }
 
     #[test]
     fn splice_bails_on_paragraph_count_mismatch() {
-        let original = format!("<hs:sec>{}</hs:sec>", p("하나", true));
+        let one = format!("<hs:sec>{}</hs:sec>", p("하나", true));
         let two = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
-        assert!(splice_section(&original, &two, &two).is_none());
+        assert!(splice_section(&two, &two, &one).is_none());
     }
 
+    /// Branch review A2: the cache source must hold the output's tokens
+    /// exactly — otherwise its coordinates count other tokens.
     #[test]
-    fn splice_skips_paragraph_that_already_has_cache() {
-        let original = format!("<hs:sec>{}</hs:sec>", p("하나", true));
-        let with_cache = original.clone();
-        let spliced = splice_section(&original, &with_cache, &with_cache).unwrap();
-        assert_eq!(spliced.matches("<hp:linesegarray").count(), 1);
+    fn splice_bails_when_the_source_differs_beyond_caches() {
+        let output = format!("<hs:sec>{}{}</hs:sec>", p("하나", false), p("둘", false));
+        let source = format!("<hs:sec>{}{}</hs:sec>", p("하나", true), p("둘셋", true));
+        assert!(splice_section(&output, &output, &source).is_none());
     }
 
     /// W2 (design 3.5 test 2): editing the second of three cell paragraphs
@@ -383,10 +433,10 @@ mod tests {
                 p("after", lsa)
             )
         };
-        let original = section("c1", true);
         let baseline = section("c1", false);
         let output = section("c1 이 여러 줄로 길어졌다", false);
-        let spliced = splice_section(&original, &baseline, &output).unwrap();
+        let source = section("c1 이 여러 줄로 길어졌다", true);
+        let spliced = splice_section(&baseline, &output, &source).unwrap();
         let slices = scan_paragraphs(&spliced).unwrap();
         // open order: before, host, c0, c1, c2, after.
         let cached: Vec<bool> = slices.iter().map(|s| s.line_seg.is_some()).collect();

@@ -105,3 +105,107 @@ fn set_cell_drops_the_flow_tail_and_keeps_the_rest() {
     // The other cell (its own flow) and the paragraph before keep theirs.
     assert_eq!(caches(&section_xml(&edited.bytes)), [0, 2]);
 }
+
+fn table(text: &str) -> Table {
+    let unit = HwpUnit::new(4000).unwrap();
+    Table::new(vec![TableRow::new(vec![TableCell::new(vec![para(text)], unit)])])
+}
+
+/// A first paragraph holding the section controls, a table and twenty
+/// letters, then a paragraph with a second table; the first paragraph's
+/// cache is replaced by `lines` (its `textpos` values) and, when
+/// `omit_col_pr`, its `colPr` control is removed, as an input may omit it.
+fn first_paragraph_cached(lines: &[u32], omit_col_pr: bool) -> Vec<u8> {
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![
+            Paragraph::with_runs(
+                vec![
+                    Run::table(table("t0"), CharShapeIndex::new(0)),
+                    Run::text("ABCDEFGHIJKLMNOPQRST", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            ),
+            Paragraph::with_runs(
+                vec![Run::table(table("t1"), CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            ),
+        ],
+        PageSettings::a4(),
+    ));
+    let store = style_store_for_preset("default").unwrap();
+    let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+    let xml = section_xml(&bytes);
+    let xml = if omit_col_pr {
+        let col_start = xml.find("<hp:ctrl><hp:colPr").expect("colPr control");
+        let col_end = col_start + xml[col_start..].find("</hp:ctrl>").unwrap() + "</hp:ctrl>".len();
+        format!("{}{}", &xml[..col_start], &xml[col_end..])
+    } else {
+        xml
+    };
+    // The first paragraph is the last to close at body level before the
+    // second: put its cache before the `</hp:p>` that follows the text.
+    let text_at = xml.find("ABCDEFGHIJKLMNOPQRST").unwrap();
+    let close = text_at + xml[text_at..].find("</hp:p>").unwrap();
+    let segs: String = lines
+        .iter()
+        .enumerate()
+        .map(|(i, pos)| {
+            format!(
+                "<hp:lineseg textpos=\"{pos}\" vertpos=\"{}\" vertsize=\"1000\" \
+                 textheight=\"1000\" baseline=\"850\" spacing=\"600\" horzpos=\"0\" \
+                 horzsize=\"42520\" flags=\"393216\"/>",
+                i * 1600
+            )
+        })
+        .collect();
+    let xml =
+        format!("{}<hp:linesegarray>{segs}</hp:linesegarray>{}", &xml[..close], &xml[close..]);
+    with_section_xml(&bytes, &xml)
+}
+
+fn first_cache(bytes: &[u8]) -> Option<hwpforge_core::layout::LayoutCache> {
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(bytes).unwrap();
+    decoded.document.sections()[0].paragraphs[0].layout_cache.clone()
+}
+
+fn edit_second_table(bytes: &[u8]) -> Vec<u8> {
+    let spec = CellSpec {
+        table: 1,
+        target: CellTarget::At(GridCoord::new(0, 0)),
+        text: "바뀐 칸".to_string(),
+    };
+    HwpxCellEditor::set_cells(bytes, &[spec]).expect("set_cells").bytes
+}
+
+/// Branch review A2: the input omits `colPr`, so its line start 26 is Core
+/// position 10 (section controls and the table before the text); the
+/// re-encoder writes `colPr`, and carrying the original cache XML moved that
+/// line to 2 with no warning. The carried cache now re-decodes to the
+/// input's own Core cache.
+/// 이것을 실패시키는 것: 캐시를 원본 XML 에서 가져오기(재디코드가 [0,2]).
+#[test]
+fn an_untouched_paragraph_keeps_its_line_starts_when_the_encoder_adds_a_token() {
+    let bytes = first_paragraph_cached(&[0, 26], true);
+    let before = first_cache(&bytes).expect("the input cache decodes");
+    let starts: Vec<u32> = before.lines.iter().map(|s| s.textpos).collect();
+    assert_eq!(starts, [0, 10]);
+    let edited = edit_second_table(&bytes);
+    assert_eq!(first_cache(&edited), Some(before));
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&edited).unwrap();
+    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+}
+
+/// A cache the decoder dropped (a line starting at 20, inside the table's
+/// span after the section and column controls) is not in Core, so the edit
+/// does not bring it back from the input.
+/// 이것을 실패시키는 것: 캐시를 원본 XML 에서 가져오기(버린 캐시가 되살아난다).
+#[test]
+fn a_cache_the_decoder_dropped_stays_dropped() {
+    let bytes = first_paragraph_cached(&[0, 20], false);
+    assert_eq!(first_cache(&bytes), None);
+    let edited = edit_second_table(&bytes);
+    let xml = section_xml(&edited);
+    assert!(!xml[..xml.find("바뀐 칸").unwrap()].contains("<hp:linesegarray"));
+    assert_eq!(first_cache(&edited), None);
+}
