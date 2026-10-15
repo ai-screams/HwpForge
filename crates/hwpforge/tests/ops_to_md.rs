@@ -179,10 +179,8 @@ fn styled_keeps_the_span_and_so_has_nothing_to_report() {
 /// Nine tables, each in the one cell of the next.
 fn nine_nested_tables() -> Vec<u8> {
     use hwpforge::core::table::{Table, TableCell, TableRow};
-    use hwpforge::core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge::core::{Paragraph, Run};
     use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
-    use hwpforge::hwpx::HwpxEncoder;
 
     let mut run = Run::text("core", CharShapeIndex::new(0));
     for _ in 0..9 {
@@ -192,6 +190,16 @@ fn nine_nested_tables() -> Vec<u8> {
         );
         run = Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
     }
+    hwpx_of_one_run(run)
+}
+
+/// A one-paragraph HWPX holding `run`.
+fn hwpx_of_one_run(run: hwpforge::core::Run) -> Vec<u8> {
+    use hwpforge::core::{Document, ImageStore, PageSettings, Paragraph, Section};
+    use hwpforge::foundation::ParaShapeIndex;
+    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+    use hwpforge::hwpx::HwpxEncoder;
+
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(
         vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
@@ -218,6 +226,21 @@ fn lossy_reports_the_nested_table_it_left_out() {
     let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
     assert_eq!(codes.iter().filter(|c| *c == "CONTAINER_TOO_DEEP").count(), 1, "{codes:?}");
     assert!(out.markdown.contains("(중첩 표 생략)"), "{}", out.markdown);
+}
+
+/// A styled warning reaches the caller too: an equation whose LaTeX would
+/// end its `$...$` early is written as text and reported.
+/// 이것을 실패시키는 것: styled 경고 전달 삭제 · `md_warning_code` 의 갈래 삭제.
+#[test]
+fn styled_reports_an_equation_written_as_text() {
+    use hwpforge::core::{control::Control, Run};
+    use hwpforge::foundation::CharShapeIndex;
+    let run = Run::control(Control::equation("a $ b"), CharShapeIndex::new(0));
+    let out = to_md(&hwpx_of_one_run(run), &MdExportOptions::default().with_mode(MdMode::Styled))
+        .expect("to_md");
+    let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
+    assert_eq!(codes.iter().filter(|c| *c == "EQUATION_AS_TEXT").count(), 1, "{codes:?}");
+    assert!(out.markdown.contains("a \\$ b"), "{}", out.markdown);
 }
 
 #[test]
