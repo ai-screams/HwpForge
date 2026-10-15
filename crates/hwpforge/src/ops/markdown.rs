@@ -192,6 +192,7 @@ pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsE
         MdMode::Styled => {
             let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
             let output = MdEncoder::encode_styled(&document, &lookup);
+            warnings.extend(output.warnings.into_iter().map(OpsWarning::Md));
             (output.markdown, output.images.into_iter().collect())
         }
         MdMode::Lossy => {

@@ -19,14 +19,19 @@ use crate::internal_styles::parse_list_continuation_style_name;
 
 /// Output of style-aware markdown encoding.
 ///
-/// Contains the generated markdown string and any extracted images
-/// (keyed by their relative path within the output).
+/// Contains the generated markdown string, any extracted images (keyed by
+/// their relative path within the output) and what the rendering left out.
+/// Built only by the encoder (`#[non_exhaustive]`): read its fields.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MdOutput {
     /// The generated markdown string.
     pub markdown: String,
     /// Extracted images: relative path → binary data.
     pub images: HashMap<String, Vec<u8>>,
+    /// What the rendering left out — today a container nested too deep
+    /// ([`super::MdWarning::ContainerTooDeep`]); empty for most documents.
+    pub warnings: Vec<super::MdWarning>,
 }
 
 const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
@@ -193,6 +198,34 @@ impl Ctx {
 struct State {
     notes: FootnoteCollector,
     assets: Assets,
+    /// What was left out, with where (`at`).
+    warnings: Vec<super::MdWarning>,
+    /// The section and top-level paragraph being drawn.
+    at: (usize, usize),
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            notes: FootnoteCollector::new(),
+            assets: Assets::default(),
+            warnings: Vec::new(),
+            at: (0, 0),
+        }
+    }
+
+    /// The notice written for a `container` past the depth limit, recorded
+    /// as a warning at the current place.
+    /// 이것을 실패시키는 것: 경고 기록 삭제(`deep_containers_are_cut_off`).
+    fn too_deep(&mut self, container: &'static str) -> String {
+        self.warnings.push(super::MdWarning::ContainerTooDeep {
+            container,
+            limit: crate::lossless_grammar::MAX_NESTING_DEPTH,
+            section: self.at.0,
+            paragraph: self.at.1,
+        });
+        TOO_DEEP.to_string()
+    }
 }
 
 /// The image assets (`MdOutput::images`): one key per source picture
@@ -292,7 +325,7 @@ fn emit_picture(
 /// properties to emit inline formatting and heading markers.
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
     let mut blocks = Vec::new();
-    let mut st = State { notes: FootnoteCollector::new(), assets: Assets::default() };
+    let mut st = State::new();
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
@@ -302,7 +335,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         let mut code_block_lines: Vec<String> = Vec::new();
         let mut continuation: Option<ListContinuationContext> = None;
 
-        for paragraph in &section.paragraphs {
+        for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
+            st.at = (section_index, paragraph_index);
             // Page break
             if paragraph.page_break {
                 // Flush code block first
@@ -372,7 +406,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         markdown.push_str(&definitions);
     }
 
-    MdOutput { markdown, images: st.assets.images }
+    MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
 }
 
 /// Encodes a single top-level paragraph into styled markdown.
@@ -648,7 +682,7 @@ fn encode_control_styled(
         Control::Memo { content, .. } => {
             // Drawn as Markdown (`paragraph_text_styled`); an HTML cell
             // escapes the whole memo after.
-            let Some(inner) = ctx.enter() else { return TOO_DEEP.to_string() };
+            let Some(inner) = ctx.enter() else { return st.too_deep("memo") };
             let inner = Ctx { in_comment: true, ..inner };
             let body = content
                 .iter()
@@ -695,7 +729,7 @@ fn extract_note_body(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<String> {
-    let Some(inner) = ctx.enter() else { return vec![TOO_DEEP.to_string()] };
+    let Some(inner) = ctx.enter() else { return vec![st.too_deep("note")] };
     let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
     paragraphs
         .iter()
@@ -715,7 +749,7 @@ fn shape_text(
     st: &mut State,
     ctx: Ctx,
 ) -> String {
-    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
+    let Some(ctx) = ctx.enter() else { return st.too_deep("shape text") };
     let parts: Vec<String> = paragraphs
         .iter()
         .map(|p| {
@@ -915,7 +949,7 @@ fn table_to_styled_markdown(
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
 fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
-    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
+    let Some(ctx) = ctx.enter() else { return st.too_deep("table") };
     let ctx = ctx.markdown();
     let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -950,7 +984,7 @@ fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ct
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
 fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
-    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
+    let Some(ctx) = ctx.enter() else { return st.too_deep("table") };
     let ctx = Ctx { html: true, ..ctx };
     let mut lines = Vec::new();
     lines.push("<table>".to_string());
@@ -1130,7 +1164,7 @@ fn styled_caption(
     ctx: Ctx,
 ) -> String {
     let Some(caption) = caption else { return String::new() };
-    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
+    let Some(ctx) = ctx.enter() else { return st.too_deep("caption") };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
         let t = paragraph_text_styled(p, styles, st, ctx);
@@ -1157,7 +1191,7 @@ fn html_caption(
     ctx: Ctx,
 ) -> String {
     let Some(caption) = caption else { return String::new() };
-    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
+    let Some(ctx) = ctx.enter() else { return st.too_deep("caption") };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
         let t = extract_paragraph_text_html(p, styles, st, ctx);
@@ -1895,7 +1929,7 @@ mod tests {
         // Validation rejects empty tables, so test the helper directly.
         let table = Table::new(vec![]);
         let styles = MockStyles::new();
-        let mut st = State { notes: FootnoteCollector::new(), assets: Assets::default() };
+        let mut st = State::new();
         let result = table_to_styled_markdown(&table, &styles, false, &mut st, Ctx::default());
         assert_eq!(result, "| |\n| --- |");
     }
@@ -3542,10 +3576,12 @@ mod tests {
     }
 
     /// Containers nested past the limit are cut off with a visible notice
-    /// instead of recursing (group → text box → group …), and a shallower
-    /// nesting is drawn whole.
+    /// and one warning naming the container and its place, instead of
+    /// recursing (group → text box → group …); a shallower nesting is drawn
+    /// whole with no warning.
     ///
-    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제.
+    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제 · 경고 기록 삭제 ·
+    /// 자리(`at`) 갱신 삭제.
     #[test]
     fn deep_containers_are_cut_off() {
         use hwpforge_core::control::GroupChild;
@@ -3558,10 +3594,23 @@ mod tests {
             }
             run
         };
-        let md = encode_styled(&validated_document(vec![para(vec![nest(32)])]), &styles).markdown;
-        assert_eq!(md, "core");
-        let md = encode_styled(&validated_document(vec![para(vec![nest(33)])]), &styles).markdown;
-        assert_eq!(md, TOO_DEEP);
+        let out = encode_styled(&validated_document(vec![para(vec![nest(32)])]), &styles);
+        assert_eq!(out.markdown, "core");
+        assert!(out.warnings.is_empty());
+        let out = encode_styled(
+            &validated_document(vec![para(vec![t("x")]), para(vec![nest(33)])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, format!("x\n\n{TOO_DEEP}"));
+        assert_eq!(
+            out.warnings,
+            vec![super::super::MdWarning::ContainerTooDeep {
+                container: "shape text",
+                limit: 32,
+                section: 0,
+                paragraph: 1,
+            }]
+        );
     }
 
     /// An equation's LaTeX in an HTML cell is escaped text: a script that

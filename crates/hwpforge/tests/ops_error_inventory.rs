@@ -309,6 +309,7 @@ const WARNING_MAPPING: Table = &[
         &[
             ("MergedCellsFlattened", "TABLE_MERGE_FLATTENED"),
             ("ImageEmbedSkipped", "IMAGE_EMBED_SKIPPED"),
+            ("ContainerTooDeep", "CONTAINER_TOO_DEEP"),
         ],
     ),
     (
@@ -844,6 +845,15 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                 OpsWarning::Md(MdWarning::ImageEmbedSkipped {
                     src: "a.png".into(),
                     reason: ImageEmbedSkipReason::MissingFile,
+                }),
+            ),
+            (
+                "ContainerTooDeep",
+                OpsWarning::Md(MdWarning::ContainerTooDeep {
+                    container: "table",
+                    limit: 8,
+                    section: 0,
+                    paragraph: 1,
                 }),
             ),
         ],

@@ -871,6 +871,7 @@ fn md_warning_code(warning: &MdWarning) -> &'static str {
     match warning {
         MdWarning::MergedCellsFlattened { .. } => "TABLE_MERGE_FLATTENED",
         MdWarning::ImageEmbedSkipped { .. } => "IMAGE_EMBED_SKIPPED",
+        MdWarning::ContainerTooDeep { .. } => "CONTAINER_TOO_DEEP",
         _ => UNCLASSIFIED,
     }
 }

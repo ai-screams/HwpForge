@@ -83,11 +83,20 @@ fn encode_body(
             continuation_level = None;
         }
 
-        for paragraph in &section.paragraphs {
+        for (paragraph_index, paragraph) in section.paragraphs.iter().enumerate() {
             let current_continuation_level = mapping
                 .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
                 .filter(|level| continuation_level == Some(*level));
+            let first_new = warnings.len();
             let markdown = encode_paragraph(paragraph, mapping, registry, warnings);
+            // Place the depth warnings this paragraph raised.
+            // 이것을 실패시키는 것: 이 자리 채우기 삭제(`nested_tables_stay_small`).
+            for warning in &mut warnings[first_new..] {
+                if let super::MdWarning::ContainerTooDeep { section, paragraph, .. } = warning {
+                    *section = section_index;
+                    *paragraph = paragraph_index;
+                }
+            }
             if !markdown.trim().is_empty() {
                 if let Some(level) = current_continuation_level {
                     let indented = format_list_continuation(&markdown, level);
@@ -350,6 +359,15 @@ fn lossy_caption(
 /// 깊이 증가 삭제(`nested_tables_stay_small`).
 fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth: usize) -> String {
     if depth >= MAX_TABLE_NESTING {
+        // The place is filled in by `encode_body` once the top-level
+        // paragraph is drawn. 이것을 실패시키는 것: 경고 기록 삭제
+        // (`nested_tables_stay_small`).
+        warnings.push(super::MdWarning::ContainerTooDeep {
+            container: "table",
+            limit: MAX_TABLE_NESTING,
+            section: 0,
+            paragraph: 0,
+        });
         return TABLE_TOO_DEEP.to_string();
     }
     if table.rows.is_empty() {
@@ -1298,10 +1316,12 @@ mod tests {
     }
 
     /// Tables nested in cells stay small: the output of 24 nested tables is
-    /// bounded (each level past the limit is not drawn), while 8 nested
-    /// tables are drawn whole as before (the escaping doubles per level).
+    /// bounded (each level past the limit is not drawn, one warning with its
+    /// place), while 8 nested tables are drawn whole as before (the escaping
+    /// doubles per level) with no warning.
     ///
-    /// 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제.
+    /// 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제 · 경고 기록 삭제 ·
+    /// 경고 자리 채우기 삭제.
     #[test]
     fn nested_tables_stay_small() {
         use hwpforge_core::{Table, TableCell, TableRow};
@@ -1318,16 +1338,32 @@ mod tests {
             }
             let mut d = Document::new();
             d.add_section(Section::with_paragraphs(
-                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                vec![
+                    Paragraph::with_runs(
+                        vec![Run::text("x", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    ),
+                    Paragraph::with_runs(vec![run], ParaShapeIndex::new(0)),
+                ],
                 hwpforge_core::PageSettings::a4(),
             ));
-            encode_without_template(&d.validate().unwrap()).unwrap()
+            encode_without_template_report(&d.validate().unwrap()).unwrap()
         };
-        assert_eq!(nest(2), "| \\| core \\|<br>\\| --- \\| |\n| --- |");
-        let eight = nest(8);
+        assert_eq!(nest(2).0, "x\n\n| \\| core \\|<br>\\| --- \\| |\n| --- |");
+        let (eight, w) = nest(8);
         assert!(eight.contains("core") && !eight.contains(TABLE_TOO_DEEP));
-        let deep = nest(24);
+        assert!(w.is_empty());
+        let (deep, w) = nest(24);
         assert!(deep.contains(TABLE_TOO_DEEP) && !deep.contains("core"));
         assert!(deep.len() < 4 * eight.len(), "{} vs {}", deep.len(), eight.len());
+        assert_eq!(
+            w,
+            vec![super::super::MdWarning::ContainerTooDeep {
+                container: "table",
+                limit: MAX_TABLE_NESTING,
+                section: 0,
+                paragraph: 1,
+            }]
+        );
     }
 }

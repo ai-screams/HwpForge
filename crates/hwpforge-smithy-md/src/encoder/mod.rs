@@ -40,6 +40,21 @@ pub enum MdWarning {
         /// Why the reference was excluded.
         reason: crate::embed::ImageEmbedSkipReason,
     },
+    /// HWPX→MD (readable views): a container nested deeper than the view
+    /// draws was left out and a notice written in its place — styled past
+    /// 32 nested containers (`(중첩 깊이 초과로 생략)`), lossy past 8 tables
+    /// nested in cells (`(중첩 표 생략)`).
+    ContainerTooDeep {
+        /// What was left out: `"table"`, `"caption"`, `"shape text"`,
+        /// `"note"` or `"memo"`.
+        container: &'static str,
+        /// The nesting limit that was reached.
+        limit: usize,
+        /// Index of the section holding it.
+        section: usize,
+        /// Index of the section's top-level paragraph holding it.
+        paragraph: usize,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -53,6 +68,11 @@ impl core::fmt::Display for MdWarning {
             Self::ImageEmbedSkipped { src, reason } => {
                 write!(f, "image \"{src}\" not embedded ({reason}) — image dropped")
             }
+            Self::ContainerTooDeep { container, limit, section, paragraph } => write!(
+                f,
+                "{container} nested deeper than {limit} levels left out \
+                 (section {section}, paragraph {paragraph})"
+            ),
         }
     }
 }

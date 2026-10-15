@@ -1181,6 +1181,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "ContainerTooDeep",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

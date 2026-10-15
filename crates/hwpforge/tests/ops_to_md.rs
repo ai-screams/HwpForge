@@ -176,6 +176,50 @@ fn styled_keeps_the_span_and_so_has_nothing_to_report() {
     assert!(out.markdown.contains("colspan"), "the span must survive as HTML:\n{}", out.markdown);
 }
 
+/// Nine tables, each in the one cell of the next.
+fn nine_nested_tables() -> Vec<u8> {
+    use hwpforge::core::table::{Table, TableCell, TableRow};
+    use hwpforge::core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge::hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+    use hwpforge::hwpx::HwpxEncoder;
+
+    let mut run = Run::text("core", CharShapeIndex::new(0));
+    for _ in 0..9 {
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(80.0).expect("width"),
+        );
+        run = Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
+    }
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+        PageSettings::a4(),
+    ));
+    let mut store = HwpxStyleStore::new();
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+    HwpxEncoder::encode(&doc.validate().expect("validate"), &store, &ImageStore::new())
+        .expect("encode")
+}
+
+/// What the lossy view leaves out for depth reaches the caller as a
+/// warning: the ninth nested table is written as a notice and reported.
+/// 이것을 실패시키는 것: `md_warning_code` 의 갈래 삭제(코드가 UNCLASSIFIED) ·
+/// lossy 경고 전달 삭제.
+#[test]
+fn lossy_reports_the_nested_table_it_left_out() {
+    let out = to_md(&nine_nested_tables(), &MdExportOptions::default().with_mode(MdMode::Lossy))
+        .expect("to_md");
+    let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();
+    assert_eq!(codes.iter().filter(|c| *c == "CONTAINER_TOO_DEEP").count(), 1, "{codes:?}");
+    assert!(out.markdown.contains("(중첩 표 생략)"), "{}", out.markdown);
+}
+
 #[test]
 fn non_hwpx_input_is_a_decode_failure_in_every_mode() {
     for mode in [MdMode::Styled, MdMode::Lossy, MdMode::Lossless] {
