@@ -634,6 +634,7 @@ impl HwpxDecoder {
         let mut parsed_masterpages: std::collections::BTreeMap<usize, (usize, usize)> =
             std::collections::BTreeMap::new();
         let mut master_budget = CopyBudget::new(MASTER_PAGE_BUDGET);
+        let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
 
@@ -706,6 +707,11 @@ impl HwpxDecoder {
                 // 이것을 실패시키는 것: 공유를 손실로 보기(`shared_master_pages_are_kept`),
                 // 예산 없이 복제하기 · Core 일부만 세기(`a_master_page_part_is_read_once`),
                 // 거절도 과금하기(`copy_budget_charges_admitted_copies_only`).
+                // Named by a section, kept or not (r6 L1: a part refused by
+                // the budget is not also "referenced by no section").
+                // 이것을 실패시키는 것: 보관 맵으로 무참조를 판정하기
+                // (`a_refused_master_page_is_not_reported_unreferenced`).
+                named_masterpages.insert(number);
                 let cost = xml.len();
                 if !master_budget.admit(cost) {
                     warnings.push(lost(format!(
@@ -782,7 +788,7 @@ impl HwpxDecoder {
 
             document.add_section(section);
         }
-        for number in masterpage_xmls.keys().filter(|n| !parsed_masterpages.contains_key(*n)) {
+        for number in masterpage_xmls.keys().filter(|n| !named_masterpages.contains(*n)) {
             warnings.push(DecodeWarning::ContentLost {
                 part: format!("Contents/masterpage{number}.xml"),
                 path: ParagraphPath::default(),
@@ -1256,6 +1262,28 @@ mod tests {
             assert_eq!(lost.len(), 30 - kept, "{lost:?}");
             assert!(lost.iter().all(|m| m.contains("does not fit the master page budget")));
         }
+    }
+
+    /// Branch review r6 L1: a part its section names but the budget refuses
+    /// is reported once, as over the budget — not also as named by no
+    /// section.
+    /// 이것을 실패시키는 것: 무참조를 보관 맵으로 판정하기.
+    #[test]
+    fn a_refused_master_page_is_not_reported_unreferenced() {
+        let big = "가".repeat(1 << 20);
+        let bytes = master_pages_doc(&[Some(&big), Some(&big)]);
+        let own = r#"<hp:masterPage idRef="masterpage0"/>"#;
+        let mut pkg = crate::patch::RawPackage::read(&bytes).unwrap();
+        let xml = pkg.read_text_entry("Contents/section0.xml").unwrap();
+        // Section 0 fills the budget with its own part; section 1's part,
+        // named once, does not fit.
+        let copies = MASTER_PAGE_BUDGET / part_len(&bytes, 0);
+        pkg.replace_text_entry("Contents/section0.xml", xml.replace(own, &own.repeat(copies)));
+        let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+        assert!(decoded.document.sections()[1].master_pages.is_none());
+        let lost = lost_messages(&decoded);
+        assert_eq!(lost.len(), 1, "{lost:?}");
+        assert!(lost[0].contains("does not fit the master page budget"), "{lost:?}");
     }
 
     /// Branch review r3 H2 / r4 H2: a part named by three or five sections,
