@@ -219,23 +219,34 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
     paragraph_text_at(paragraph, warnings, 0)
 }
 
-/// How many tables a lossy table may sit inside. A table in a cell is
-/// written as cell text, escaped once more for every level (`\` doubles),
-/// so the output — and the time to build it — doubles per level; past this
-/// depth the inner table is replaced by [`TABLE_TOO_DEEP`]. No corpus
-/// document reaches it (lossy output unchanged across the corpus).
+/// How many tables a lossy table may sit inside; past this depth the inner
+/// table is replaced by [`TABLE_TOO_DEEP`]. No corpus document reaches it.
+/// The output stays linear in the depth below it: text in a cell is escaped
+/// once, where it is written, and a table in a cell is drawn cell-safe
+/// (`\|`, `<br>`) instead of being escaped again by every enclosing cell.
 const MAX_TABLE_NESTING: usize = 8;
 
 /// Written in place of a table nested deeper than [`MAX_TABLE_NESTING`].
 const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
 
-/// [`paragraph_text_markdown`] inside `depth` tables.
+/// [`paragraph_text_markdown`] inside `depth` tables. Inside a table
+/// (`depth > 0`) the result is cell text: every piece of text is escaped
+/// once here ([`escape_gfm_cell`]) and the cell writes it as it is.
 fn paragraph_text_at(
     paragraph: &Paragraph,
     warnings: &mut Vec<super::MdWarning>,
     depth: usize,
 ) -> String {
     let mut output = String::new();
+    // Text pushed through here is escaped in a cell; table and caption
+    // markup from the recursion is already cell-safe and pushed directly.
+    let text = |output: &mut String, piece: &str| {
+        if depth > 0 {
+            output.push_str(&escape_gfm_cell(piece));
+        } else {
+            output.push_str(piece);
+        }
+    };
 
     // A group is drawn as its children (WS): body, table cells and captions
     // come through here; the plain-text paths (notes, text boxes) do not.
@@ -249,23 +260,23 @@ fn paragraph_text_at(
             // §3a-A4.
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
-                    output.push_str(&cow);
+                    text(&mut output, &cow);
                 }
             }
             Part::Image(image) => {
                 if !output.is_empty() {
                     output.push(' ');
                 }
-                output.push_str(&format!("![{}]({})", image_alt_text(&image.path), image.path));
+                text(&mut output, &format!("![{}]({})", image_alt_text(&image.path), image.path));
                 output.push_str(&lossy_caption(image.caption.as_ref(), warnings, depth));
             }
             Part::Control(control) => match control {
                 // Only an allowed URL is written as a link (the text otherwise).
-                Control::Hyperlink { text, url } => {
+                Control::Hyperlink { text: label, url } => {
                     if super::link_url_allowed(url) {
-                        output.push_str(&format!("[{text}]({url})"));
+                        text(&mut output, &format!("[{label}]({url})"));
                     } else {
-                        output.push_str(text);
+                        text(&mut output, label);
                     }
                 }
                 Control::Footnote { paragraphs, .. } => {
@@ -274,7 +285,7 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    output.push_str(&format!("(footnote: {})", footnote.trim()));
+                    text(&mut output, &format!("(footnote: {})", footnote.trim()));
                 }
                 Control::Endnote { paragraphs, .. } => {
                     let endnote = paragraphs
@@ -282,7 +293,7 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    output.push_str(&format!("(endnote: {})", endnote.trim()));
+                    text(&mut output, &format!("(endnote: {})", endnote.trim()));
                 }
                 Control::TextBox { paragraphs, .. } => {
                     let body = paragraphs
@@ -290,10 +301,10 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    output.push_str(body.trim());
+                    text(&mut output, body.trim());
                 }
                 Control::Unknown { tag, .. } => {
-                    output.push_str(&format!("`[{tag}]`"));
+                    text(&mut output, &format!("`[{tag}]`"));
                 }
                 Control::Line { .. } => {
                     // Lines have no text content to render in lossy mode
@@ -306,27 +317,27 @@ fn paragraph_text_at(
                         .collect::<Vec<_>>()
                         .join(" ");
                     if !body.trim().is_empty() {
-                        output.push_str(body.trim());
+                        text(&mut output, body.trim());
                     }
                 }
                 Control::Dutmal { main_text, sub_text, .. } => {
-                    output.push_str(&format!("{main_text}({sub_text})"));
+                    text(&mut output, &format!("{main_text}({sub_text})"));
                 }
                 Control::Compose { compose_text, .. } => {
-                    output.push_str(compose_text);
+                    text(&mut output, compose_text);
                 }
                 Control::NewNumber { .. } | Control::PageHiding { .. } => {
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
                     // no-op (W2·W3).
                 }
                 Control::AutoNumber { num, format, .. } => {
-                    output.push_str(&super::auto_number_text(*num, format));
+                    text(&mut output, &super::auto_number_text(*num, format));
                 }
                 _ => {}
             },
             Part::Table(table) => {
                 if !output.is_empty() {
-                    output.push('\n');
+                    output.push_str(if depth > 0 { "<br>" } else { "\n" });
                 }
                 output.push_str(&table_to_markdown(table, warnings, depth));
                 output.push_str(&lossy_caption(table.caption.as_ref(), warnings, depth));
@@ -353,15 +364,21 @@ fn lossy_caption(
         .map(|p| paragraph_text_at(p, warnings, depth))
         .filter(|t| !t.trim().is_empty())
         .collect();
+    // In a cell the paragraph break is `<br><br>` (cell-safe, see
+    // [`paragraph_text_at`]).
+    let gap = if depth > 0 { "<br><br>" } else { "\n\n" };
     if text.is_empty() {
         String::new()
     } else {
-        format!("\n\n{}", text.join("\n\n"))
+        format!("{gap}{}", text.join(gap))
     }
 }
 
-/// A table inside `depth` tables. 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서
-/// 깊이 증가 삭제(`nested_tables_stay_small`).
+/// A table inside `depth` tables. Inside a table (`depth > 0`) it is drawn
+/// cell-safe — `\|` for its bars, `<br>` between its lines — around cell
+/// text that [`paragraph_text_at`] has already escaped, so no text is
+/// escaped twice. 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제 ·
+/// 칸 글자를 다시 escape 하기(`nested_tables_stay_small`).
 fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth: usize) -> String {
     if depth >= MAX_TABLE_NESTING {
         // The place is filled in by `encode_body` once the top-level
@@ -375,8 +392,9 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth:
         });
         return TABLE_TOO_DEEP.to_string();
     }
+    let (bar, line) = if depth > 0 { ("\\|", "<br>") } else { ("|", "\n") };
     if table.rows.is_empty() {
-        return "| |\n| --- |".to_string();
+        return format!("{bar} {bar}{line}{bar} --- {bar}");
     }
 
     // Warning-first: this renderer flattens merged regions into a plain GFM
@@ -398,13 +416,11 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth:
             row.cells
                 .iter()
                 .map(|cell| {
-                    let text = cell
-                        .paragraphs
+                    cell.paragraphs
                         .iter()
                         .map(|p| paragraph_text_at(p, warnings, depth + 1))
                         .collect::<Vec<_>>()
-                        .join(" ");
-                    escape_gfm_cell(&text)
+                        .join(" ")
                 })
                 .collect()
         })
@@ -413,19 +429,23 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth:
     let header = rows.first().cloned().unwrap_or_else(|| vec![String::new()]);
     let col_count = header.len().max(1);
 
+    let sep = format!(" {bar} ");
     let mut lines = Vec::new();
-    lines.push(format!("| {} |", header.join(" | ")));
-    lines.push(format!("| {} |", (0..col_count).map(|_| "---").collect::<Vec<_>>().join(" | ")));
+    lines.push(format!("{bar} {} {bar}", header.join(&sep)));
+    lines.push(format!(
+        "{bar} {} {bar}",
+        (0..col_count).map(|_| "---").collect::<Vec<_>>().join(&sep)
+    ));
 
     for row in rows.iter().skip(1) {
         if row.is_empty() {
-            lines.push("| |".to_string());
+            lines.push(format!("{bar} {bar}"));
         } else {
-            lines.push(format!("| {} |", row.join(" | ")));
+            lines.push(format!("{bar} {} {bar}", row.join(&sep)));
         }
     }
 
-    lines.join("\n")
+    lines.join(line)
 }
 
 fn image_alt_text(path: &str) -> String {
@@ -1322,8 +1342,7 @@ mod tests {
 
     /// Tables nested in cells stay small: the output of 24 nested tables is
     /// bounded (each level past the limit is not drawn, one warning with its
-    /// place), while 8 nested tables are drawn whole as before (the escaping
-    /// doubles per level) with no warning.
+    /// place), while 8 nested tables are drawn whole with no warning.
     ///
     /// 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제 · 경고 기록 삭제 ·
     /// 경고 자리 채우기 삭제.
@@ -1370,6 +1389,39 @@ mod tests {
                 paragraph: 1,
             }]
         );
+    }
+
+    /// Text in a nested table is escaped once, where it is written, so the
+    /// output grows linearly with the depth: 8 nested tables around 1,000
+    /// backslashes stay near 2,000 bytes (escaping per level would make it
+    /// 2^8 times that).
+    ///
+    /// 이것을 실패시키는 것: 칸 글자를 칸마다 다시 escape 하기 · 칸 안 표를
+    /// cell-safe 가 아닌 꼴(`|`, 줄바꿈)로 쓰기.
+    #[test]
+    fn nested_table_text_is_escaped_once() {
+        use hwpforge_core::{Table, TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let nest = |core: &str, n: usize| {
+            let mut run = Run::text(core, CharShapeIndex::new(0));
+            for _ in 0..n {
+                let cell = TableCell::new(
+                    vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                    u(1000),
+                );
+                run =
+                    Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
+            }
+            encode_without_template(&validated_document(vec![Paragraph::with_runs(
+                vec![run],
+                ParaShapeIndex::new(0),
+            )]))
+            .unwrap()
+        };
+        assert_eq!(nest("a\\b|c\nd", 1), "| a\\\\b\\|c<br>d |\n| --- |");
+        assert_eq!(nest("a\\b|c", 2), "| \\| a\\\\b\\|c \\|<br>\\| --- \\| |\n| --- |");
+        let deep = nest(&"\\".repeat(1000), MAX_TABLE_NESTING);
+        assert!(deep.len() < 2000 + 200, "{}", deep.len());
     }
 
     /// Lossy writes a link only for an allowed URL; otherwise its text.
