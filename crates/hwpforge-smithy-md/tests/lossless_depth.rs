@@ -88,7 +88,7 @@ fn boxes_around(n: usize, mut run: Run) -> Run {
 /// picture → caption → table path and for text boxes in text boxes.
 ///
 /// 이것을 실패시키는 것: 인코더의 깊이 검사 삭제 · 한도 비교 하나 어긋남(31·33) ·
-/// 빈 묶음·선의 자기 깊이 검사 각각 삭제.
+/// 빈 묶음·선·표의 자기 깊이 검사 각각 삭제.
 #[test]
 fn encoder_limits_nesting_depth() {
     // groups(n) is n groups and one picture: n + 1 containers.
@@ -127,6 +127,32 @@ fn encoder_limits_nesting_depth() {
             CharShapeIndex::new(0),
         )
     };
+    // A table counts itself even with no cell to carry its depth: inside 32
+    // notes (validation does not reach it there) a table without rows is
+    // the 33rd container; inside 32 text boxes a table with one row and no
+    // cell likewise.
+    let notes_around = |n: usize, mut run: Run| {
+        for _ in 0..n {
+            run = Run::control(Control::footnote(vec![para(vec![run])]), CharShapeIndex::new(0));
+        }
+        run
+    };
+    let rowless = || Run::table(Table::new(Vec::new()), CharShapeIndex::new(0));
+    let cell_less =
+        || Run::table(Table::new(vec![TableRow::new(Vec::new())]), CharShapeIndex::new(0));
+    for (name, deep) in [
+        ("rowless in notes", notes_around(LIMIT, rowless())),
+        ("cell-less in boxes", boxes_around(LIMIT, cell_less())),
+    ] {
+        let mut d = Document::new();
+        d.add_section(Section::with_paragraphs(vec![para(vec![deep])], PageSettings::a4()));
+        if let Ok(v) = d.validate() {
+            assert!(
+                matches!(MdEncoder::encode_lossless(&v), Err(MdError::UnsupportedStructure { .. })),
+                "{name}"
+            );
+        }
+    }
     for (name, leaf) in [
         ("group", Run::control(empty_group, CharShapeIndex::new(0))),
         ("line", Run::control(line, CharShapeIndex::new(0))),
