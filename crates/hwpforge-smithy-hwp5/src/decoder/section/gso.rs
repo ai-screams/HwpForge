@@ -95,6 +95,8 @@ pub(super) struct InlineGsoContext {
     current_para: Option<super::ParaBuf>,
     /// A shape inside this shape's text, collected the same way.
     inner: Option<Box<InlineGsoContext>>,
+    /// How many shapes' text this shape sits in (0 = not in a shape's text).
+    text_depth: u16,
     /// Outline and fill from the scope's first `ShapeComponent`.
     look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// A rectangle's corner ratio read without a look to carry it.
@@ -631,6 +633,7 @@ impl InlineGsoContext {
             paragraphs: Vec::new(),
             current_para: None,
             inner: None,
+            text_depth: 0,
             look: None,
             unread_corner_ratio: 0,
             original_size: None,
@@ -732,7 +735,22 @@ impl InlineGsoContext {
             }
             TagId::CtrlHeader if in_paragraph => {
                 let ctrl_id = super::parse_ctrl_id(&record.data);
-                if ctrl_id == CTRL_ID_GSO {
+                if ctrl_id == CTRL_ID_GSO && self.text_depth >= super::SHAPE_TEXT_MAX_DEPTH {
+                    // Branch review B-M3: shapes nested in shapes' text are
+                    // collected recursively; past the budget the shape is
+                    // skipped (its records are taken below and ignored) and
+                    // reported, rather than recursing without bound.
+                    // 이것을 실패시키는 것: 이 상한 삭제(`shape_text_nesting_is_capped`).
+                    warnings.push(Hwp5Warning::ContentLost {
+                        kind: "shape_text_depth".to_string(),
+                        reason: format!(
+                            "a shape nested more than {} levels deep in shapes' text is not read",
+                            super::SHAPE_TEXT_MAX_DEPTH
+                        ),
+                        location: format!("record level {level}"),
+                    });
+                } else if ctrl_id == CTRL_ID_GSO {
+                    let text_depth = self.text_depth + 1;
                     self.inner = Some(Box::new(InlineGsoContext::new(
                         level,
                         ctrl_id,
@@ -740,6 +758,9 @@ impl InlineGsoContext {
                         super::ctrl_header_properties_raw(&record.data),
                         Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                     )));
+                    if let Some(inner) = self.inner.as_mut() {
+                        inner.text_depth = text_depth;
+                    }
                 } else if let Some(buf) = self.current_para.as_mut() {
                     buf.controls.push(
                         BodyTextParserState::typed_inline_family_control(ctrl_id, &record.data)

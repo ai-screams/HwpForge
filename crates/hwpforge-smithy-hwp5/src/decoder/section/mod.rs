@@ -74,6 +74,12 @@ const SHAPE_COMPONENT_TYPE_TEXTART: [u8; 4] = [0x74, 0x61, 0x74, 0x24]; // "$tat
 /// warning and degrade rather than recurse or panic.
 const GSO_GROUP_MAX_DEPTH: u16 = 16;
 
+/// Maximum nesting of shapes in shapes' text (a text box in a text box …),
+/// the same budget as [`GSO_GROUP_MAX_DEPTH`]: the collection recurses once
+/// per level, so a stream nesting them without bound would recurse without
+/// bound. A deeper shape is skipped and reported (`shape_text_depth`).
+pub(super) const SHAPE_TEXT_MAX_DEPTH: u16 = GSO_GROUP_MAX_DEPTH;
+
 /// Maximum nesting depth of `tbl ` contexts on [`BodyTextParserState::table_stack`].
 ///
 /// `table_stack` grows on every `tbl ` CtrlHeader (top-level or re-entered
@@ -3831,6 +3837,59 @@ mod tests {
             }
         }
         stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &[0u8; 9]));
+    }
+
+    /// A chain of `depth` text boxes, each holding the next in its text, the
+    /// last holding "leaf".
+    fn nested_text_rects(stream: &mut Vec<u8>, level: u16, depth: usize) {
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            level,
+            &gso_ctrl_header_data(0, 0, 9000, 3000),
+        ));
+        stream.extend(make_record(TagId::ShapeComponent, level + 1, b"cer$cer$"));
+        stream.extend(make_record(TagId::ListHeader, level + 2, &[1, 0, 0, 0, 0, 0]));
+        stream.extend(make_record(TagId::ParaHeader, level + 2, &para_header_data(0, 0)));
+        if depth > 1 {
+            stream.extend(make_record(
+                TagId::ParaText,
+                level + 3,
+                &para_text_with_control_ref("", ""),
+            ));
+            nested_text_rects(stream, level + 3, depth - 1);
+        } else {
+            stream.extend(make_record(TagId::ParaText, level + 3, &para_text_data("leaf")));
+        }
+        stream.extend(make_record(TagId::ShapeComponentRect, level + 2, &[0u8; 9]));
+    }
+
+    /// Branch review B-M3: text boxes nested in text boxes are read up to
+    /// the budget; a deeper one is skipped and reported.
+    /// 이것을 실패시키는 것: 상한 삭제(전부 읽힘, 보고 없음) · 상한을 하나 낮추기.
+    #[test]
+    fn shape_text_nesting_is_capped() {
+        let read = |depth: usize| {
+            let mut stream = Vec::new();
+            stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+            stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+            nested_text_rects(&mut stream, 0, depth);
+            let result = parse_body_text(&stream, &version()).unwrap();
+            let mut boxes = 0;
+            let mut at = result.paragraphs[0].controls.first();
+            while let Some(Hwp5Control::TextBox(tb)) = at {
+                boxes += 1;
+                at = tb.paragraphs.first().and_then(|p| p.controls.first());
+            }
+            let capped = result.warnings.iter().any(
+                |w| matches!(w, Hwp5Warning::ContentLost { kind, .. } if kind == "shape_text_depth"),
+            );
+            (boxes, capped)
+        };
+        // The body box's text context is depth 0 and the first shape in its
+        // text opens depth 1, so `SHAPE_TEXT_MAX_DEPTH` + 2 boxes are read.
+        let max = usize::from(SHAPE_TEXT_MAX_DEPTH) + 2;
+        assert_eq!(read(max), (max, false));
+        assert_eq!(read(max + 5), (max, true));
     }
 
     fn text_box_texts(control: &Hwp5Control) -> Vec<String> {
