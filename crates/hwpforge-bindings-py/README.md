@@ -107,7 +107,7 @@ that has to decode the document first can also raise `DECODE_FAILED`.
 | `stamp_plan()`                                                    | `StampPlanReport`                  | `DECODE_FAILED`                                                                                    |
 | `to_json(*, styles=True)`                                         | `TextResult[ToJsonReport]`         | `DECODE_FAILED`                                                                                    |
 | `export_section(*, section, styles=True)`                         | `TextResult[ExportSectionReport]`  | `SECTION_OUT_OF_RANGE`                                                                             |
-| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"` refuses to lose anything)                                       |
+| `to_md(*, mode="styled")`                                         | `TextResult[ToMdReport]`           | `ENCODE_FAILED` (`mode="lossless"` refuses what it cannot carry)                                   |
 | `to_pdf(*, font_dirs, discovery, degraded, partial_cache_reject)` | `BytesResult[ToPdfReport]`         | `PDF_RENDER_FAILED`                                                                                |
 | `fill(values)`                                                    | `DocumentResult[FillReport]`       | `FIELD_NOT_FOUND`, `FIELD_NOT_FILLABLE`, `EMPTY_FIELD_VALUE`                                       |
 | `set_cell(*, table, at, right_of, below, text, specs)`            | `DocumentResult[SetCellReport]`    | `TABLE_NOT_FOUND`, `CELL_NOT_FOUND`, `INPUT_ENTRIES_NOT_CARRIED`                                   |

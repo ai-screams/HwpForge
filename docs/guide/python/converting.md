@@ -46,7 +46,7 @@ print(lossy.text[:200])
 print(lossy.report["mode"], list(lossy.report["images"].keys()))
 ```
 
-- `mode="lossless"`는 무언가를 잃어야 하면 `ENCODE_FAILED`로 거부합니다.
+- `mode="lossless"`는 [보존 범위](../markdown-bridge.md#lossless-보존-범위) 안의 값을 담고, 담을 수 없는 개체가 있으면 `ENCODE_FAILED`로 거부합니다. 보존 범위 밖의 값(문단 스타일, 머리말 등)은 거부 없이 빠집니다.
 - 보고서의 `images`는 문서가 참조한 이미지의 `{키: 바이트}`입니다. Markdown 텍스트가 그 키를 가리키므로, 파일로 저장할 때 같은 이름으로 옆에 써 두면 됩니다.
 
 ## `to_json` · `from_json` — 전체 문서를 JSON으로
