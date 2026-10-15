@@ -109,6 +109,8 @@ enum OpenNode {
     Footnote(FootnoteNode),
     UnknownControl(UnknownControlNode),
     Group(Box<GroupNode>),
+    Picture(Box<PictureNode>),
+    Caption(Box<hwpforge_core::caption::Caption>),
 }
 
 impl OpenNode {
@@ -125,6 +127,8 @@ impl OpenNode {
             Self::Footnote(_) => "footnote",
             Self::UnknownControl(_) => "control",
             Self::Group(_) => "group",
+            Self::Picture(_) => "img",
+            Self::Caption(_) => "caption",
         }
     }
 }
@@ -205,6 +209,13 @@ struct GroupNode {
     control: Control,
 }
 
+/// An open `<img>` (one with a caption child).
+#[derive(Debug)]
+struct PictureNode {
+    char_shape_id: Option<CharShapeIndex>,
+    image: Image,
+}
+
 #[derive(Debug)]
 struct UnknownControlNode {
     char_shape_id: CharShapeIndex,
@@ -259,6 +270,11 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
             paragraphs: Vec::new(),
         })),
         "group" => Ok(OpenNode::Group(Box::new(parse_group(start, stack)?))),
+        "img" => {
+            let (char_shape_id, image) = parse_picture(start, stack)?;
+            Ok(OpenNode::Picture(Box::new(PictureNode { char_shape_id, image })))
+        }
+        "caption" => Ok(OpenNode::Caption(Box::new(parse_caption(start)?))),
         "control" => Ok(OpenNode::UnknownControl(UnknownControlNode {
             char_shape_id: parse_index_attr(start, "control", "data-char-shape")?,
             kind: required_attr(start, "control", "data-kind")?,
@@ -277,14 +293,15 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
     match tag {
         "img" => {
             let (char_shape_id, image) = parse_picture(empty, stack)?;
-            match char_shape_id {
-                Some(cs) => push_run_to_parent(stack, Run::image(image, cs)),
-                None => push_group_child(stack, GroupChild::Picture(image)),
-            }
+            attach_picture(PictureNode { char_shape_id, image }, stack)
         }
         "group" => {
             let node = parse_group(empty, stack)?;
             attach_group(node, stack)
+        }
+        "caption" => {
+            let caption = parse_caption(empty)?;
+            attach_caption(caption, stack)
         }
         "span" => {
             let char_shape_id = parse_index_attr(empty, "span", "data-char-shape")?;
@@ -312,7 +329,7 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
     let parent = stack.last().map(OpenNode::tag_name);
     let valid = match tag {
         "section" => parent.is_none(),
-        "p" => matches!(parent, Some("section" | "td" | "textbox" | "footnote")),
+        "p" => matches!(parent, Some("section" | "td" | "textbox" | "footnote" | "caption")),
         "table" => matches!(parent, Some("p")),
         "tr" => matches!(parent, Some("table")),
         "td" => matches!(parent, Some("tr")),
@@ -525,6 +542,8 @@ fn attach_closed_node(
             )
         }
         OpenNode::Group(group) => attach_group(*group, stack),
+        OpenNode::Picture(picture) => attach_picture(*picture, stack),
+        OpenNode::Caption(caption) => attach_caption(*caption, stack),
         OpenNode::UnknownControl(control) => push_run_to_parent(
             stack,
             Run::control(
@@ -536,6 +555,59 @@ fn attach_closed_node(
             ),
         ),
     }
+}
+
+/// Hands a finished picture to its parent: a run under `<p>`, a child under
+/// `<group>`.
+fn attach_picture(picture: PictureNode, stack: &mut [OpenNode]) -> MdResult<()> {
+    match picture.char_shape_id {
+        Some(cs) => push_run_to_parent(stack, Run::image(picture.image, cs)),
+        None => push_group_child(stack, GroupChild::Picture(picture.image)),
+    }
+}
+
+/// Hands a finished caption to its `<img>`; a second caption is refused.
+/// 이것을 실패시키는 것: 두 번째 caption 거부 삭제(`picture_caption_grammar_errors`).
+fn attach_caption(
+    caption: hwpforge_core::caption::Caption,
+    stack: &mut [OpenNode],
+) -> MdResult<()> {
+    let Some(OpenNode::Picture(picture)) = stack.last_mut() else {
+        return Err(MdError::LosslessParse {
+            detail: "<caption> must be inside <img>".to_string(),
+        });
+    };
+    if picture.image.caption.is_some() {
+        return Err(MdError::LosslessParse { detail: "<img> has two <caption>s".to_string() });
+    }
+    picture.image.caption = Some(caption);
+    Ok(())
+}
+
+/// `<caption>` (P5b W2): side and gap required, width optional (missing =
+/// none, kept apart from zero), the full-size flag and saved width.
+/// 이것을 실패시키는 것: 측 기본값화 · 너비 없음과 0 혼동
+/// (`picture_caption_round_trips`, `picture_caption_grammar_errors`).
+fn parse_caption(start: &BytesStart<'_>) -> MdResult<hwpforge_core::caption::Caption> {
+    // Its place (inside `<img>`) is checked when it is attached.
+    let attrs = Attrs::read(start, "caption", &g::caption_attributes())?;
+    let side = attrs.spelled(g::CAPTION_SIDE, g::caption_side_from)?;
+    let mut caption = hwpforge_core::caption::Caption::new(Vec::new(), side)
+        .with_gap(attrs.unit(g::CAPTION_GAP)?)
+        .with_full_size(match attrs.get(g::CAPTION_FULL_SIZE) {
+            None => false,
+            Some(_) => attrs.flag(g::CAPTION_FULL_SIZE)?,
+        })
+        .with_last_width(match attrs.get(g::CAPTION_LAST_WIDTH) {
+            None => None,
+            Some(_) => Some(attrs.unit(g::CAPTION_LAST_WIDTH)?),
+        });
+    if attrs.get(g::WIDTH).is_some() {
+        caption = caption.with_width(attrs.unit(g::WIDTH)?);
+    } else if attrs.get(g::BOX_MM[0]).is_some() {
+        return Err(MdError::LosslessMissingAttribute { element: "caption", attribute: g::WIDTH });
+    }
+    Ok(caption)
 }
 
 /// Hands a finished group to its parent: a run under `<p>`, a child under
@@ -811,6 +883,10 @@ fn push_paragraph_to_parent(stack: &mut [OpenNode], paragraph: Paragraph) -> MdR
             }
             OpenNode::Footnote(footnote) => {
                 footnote.paragraphs.push(paragraph);
+                Ok(())
+            }
+            OpenNode::Caption(caption) => {
+                caption.paragraphs.push(paragraph);
                 Ok(())
             }
             _ => Err(MdError::LosslessParse {

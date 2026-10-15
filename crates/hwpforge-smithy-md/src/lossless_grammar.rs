@@ -3,6 +3,7 @@
 //! escaping and the color reader. The encoder writes and the decoder reads
 //! through these same tables, so the two cannot drift apart.
 
+use hwpforge_core::caption::CaptionSide;
 use hwpforge_core::placement::{
     HorzAlign, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
 };
@@ -80,6 +81,49 @@ pub(crate) const CROP: [&str; 4] =
 /// EXTENT (`Image::image_extent`): both or none.
 pub(crate) const EXTENT: [&str; 2] =
     ["data-image-extent-width-unit", "data-image-extent-height-unit"];
+
+/// The caption element (`<caption>`): side and gap required, the width
+/// (BOX's `data-width-unit`) optional, then the full-size flag and saved
+/// width when set.
+pub(crate) const CAPTION_SIDE: &str = "data-side";
+pub(crate) const CAPTION_GAP: &str = "data-gap-unit";
+pub(crate) const CAPTION_GAP_MM: &str = "data-gap-mm";
+pub(crate) const CAPTION_FULL_SIZE: &str = "data-full-size";
+pub(crate) const CAPTION_LAST_WIDTH: &str = "data-last-width-unit";
+
+/// Every attribute `<caption>` may carry.
+pub(crate) fn caption_attributes() -> Vec<&'static str> {
+    vec![
+        CAPTION_SIDE,
+        CAPTION_GAP,
+        CAPTION_GAP_MM,
+        WIDTH,
+        BOX_MM[0],
+        CAPTION_FULL_SIZE,
+        CAPTION_LAST_WIDTH,
+    ]
+}
+
+pub(crate) fn caption_side_str(v: CaptionSide) -> MdResult<&'static str> {
+    Ok(match v {
+        CaptionSide::Left => "Left",
+        CaptionSide::Right => "Right",
+        CaptionSide::Top => "Top",
+        CaptionSide::Bottom => "Bottom",
+        #[allow(unreachable_patterns)]
+        _ => return Err(unsupported("caption side")),
+    })
+}
+
+pub(crate) fn caption_side_from(s: &str) -> Option<CaptionSide> {
+    Some(match s {
+        "Left" => CaptionSide::Left,
+        "Right" => CaptionSide::Right,
+        "Top" => CaptionSide::Top,
+        "Bottom" => CaptionSide::Bottom,
+        _ => return None,
+    })
+}
 
 /// A table cell's line wrap (`<td>`), written only when it is not the
 /// default break.

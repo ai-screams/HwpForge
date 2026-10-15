@@ -137,24 +137,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 ));
             }
             RunContent::Image(image) => {
-                refuse_out_margin(image.placement.as_ref())?;
-                let frame = frame_attrs(&image.frame);
-                // The picture's link, when it has one (`Image::hyperlink`).
-                let link = match image.hyperlink.as_deref() {
-                    Some(url) => format!(" data-hyperlink=\"{}\"", g::escape_attr(url)?),
-                    None => String::new(),
-                };
-                out.push_str(&format!(
-                    "<img data-char-shape=\"{}\" src=\"{}\" alt=\"{}\" data-format=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\"{frame}{link} />",
-                    run.char_shape_id.get(),
-                    g::escape_attr(&image.path)?,
-                    g::escape_attr(&image.path)?,
-                    g::escape_attr(&image.format.to_string())?,
-                    image.width.as_i32(),
-                    image.height.as_i32(),
-                    image.width.to_mm(),
-                    image.height.to_mm()
-                ));
+                out.push_str(&encode_picture(image, Some(run.char_shape_id.get()))?);
             }
             RunContent::Control(control) => match control.as_ref() {
                 Control::Hyperlink { text, url } => {
@@ -564,7 +547,7 @@ fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> 
     out.push('>');
     for child in children {
         match child {
-            GroupChild::Picture(image) => out.push_str(&encode_group_picture(image)?),
+            GroupChild::Picture(image) => out.push_str(&encode_picture(image, None)?),
             GroupChild::Shape(shape @ Control::Group { .. }) => {
                 out.push_str(&encode_group(shape, None)?)
             }
@@ -591,23 +574,31 @@ fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> 
     Ok(out)
 }
 
-/// A picture inside a group: every field of the picture, or refused.
-fn encode_group_picture(image: &Image) -> MdResult<String> {
-    // 이것을 실패시키는 것: 이 거부를 지우기(`group_picture_caption_is_refused`).
-    if image.caption.is_some() {
+/// A picture (`<img>`): `char_shape` under a paragraph, `None` as a group
+/// child. Every field of the picture is written; its caption follows as a
+/// `<caption>` child.
+fn encode_picture(image: &Image, char_shape: Option<usize>) -> MdResult<String> {
+    // A group picture's caption has no place yet (W5 places captions in
+    // groups along with shapes). 이것을 실패시키는 것: 이 거부를 지우기
+    // (`group_with_what_it_cannot_hold_is_refused`).
+    if char_shape.is_none() && image.caption.is_some() {
         return Err(MdError::UnsupportedStructure {
             detail: "group picture caption is not carried by the lossless encoder".to_string(),
         });
     }
-    let mut out = format!(
-        "<img {}=\"{}\" {}=\"{}\" {}=\"{}\"",
+    let mut out = String::from("<img");
+    if let Some(cs) = char_shape {
+        out.push_str(&format!(" {}=\"{cs}\"", g::CHAR_SHAPE));
+    }
+    out.push_str(&format!(
+        " {}=\"{}\" {}=\"{}\" {}=\"{}\"",
         g::SRC,
         g::escape_attr(&image.path)?,
         g::ALT,
         g::escape_attr(&image.path)?,
         g::FORMAT,
         g::escape_attr(&image.format.to_string())?
-    );
+    ));
     // The Display form lower-cases an unknown format (`BIN0001` → `bin0001`),
     // so its raw spelling goes along. 이것을 실패시키는 것: 이 방출 삭제
     // (`group_round_trips_every_field` 의 `BIN0001`).
@@ -635,8 +626,118 @@ fn encode_group_picture(image: &Image) -> MdResult<String> {
     if let Some(url) = image.hyperlink.as_deref() {
         out.push_str(&format!(" {}=\"{}\"", g::HYPERLINK, g::escape_attr(url)?));
     }
-    out.push_str(" />");
+    match &image.caption {
+        None => out.push_str(" />"),
+        Some(caption) => {
+            out.push('>');
+            out.push_str(&encode_caption(caption)?);
+            out.push_str("</img>");
+        }
+    }
     Ok(out)
+}
+
+/// A caption (`<caption>`): side, gap, width, full-size flag and saved
+/// width, then its paragraphs — an exact subtree, so what this wave cannot
+/// write exactly inside it refuses the document.
+fn encode_caption(caption: &hwpforge_core::caption::Caption) -> MdResult<String> {
+    admit_exact(&caption.paragraphs)?;
+    let mut out = format!(
+        "<caption {}=\"{}\" {}=\"{}\" {}=\"{}\"",
+        g::CAPTION_SIDE,
+        g::caption_side_str(caption.side)?,
+        g::CAPTION_GAP,
+        caption.gap.as_i32(),
+        g::CAPTION_GAP_MM,
+        g::mm(caption.gap)
+    );
+    if let Some(w) = caption.width {
+        out.push_str(&format!(
+            " {}=\"{}\" {}=\"{}\"",
+            g::WIDTH,
+            w.as_i32(),
+            g::BOX_MM[0],
+            g::mm(w)
+        ));
+    }
+    if caption.full_size {
+        out.push_str(&format!(" {}=\"true\"", g::CAPTION_FULL_SIZE));
+    }
+    if let Some(w) = caption.last_width {
+        out.push_str(&format!(" {}=\"{}\"", g::CAPTION_LAST_WIDTH, w.as_i32()));
+    }
+    if caption.paragraphs.is_empty() {
+        out.push_str(" />");
+        return Ok(out);
+    }
+    out.push('>');
+    for paragraph in &caption.paragraphs {
+        out.push_str(&encode_paragraph(paragraph)?);
+    }
+    out.push_str("</caption>");
+    Ok(out)
+}
+
+/// The admission of an exact subtree (a picture caption): the objects it
+/// holds at any depth must be ones this grammar writes exactly — pictures
+/// and groups — and no list may be empty where the decoder would make
+/// content up (a paragraph without runs, a table without rows, a cell or a
+/// note without paragraphs). Checked before anything is written, so a
+/// later comparison of paragraphs by projection cannot hide a lost object.
+/// 이것을 실패시키는 것: 도형 거부 삭제 · 빈 목록 거부 각각 삭제
+/// (`picture_caption_admission`).
+fn admit_exact(paragraphs: &[Paragraph]) -> MdResult<()> {
+    let refuse = |what: &str| {
+        Err(MdError::UnsupportedStructure {
+            detail: format!(
+                "{what} inside a picture caption is not carried by the lossless encoder"
+            ),
+        })
+    };
+    for p in paragraphs {
+        if p.runs.is_empty() {
+            return refuse("a paragraph without runs");
+        }
+        for run in &p.runs {
+            match &run.content {
+                RunContent::Image(image) => {
+                    if let Some(c) = &image.caption {
+                        admit_exact(&c.paragraphs)?;
+                    }
+                }
+                RunContent::Table(t) => {
+                    if t.rows.is_empty() {
+                        return refuse("a table without rows");
+                    }
+                    for cell in t.rows.iter().flat_map(|r| &r.cells) {
+                        if cell.paragraphs.is_empty() {
+                            return refuse("a cell without paragraphs");
+                        }
+                        admit_exact(&cell.paragraphs)?;
+                    }
+                }
+                RunContent::Control(c) => match c.as_ref() {
+                    Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                        if paragraphs.is_empty() {
+                            return refuse("a note without paragraphs");
+                        }
+                        admit_exact(paragraphs)?;
+                    }
+                    Control::Line { .. }
+                    | Control::Rect { .. }
+                    | Control::Ellipse { .. }
+                    | Control::Arc { .. }
+                    | Control::Polygon { .. }
+                    | Control::Curve { .. }
+                    | Control::ConnectLine { .. }
+                    | Control::TextBox { .. } => return refuse(c.kind_name()),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn escape_html(input: &str) -> String {
@@ -717,12 +818,12 @@ mod tests {
         ));
         assert!(encode_lossless(&doc(None)).is_ok());
     }
-    /// S18: a picture or a text box with an outer margin is refused; without
-    /// one it is written.
+    /// S18: a text box with an outer margin is refused; without one it is
+    /// written. A picture's margin round-trips (W2).
     ///
-    /// 이것을 실패시키는 것: 그림·글상자 거부를 각각 지우기.
+    /// 이것을 실패시키는 것: 글상자 거부 지우기 · 그림 바깥 여백 방출 삭제.
     #[test]
-    fn object_outer_margin_is_refused() {
+    fn object_outer_margin_is_carried_or_refused() {
         use hwpforge_core::placement::ObjectPlacement;
         use hwpforge_core::table::TableMargin;
         let with_margin = |bottom: i32| {
@@ -742,14 +843,12 @@ mod tests {
         };
         for bottom in [140, 0] {
             let unit = HwpUnit::new(3000).unwrap();
+            // A picture's outer margin is carried since W2.
             let image = Image::new("BinData/a.png", unit, unit, ImageFormat::Png)
                 .with_placement(with_margin(bottom));
-            let r = encode_lossless(&doc(Run::image(image, CharShapeIndex::new(0))));
-            assert_eq!(
-                matches!(r, Err(MdError::UnsupportedStructure { .. })),
-                bottom != 0,
-                "image"
-            );
+            let run = Run::image(image, CharShapeIndex::new(0));
+            let back = round_trip(&doc(run.clone()));
+            assert_eq!(back.sections()[0].paragraphs[0].runs[0], run, "image");
             let inner = Paragraph::with_runs(
                 vec![Run::text("box", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
