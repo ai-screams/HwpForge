@@ -135,8 +135,11 @@ fn encode_paragraph(
                     + &lossy_caption(table.caption.as_ref(), warnings, 0);
             }
             RunContent::Image(image) => {
-                return format!("![{}]({})", image_alt_text(&image.path), image.path)
-                    + &lossy_caption(image.caption.as_ref(), warnings, 0);
+                return format!(
+                    "![{}]({})",
+                    super::escape_inline_markup(&image_alt_text(&image.path), true, false, None),
+                    super::link_destination(&image.path)
+                ) + &lossy_caption(image.caption.as_ref(), warnings, 0);
             }
             _ => {}
         }
@@ -230,21 +233,26 @@ const MAX_TABLE_NESTING: usize = 8;
 const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
 
 /// [`paragraph_text_markdown`] inside `depth` tables. Inside a table
-/// (`depth > 0`) the result is cell text: every piece of text is escaped
-/// once here ([`escape_gfm_cell`]) and the cell writes it as it is.
+/// (`depth > 0`) the result is cell text, escaped once here and written by
+/// the cell as it is.
+///
+/// The document's text is gathered in `pending` and escaped
+/// ([`super::escape_inline_markup`]) when markup follows it or the paragraph
+/// ends, so a sequence split across runs (`[a]` then `(javascript:…)`) is
+/// judged whole, and against the markup's first character.
 fn paragraph_text_at(
     paragraph: &Paragraph,
     warnings: &mut Vec<super::MdWarning>,
     depth: usize,
 ) -> String {
+    let cell = depth > 0;
     let mut output = String::new();
-    // Text pushed through here is escaped in a cell; table and caption
-    // markup from the recursion is already cell-safe and pushed directly.
-    let text = |output: &mut String, piece: &str| {
-        if depth > 0 {
-            output.push_str(&escape_gfm_cell(piece));
-        } else {
-            output.push_str(piece);
+    let mut pending = String::new();
+    // Writes the gathered text, judged against `after`.
+    let flush = |output: &mut String, pending: &mut String, after: Option<char>| {
+        if !pending.is_empty() {
+            output.push_str(&super::escape_inline_markup(pending, false, cell, after));
+            pending.clear();
         }
     };
 
@@ -260,27 +268,36 @@ fn paragraph_text_at(
             // §3a-A4.
             Part::Text(content) => {
                 if let Some(cow) = content.plain_text() {
-                    text(&mut output, &cow);
+                    pending.push_str(&cow);
                 }
             }
             Part::Image(image) => {
-                if !output.is_empty() {
+                let sep = !output.is_empty() || !pending.is_empty();
+                flush(&mut output, &mut pending, Some(' '));
+                if sep {
                     output.push(' ');
                 }
-                text(&mut output, &format!("![{}]({})", image_alt_text(&image.path), image.path));
+                let alt =
+                    super::escape_inline_markup(&image_alt_text(&image.path), true, cell, None);
+                let path = super::link_destination(&image.path);
+                let path = if cell { escape_gfm_cell(&path) } else { path };
+                output.push_str(&format!("![{alt}]({path})"));
                 output.push_str(&lossy_caption(image.caption.as_ref(), warnings, depth));
             }
             Part::Control(control) => match control {
                 // Only an allowed URL is written as a link (the text otherwise).
                 // Its label escapes `\`, `[` and `]`, so it cannot close the
-                // link early and start another (`a](javascript:…)[b`).
+                // link early and start another (`a](javascript:…)[b`), and its
+                // destination cannot end early.
                 Control::Hyperlink { text: label, url } => {
                     if super::link_url_allowed(url) {
-                        let label =
-                            label.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
-                        text(&mut output, &format!("[{label}]({url})"));
+                        flush(&mut output, &mut pending, Some('['));
+                        let label = super::escape_inline_markup(label, true, cell, None);
+                        let url = super::link_destination(url);
+                        let url = if cell { escape_gfm_cell(&url) } else { url };
+                        output.push_str(&format!("[{label}]({url})"));
                     } else {
-                        text(&mut output, label);
+                        pending.push_str(label);
                     }
                 }
                 Control::Footnote { paragraphs, .. } => {
@@ -289,7 +306,7 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    text(&mut output, &format!("(footnote: {})", footnote.trim()));
+                    pending.push_str(&format!("(footnote: {})", footnote.trim()));
                 }
                 Control::Endnote { paragraphs, .. } => {
                     let endnote = paragraphs
@@ -297,7 +314,7 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    text(&mut output, &format!("(endnote: {})", endnote.trim()));
+                    pending.push_str(&format!("(endnote: {})", endnote.trim()));
                 }
                 Control::TextBox { paragraphs, .. } => {
                     let body = paragraphs
@@ -305,10 +322,12 @@ fn paragraph_text_at(
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    text(&mut output, body.trim());
+                    pending.push_str(body.trim());
                 }
                 Control::Unknown { tag, .. } => {
-                    text(&mut output, &format!("`[{tag}]`"));
+                    flush(&mut output, &mut pending, Some('`'));
+                    let code = format!("`[{tag}]`");
+                    output.push_str(&if cell { escape_gfm_cell(&code) } else { code });
                 }
                 Control::Line { .. } => {
                     // Lines have no text content to render in lossy mode
@@ -321,33 +340,36 @@ fn paragraph_text_at(
                         .collect::<Vec<_>>()
                         .join(" ");
                     if !body.trim().is_empty() {
-                        text(&mut output, body.trim());
+                        pending.push_str(body.trim());
                     }
                 }
                 Control::Dutmal { main_text, sub_text, .. } => {
-                    text(&mut output, &format!("{main_text}({sub_text})"));
+                    pending.push_str(&format!("{main_text}({sub_text})"));
                 }
                 Control::Compose { compose_text, .. } => {
-                    text(&mut output, compose_text);
+                    pending.push_str(compose_text);
                 }
                 Control::NewNumber { .. } | Control::PageHiding { .. } => {
                     // 번호 재시작·감추기 지시 — 본문 텍스트 없음, 명시적
                     // no-op (W2·W3).
                 }
                 Control::AutoNumber { num, format, .. } => {
-                    text(&mut output, &super::auto_number_text(*num, format));
+                    pending.push_str(&super::auto_number_text(*num, format));
                 }
                 _ => {}
             },
             Part::Table(table) => {
-                if !output.is_empty() {
-                    output.push_str(if depth > 0 { "<br>" } else { "\n" });
+                let sep = !output.is_empty() || !pending.is_empty();
+                flush(&mut output, &mut pending, Some(if cell { '<' } else { '\n' }));
+                if sep {
+                    output.push_str(if cell { "<br>" } else { "\n" });
                 }
                 output.push_str(&table_to_markdown(table, warnings, depth));
                 output.push_str(&lossy_caption(table.caption.as_ref(), warnings, depth));
             }
         }
     }
+    flush(&mut output, &mut pending, None);
 
     output
 }
@@ -1428,6 +1450,105 @@ mod tests {
         assert!(deep.len() < 2000 + 200, "{}", deep.len());
     }
 
+    /// Lossy escapes the document's text only where CommonMark would read
+    /// markup — raw HTML and autolinks (`<` before printable ASCII), entity
+    /// references, inline link and image labels (`](`), link reference
+    /// definitions — judged across runs, and keeps the rest as it is.
+    ///
+    /// 이것을 실패시키는 것: 규칙(`<`·`&`·`](`·줄 머리 `[…]:`) 하나씩 삭제 · 역슬래시
+    /// 겹치기 삭제 · run 마다 따로 판정(모아 두기 삭제) · 칸에서 두 번 escape ·
+    /// 다음 마크업 첫 글자를 보지 않기 · 그림 alt·경로 escape 삭제.
+    #[test]
+    fn lossy_text_escapes_only_markup() {
+        let body = |runs: Vec<Run>| {
+            encode_without_template(&validated_document(vec![Paragraph::with_runs(
+                runs,
+                ParaShapeIndex::new(0),
+            )]))
+            .unwrap()
+        };
+        let one = |text: &str| body(vec![Run::text(text, CharShapeIndex::new(0))]);
+        for (input, expected) in [
+            ("<img src=x onerror=y>", "\\<img src=x onerror=y>"),
+            ("</b>", "\\</b>"),
+            ("<!-- c -->", "\\<!-- c -->"),
+            ("<?x ?>", "\\<?x ?>"),
+            ("<https://e.invalid>", "\\<https://e.invalid>"),
+            ("<a@b.c>", "\\<a@b.c>"),
+            ("&amp; &#60; &#x3c;", "\\&amp; \\&#60; \\&#x3c;"),
+            ("[x](javascript:y)", "[x\\](javascript:y)"),
+            ("![x](y)", "![x\\](y)"),
+            ("[a]: javascript:x", "\\[a]: javascript:x"),
+            ("\\<img>", "\\\\\\<img>"),
+            ("<b>x</b>", "\\<b>x\\</b>"),
+            ("<a href=\"x\" title='y' z>", "\\<a href=\"x\" title='y' z>"),
+            ("<br/>", "\\<br/>"),
+            ("<![CDATA[x]]>", "\\<![CDATA[x]]>"),
+            ("<!DOCTYPE x>", "\\<!DOCTYPE x>"),
+            ("<div 가나", "\\<div 가나"),
+            ("<DIV", "\\<DIV"),
+            // Kept: not markup to CommonMark.
+            (
+                "<붙임> <표 1> a < b [참고] AT&T & *x* # h [a] (b)",
+                "<붙임> <표 1> a < b [참고] AT&T & *x* # h [a] (b)",
+            ),
+            (
+                "<AI가 바꾼 것> <AI Agent 기반 공방> <b 가> <x=1> <b_x>",
+                "<AI가 바꾼 것> <AI Agent 기반 공방> <b 가> <x=1> <b_x>",
+            ),
+        ] {
+            assert_eq!(one(input), expected, "{input}");
+        }
+        let t = |s: &str| Run::text(s, CharShapeIndex::new(0));
+        assert_eq!(body(vec![t("[a]"), t("(javascript:x)")]), "[a\\](javascript:x)");
+        assert_eq!(body(vec![t("<"), t("img>")]), "\\<img>");
+        // In a cell, escaped once with the cell's own escaping.
+        let cell = TableCell::new(
+            vec![Paragraph::with_runs(vec![t("<img>|\\")], ParaShapeIndex::new(0))],
+            hwpforge_foundation::HwpUnit::new(1000).unwrap(),
+        );
+        let table = Run::table(
+            hwpforge_core::Table::new(vec![TableRow::new(vec![cell])]),
+            CharShapeIndex::new(0),
+        );
+        assert_eq!(body(vec![table]), "| \\<img>\\|\\\\ |\n| --- |");
+        // What follows the text decides at its end: `<div` before the space
+        // ahead of a picture opens an HTML block.
+        let pic = || {
+            Run::image(
+                hwpforge_core::Image::new(
+                    "p.png",
+                    hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+                    hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+                    hwpforge_core::ImageFormat::Png,
+                ),
+                CharShapeIndex::new(0),
+            )
+        };
+        assert_eq!(body(vec![t("<div"), pic()]), "\\<div ![p](p.png)");
+        assert_eq!(body(vec![t("<b"), pic()]), "<b ![p](p.png)");
+        let link = Run::control(
+            Control::Hyperlink { text: "t".into(), url: "https://e.invalid".into() },
+            CharShapeIndex::new(0),
+        );
+        assert_eq!(body(vec![t("<div"), link]), "<div[t](https://e.invalid)");
+        // A picture's alt cannot close its label and its path cannot end early.
+        let image = hwpforge_core::Image::new(
+            "x/a](b).png",
+            hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+            hwpforge_foundation::HwpUnit::from_mm(5.0).unwrap(),
+            hwpforge_core::ImageFormat::Png,
+        );
+        assert_eq!(
+            body(vec![Run::image(image.clone(), CharShapeIndex::new(0))]),
+            "![a\\](b)](x/a]%28b%29.png)"
+        );
+        assert_eq!(
+            body(vec![t("x"), Run::image(image, CharShapeIndex::new(0))]),
+            "x ![a\\](b)](x/a]%28b%29.png)"
+        );
+    }
+
     /// Lossy writes a link only for an allowed URL; otherwise its text. A
     /// label cannot close the link and start another.
     ///
@@ -1455,6 +1576,11 @@ mod tests {
         assert_eq!(
             doc_label("a](javascript:x)[b\\", "https://e.invalid"),
             "[a\\](javascript:x)\\[b\\\\](https://e.invalid)"
+        );
+        // The destination cannot end early: no whitespace, so the URL passes.
+        assert_eq!(
+            doc("https://a)<img/src=x/onerror=y>"),
+            "[t](https://a%29%3Cimg/src=x/onerror=y%3E)"
         );
     }
 }
