@@ -118,46 +118,137 @@ pub(crate) fn auto_number_text(
     out
 }
 
+/// One drawn piece of a paragraph, borrowed from the document: a run's
+/// content, or a group child standing in its group's place.
+#[derive(Clone, Copy)]
+pub(crate) enum Part<'a> {
+    /// A text run (`Text` or `InlineText`).
+    Text(&'a hwpforge_core::RunContent),
+    /// A picture: a picture run or a group's picture child.
+    Image(&'a hwpforge_core::image::Image),
+    /// A table run.
+    Table(&'a hwpforge_core::Table),
+    /// A control run or a group's shape child.
+    Control(&'a hwpforge_core::Control),
+}
+
 /// The runs of a paragraph as the readable views draw them: a group run
-/// (묶음) stands for its children in z-order as consecutive runs of the
-/// group's char shape — a picture child as a picture run, a shape child as
-/// that control's run, a nested group recursively. Borrowed unchanged when
-/// the paragraph holds no group.
-/// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기
-/// (`lossy_group_children_in_order`, `styled_group_children_in_order`).
-pub(crate) fn runs_with_groups_spread(
+/// (묶음) stands for its children in z-order — a picture child as a
+/// picture, a shape child as that control, a nested group recursively —
+/// each with the group run's char shape. Everything is borrowed (no
+/// subtree is copied) and nested groups are walked with an explicit stack,
+/// so neither memory nor recursion grows with the group depth.
+/// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기 ·
+/// 복사로 되돌리기(`lossy_group_children_in_order`, `styled_group_children_in_order`,
+/// `group_children_are_borrowed`).
+pub(crate) fn spread_groups(
     runs: &[hwpforge_core::Run],
-) -> std::borrow::Cow<'_, [hwpforge_core::Run]> {
+) -> impl Iterator<Item = (Part<'_>, hwpforge_foundation::CharShapeIndex)> {
     use hwpforge_core::control::GroupChild;
     use hwpforge_core::{Control, Run, RunContent};
-    fn spread(
-        children: &[GroupChild],
-        cs: hwpforge_foundation::CharShapeIndex,
-        out: &mut Vec<Run>,
-    ) {
-        for child in children {
-            match child {
-                GroupChild::Picture(image) => out.push(Run::image(image.clone(), cs)),
-                GroupChild::Shape(Control::Group { children, .. }) => spread(children, cs, out),
-                GroupChild::Shape(shape) => out.push(Run::control(shape.clone(), cs)),
-                // A future child kind is not drawn.
-                _ => {}
+    use hwpforge_foundation::CharShapeIndex;
+    struct Spread<'a> {
+        runs: std::slice::Iter<'a, Run>,
+        groups: Vec<(std::slice::Iter<'a, GroupChild>, CharShapeIndex)>,
+    }
+    impl<'a> Iterator for Spread<'a> {
+        type Item = (Part<'a>, CharShapeIndex);
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                if let Some((children, cs)) = self.groups.last_mut() {
+                    let cs = *cs;
+                    match children.next() {
+                        None => {
+                            self.groups.pop();
+                        }
+                        Some(GroupChild::Picture(image)) => return Some((Part::Image(image), cs)),
+                        Some(GroupChild::Shape(Control::Group { children, .. })) => {
+                            self.groups.push((children.iter(), cs));
+                        }
+                        Some(GroupChild::Shape(shape)) => return Some((Part::Control(shape), cs)),
+                        // A future child kind is not drawn.
+                        Some(_) => {}
+                    }
+                    continue;
+                }
+                let run = self.runs.next()?;
+                let cs = run.char_shape_id;
+                match &run.content {
+                    RunContent::Control(c) => match c.as_ref() {
+                        Control::Group { children, .. } => self.groups.push((children.iter(), cs)),
+                        other => return Some((Part::Control(other), cs)),
+                    },
+                    RunContent::Image(image) => return Some((Part::Image(image), cs)),
+                    RunContent::Table(table) => return Some((Part::Table(table), cs)),
+                    content => return Some((Part::Text(content), cs)),
+                }
             }
         }
     }
-    let is_group = |r: &Run| matches!(&r.content, RunContent::Control(c) if matches!(**c, Control::Group { .. }));
-    if !runs.iter().any(is_group) {
-        return std::borrow::Cow::Borrowed(runs);
-    }
-    let mut out = Vec::with_capacity(runs.len());
-    for run in runs {
-        match &run.content {
-            RunContent::Control(c) => match c.as_ref() {
-                Control::Group { children, .. } => spread(children, run.char_shape_id, &mut out),
-                _ => out.push(run.clone()),
-            },
-            _ => out.push(run.clone()),
+    Spread { runs: runs.iter(), groups: Vec::new() }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::*;
+    use hwpforge_core::control::{Control, GroupChild};
+    use hwpforge_core::image::{Image, ImageFormat};
+    use hwpforge_core::{ObjectFrame, Run};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit};
+
+    /// Group children come out in z-order, each borrowed from the tree
+    /// itself (the same address — nothing is copied), nested groups walked
+    /// without recursion; a run that is not a group comes out as it is.
+    ///
+    /// 이것을 실패시키는 것: 자식을 복사해 내보내기 · 자식 순서 뒤집기 · 중첩 묶음 건너뛰기.
+    #[test]
+    fn group_children_are_borrowed() {
+        let u = |v| HwpUnit::new(v).unwrap();
+        let group = |children| Control::Group {
+            children,
+            width: u(10),
+            height: u(10),
+            frame: ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        let mut inner =
+            group(vec![GroupChild::Picture(Image::new("b", u(1), u(1), ImageFormat::Png))]);
+        for _ in 0..200 {
+            inner = group(vec![GroupChild::Shape(inner)]);
         }
+        let runs = vec![
+            Run::text("t", CharShapeIndex::new(1)),
+            Run::control(
+                group(vec![
+                    GroupChild::Picture(Image::new("a", u(1), u(1), ImageFormat::Png)),
+                    GroupChild::Shape(inner),
+                    GroupChild::Shape(Control::equation("x")),
+                ]),
+                CharShapeIndex::new(7),
+            ),
+        ];
+        let parts: Vec<_> = spread_groups(&runs).collect();
+        assert_eq!(parts.len(), 4);
+        assert!(
+            matches!(parts[0], (Part::Text(c), cs) if std::ptr::eq(c, &runs[0].content) && cs == CharShapeIndex::new(1))
+        );
+        let hwpforge_core::RunContent::Control(top) = &runs[1].content else { panic!() };
+        let Control::Group { children, .. } = top.as_ref() else { panic!() };
+        let GroupChild::Picture(a) = &children[0] else { panic!() };
+        assert!(
+            matches!(parts[1], (Part::Image(i), cs) if std::ptr::eq(i, a) && cs == CharShapeIndex::new(7))
+        );
+        let mut node = &children[1];
+        let deepest = loop {
+            match node {
+                GroupChild::Shape(Control::Group { children, .. }) => node = &children[0],
+                GroupChild::Picture(image) => break image,
+                _ => panic!(),
+            }
+        };
+        assert!(matches!(parts[2], (Part::Image(i), _) if std::ptr::eq(i, deepest)));
+        let GroupChild::Shape(eq) = &children[2] else { panic!() };
+        assert!(matches!(parts[3], (Part::Control(c), _) if std::ptr::eq(c, eq)));
     }
-    std::borrow::Cow::Owned(out)
 }

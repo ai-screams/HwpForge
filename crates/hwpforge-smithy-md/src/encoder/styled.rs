@@ -13,6 +13,7 @@ use hwpforge_core::{
 use hwpforge_foundation::UnderlineType;
 
 use super::list_format::{format_list_continuation, format_list_item};
+use super::Part;
 use crate::eqn::{render_equation, EqnRender};
 use crate::internal_styles::parse_list_continuation_style_name;
 
@@ -451,19 +452,19 @@ fn paragraph_text_styled(
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
-    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
-        match &run.content {
+    for (part, cs) in super::spread_groups(&paragraph.runs) {
+        match part {
             // InlineText folds to the same `\t`-bearing string via
             // `plain_text()` because Markdown styling has no
             // representation for `<hp:tab>` attributes. The
             // formatting group key still uses `char_shape_id`, so the
             // run gets wrapped exactly like a plain `Text(String)` run
             // — see debug doc §3a-A5.
-            RunContent::Text(_) | RunContent::InlineText(_) => {
-                let Some(cow) = run.content.plain_text() else {
+            Part::Text(content) => {
+                let Some(cow) = content.plain_text() else {
                     continue;
                 };
-                let fmt = InlineFormat::from_style(run.char_shape_id, styles);
+                let fmt = InlineFormat::from_style(cs, styles);
                 if fmt == current_format {
                     current_text.push_str(&cow);
                 } else {
@@ -476,7 +477,7 @@ fn paragraph_text_styled(
                     current_text.push_str(&cow);
                 }
             }
-            RunContent::Image(image) => {
+            Part::Image(image) => {
                 // Flush text group.
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap(&current_text));
@@ -489,7 +490,7 @@ fn paragraph_text_styled(
                 output.push_str(&emit_picture(image, styles, st, ctx));
                 output.push_str(&styled_caption(image.caption.as_ref(), styles, st, ctx));
             }
-            RunContent::Table(table) => {
+            Part::Table(table) => {
                 // Flush text group.
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap(&current_text));
@@ -502,7 +503,7 @@ fn paragraph_text_styled(
                 output.push_str(&table_to_styled_markdown(table, styles, false, st, ctx));
                 output.push_str(&styled_caption(table.caption.as_ref(), styles, st, ctx));
             }
-            RunContent::Control(control) => {
+            Part::Control(control) => {
                 // Flush text group.
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap(&current_text));
@@ -514,13 +515,12 @@ fn paragraph_text_styled(
                 // Markdown (review r1: a `*` prefix and suffix turned "3"
                 // into emphasis). 이것을 실패시키는 것: 이 이스케이프를 지우기
                 // (`caption_number_prefix_is_escaped`).
-                if matches!(**control, Control::AutoNumber { .. }) {
+                if matches!(*control, Control::AutoNumber { .. }) {
                     output.push_str(&escape_markdown(&text));
                 } else {
                     output.push_str(&text);
                 }
             }
-            _ => {}
         }
     }
 
@@ -960,16 +960,16 @@ fn extract_paragraph_text_html(
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
-    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
-        match &run.content {
+    for (part, cs) in super::spread_groups(&paragraph.runs) {
+        match part {
             // Same as the Markdown styled path (debug doc §3a-A6):
             // `InlineText` folds to its `\t`-bearing plain string via
             // `plain_text()` so HTML output stays consistent.
-            RunContent::Text(_) | RunContent::InlineText(_) => {
-                let Some(cow) = run.content.plain_text() else {
+            Part::Text(content) => {
+                let Some(cow) = content.plain_text() else {
                     continue;
                 };
-                let fmt = InlineFormat::from_style(run.char_shape_id, styles);
+                let fmt = InlineFormat::from_style(cs, styles);
                 if fmt == current_format {
                     current_text.push_str(&cow);
                 } else {
@@ -981,7 +981,7 @@ fn extract_paragraph_text_html(
                     current_text.push_str(&cow);
                 }
             }
-            RunContent::Control(control) => {
+            Part::Control(control) => {
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap_html(&current_text));
                     current_text.clear();
@@ -990,7 +990,7 @@ fn extract_paragraph_text_html(
                 // Equations: LaTeX is written verbatim; a script too deep to
                 // convert is ordinary cell text (whitespace collapsed),
                 // HTML-escaped like `wrap_html` does.
-                if let Control::Equation { script, .. } = &**control {
+                if let Control::Equation { script, .. } = control {
                     match render_equation(script) {
                         EqnRender::Latex(latex) => output.push_str(&latex),
                         EqnRender::RawFallback(raw) => output.push_str(&escape_html(&raw)),
@@ -1002,7 +1002,7 @@ fn extract_paragraph_text_html(
                 // Only structural/safe outputs (footnote markers, hyperlinks,
                 // chart comments, empty shapes) and shape text — drawn as HTML
                 // already — skip escaping.
-                let escaped = match &**control {
+                let escaped = match control {
                     Control::TextBox { .. }
                     | Control::Ellipse { .. }
                     | Control::Polygon { .. }
@@ -1020,7 +1020,7 @@ fn extract_paragraph_text_html(
                 };
                 output.push_str(&escaped);
             }
-            RunContent::Image(image) => {
+            Part::Image(image) => {
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap_html(&current_text));
                     current_text.clear();
@@ -1029,7 +1029,7 @@ fn extract_paragraph_text_html(
                 output.push_str(&emit_picture(image, styles, st, ctx));
                 output.push_str(&html_caption(image.caption.as_ref(), styles, st, ctx));
             }
-            RunContent::Table(table) => {
+            Part::Table(table) => {
                 if !current_text.is_empty() {
                     output.push_str(&current_format.wrap_html(&current_text));
                     current_text.clear();
@@ -1038,7 +1038,6 @@ fn extract_paragraph_text_html(
                 output.push_str(&table_to_html(table, styles, st, ctx));
                 output.push_str(&html_caption(table.caption.as_ref(), styles, st, ctx));
             }
-            _ => {}
         }
     }
 

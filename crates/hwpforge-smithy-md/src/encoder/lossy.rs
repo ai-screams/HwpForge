@@ -7,6 +7,7 @@ use hwpforge_core::{
 };
 
 use super::list_format::{format_list_continuation, format_list_item};
+use super::Part;
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
 use crate::mapper::{resolve_mapping, MdMapping, ParagraphKind};
@@ -193,27 +194,27 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
 
     // A group is drawn as its children (WS): body, table cells and captions
     // come through here; the plain-text paths (notes, text boxes) do not.
-    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
-        match &run.content {
+    for (part, _) in super::spread_groups(&paragraph.runs) {
+        match part {
             // Markdown cannot represent inline tab attributes, so any
             // `<hp:tab width=... leader=... type=.../>` collapses back
             // to a literal `\t` via `plain_text()` — same effective
             // output the `Text(String)` arm would produce. See
             // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
             // §3a-A4.
-            RunContent::Text(_) | RunContent::InlineText(_) => {
-                if let Some(cow) = run.content.plain_text() {
+            Part::Text(content) => {
+                if let Some(cow) = content.plain_text() {
                     output.push_str(&cow);
                 }
             }
-            RunContent::Image(image) => {
+            Part::Image(image) => {
                 if !output.is_empty() {
                     output.push(' ');
                 }
                 output.push_str(&format!("![{}]({})", image_alt_text(&image.path), image.path));
                 output.push_str(&lossy_caption(image.caption.as_ref(), warnings));
             }
-            RunContent::Control(control) => match control.as_ref() {
+            Part::Control(control) => match control {
                 Control::Hyperlink { text, url } => {
                     output.push_str(&format!("[{text}]({url})"));
                 }
@@ -273,14 +274,13 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                 }
                 _ => {}
             },
-            RunContent::Table(table) => {
+            Part::Table(table) => {
                 if !output.is_empty() {
                     output.push('\n');
                 }
                 output.push_str(&table_to_markdown(table, warnings));
                 output.push_str(&lossy_caption(table.caption.as_ref(), warnings));
             }
-            _ => {}
         }
     }
 
