@@ -328,6 +328,8 @@ pub(crate) struct DecodeCtx {
     /// reused when an outer group's retry decodes them again.
     pub(crate) decoded_containers:
         HashMap<usize, (Option<hwpforge_core::run::Run>, Vec<super::DecodeWarning>)>,
+    /// How many group decodes are under way (0 = outside any group).
+    pub(crate) group_depth: usize,
 }
 
 impl DecodeCtx {
@@ -344,6 +346,7 @@ impl DecodeCtx {
             group_frames: true,
             group_sources: Vec::new(),
             decoded_containers: HashMap::new(),
+            group_depth: 0,
         }
     }
 
@@ -362,6 +365,7 @@ impl DecodeCtx {
             group_frames: true,
             group_sources: Vec::new(),
             decoded_containers: HashMap::new(),
+            group_depth: 0,
         }
     }
 

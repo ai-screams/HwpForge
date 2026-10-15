@@ -1402,11 +1402,21 @@ pub(crate) fn decode_container(
     // on the outer attempt (its own state is saved below), so the first one
     // is reused.
     // 이것을 실패시키는 것: 이 재사용 삭제(`nested_group_retries_stay_linear`).
+    //
+    // Branch review r2 M3: reusing it must not copy it. A group decoded
+    // inside another group's decode is kept once, by its wire element, and
+    // a placeholder stands for it in the tree under construction; the
+    // outermost group swaps every placeholder for its group (moved, not
+    // cloned) when it is done, so each group is held once, whichever
+    // attempt's tree survives.
+    // 이것을 실패시키는 것: 결과를 복제해 보관하기 · 단계마다 자리표 해소하기
+    // (`nested_group_retries_stay_linear` 의 작업량).
     let key = std::ptr::from_ref(container) as usize;
     if let Some((run, warnings)) = ctx.decoded_containers.get(&key) {
-        let run = run.clone();
+        let placeholder = run.as_ref().map(|r| group_placeholder(key, r.char_shape_id));
         ctx.warnings.extend(warnings.iter().cloned());
-        return Ok(run);
+        crate::work::tick();
+        return Ok(placeholder);
     }
     // A group in a group child's text is decoded on its own: keep the outer
     // group's state.
@@ -1414,17 +1424,90 @@ pub(crate) fn decode_container(
     let saved_frames = ctx.group_frames;
     ctx.group_frames = true;
     let mark = ctx.warnings.len();
+    ctx.group_depth += 1;
     let result =
         decode_container_once(container, char_shape_id, depth, ctx).and_then(|run| match run {
             Some(run) => settle_group_frames(container, run, char_shape_id, depth, mark, ctx),
             None => Ok(None),
         });
+    ctx.group_depth -= 1;
     ctx.group_sources = saved_sources;
     ctx.group_frames = saved_frames;
-    if let Ok(run) = &result {
-        ctx.decoded_containers.insert(key, (run.clone(), ctx.warnings[mark..].to_vec()));
+    let run = result?;
+    if ctx.group_depth > 0 {
+        let placeholder = run.as_ref().map(|r| group_placeholder(key, r.char_shape_id));
+        // Tests count the paragraphs the reuse holds.
+        #[cfg(test)]
+        if let Some(r) = &run {
+            let mut holder = hwpforge_core::paragraph::Paragraph::new(
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+            holder.runs.push(r.clone());
+            holder.for_each_paragraph(|_| crate::work::tick());
+        }
+        ctx.decoded_containers.insert(key, (run, ctx.warnings[mark..].to_vec()));
+        return Ok(placeholder);
     }
-    result
+    // The outermost group: put every group decoded inside it in its place.
+    let mut kept: std::collections::HashMap<usize, Run> =
+        ctx.decoded_containers.drain().filter_map(|(k, (run, _))| run.map(|r| (k, r))).collect();
+    Ok(run.map(|mut run| {
+        resolve_group_placeholders(&mut run, &mut kept);
+        run
+    }))
+}
+
+/// The tag of a [`group_placeholder`].
+const GROUP_PLACEHOLDER: &str = "\u{0}hwpforge-group";
+
+/// A run standing for the group decoded from the wire element at `key`
+/// until the outermost group's decode puts that group in its place.
+fn group_placeholder(key: usize, char_shape_id: CharShapeIndex) -> Run {
+    Run::control(
+        Control::Unknown { tag: GROUP_PLACEHOLDER.to_string(), data: Some(key.to_string()) },
+        char_shape_id,
+    )
+}
+
+/// Replaces every group placeholder in `run` (and in what replaces it) with
+/// its group, moved out of `kept`. Each paragraph is visited once.
+fn resolve_group_placeholders(run: &mut Run, kept: &mut std::collections::HashMap<usize, Run>) {
+    fn swap(run: &mut Run, kept: &mut std::collections::HashMap<usize, Run>) {
+        crate::work::tick();
+        if let RunContent::Control(c) = &run.content {
+            if let Control::Unknown { tag, data: Some(key) } = &**c {
+                if tag == GROUP_PLACEHOLDER {
+                    if let Some(group) = key.parse().ok().and_then(|k: usize| kept.remove(&k)) {
+                        *run = group;
+                    }
+                }
+            }
+        }
+    }
+    fn paragraphs(
+        list: &mut [hwpforge_core::paragraph::Paragraph],
+        kept: &mut std::collections::HashMap<usize, Run>,
+    ) {
+        for paragraph in list {
+            paragraph.for_each_paragraph_mut(|p| {
+                for r in &mut p.runs {
+                    swap(r, kept);
+                    // Run pictures' captions are not walked: enter them here.
+                    if let RunContent::Image(image) = &mut r.content {
+                        if let Some(caption) = image.caption.as_mut() {
+                            paragraphs(&mut caption.paragraphs, kept);
+                        }
+                    }
+                }
+            });
+        }
+    }
+    swap(run, kept);
+    let mut holder =
+        hwpforge_core::paragraph::Paragraph::new(hwpforge_foundation::ParaShapeIndex::new(0));
+    holder.runs.push(std::mem::replace(run, Run::text("", run.char_shape_id)));
+    paragraphs(std::slice::from_mut(&mut holder), kept);
+    *run = holder.runs.pop().expect("the run put in");
 }
 
 #[cfg(test)]
@@ -6883,7 +6966,8 @@ mod group_tests {
     /// child's text — group → polygon text → group … — the inner groups must
     /// not be decoded again for every outer retry: the work stays linear in
     /// the depth (it doubled per level: depth 16 took about 0.6 s).
-    /// 이것을 실패시키는 것: 안쪽 묶음 결과를 다시 쓰지 않기(디코드 횟수 2^깊이).
+    /// 이것을 실패시키는 것: 안쪽 묶음 결과를 다시 쓰지 않기(디코드 횟수 2^깊이) ·
+    /// 단계마다 자리표 해소(작업량 깊이²) · 자리표를 남기기.
     #[test]
     fn nested_group_retries_stay_linear() {
         fn nest(depth: usize) -> String {
@@ -6904,11 +6988,36 @@ mod group_tests {
             }
             xml
         }
+        // Every group of the chain is in the tree once and no placeholder is
+        // left: groups counted through paragraphs (text bodies included).
+        fn groups(control: &Control) -> (usize, usize) {
+            let mut found = (0, 0);
+            let mut holder = hwpforge_core::paragraph::Paragraph::new(
+                hwpforge_foundation::ParaShapeIndex::new(0),
+            );
+            holder.runs.push(hwpforge_core::run::Run::control(
+                control.clone(),
+                hwpforge_foundation::CharShapeIndex::new(0),
+            ));
+            holder.for_each_paragraph(|p| {
+                for r in &p.runs {
+                    match r.content.as_control() {
+                        Some(Control::Group { .. }) => found.0 += 1,
+                        Some(Control::Unknown { .. }) => found.1 += 1,
+                        _ => {}
+                    }
+                }
+            });
+            found
+        }
         let mut counts = Vec::new();
+        let mut work = Vec::new();
         for depth in [4, 8] {
             super::CONTAINER_DECODES.with(|n| n.set(0));
+            crate::work::WORK.with(|w| w.set(0));
             let (g, w) = decode(&nest(depth));
-            assert!(g.is_some());
+            work.push(crate::work::WORK.with(std::cell::Cell::get));
+            assert_eq!(groups(g.as_ref().unwrap()), (depth, 0));
             assert_eq!(
                 lost_kinds(&w).iter().filter(|k| *k == "shape_drawn_extent").count(),
                 depth,
@@ -6918,6 +7027,9 @@ mod group_tests {
         }
         // Two decodes per group: 8 and 16.
         assert_eq!(counts, [8, 16]);
+        // r2 M3: holding and placing the groups is linear too — no copy per
+        // level (the work doubles with the depth, it does not quadruple).
+        assert!(work[1] <= 2 * work[0] + 4, "{work:?}");
     }
 
     /// A group's size lock and original box round-trip.
