@@ -1396,6 +1396,18 @@ pub(crate) fn decode_container(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
+    // Branch review B: an outer group's retry decodes its whole subtree
+    // again, and a group in a child's text would be retried again for each
+    // outer attempt — 2^depth decodes. Its result and warnings do not depend
+    // on the outer attempt (its own state is saved below), so the first one
+    // is reused.
+    // 이것을 실패시키는 것: 이 재사용 삭제(`nested_group_retries_stay_linear`).
+    let key = std::ptr::from_ref(container) as usize;
+    if let Some((run, warnings)) = ctx.decoded_containers.get(&key) {
+        let run = run.clone();
+        ctx.warnings.extend(warnings.iter().cloned());
+        return Ok(run);
+    }
     // A group in a group child's text is decoded on its own: keep the outer
     // group's state.
     let saved_sources = std::mem::take(&mut ctx.group_sources);
@@ -1409,7 +1421,16 @@ pub(crate) fn decode_container(
         });
     ctx.group_sources = saved_sources;
     ctx.group_frames = saved_frames;
+    if let Ok(run) = &result {
+        ctx.decoded_containers.insert(key, (run.clone(), ctx.warnings[mark..].to_vec()));
+    }
     result
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`decode_container_once`] ran on this thread.
+    pub(crate) static CONTAINER_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// S20 (§19.23.17 M2, §19.23.20): a group decoded with its original boxes is
@@ -1522,6 +1543,8 @@ fn decode_container_once(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
+    #[cfg(test)]
+    CONTAINER_DECODES.with(|n| n.set(n.get() + 1));
     use super::group_geometry::{bounds, corners, wire_chain, Affine, EXACT_TOLERANCE};
 
     let (org_w, org_h) = container_org_size(container);
@@ -6853,6 +6876,48 @@ mod group_tests {
         let (g, w) = decode(&container_with((1000, 1000), (800, 800), &ri(ID, &[(ID, ID)]), &leaf));
         assert_eq!(lost_kinds(&w), ["shape_drawn_extent"]);
         assert_eq!(g.unwrap().frame().unwrap().original_size, Some(s20_size(1000, 1000)));
+    }
+
+    /// Branch review B: a group whose box its matrices do not draw is
+    /// decoded twice (with and without original boxes). Nested through a
+    /// child's text — group → polygon text → group … — the inner groups must
+    /// not be decoded again for every outer retry: the work stays linear in
+    /// the depth (it doubled per level: depth 16 took about 0.6 s).
+    /// 이것을 실패시키는 것: 안쪽 묶음 결과를 다시 쓰지 않기(디코드 횟수 2^깊이).
+    #[test]
+    fn nested_group_retries_stay_linear() {
+        fn nest(depth: usize) -> String {
+            let leaf = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+            let mut xml = container_with((1000, 1000), (800, 800), &ri(ID, &[(ID, ID)]), &leaf);
+            for _ in 1..depth {
+                let text = format!(
+                    r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{xml}</hp:run></hp:p></hp:subList></hp:drawText>"#
+                );
+                let pts = [(0, 0), (500, 0), (500, 500)];
+                let shape = polygon((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]), &pts, &text);
+                xml = container_with(
+                    (1000, 1000),
+                    (800, 800),
+                    &ri(ID, &[(ID, ID)]),
+                    &format!("{leaf}{shape}"),
+                );
+            }
+            xml
+        }
+        let mut counts = Vec::new();
+        for depth in [4, 8] {
+            super::CONTAINER_DECODES.with(|n| n.set(0));
+            let (g, w) = decode(&nest(depth));
+            assert!(g.is_some());
+            assert_eq!(
+                lost_kinds(&w).iter().filter(|k| *k == "shape_drawn_extent").count(),
+                depth,
+                "{w:?}"
+            );
+            counts.push(super::CONTAINER_DECODES.with(std::cell::Cell::get));
+        }
+        // Two decodes per group: 8 and 16.
+        assert_eq!(counts, [8, 16]);
     }
 
     /// A group's size lock and original box round-trip.

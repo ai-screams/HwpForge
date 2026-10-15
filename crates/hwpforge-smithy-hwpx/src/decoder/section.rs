@@ -323,6 +323,11 @@ pub(crate) struct DecodeCtx {
     /// for a node the frame check does not judge (a nested group, a leaf
     /// without an original box).
     pub(crate) group_sources: Vec<Option<Vec<(f64, f64)>>>,
+    /// Groups already decoded (by the address of their wire element, which
+    /// lives for the whole section decode) with the warnings they reported —
+    /// reused when an outer group's retry decodes them again.
+    pub(crate) decoded_containers:
+        HashMap<usize, (Option<hwpforge_core::run::Run>, Vec<super::DecodeWarning>)>,
 }
 
 impl DecodeCtx {
@@ -338,6 +343,7 @@ impl DecodeCtx {
             lifted_header_footers: std::collections::HashSet::new(),
             group_frames: true,
             group_sources: Vec::new(),
+            decoded_containers: HashMap::new(),
         }
     }
 
@@ -355,6 +361,7 @@ impl DecodeCtx {
             lifted_header_footers: std::collections::HashSet::new(),
             group_frames: true,
             group_sources: Vec::new(),
+            decoded_containers: HashMap::new(),
         }
     }
 
