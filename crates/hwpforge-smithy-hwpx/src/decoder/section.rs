@@ -450,6 +450,7 @@ impl DecodeCtx {
 /// 텍스트는 일반 방출이라 1:1. 소비량을 알 수 없는 자식(미지 Switch·
 /// Other·StrayText·`<hp:t>` 내 미지 요소·다중 payload ctrl)은 `Err` —
 /// 캐시 fail-closed (문서 디코드는 계속된다).
+#[cfg(test)]
 fn build_paragraph_wire_map(
     hx: &HxParagraph,
 ) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String> {
@@ -646,6 +647,20 @@ fn convert_paragraph(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
+    convert_paragraph_from(hx, 0, is_first, depth, ctx)
+}
+
+/// [`convert_paragraph`] reading `hx`'s runs from run `skip` on — the runs
+/// before it are not part of the paragraph (a note's injected number
+/// head), for the Core runs and the wire map alike.
+fn convert_paragraph_from(
+    hx: &HxParagraph,
+    skip: usize,
+    is_first: bool,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
+    let hx_runs = hx.runs.get(skip..).unwrap_or_default();
     const MAX_STYLE_INDEX: u32 = 100_000;
     if hx.para_pr_id_ref > MAX_STYLE_INDEX {
         return Err(crate::error::HwpxError::InvalidStructure {
@@ -663,7 +678,7 @@ fn convert_paragraph(
     // paragraph-end mark's char shape; it is that, not a run.
     // 이것을 실패시키는 것: 이 읽기를 지우기(`end_mark_run_round_trips`).
     let end_mark =
-        (hx.runs.len() >= 2).then(|| hx.runs.last()).flatten().filter(|r| is_end_mark_run(r));
+        (hx_runs.len() >= 2).then(|| hx_runs.last()).flatten().filter(|r| is_end_mark_run(r));
     // The end run's reference is checked like every run's (`convert_run`),
     // which it does not go through (review r1). 이것을 실패시키는 것: 이 검사를
     // 지우기(`end_run_reference_is_bounded`).
@@ -676,7 +691,7 @@ fn convert_paragraph(
         });
     }
     let end_char_shape = end_mark.map(|r| CharShapeIndex::new(r.char_pr_id_ref as usize));
-    let body_runs = &hx.runs[..hx.runs.len() - usize::from(end_mark.is_some())];
+    let body_runs = &hx_runs[..hx_runs.len() - usize::from(end_mark.is_some())];
 
     let mut runs = Vec::new();
     // S22 r2: text the run conversion folded into a field whose end is not
@@ -724,8 +739,7 @@ fn convert_paragraph(
     // and editing surfaces (cell stamping, set-cell) restore styled text from
     // it. Index 0 is only for paragraphs with no <hp:run> at all.
     if runs.is_empty() {
-        let char_shape_id = hx
-            .runs
+        let char_shape_id = hx_runs
             .first()
             .map_or(CharShapeIndex::new(0), |r| CharShapeIndex::new(r.char_pr_id_ref as usize));
         runs.push(Run::text("", char_shape_id));
@@ -764,7 +778,7 @@ fn convert_paragraph(
             );
             return None;
         }
-        let (map, tokens) = match build_paragraph_wire_map(hx) {
+        let (map, tokens) = match build_wire_map_over_runs(hx_runs, 0) {
             Ok(ledger) => ledger,
             Err(reason) => {
                 ctx.cache_dropped(reason);
@@ -1928,7 +1942,7 @@ fn decode_note_paragraphs(
     // 이 계약을 집행: spacer 만 살아남으면 사이클마다 " " run 이 누적된다).
     // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(F1 실측)
     // 이 시그니처에 걸리지 않는다 — 한컴 본문은 있는 그대로 보존.
-    let strip = injected_head_range(&hx.sub_list);
+    let strip = injected_head_range(&hx.sub_list).unwrap_or(0);
     decode_sublist_paragraphs_skipping(&hx.sub_list, strip, depth, ctx)
 }
 
@@ -1939,10 +1953,11 @@ fn decode_note_paragraphs(
 /// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
 /// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
 /// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
-pub(crate) fn injected_head_range(sub_list: &HxSubList) -> Option<(usize, usize)> {
+/// Returns how many leading runs of the first paragraph the pair takes.
+pub(crate) fn injected_head_range(sub_list: &HxSubList) -> Option<usize> {
     let first = sub_list.paragraphs.first()?;
     let [head, spacer, ..] = first.runs.as_slice() else { return None };
-    (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some((0, 2))
+    (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some(2)
 }
 
 /// autoNum(FOOTNOTE/ENDNOTE)-전용 head run 판정 — 다른 payload 가 섞인
@@ -2377,7 +2392,7 @@ pub(crate) fn decode_sublist_paragraphs(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
-    decode_sublist_paragraphs_skipping(sub_list, None, depth, ctx)
+    decode_sublist_paragraphs_skipping(sub_list, 0, depth, ctx)
 }
 
 /// [`decode_sublist_paragraphs`] + 첫 문단의 run 구간 `(offset, count)` 생략.
@@ -2386,7 +2401,7 @@ pub(crate) fn decode_sublist_paragraphs(
 /// clone, M-N4 메모리 증폭) 대신 첫 문단만 재구성한다.
 fn decode_sublist_paragraphs_skipping(
     sub_list: &HxSubList,
-    strip_first: Option<(usize, usize)>,
+    strip_first: usize,
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
@@ -2401,14 +2416,12 @@ fn decode_sublist_paragraphs_skipping(
     let mut out = Vec::with_capacity(sub_list.paragraphs.len());
     for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
         ctx.enter(super::PathSeg::NestedParagraph(i));
-        let result = if i == 0 && strip_first.is_some() {
-            let (at, count) = strip_first.unwrap_or_default();
-            let mut trimmed = hx_para.clone();
-            trimmed.runs.drain(at..at + count);
-            convert_paragraph(&trimmed, false, depth + 1, ctx)
-        } else {
-            convert_paragraph(hx_para, false, depth + 1, ctx)
-        };
+        // The number head is skipped by reading the paragraph from its
+        // third run on — no copy of the paragraph (r4 M1: copying it copied
+        // every object in it, at every nesting level).
+        // 이것을 실패시키는 것: 번호 머리를 건너뛰지 않기(`footnote_roundtrip_via_decoder`).
+        let skip = if i == 0 { strip_first } else { 0 };
+        let result = convert_paragraph_from(hx_para, skip, false, depth + 1, ctx);
         ctx.leave();
         let (para, _) = result?;
         out.push(para);
@@ -3242,7 +3255,7 @@ mod tests {
 
         assert_eq!(
             super::injected_head_range(&make(vec![head.clone(), spacer.clone(), body.clone()])),
-            Some((0, 2)),
+            Some(2),
             "기본 offset 0"
         );
         assert_eq!(
