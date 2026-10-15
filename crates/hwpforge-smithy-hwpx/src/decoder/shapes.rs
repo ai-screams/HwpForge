@@ -7190,6 +7190,65 @@ mod group_tests {
         }
     }
 
+    /// Branch review r4 H1: the same through retries, both ways — each
+    /// group keeps its first decode (`shape_drawn_extent`) or takes its
+    /// retry (`object_original_size`) — with a lost group at the bottom:
+    /// every warning once, work linear in the depth.
+    /// 이것을 실패시키는 것: 재시도에서 경고를 슬롯과 부모 양쪽에 두기.
+    #[test]
+    fn retried_chains_report_each_warning_once() {
+        fn chain(depth: usize, take_retry: bool) -> String {
+            let bad = ri([f64::NAN, 0.0, 0.0, 0.0, 1.0, 0.0], &[(ID, ID)]);
+            let pts = [(0, 0), (500, 0), (500, 500)];
+            let lost = polygon((500, 500), &bad, &pts, "");
+            let mut xml = container_with((1000, 1000), (1000, 1000), &ri(ID, &[(ID, ID)]), &lost);
+            for _ in 0..depth {
+                let text = format!(
+                    r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{xml}</hp:run></hp:p></hp:subList></hp:drawText>"#
+                );
+                let carrier = polygon((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]), &pts, &text);
+                xml = if take_retry {
+                    let s = [0.000200498, 0.0, 0.0, 0.0, 1.0, 0.0];
+                    let leaf = rect((5_000_000, 100), &ri(ID, &[(ID, ID), (s, ID)]));
+                    container_xml(
+                        (2000, 200),
+                        None,
+                        &ri(ID, &[(ID, ID)]),
+                        &format!("{leaf}{carrier}"),
+                    )
+                } else {
+                    let leaf = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+                    container_with(
+                        (1000, 1000),
+                        (800, 800),
+                        &ri(ID, &[(ID, ID)]),
+                        &format!("{leaf}{carrier}"),
+                    )
+                };
+            }
+            xml
+        }
+        for take_retry in [false, true] {
+            let mut counts = Vec::new();
+            for depth in [4, 8] {
+                crate::work::WORK.with(|w| w.set(0));
+                let (g, warnings) = decode(&chain(depth, take_retry));
+                assert!(g.is_some());
+                let work = crate::work::WORK.with(std::cell::Cell::get);
+                let texts: Vec<String> = warnings.iter().map(|w| format!("{w:?}")).collect();
+                let mut unique = texts.clone();
+                unique.sort();
+                unique.dedup();
+                assert_eq!(unique.len(), texts.len(), "a warning reported twice: {texts:?}");
+                let kind = if take_retry { "object_original_size" } else { "shape_drawn_extent" };
+                assert_eq!(lost_kinds(&warnings).iter().filter(|k| *k == kind).count(), depth);
+                counts.push((texts.len(), work));
+            }
+            let ((w4, k4), (w8, k8)) = (counts[0], counts[1]);
+            assert!(w8 <= 2 * w4 + 4 && k8 <= 2 * k4 + 8, "{take_retry}: {counts:?}");
+        }
+    }
+
     /// Branch review r3 H1: groups inside notes whose first paragraph
     /// starts with the encoder's number head are decoded from a trimmed copy
     /// of that paragraph. Two such notes in one text box of an outer group,
