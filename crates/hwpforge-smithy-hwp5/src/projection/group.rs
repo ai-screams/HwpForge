@@ -1960,6 +1960,21 @@ mod tests {
         group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![child(pic, at(100, 100, 0.0, 0.0))])
     }
 
+    /// Branch review B-H3: a group of pictures of one asset stores it once.
+    /// 이것을 실패시키는 것: 참조마다 복사하기(그림 수만큼 복사).
+    #[test]
+    fn an_asset_is_copied_once() {
+        let pictures: Vec<Hwp5GroupChild> =
+            (0..20).map(|_| child(picture(), at(100, 100, 0.0, 0.0))).collect();
+        let top = group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), pictures);
+        super::super::ASSET_COPIES.with(|n| n.set(0));
+        let (g, lost) = project(&top);
+        assert!(lost.is_empty(), "{lost:?}");
+        let Some(Control::Group { children, .. }) = g else { panic!("group") };
+        assert_eq!(children.len(), 20);
+        assert_eq!(super::super::ASSET_COPIES.with(std::cell::Cell::get), 1);
+    }
+
     /// A group picture's crop is carried (not reported): the record's crop
     /// with its image size, nothing for the whole image.
     ///

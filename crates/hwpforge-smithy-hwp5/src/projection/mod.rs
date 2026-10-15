@@ -13,6 +13,12 @@ mod text;
 
 use std::collections::{BTreeSet, VecDeque};
 
+#[cfg(test)]
+thread_local! {
+    /// How many image assets the projection copied into its store.
+    pub(crate) static ASSET_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
@@ -637,7 +643,7 @@ impl<'a> ProjectionImageState<'a> {
             return None;
         }
 
-        self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+        self.store_asset(asset);
 
         // Decode placement before constructing the image so the byte-ground
         // fail-closed warnings (unknown relTo/wrap bits) reach `self.warnings`
@@ -866,7 +872,7 @@ impl<'a> ProjectionImageState<'a> {
                     lost(&mut self.warnings, format!("picture fill: {reason}"));
                     return style;
                 };
-                self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+                self.store_asset(asset);
                 let mode = match img.mode {
                     Hwp5FillImageMode::TileAll => ImageFillMode::Tile,
                     Hwp5FillImageMode::Resize => ImageFillMode::Stretch,
@@ -920,6 +926,19 @@ impl<'a> ProjectionImageState<'a> {
         Some(run)
     }
 
+    /// Puts `asset` in the image store unless it is already there — one copy
+    /// per asset, however many pictures and fills reference it (branch
+    /// review B-H3: each reference copied the bytes, twice for a group
+    /// picture).
+    /// 이것을 실패시키는 것: 이미 있어도 복사하기(`an_asset_is_copied_once`).
+    fn store_asset(&mut self, asset: &Hwp5JoinedImageAsset) {
+        if self.image_store.get(&asset.payload.storage_name).is_none() {
+            #[cfg(test)]
+            ASSET_COPIES.with(|n| n.set(n.get() + 1));
+            self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+        }
+    }
+
     /// The image asset of BinData `reference`, when the document has one.
     fn image_asset(&self, reference: u16) -> Option<&'a Hwp5JoinedImageAsset> {
         self.image_assets?.asset_for_reference(reference)
@@ -945,7 +964,7 @@ impl<'a> ProjectionImageState<'a> {
         hyperlink: Option<String>,
     ) -> Option<Image> {
         let asset = self.image_asset(image.binary_data_id)?;
-        self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
+        self.store_asset(asset);
         let mut core_image = Image::new(
             asset.payload.package_path.clone(),
             HwpUnit::new(width).unwrap_or(HwpUnit::ZERO),
@@ -957,8 +976,7 @@ impl<'a> ProjectionImageState<'a> {
         // A group picture's box is folded from its matrices, so its own
         // display size is not the size the record's extent is compared to:
         // the extent is always kept with a crop, and dropped without one.
-        let bytes = asset.bytes.clone();
-        self.carry_picture_frame(&mut core_image, image, (width, height), &bytes);
+        self.carry_picture_frame(&mut core_image, image, (width, height), &asset.bytes);
         Some(core_image)
     }
 }
