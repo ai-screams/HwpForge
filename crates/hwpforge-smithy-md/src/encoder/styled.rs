@@ -163,11 +163,28 @@ struct Ctx {
     /// Inside a memo (`<!-- memo: … -->`): pictures are written as link
     /// text only (no asset), notes inline.
     in_comment: bool,
+    /// How many containers (tables, captions, shape texts, note and memo
+    /// bodies) enclose this content — each one is a level of recursion.
+    depth: usize,
 }
+
+/// Written in place of a container nested deeper than
+/// [`MAX_NESTING_DEPTH`](crate::lossless_grammar::MAX_NESTING_DEPTH): the
+/// styled view is infallible, so it says what it left out instead of
+/// recursing without bound.
+const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
 
 impl Ctx {
     fn markdown(self) -> Self {
         Self { html: false, ..self }
+    }
+
+    /// The context one container deeper, or `None` past the limit.
+    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제
+    /// (`deep_containers_are_cut_off`).
+    fn enter(self) -> Option<Self> {
+        (self.depth < crate::lossless_grammar::MAX_NESTING_DEPTH)
+            .then_some(Self { depth: self.depth + 1, ..self })
     }
 }
 
@@ -631,7 +648,8 @@ fn encode_control_styled(
         Control::Memo { content, .. } => {
             // Drawn as Markdown (`paragraph_text_styled`); an HTML cell
             // escapes the whole memo after.
-            let inner = Ctx { in_comment: true, ..ctx };
+            let Some(inner) = ctx.enter() else { return TOO_DEEP.to_string() };
+            let inner = Ctx { in_comment: true, ..inner };
             let body = content
                 .iter()
                 .map(|p| paragraph_text_styled(p, styles, st, inner))
@@ -677,7 +695,8 @@ fn extract_note_body(
     st: &mut State,
     ctx: Ctx,
 ) -> Vec<String> {
-    let inner = Ctx { note_depth: ctx.note_depth + 1, ..ctx };
+    let Some(inner) = ctx.enter() else { return vec![TOO_DEEP.to_string()] };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
     paragraphs
         .iter()
         .map(|p| paragraph_text_styled(p, styles, st, inner).trim().to_string())
@@ -696,6 +715,7 @@ fn shape_text(
     st: &mut State,
     ctx: Ctx,
 ) -> String {
+    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
     let parts: Vec<String> = paragraphs
         .iter()
         .map(|p| {
@@ -895,6 +915,7 @@ fn table_to_styled_markdown(
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
 fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
+    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
     let ctx = ctx.markdown();
     let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -929,6 +950,7 @@ fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ct
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
 fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
+    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
     let ctx = Ctx { html: true, ..ctx };
     let mut lines = Vec::new();
     lines.push("<table>".to_string());
@@ -1108,6 +1130,7 @@ fn styled_caption(
     ctx: Ctx,
 ) -> String {
     let Some(caption) = caption else { return String::new() };
+    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
         let t = paragraph_text_styled(p, styles, st, ctx);
@@ -1134,6 +1157,7 @@ fn html_caption(
     ctx: Ctx,
 ) -> String {
     let Some(caption) = caption else { return String::new() };
+    let Some(ctx) = ctx.enter() else { return TOO_DEEP.to_string() };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
         let t = extract_paragraph_text_html(p, styles, st, ctx);
@@ -3515,6 +3539,29 @@ mod tests {
             encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
         assert!(!md.contains("<b>"), "{md}");
         assert!(md.contains("(주: &amp;lt;b&amp;gt;x&amp;lt;/b&amp;gt;)"), "{md}");
+    }
+
+    /// Containers nested past the limit are cut off with a visible notice
+    /// instead of recursing (group → text box → group …), and a shallower
+    /// nesting is drawn whole.
+    ///
+    /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제.
+    #[test]
+    fn deep_containers_are_cut_off() {
+        use hwpforge_core::control::GroupChild;
+        let styles = MockStyles::new();
+        let nest = |n: usize| {
+            let mut run = t("core");
+            for _ in 0..n {
+                let tb = text_box(vec![para(vec![run])]);
+                run = group(vec![GroupChild::Shape(tb)]);
+            }
+            run
+        };
+        let md = encode_styled(&validated_document(vec![para(vec![nest(32)])]), &styles).markdown;
+        assert_eq!(md, "core");
+        let md = encode_styled(&validated_document(vec![para(vec![nest(33)])]), &styles).markdown;
+        assert_eq!(md, TOO_DEEP);
     }
 
     /// An equation's LaTeX in an HTML cell is escaped text: a script that

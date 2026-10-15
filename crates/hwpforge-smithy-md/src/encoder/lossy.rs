@@ -25,6 +25,7 @@ pub(crate) fn encode_with_template_report(
     document: &Document<Validated>,
     template: &Template,
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
+    refuse_too_deep(document)?;
     let mut warnings = Vec::new();
     let (mapping, registry) = resolve_mapping(template)?;
     let body = encode_body(document, Some(&mapping), Some(&registry), &mut warnings);
@@ -46,9 +47,25 @@ pub(crate) fn encode_without_template(document: &Document<Validated>) -> MdResul
 pub(crate) fn encode_without_template_report(
     document: &Document<Validated>,
 ) -> MdResult<(String, Vec<super::MdWarning>)> {
+    refuse_too_deep(document)?;
     let mut warnings = Vec::new();
     let body = encode_body(document, None, None, &mut warnings);
     Ok((body, warnings))
+}
+
+/// The lossy view recurses through tables and captions; a document nested
+/// deeper than the lossless limit is refused before drawing starts.
+/// 이것을 실패시키는 것: 이 검사를 지우기(`lossy_refuses_too_deep_nesting`).
+fn refuse_too_deep(document: &Document<Validated>) -> MdResult<()> {
+    if super::nests_too_deep(document) {
+        return Err(crate::error::MdError::UnsupportedStructure {
+            detail: format!(
+                "structure nests deeper than {} containers",
+                crate::lossless_grammar::MAX_NESTING_DEPTH
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn encode_body(
@@ -1220,5 +1237,38 @@ mod tests {
         assert_eq!(doc(para(vec![t("앞"), s1])), "앞");
         let s2 = grp(Control::text_box(vec![para(vec![t("  ")])], u(10), u(10)));
         assert_eq!(doc(para(vec![t("앞"), s2, t("뒤")])), "앞뒤");
+    }
+
+    /// A document nested past the lossless limit is refused before
+    /// drawing; at the limit it is drawn. (Notes are the nesting here: lossy
+    /// draws nested tables in time that doubles per level, an older cost
+    /// kept out of this test.)
+    ///
+    /// 이것을 실패시키는 것: 이 검사를 지우기.
+    #[test]
+    fn lossy_refuses_too_deep_nesting() {
+        let nest = |n: usize| {
+            let mut run = Run::text("core", CharShapeIndex::new(0));
+            for _ in 0..n {
+                run = Run::control(
+                    Control::footnote(vec![Paragraph::with_runs(
+                        vec![run],
+                        ParaShapeIndex::new(0),
+                    )]),
+                    CharShapeIndex::new(0),
+                );
+            }
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                hwpforge_core::PageSettings::a4(),
+            ));
+            d.validate().unwrap()
+        };
+        assert!(encode_without_template(&nest(32)).is_ok());
+        assert!(matches!(
+            encode_without_template(&nest(33)),
+            Err(crate::error::MdError::UnsupportedStructure { .. })
+        ));
     }
 }
