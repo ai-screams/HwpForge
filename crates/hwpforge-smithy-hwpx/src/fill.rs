@@ -202,12 +202,21 @@ impl WireScan {
     }
 }
 
-/// 같은 `path` 안에서 각 항목의 순번 (0부터, 목록 순서).
+/// 같은 `path` 안에서 각 항목의 순번 (0부터, 목록 순서). 경로마다 센 수를
+/// 색인에 두어 항목 수에 선형이다(브랜치 리뷰 B-H2: 앞 항목을 매번 다시 세면
+/// N²).
+/// 이것을 실패시키는 것: 앞 항목 다시 세기(`locating_stays_linear` 의 작업량).
 fn ordinals(paths: &[&[PathSeg]]) -> Vec<usize> {
+    let mut seen: std::collections::HashMap<&[PathSeg], usize> =
+        std::collections::HashMap::with_capacity(paths.len());
     paths
         .iter()
-        .enumerate()
-        .map(|(i, path)| paths[..i].iter().filter(|p| *p == path).count())
+        .map(|path| {
+            crate::cache_flow::tick();
+            let count = seen.entry(path).or_insert(0);
+            *count += 1;
+            *count - 1
+        })
         .collect()
 }
 
@@ -234,16 +243,17 @@ fn strip_linesegarray_for_changed_fields(
     }
     for (section_idx, field_indices) in sections {
         let path = crate::patch::section_path(section_idx);
-        let mut xml = pkg.read_text_entry(&path)?;
         let expected = inventory.get(&section_idx).map(Vec::as_slice).unwrap_or_default();
-        let mut removals =
+        let xml = pkg.read_text_entry(&path)?;
+        let removals =
             locate_changed_paragraph_caches(&xml, section_idx, expected, &field_indices)?;
-        // 구간은 문단마다 한 번만 모인다([`WireScan::stale_caches`]) — 뒤에서부터
-        // 지운다 (캐시 없는 문단은 removals 에 아무 것도 더하지 않는다 = no-op).
-        removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
-        for range in removals {
-            xml.replace_range(range, "");
-        }
+        // 구간은 문단마다 한 번만 모이고([`WireScan::stale_caches`]) 한 번에
+        // 써진다 — 구간마다 뒤를 당기면 문단 수의 제곱 바이트 이동(B-H2).
+        // 캐시 없는 문단은 removals 에 아무 것도 더하지 않는다 = no-op.
+        let xml = crate::cache_flow::splice(
+            &xml,
+            removals.into_iter().map(|range| (range, String::new())).collect(),
+        )?;
         pkg.replace_text_entry(&path, xml);
     }
     pkg.write()
@@ -285,14 +295,23 @@ fn locate_changed_paragraph_caches(
             ),
         };
 
-    // 짝: 인벤토리 i ↔ wire j (경로·순번이 같고 이름이 같음).
+    // 짝: 인벤토리 i ↔ wire j (경로·순번이 같고 이름이 같음). (경로, 순번) 색인
+    // 한 번으로 찾는다 — wire 를 항목마다 훑으면 N²(B-H2).
+    let mut wire_at: std::collections::HashMap<(&[PathSeg], usize), usize> =
+        std::collections::HashMap::with_capacity(wire.len());
+    for (j, path) in wire_paths.iter().enumerate() {
+        crate::cache_flow::tick();
+        wire_at.entry((*path, wire_ordinals[j])).or_insert(j);
+    }
     let mut partner: Vec<usize> = Vec::with_capacity(expected.len());
+    let mut paired = vec![false; wire.len()];
     for (i, field) in expected.iter().enumerate() {
-        let found = wire.iter().enumerate().position(|(j, w)| {
-            w.locator.path == field.path && wire_ordinals[j] == expected_ordinals[i]
-        });
-        match found {
-            Some(j) if wire[j].locator.name == field.name => partner.push(j),
+        crate::cache_flow::tick();
+        match wire_at.get(&(field.path.as_slice(), expected_ordinals[i])).copied() {
+            Some(j) if wire[j].locator.name == field.name => {
+                partner.push(j);
+                paired[j] = true;
+            }
             Some(j) => {
                 return Err(mismatch(
                     &format!("is named {:?} in the section XML", wire[j].locator.name),
@@ -310,7 +329,7 @@ fn locate_changed_paragraph_caches(
         }
     }
     if wire.len() != expected.len() {
-        let extra = (0..wire.len()).find(|j| !partner.contains(j)).unwrap_or_default();
+        let extra = paired.iter().position(|p| !p).unwrap_or_default();
         return Err(mismatch(
             "is in the section XML but not in the decoded document",
             &wire[extra].locator,
@@ -1275,6 +1294,35 @@ mod tests {
             let xml = fill_xml(&bytes, &[("mid", value)]).expect("fill");
             assert_eq!(caches(&xml), vec![0, 1], "{value}");
         }
+    }
+
+    /// Branch review B-H2: locating the filled paragraphs and writing the
+    /// removals stays linear in the field count — the per-path ordinals, the
+    /// pairing with the section XML and the one-pass splice — not only the
+    /// cache collection.
+    /// 이것을 실패시키는 것: 순번을 앞 항목 다시 세기로, 짝짓기를 wire 전체 훑기로
+    /// (작업량 N²) · 구간마다 따로 지우기(splice 를 구간마다 부름).
+    #[test]
+    fn locating_stays_linear() {
+        const N: usize = 2000;
+        let paragraphs: Vec<Paragraph> =
+            (0..N).map(|i| para(vec![field(&format!("f{i}"), "값")])).collect();
+        let doc = encode(paragraphs, &ImageStore::default());
+        let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
+        let locators: Vec<FieldLocator> = (0..N)
+            .map(|i| FieldLocator {
+                path: vec![PathSeg::BodyParagraph(i)],
+                name: Some(format!("f{i}")),
+            })
+            .collect();
+        let inventory = BTreeMap::from([(0, locators)]);
+        let changed: Vec<(usize, usize)> = (0..N).map(|i| (0, i)).collect();
+        crate::cache_flow::WORK.with(|w| w.set(0));
+        let out =
+            strip_linesegarray_for_changed_fields(&bytes, &inventory, &changed).expect("strip");
+        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        assert!(caches(&section_xml(&out)).is_empty());
+        assert!(work <= 10 * N, "{work} work units for {N} fields");
     }
 
     /// W2 review MEDIUM: the scan keeps one cache list per paragraph (not a

@@ -464,7 +464,7 @@ pub mod warning_samples {
 pub struct ParagraphPath(pub Vec<PathSeg>);
 
 /// [`ParagraphPath`] 의 segment 하나.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum PathSeg {
     /// 구역 인덱스.

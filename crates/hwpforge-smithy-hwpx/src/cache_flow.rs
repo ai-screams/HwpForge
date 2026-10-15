@@ -38,6 +38,7 @@ pub(crate) fn stale_caches(
         let mut at = Some(paragraph);
         while let Some(q) = at {
             tick();
+            self::tick();
             let list = para_list[q];
             from[list] = from[list].min(q);
             at = list_host[list];
@@ -46,6 +47,7 @@ pub(crate) fn stale_caches(
     (0..caches.len())
         .filter(|&j| {
             tick();
+            self::tick();
             j >= from[para_list[j]]
         })
         .flat_map(|j| caches[j].iter().cloned())
@@ -209,6 +211,27 @@ struct Open {
     page_level: bool,
 }
 
+/// Counts one unit of work in the invalidation path, for the tests that
+/// pin it linear in the input (branch review B-H2); nothing outside tests.
+#[inline]
+pub(crate) fn tick() {
+    tick_n(1);
+}
+
+/// Counts `n` units of work (see [`tick`]).
+#[inline]
+#[cfg_attr(not(test), allow(unused_variables))]
+pub(crate) fn tick_n(n: usize) {
+    #[cfg(test)]
+    WORK.with(|w| w.set(w.get() + n));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Work units counted by [`tick`] on this thread.
+    pub(crate) static WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Writes `xml` with each `(range, replacement)` applied, in one pass.
 ///
 /// # Errors
@@ -220,9 +243,12 @@ pub(crate) fn splice(
     mut replacements: Vec<(Range<usize>, String)>,
 ) -> HwpxResult<String> {
     replacements.sort_unstable_by_key(|(range, _)| (range.start, range.end));
+    // One unit per KiB written, so writing the part once per range shows.
+    tick_n(xml.len() / 1024);
     let mut out = String::with_capacity(xml.len());
     let mut cursor = 0;
     for (range, text) in replacements {
+        tick();
         if range.start < cursor
             || range.end < range.start
             || !xml.is_char_boundary(range.start)
