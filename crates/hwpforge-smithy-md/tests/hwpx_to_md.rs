@@ -5,7 +5,8 @@
 //! 2. `HwpxDecoder::decode` → `HwpxDocument { document, style_store, image_store }`
 //! 3. `document.validate()` → `Document<Validated>`
 //! 4. `HwpxStyleLookup::new(&style_store, &image_store)` → `&dyn StyleLookup`
-//! 5. `MdEncoder::encode_styled(&validated, &lookup)` → `MdOutput { markdown, images }`
+//! 5. `MdEncoder::encode_styled(&validated, &lookup)` → `MdOutput { markdown, images, warnings }`
+//!    (`#[non_exhaustive]`: read its fields or destructure with `..`)
 
 use std::io::Write as IoWrite;
 
