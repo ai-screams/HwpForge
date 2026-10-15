@@ -616,16 +616,14 @@ fn encode_control_styled(
         // a memo is written inline. 이것을 실패시키는 것: 깊이 조건 삭제 · 메모
         // 조건 삭제(`notes_follow_depth_and_memo`).
         Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
-            let body = extract_note_body(paragraphs, styles, st, ctx);
-            if ctx.note_depth > 0 || ctx.in_comment {
-                // The body is Markdown text; in an HTML cell it is escaped
-                // like other text (the cell passes notes through as-is).
-                let inline = format!("(주: {})", body.join(" "));
-                if ctx.html {
-                    escape_html(&inline)
-                } else {
-                    inline
-                }
+            let inline = ctx.note_depth > 0 || ctx.in_comment;
+            // An inline body in an HTML cell is drawn as HTML from the start
+            // (the cell passes notes through as-is), so its text is escaped
+            // once. 이것을 실패시키는 것: HTML 분기 삭제(Markdown 렌더 후 HTML
+            // escape 로 — `link_text_cannot_inject_markup`).
+            let body = extract_note_body(paragraphs, styles, st, ctx, inline && ctx.html);
+            if inline {
+                format!("(주: {})", body.join(" "))
             } else if matches!(control, Control::Footnote { .. }) {
                 st.notes.add_footnote(body)
             } else {
@@ -730,18 +728,28 @@ fn encode_control_styled(
 }
 
 /// A note body's paragraphs, each drawn on its own (multi-paragraph
-/// preserved) in Markdown (`paragraph_text_styled`) one note level deeper.
+/// preserved) one note level deeper: in Markdown (`paragraph_text_styled`),
+/// or in HTML (`extract_paragraph_text_html`) when `html`.
 fn extract_note_body(
     paragraphs: &[Paragraph],
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
+    html: bool,
 ) -> Vec<String> {
     let Some(inner) = ctx.enter() else { return vec![st.too_deep("note")] };
     let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
     paragraphs
         .iter()
-        .map(|p| paragraph_text_styled(p, styles, st, inner).trim().to_string())
+        .map(|p| {
+            if html {
+                extract_paragraph_text_html(p, styles, st, inner)
+            } else {
+                paragraph_text_styled(p, styles, st, inner)
+            }
+            .trim()
+            .to_string()
+        })
         .filter(|t| !t.is_empty())
         .collect()
 }
@@ -3555,10 +3563,12 @@ mod tests {
     /// through a text box, through a shape in a text box — the link is an
     /// `<a>` with an escaped href and escaped text (a dangerous scheme keeps
     /// only the escaped text); in Markdown the text is Markdown-escaped. An
-    /// inline note in an HTML cell is escaped too.
+    /// inline note in an HTML cell is drawn as HTML, its text escaped once
+    /// (no `&amp;lt;`, no Markdown backslash).
     ///
     /// 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제(HTML·Markdown 각각) ·
-    /// href 이스케이프 삭제 · HTML 칸 인라인 각주 이스케이프 삭제.
+    /// href 이스케이프 삭제 · HTML 칸 인라인 각주를 Markdown 으로 그린 뒤 HTML
+    /// escape 하기 · HTML 칸 밖 인라인 각주를 HTML 로 그리기.
     #[test]
     fn link_text_cannot_inject_markup() {
         let styles = MockStyles::new();
@@ -3607,7 +3617,16 @@ mod tests {
         let md =
             encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
         assert!(!md.contains("<b>"), "{md}");
-        assert!(md.contains("(주: &amp;lt;b&amp;gt;x&amp;lt;/b&amp;gt;)"), "{md}");
+        assert!(md.contains("(주: &lt;b&gt;x&lt;/b&gt;)"), "{md}");
+        let deep = note(vec![merged_cell_table(vec![note(vec![t("*x*")])])]);
+        let md =
+            encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
+        assert!(md.contains("(주: *x*)"), "{md}");
+        // Outside an HTML cell an inline note stays Markdown.
+        let deep = note(vec![note(vec![t("*x*")])]);
+        let md =
+            encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
+        assert!(md.contains("(주: \\*x\\*)"), "{md}");
     }
 
     /// Containers nested past the limit are cut off with a visible notice
