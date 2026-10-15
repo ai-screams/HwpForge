@@ -211,8 +211,8 @@ struct Open {
     page_level: bool,
 }
 
-/// Counts one unit of work in the invalidation path, for the tests that
-/// pin it linear in the input (branch review B-H2); nothing outside tests.
+/// Counts one unit of work, for the tests that pin a path linear in its
+/// input (branch review B-H2, B-M1); nothing outside tests.
 #[inline]
 pub(crate) fn tick() {
     tick_n(1);

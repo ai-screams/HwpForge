@@ -64,12 +64,21 @@ pub(crate) fn read_manifest(content_hpf: &str) -> HwpxResult<Vec<(String, String
 /// One [`EncodeWarning::PackageIdConflict`] per manifest id that two or more
 /// items share, in the order the id first appears. `items` come from
 /// [`read_manifest`].
+///
+/// The ids are indexed once, so the work grows with the item count (branch
+/// review B-M1: a scan of the ids so far per item was quadratic).
+/// 이것을 실패시키는 것: 항목마다 앞 id 를 훑기(`checks_stay_linear`).
 pub(crate) fn manifest_id_conflicts(items: &[(String, String)]) -> Vec<EncodeWarning> {
     let mut by_id: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut index: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (item_id, item_href) in items {
-        match by_id.iter_mut().find(|(id, _)| *id == item_id) {
-            Some((_, hrefs)) => hrefs.push(item_href.clone()),
-            None => by_id.push((item_id, vec![item_href.clone()])),
+        crate::cache_flow::tick();
+        match index.get(item_id.as_str()) {
+            Some(&at) => by_id[at].1.push(item_href.clone()),
+            None => {
+                index.insert(item_id, by_id.len());
+                by_id.push((item_id, vec![item_href.clone()]));
+            }
         }
     }
     by_id
@@ -98,7 +107,9 @@ pub(crate) fn unresolved_references(
     items: &[(String, String)],
     parts: &[(&str, &str)],
 ) -> HwpxResult<Vec<EncodeWarning>> {
-    let binary: Vec<&str> = items
+    // Sets, so the work grows with the items and references (B-M1).
+    // 이것을 실패시키는 것: 목록 훑기로 되돌리기(`checks_stay_linear`).
+    let binary: std::collections::HashSet<&str> = items
         .iter()
         .filter(|(_, href)| href.starts_with("BinData/"))
         .map(|(id, _)| id.as_str())
@@ -106,7 +117,7 @@ pub(crate) fn unresolved_references(
     let mut warnings = Vec::new();
     for &(part, xml) in parts {
         let parse_error = |detail: String| HwpxError::XmlParse { file: part.to_string(), detail };
-        let mut reported: Vec<String> = Vec::new();
+        let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut reader = Reader::from_str(xml);
         loop {
             let element = match reader.read_event() {
@@ -123,13 +134,13 @@ pub(crate) fn unresolved_references(
                 let reference = attr
                     .normalized_value(XmlVersion::Explicit1_0)
                     .map_err(|e| parse_error(e.to_string()))?;
+                crate::cache_flow::tick();
                 if reference.is_empty()
-                    || binary.contains(&reference.as_ref())
-                    || reported.iter().any(|r| *r == reference)
+                    || binary.contains(reference.as_ref())
+                    || !reported.insert(reference.to_string())
                 {
                     continue;
                 }
-                reported.push(reference.to_string());
                 warnings.push(EncodeWarning::ImageReferenceUnresolved {
                     part: part.to_string(),
                     location: format!("{}@binaryItemIDRef", element.name().as_ref()),
@@ -154,6 +165,25 @@ mod tests {
 
     fn strings(xs: &[&str]) -> Vec<String> {
         xs.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// Branch review B-M1: the manifest conflicts and the reference check
+    /// do constant work per item and per reference.
+    #[test]
+    fn checks_stay_linear() {
+        const N: usize = 3000;
+        let items: Vec<(String, String)> =
+            (0..N).map(|i| (format!("image{i}"), format!("BinData/image{i}.png"))).collect();
+        let xml: String = std::iter::once("<r>".to_string())
+            .chain((0..N).map(|i| format!(r#"<p binaryItemIDRef="missing{i}"/>"#)))
+            .chain(std::iter::once("</r>".to_string()))
+            .collect();
+        crate::cache_flow::WORK.with(|w| w.set(0));
+        assert!(manifest_id_conflicts(&items).is_empty());
+        let unresolved = unresolved_references(&items, &[("Contents/section0.xml", &xml)]).unwrap();
+        assert_eq!(unresolved.len(), N);
+        let work = crate::cache_flow::WORK.with(std::cell::Cell::get);
+        assert!(work <= 3 * N, "{work} work units for {N} items and references");
     }
 
     /// 이것을 실패시키는 것: 겹침 판정을 이미지·OLE 항목 안에서만 하는 것 —
