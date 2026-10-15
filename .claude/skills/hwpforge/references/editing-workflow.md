@@ -22,7 +22,7 @@ The refusal codes differ by interface — Python and MCP name them differently; 
 
 Because `fill` and `patch` keep every other entry byte for byte, `Preview/PrvText.txt` (the preview text file managers and 한컴 show before opening) still holds the old text after the edit (measured: fill and patch both). 한컴 refreshes it on the next save; mention it if the user relies on previews.
 
-A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
+A `.hwpx` produced by `convert-hwp5` or by HwpForge itself carries no 한컴 entries, so every surface accepts it — unless reading it loses content: a cross-reference or bookmark whose displayed text sits in its field is dropped on reading (`CONTENT_LOST field_body`), and `set-cell`, `stamp` and `restyle` then refuse with `INPUT_NOT_ROUNDTRIP_SAFE`; `patch` still edits such a file. When unsure, run the surface on the file: a refusal is immediate and writes nothing.
 
 ## Two write-back modes
 
