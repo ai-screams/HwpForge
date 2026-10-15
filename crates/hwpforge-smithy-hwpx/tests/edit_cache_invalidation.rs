@@ -209,3 +209,32 @@ fn a_cache_the_decoder_dropped_stays_dropped() {
     assert!(!xml[..xml.find("바뀐 칸").unwrap()].contains("<hp:linesegarray"));
     assert_eq!(first_cache(&edited), None);
 }
+
+/// Branch review r2 M1: a second line starting at wire 16 — after the
+/// section definition and the table, before the text — is Core position 0
+/// with the boundary "after a section definition and a table". The
+/// re-encoder writes a column definition between those two; the line still
+/// starts after the table, so the untouched paragraph keeps the input's
+/// cache exactly.
+/// 이것을 실패시키는 것: 경계가 단 정의를 건너뛰지 않기(캐시가 무경고로 사라진다).
+#[test]
+fn an_untouched_paragraph_keeps_a_line_start_past_a_column_definition() {
+    let bytes = first_paragraph_cached(&[0, 16], true);
+    let before = first_cache(&bytes).expect("the input cache decodes");
+    assert!(before.lines[1].boundary.is_some(), "{before:?}");
+    let edited = edit_second_table(&bytes);
+    // The re-decoded boundary also names the column definition the output
+    // now holds; otherwise the cache is the input's.
+    let without_col = |mut cache: hwpforge_core::layout::LayoutCache| {
+        for line in &mut cache.lines {
+            if let Some(b) = line.boundary.as_mut() {
+                b.skip.retain(|k| *k != hwpforge_core::layout::WireTokenKind::ColumnDef);
+            }
+        }
+        cache
+    };
+    let after = first_cache(&edited).expect("the untouched paragraph keeps a cache");
+    assert_eq!(without_col(after), before);
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&edited).unwrap();
+    assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+}

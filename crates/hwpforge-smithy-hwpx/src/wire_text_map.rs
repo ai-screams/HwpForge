@@ -457,12 +457,34 @@ impl TokenLedger {
         boundary: &hwpforge_core::layout::LineBoundary,
     ) -> Result<u32, String> {
         let here = self.at(core);
-        let k = boundary.skip.len();
         let kinds = || -> Vec<_> { here.iter().map(|&i| self.tokens[i].kind).collect() };
+        // The skipped tokens, in order. A column definition the boundary does
+        // not name may sit between them: the input had none there and the
+        // encoder writes one after the section definition. The line starts
+        // after the skipped token that follows it, so after it too — exact,
+        // not a guess. One left over before `next` or at the end is not
+        // skipped (where the line starts against it is unknown).
+        // 이것을 실패시키는 것: 단 정의를 건너뛰지 않기
+        // (`an_untouched_paragraph_keeps_a_line_start_past_a_column_definition`).
+        let mut k = 0;
+        let mut matches = true;
+        for kind in &boundary.skip {
+            use hwpforge_core::layout::WireTokenKind;
+            while *kind != WireTokenKind::ColumnDef
+                && here.get(k).is_some_and(|&i| self.tokens[i].kind == WireTokenKind::ColumnDef)
+            {
+                k += 1;
+            }
+            match here.get(k) {
+                Some(&i) if self.tokens[i].kind == *kind => k += 1,
+                _ => {
+                    matches = false;
+                    break;
+                }
+            }
+        }
         // S22 r2: only the skipped prefix and the token after it are read.
         self.count_visits(k.min(here.len()) + 1);
-        let matches = here.len() >= k
-            && here[..k].iter().zip(&boundary.skip).all(|(&i, kind)| self.tokens[i].kind == *kind);
         if !matches {
             return Err(format!(
                 "line boundary at core {core}: skip {:?} does not match the tokens {:?}",
