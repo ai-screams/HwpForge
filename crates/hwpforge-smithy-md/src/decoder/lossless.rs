@@ -1730,12 +1730,10 @@ fn parse_optional_u16_attr(
 /// §19.22 D3: `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
 /// break. `BREAK` itself is not a written value and is refused like any
 /// other unknown spelling; a repeated name is refused.
-/// 이것을 실패시키는 것: 읽기 삭제 · 모르는 값을 기본값으로
-/// (`cell_line_wrap_round_trips`, `cell_line_wrap_attribute_errors`). The
-/// repeat is refused here; quick-xml's own duplicate check also catches it
-/// whenever another `<td>` lookup scans the whole list (one for an absent
-/// attribute does), so dropping this scan alone still refuses the repeat in
-/// `cell_line_wrap_attribute_errors`.
+/// The other `<td>` lookups stop at the first match, so only this scan
+/// sees a repeat placed after them.
+/// 이것을 실패시키는 것: 읽기 삭제 · 모르는 값을 기본값으로 · 중복 검사 삭제
+/// (`cell_line_wrap_round_trips`, `cell_line_wrap_attribute_errors`).
 fn parse_line_wrap_attr(start: &BytesStart<'_>) -> MdResult<hwpforge_core::table::CellLineWrap> {
     match unique_attr(start, "td", g::LINE_WRAP)? {
         None => Ok(hwpforge_core::table::CellLineWrap::Break),
@@ -1901,6 +1899,15 @@ mod tests {
             td(r#"data-line-wrap="KEEP" data-line-wrap="KEEP""#),
             Err(MdError::LosslessParse { .. })
         ));
+        // With every other lookup satisfied before it (a background too), a
+        // repeat — same value or not — is seen only by this attribute's own
+        // scan.
+        for repeat in [
+            r##"data-background="#FFFFFF" data-line-wrap="KEEP" data-line-wrap="SQUEEZE""##,
+            r##"data-background="#FFFFFF" data-line-wrap="KEEP" data-line-wrap="KEEP""##,
+        ] {
+            assert!(matches!(td(repeat), Err(MdError::LosslessParse { .. })), "{repeat}");
+        }
         assert!(td(r#"data-line-wrap="KEEP""#).is_ok());
     }
 
