@@ -608,9 +608,10 @@ fn encode_control_styled(
                 }
                 (false, false) => escape_markdown(text),
                 (false, true) => {
-                    // Escape ) in url to prevent markdown injection
-                    let safe_url = url.replace('(', "%28").replace(')', "%29");
-                    format!("[{}]({safe_url})", escape_markdown(text))
+                    // The destination cannot end early (`(`, `)`, `<`, `>`
+                    // encoded). 이것을 실패시키는 것: `link_destination` 대신 괄호만
+                    // 바꾸기(`link_text_cannot_inject_markup`).
+                    format!("[{}]({})", escape_markdown(text), super::link_destination(url))
                 }
             }
         }
@@ -1165,8 +1166,10 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
     let filename = styles
         .image_resolve_filename(path)
         .unwrap_or_else(|| path.rsplit(['/', '\\']).next().unwrap_or("image"));
-    // Escape parentheses that break markdown link syntax.
-    let safe_filename = filename.replace('(', "%28").replace(')', "%29");
+    // The path cannot end the image early (`(`, `)`, `<`, `>` encoded).
+    // 이것을 실패시키는 것: `link_destination` 대신 괄호만 바꾸기
+    // (`picture_path_cannot_end_early`).
+    let safe_filename = super::link_destination(filename);
     format!("images/{safe_filename}")
 }
 
@@ -2656,6 +2659,16 @@ mod tests {
         assert_eq!(result, "images/file%281%29.jpg");
     }
 
+    /// A picture path cannot end the image early or hold raw HTML.
+    ///
+    /// 이것을 실패시키는 것: `<`·`>` 인코딩 삭제.
+    #[test]
+    fn picture_path_cannot_end_early() {
+        let styles = MockStyles::new();
+        let result = image_rel_path("x/a)<img src=y>.png", &styles);
+        assert_eq!(result, "images/a%29%3Cimg src=y%3E.png");
+    }
+
     // --- has_nested_table ---
 
     #[test]
@@ -3616,6 +3629,14 @@ mod tests {
         )
         .markdown;
         assert_eq!(md, "[&lt;img src=x onerror=alert(1)&gt;](https://e.invalid)");
+        // An allowed URL holds no whitespace but may hold `)` and `<`: its
+        // destination cannot end early.
+        let md = encode_styled(
+            &validated_document(vec![para(vec![link("https://a)<img/src=x/onerror=y>")])]),
+            &styles,
+        )
+        .markdown;
+        assert!(md.ends_with("](https://a%29%3Cimg/src=x/onerror=y%3E)"), "{md}");
         let inner_note = note(vec![t("<b>x</b>")]);
         let deep = note(vec![merged_cell_table(vec![inner_note])]);
         let md =
