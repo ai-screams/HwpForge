@@ -1410,7 +1410,8 @@ pub(crate) fn decode_container(
     // order, so it takes the same slots back by that order — no address
     // identifies a group (a group in a note's first paragraph lives in a
     // temporary copy). The outermost group moves every slot into the place
-    // of its placeholder and gathers the slots' warnings in tree order; a
+    // of its placeholder and gathers every slot's warnings once, placed or
+    // lost, in call order; a
     // placeholder without its slot is an error.
     // 이것을 실패시키는 것: 재시도에서 슬롯 대신 다시 디코드하기 · 경고를 슬롯마다
     // 후손까지 들기 · 자리표 해소 실패를 무시하기(`nested_group_retries_stay_linear`,
@@ -1423,16 +1424,8 @@ pub(crate) fn decode_container(
             crate::work::tick();
             let slot = ctx.group_slots.get(id).and_then(Option::as_ref);
             let slot = slot.ok_or_else(|| group_replay_error(id))?;
-            return Ok(match &slot.run {
-                Some(run) => Some(group_placeholder(id, run.char_shape_id)),
-                None => {
-                    // A lost group's warnings are re-reported (rare: the
-                    // whole group is gone).
-                    crate::work::tick_n(slot.warnings.len());
-                    ctx.warnings.extend(slot.warnings.iter().cloned());
-                    None
-                }
-            });
+            // A lost group's warnings stay in its slot either way.
+            return Ok(slot.run.as_ref().map(|run| group_placeholder(id, run.char_shape_id)));
         }
     }
     // A group in a group child's text is decoded on its own: keep the outer
@@ -1454,17 +1447,12 @@ pub(crate) fn decode_container(
     let own = ctx.warnings.split_off(mark);
     crate::work::tick_n(own.len());
     if !ctx.group_calls.is_empty() {
-        // Nested: keep it in a slot, the parent records the slot.
-        let slot = match run {
-            Some(run) => GroupSlot { run: Some(run), warnings: own, children: frame.record },
-            None => {
-                let mut warnings = own;
-                take_slot_warnings(&frame.record, &mut ctx.group_slots, &mut warnings);
-                crate::work::tick_n(warnings.len());
-                ctx.warnings.extend(warnings.iter().cloned());
-                GroupSlot { run: None, warnings, children: Vec::new() }
-            }
-        };
+        // Nested: keep it in a slot, the parent records the slot. A lost
+        // group (no run) keeps its warnings and children there too — they
+        // are gathered once, at the outermost group (r4 H1: copying them to
+        // the parent as well doubled them at every lost level).
+        // 이것을 실패시키는 것: 잃은 묶음 경고를 부모에도 넣기(`lost_nested_groups_report_each_warning_once`).
+        let slot = GroupSlot { run, placed: false, warnings: own, children: frame.record };
         #[cfg(test)]
         if let Some(r) = &slot.run {
             // Tests count the paragraphs the slots hold.
@@ -1483,27 +1471,24 @@ pub(crate) fn decode_container(
         }
         return Ok(placeholder);
     }
-    // The outermost group: its own warnings, then each placed group's in
-    // tree order.
+    // The outermost group: its own warnings, then every kept group's — placed
+    // or lost — once each, in call order.
     ctx.warnings.extend(own);
     let mut slots = std::mem::take(&mut ctx.group_slots);
+    let placed = run.is_some();
     let out = match run {
         Some(mut run) => {
-            let mut gathered = Vec::new();
-            resolve_group_placeholders(&mut run, &mut slots, &mut gathered)?;
-            ctx.warnings.extend(gathered);
+            resolve_group_placeholders(&mut run, &mut slots)?;
             Some(run)
         }
-        None => {
-            let mut gathered = Vec::new();
-            take_slot_warnings(&frame.record, &mut slots, &mut gathered);
-            ctx.warnings.extend(gathered);
-            None
-        }
+        None => None,
     };
-    if let Some(left) = slots.iter().position(|s| s.as_ref().is_some_and(|s| s.run.is_some())) {
+    let mut gathered = Vec::new();
+    gather_slot_warnings(&frame.record, &mut slots, &mut gathered, placed)?;
+    ctx.warnings.extend(gathered);
+    if let Some(left) = slots.iter().position(Option::is_some) {
         return Err(crate::HwpxError::InvalidStructure {
-            detail: format!("group {left} decoded inside another group was not placed"),
+            detail: format!("group {left} decoded inside another group has no parent"),
         });
     }
     Ok(out)
@@ -1513,7 +1498,10 @@ pub(crate) fn decode_container(
 /// group places it.
 #[derive(Debug)]
 pub(crate) struct GroupSlot {
+    /// The group (`None` once placed, or when it was lost).
     run: Option<Run>,
+    /// Whether the outermost group put it in its placeholder's place.
+    placed: bool,
     /// The warnings of its own level (not of the groups decoded inside it).
     warnings: Vec<crate::DecodeWarning>,
     /// The slots of the groups decoded directly inside it.
@@ -1527,19 +1515,32 @@ fn group_replay_error(at: usize) -> crate::HwpxError {
 }
 
 /// Moves the warnings of the slots `ids` and of their descendants into
-/// `out`, emptying those slots.
-fn take_slot_warnings(
+/// `out` (each slot's own, then its children's), emptying those slots.
+/// `parent_placed`: whether every group above these is in the result —
+/// then a group of theirs still unplaced is an error; below a lost group,
+/// nothing is placed.
+fn gather_slot_warnings(
     ids: &[usize],
     slots: &mut [Option<GroupSlot>],
     out: &mut Vec<crate::DecodeWarning>,
-) {
+    parent_placed: bool,
+) -> HwpxResult<()> {
     for &id in ids {
-        if let Some(slot) = slots.get_mut(id).and_then(Option::take) {
-            crate::work::tick_n(slot.warnings.len());
-            out.extend(slot.warnings);
-            take_slot_warnings(&slot.children, slots, out);
+        let slot = slots.get_mut(id).and_then(Option::take).ok_or_else(|| {
+            crate::HwpxError::InvalidStructure {
+                detail: format!("group {id} decoded inside another group was gathered twice"),
+            }
+        })?;
+        if parent_placed && slot.run.is_some() {
+            return Err(crate::HwpxError::InvalidStructure {
+                detail: format!("group {id} decoded inside another group was not placed"),
+            });
         }
+        crate::work::tick_n(slot.warnings.len());
+        out.extend(slot.warnings);
+        gather_slot_warnings(&slot.children, slots, out, parent_placed && slot.placed)?;
     }
+    Ok(())
 }
 
 /// The tag of a [`group_placeholder`].
@@ -1555,22 +1556,14 @@ fn group_placeholder(id: usize, char_shape_id: CharShapeIndex) -> Run {
 }
 
 /// Replaces every group placeholder in `run` (and in what replaces it) with
-/// its group, moved out of `slots`, and moves each placed group's warnings
-/// into `gathered` in tree order. Each paragraph is visited once.
+/// its group, moved out of `slots` (the slot keeps its warnings and is
+/// marked placed). Each paragraph is visited once.
 ///
 /// # Errors
 ///
 /// A placeholder whose slot is missing or already used.
-fn resolve_group_placeholders(
-    run: &mut Run,
-    slots: &mut [Option<GroupSlot>],
-    gathered: &mut Vec<crate::DecodeWarning>,
-) -> HwpxResult<()> {
-    fn swap(
-        run: &mut Run,
-        slots: &mut [Option<GroupSlot>],
-        gathered: &mut Vec<crate::DecodeWarning>,
-    ) -> HwpxResult<()> {
+fn resolve_group_placeholders(run: &mut Run, slots: &mut [Option<GroupSlot>]) -> HwpxResult<()> {
+    fn swap(run: &mut Run, slots: &mut [Option<GroupSlot>]) -> HwpxResult<()> {
         crate::work::tick();
         let RunContent::Control(c) = &run.content else { return Ok(()) };
         let Control::Unknown { tag, data } = &**c else { return Ok(()) };
@@ -1578,21 +1571,21 @@ fn resolve_group_placeholders(
             return Ok(());
         }
         let id: Option<usize> = data.as_deref().and_then(|d| d.parse().ok());
-        let slot = id.and_then(|id| slots.get_mut(id)).and_then(Option::take);
-        let Some(GroupSlot { run: Some(group), warnings, .. }) = slot else {
+        let slot = id.and_then(|id| slots.get_mut(id)).and_then(Option::as_mut);
+        let Some(group) = slot.and_then(|slot| {
+            slot.placed = slot.run.is_some();
+            slot.run.take()
+        }) else {
             return Err(crate::HwpxError::InvalidStructure {
                 detail: format!("group placeholder {data:?} has no group to place"),
             });
         };
-        crate::work::tick_n(warnings.len());
-        gathered.extend(warnings);
         *run = group;
         Ok(())
     }
     fn paragraphs(
         list: &mut [hwpforge_core::paragraph::Paragraph],
         slots: &mut [Option<GroupSlot>],
-        gathered: &mut Vec<crate::DecodeWarning>,
     ) -> HwpxResult<()> {
         for paragraph in list {
             let mut result = Ok(());
@@ -1601,11 +1594,11 @@ fn resolve_group_placeholders(
                     if result.is_err() {
                         return;
                     }
-                    result = swap(r, slots, gathered);
+                    result = swap(r, slots);
                     // Run pictures' captions are not walked: enter them here.
                     if let (Ok(()), RunContent::Image(image)) = (&result, &mut r.content) {
                         if let Some(caption) = image.caption.as_mut() {
-                            result = paragraphs(&mut caption.paragraphs, slots, gathered);
+                            result = paragraphs(&mut caption.paragraphs, slots);
                         }
                     }
                 }
@@ -1614,11 +1607,11 @@ fn resolve_group_placeholders(
         }
         Ok(())
     }
-    swap(run, slots, gathered)?;
+    swap(run, slots)?;
     let mut holder =
         hwpforge_core::paragraph::Paragraph::new(hwpforge_foundation::ParaShapeIndex::new(0));
     holder.runs.push(std::mem::replace(run, Run::text("", run.char_shape_id)));
-    let result = paragraphs(std::slice::from_mut(&mut holder), slots, gathered);
+    let result = paragraphs(std::slice::from_mut(&mut holder), slots);
     *run = holder.runs.pop().expect("the run put in");
     result
 }
@@ -7155,6 +7148,48 @@ mod group_tests {
         assert!(work[1] <= 2 * work[0] + 4, "{work:?}");
     }
 
+    /// Branch review r4 H1: a chain of groups nested through their text
+    /// boxes' text, where every text box has an unreadable matrix (so every
+    /// group loses its only child and is lost), reports each warning once —
+    /// the work and the warnings grow with the depth, they do not double per
+    /// level. A chain where only the outermost group survives does the same.
+    /// 이것을 실패시키는 것: 잃은 묶음의 경고를 부모에도 넣기(층마다 두 배).
+    #[test]
+    fn lost_nested_groups_report_each_warning_once() {
+        fn chain(depth: usize, bad_outer: bool) -> String {
+            let bad = ri([f64::NAN, 0.0, 0.0, 0.0, 1.0, 0.0], &[(ID, ID)]);
+            let good = ri(ID, &[(ID, ID), (ID, ID)]);
+            let pts = [(0, 0), (500, 0), (500, 500)];
+            let mut xml = String::new();
+            for level in 0..depth {
+                let text = format!(
+                    r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0">{xml}</hp:run></hp:p></hp:subList></hp:drawText>"#
+                );
+                let outermost = level + 1 == depth;
+                let matrix = if outermost && !bad_outer { &good } else { &bad };
+                let shape = polygon((500, 500), matrix, &pts, &text);
+                xml = container_with((1000, 1000), (1000, 1000), &ri(ID, &[(ID, ID)]), &shape);
+            }
+            xml
+        }
+        for bad_outer in [true, false] {
+            let mut counts = Vec::new();
+            for depth in [4, 8] {
+                crate::work::WORK.with(|w| w.set(0));
+                let (_, warnings) = decode(&chain(depth, bad_outer));
+                let work = crate::work::WORK.with(std::cell::Cell::get);
+                let texts: Vec<String> = warnings.iter().map(|w| format!("{w:?}")).collect();
+                let mut unique = texts.clone();
+                unique.sort();
+                unique.dedup();
+                assert_eq!(unique.len(), texts.len(), "a warning reported twice: {texts:?}");
+                counts.push((texts.len(), work));
+            }
+            let ((w4, k4), (w8, k8)) = (counts[0], counts[1]);
+            assert!(w8 <= 2 * w4 + 4 && k8 <= 2 * k4 + 8, "{bad_outer}: {counts:?}");
+        }
+    }
+
     /// Branch review r3 H1: groups inside notes whose first paragraph
     /// starts with the encoder's number head are decoded from a trimmed copy
     /// of that paragraph. Two such notes in one text box of an outer group,
@@ -7241,8 +7276,7 @@ mod group_tests {
     fn an_unplaced_group_placeholder_is_an_error() {
         let mut run = super::group_placeholder(3, hwpforge_foundation::CharShapeIndex::new(0));
         let mut slots: Vec<Option<super::GroupSlot>> = Vec::new();
-        let mut gathered = Vec::new();
-        assert!(super::resolve_group_placeholders(&mut run, &mut slots, &mut gathered).is_err());
+        assert!(super::resolve_group_placeholders(&mut run, &mut slots).is_err());
     }
 
     /// The group decode's own consistency checks: a retry that makes a
@@ -7267,10 +7301,25 @@ mod group_tests {
         let mut ctx = crate::decoder::section::DecodeCtx::new(0);
         ctx.group_slots.push(Some(super::GroupSlot {
             run: Some(hwpforge_core::run::Run::text("x", char_shape)),
+            placed: false,
             warnings: Vec::new(),
             children: Vec::new(),
         }));
         assert!(super::decode_container(container, char_shape, 0, &mut ctx).is_err());
+        // Gathering: a group under placed ones still unplaced, and one slot
+        // named twice, are errors; below a lost group nothing is placed.
+        let slot = || {
+            Some(super::GroupSlot {
+                run: Some(hwpforge_core::run::Run::text("x", char_shape)),
+                placed: false,
+                warnings: Vec::new(),
+                children: Vec::new(),
+            })
+        };
+        let mut out = Vec::new();
+        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, true).is_err());
+        assert!(super::gather_slot_warnings(&[0], &mut [slot()], &mut out, false).is_ok());
+        assert!(super::gather_slot_warnings(&[0, 0], &mut [slot()], &mut out, false).is_err());
         // Without it the same decode succeeds.
         let mut ctx = crate::decoder::section::DecodeCtx::new(0);
         assert!(super::decode_container(container, char_shape, 0, &mut ctx).unwrap().is_some());
