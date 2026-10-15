@@ -46,7 +46,6 @@ use crate::decoder::section::{
 use crate::decoder::Hwp5Warning;
 use crate::schema::section::{Hwp5Matrix, Hwp5ShapeFill, Hwp5ShapePoint, Hwp5ShapeRender};
 
-use super::image_size::pixel_size;
 use super::shapes::offset_placement;
 use super::text::hwp_unit_from_u32;
 use super::{
@@ -799,7 +798,7 @@ pub(super) fn project_group_run(
         report(vec![group_link_note()], &place, state);
     }
     let pixels = |reference: u16| match state.image_asset(reference) {
-        Some(asset) => Ok(pixel_size(&asset.bytes)),
+        Some(asset) => Ok(state.asset_pixels(asset)),
         None => Err(state.missing_asset_reason(reference)),
     };
     let plan = plan_children(&group.children, (0.0, 0.0), &pixels);
@@ -1960,10 +1959,14 @@ mod tests {
         group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), vec![child(pic, at(100, 100, 0.0, 0.0))])
     }
 
-    /// Branch review B-H3: a group of pictures of one asset stores it once.
-    /// 이것을 실패시키는 것: 참조마다 복사하기(그림 수만큼 복사).
+    /// Branch review B-H3: a group of pictures of one asset stores it once,
+    /// and (r2 H3) reads its image header once — for the group plan and for
+    /// every picture's crop together.
+    /// 이것을 실패시키는 것: 참조마다 복사하기(그림 수만큼 복사) · 크기 캐시 없이
+    /// 읽기(계획과 방출에서 그림마다 두 번).
     #[test]
     fn an_asset_is_copied_once() {
+        super::super::image_size::PARSES.with(|n| n.set(0));
         let pictures: Vec<Hwp5GroupChild> =
             (0..20).map(|_| child(picture(), at(100, 100, 0.0, 0.0))).collect();
         let top = group(geo(0, 0, 100, 100), at(100, 100, 0.0, 0.0), pictures);
@@ -1973,6 +1976,7 @@ mod tests {
         let Some(Control::Group { children, .. }) = g else { panic!("group") };
         assert_eq!(children.len(), 20);
         assert_eq!(super::super::ASSET_COPIES.with(std::cell::Cell::get), 1);
+        assert_eq!(super::super::image_size::PARSES.with(std::cell::Cell::get), 1);
     }
 
     /// A group picture's crop is carried (not reported): the record's crop

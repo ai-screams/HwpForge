@@ -570,6 +570,11 @@ struct ProjectionImageState<'a> {
     budget_error: Option<Hwp5Error>,
     /// Top-level groups projected so far — numbers group warnings.
     group_seq: usize,
+    /// Pixel size of each image asset read so far (by storage name), a
+    /// header that does not parse included — read once per asset, however
+    /// many pictures use it (branch review r2 H3: a JPEG header scan per
+    /// reference, twice for a group picture).
+    pixel_sizes: std::cell::RefCell<std::collections::HashMap<String, Option<(u32, u32)>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -593,6 +598,7 @@ impl<'a> ProjectionImageState<'a> {
             budget,
             budget_error: None,
             group_seq: 0,
+            pixel_sizes: std::cell::RefCell::default(),
         }
     }
 
@@ -668,7 +674,8 @@ impl<'a> ProjectionImageState<'a> {
         }
         core_image.hyperlink = self.picture_hyperlink(image);
         let display = (resolved_dimensions.width_hwp, resolved_dimensions.height_hwp);
-        self.carry_picture_frame(&mut core_image, image, display, &asset.bytes);
+        let pixels = self.asset_pixels(asset);
+        self.carry_picture_frame(&mut core_image, image, display, pixels);
         let original = image
             .original_size
             .and_then(|(w, h)| Some((i32::try_from(w).ok()?, i32::try_from(h).ok()?)));
@@ -691,9 +698,9 @@ impl<'a> ProjectionImageState<'a> {
         core_image: &mut Image,
         image: &Hwp5ImageControl,
         display: (i32, i32),
-        bytes: &[u8],
+        pixels: Option<(u32, u32)>,
     ) {
-        let frame = picture_crop(&image.picture, display, image_size::pixel_size(bytes));
+        let frame = picture_crop(&image.picture, display, pixels);
         core_image.crop = frame.crop;
         core_image.image_extent = frame.extent;
         if let Some(reason) = frame.note {
@@ -939,6 +946,17 @@ impl<'a> ProjectionImageState<'a> {
         }
     }
 
+    /// The pixel size of `asset`'s image ([`image_size::pixel_size`]), read
+    /// once per asset.
+    /// 이것을 실패시키는 것: 캐시 없이 읽기(`an_asset_is_copied_once` 의 판독 수).
+    fn asset_pixels(&self, asset: &Hwp5JoinedImageAsset) -> Option<(u32, u32)> {
+        *self
+            .pixel_sizes
+            .borrow_mut()
+            .entry(asset.payload.storage_name.clone())
+            .or_insert_with(|| image_size::pixel_size(&asset.bytes))
+    }
+
     /// The image asset of BinData `reference`, when the document has one.
     fn image_asset(&self, reference: u16) -> Option<&'a Hwp5JoinedImageAsset> {
         self.image_assets?.asset_for_reference(reference)
@@ -976,7 +994,8 @@ impl<'a> ProjectionImageState<'a> {
         // A group picture's box is folded from its matrices, so its own
         // display size is not the size the record's extent is compared to:
         // the extent is always kept with a crop, and dropped without one.
-        self.carry_picture_frame(&mut core_image, image, (width, height), &asset.bytes);
+        let pixels = self.asset_pixels(asset);
+        self.carry_picture_frame(&mut core_image, image, (width, height), pixels);
         Some(core_image)
     }
 }
@@ -8757,7 +8776,7 @@ mod shape_style_tests {
             );
             let mut core =
                 Image::new("BinData/a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
-            images.carry_picture_frame(&mut core, &image, (3_000, 2_000), &[]);
+            images.carry_picture_frame(&mut core, &image, (3_000, 2_000), None);
             match images.warnings.as_slice() {
                 [Hwp5Warning::ProjectionFallback { subject, .. }] => *subject,
                 other => panic!("{other:?}"),

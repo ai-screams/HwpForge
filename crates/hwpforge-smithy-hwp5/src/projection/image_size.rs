@@ -17,6 +17,8 @@ pub(crate) fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
         |at: usize| bytes.get(at..at + 2).map(|b| u32::from(u16::from_le_bytes([b[0], b[1]])));
     let le32 =
         |at: usize| bytes.get(at..at + 4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+    #[cfg(test)]
+    PARSES.with(|n| n.set(n.get() + 1));
     let size = match ImageFormat::sniff(bytes)? {
         // IHDR is always the first chunk: width and height at 16 and 20.
         ImageFormat::Png => (be32(16)?, be32(20)?),
@@ -31,6 +33,12 @@ pub(crate) fn pixel_size(bytes: &[u8]) -> Option<(u32, u32)> {
         _ => return None,
     };
     (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many headers [`pixel_size`] read on this thread.
+    pub(crate) static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The frame size from the first start-of-frame marker of a JPEG.
