@@ -3613,10 +3613,10 @@ mod tests {
     /// Containers nested past the limit are cut off with a visible notice
     /// and one warning naming the container and its place, instead of
     /// recursing (group → text box → group …); a shallower nesting is drawn
-    /// whole with no warning.
+    /// whole with no warning. A cut-off inside a memo is reported the same.
     ///
     /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제 · 경고 기록 삭제 ·
-    /// 자리(`at`) 갱신 삭제.
+    /// 자리(`at`) 갱신 삭제 · 메모에서 깊이 증가 삭제.
     #[test]
     fn deep_containers_are_cut_off() {
         use hwpforge_core::control::GroupChild;
@@ -3637,6 +3637,31 @@ mod tests {
             &styles,
         );
         assert_eq!(out.markdown, format!("x\n\n{TOO_DEEP}"));
+        assert_eq!(
+            out.warnings,
+            vec![super::super::MdWarning::ContainerTooDeep {
+                container: "shape text",
+                limit: 32,
+                section: 0,
+                paragraph: 1,
+            }]
+        );
+        // In a memo the notice sits inside the comment, out of sight: the
+        // warning still reports it. The memo takes one level, so 32 text
+        // boxes in it reach the limit.
+        let memo = Control::Memo {
+            content: vec![para(vec![nest(32)])],
+            anchor_runs: vec![t("a")],
+            metadata: Default::default(),
+        };
+        let out = encode_styled(
+            &validated_document(vec![
+                para(vec![t("x")]),
+                para(vec![Run::control(memo, CharShapeIndex::new(0))]),
+            ]),
+            &styles,
+        );
+        assert_eq!(out.markdown, format!("x\n\n<!-- memo: {TOO_DEEP} -->"));
         assert_eq!(
             out.warnings,
             vec![super::super::MdWarning::ContainerTooDeep {
