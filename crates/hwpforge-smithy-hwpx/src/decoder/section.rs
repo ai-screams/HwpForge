@@ -323,13 +323,19 @@ pub(crate) struct DecodeCtx {
     /// for a node the frame check does not judge (a nested group, a leaf
     /// without an original box).
     pub(crate) group_sources: Vec<Option<Vec<(f64, f64)>>>,
-    /// Groups already decoded (by the address of their wire element, which
-    /// lives for the whole section decode) with the warnings they reported —
-    /// reused when an outer group's retry decodes them again.
-    pub(crate) decoded_containers:
-        HashMap<usize, (Option<hwpforge_core::run::Run>, Vec<super::DecodeWarning>)>,
-    /// How many group decodes are under way (0 = outside any group).
-    pub(crate) group_depth: usize,
+    /// Groups decoded inside another group's decode, until the outermost
+    /// group places them (`decode_container`); numbered by position.
+    pub(crate) group_slots: Vec<Option<super::shapes::GroupSlot>>,
+    /// One entry per group decode under way, innermost last.
+    pub(crate) group_calls: Vec<GroupCalls>,
+}
+
+/// The nested group calls one group decode made (their slots, in call
+/// order), and, while it retries, how many of them the retry has taken.
+#[derive(Debug, Default)]
+pub(crate) struct GroupCalls {
+    pub(crate) record: Vec<usize>,
+    pub(crate) replay: Option<usize>,
 }
 
 impl DecodeCtx {
@@ -345,8 +351,8 @@ impl DecodeCtx {
             lifted_header_footers: std::collections::HashSet::new(),
             group_frames: true,
             group_sources: Vec::new(),
-            decoded_containers: HashMap::new(),
-            group_depth: 0,
+            group_slots: Vec::new(),
+            group_calls: Vec::new(),
         }
     }
 
@@ -364,8 +370,8 @@ impl DecodeCtx {
             lifted_header_footers: std::collections::HashSet::new(),
             group_frames: true,
             group_sources: Vec::new(),
-            decoded_containers: HashMap::new(),
-            group_depth: 0,
+            group_slots: Vec::new(),
+            group_calls: Vec::new(),
         }
     }
 
