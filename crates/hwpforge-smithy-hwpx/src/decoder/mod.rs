@@ -627,12 +627,12 @@ impl HwpxDecoder {
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
-        // Master page parts parsed so far, by file number, and the bytes
-        // their shared copies have used of the budget (all parts' size).
-        let mut parsed_masterpages: std::collections::BTreeMap<usize, MasterPage> =
+        // Master page parts parsed so far (by file number) with their decoded
+        // cost, and the budget every kept master page — first or copy — is
+        // charged against.
+        let mut parsed_masterpages: std::collections::BTreeMap<usize, (MasterPage, usize)> =
             std::collections::BTreeMap::new();
-        let share_budget: usize = masterpage_xmls.values().map(String::len).sum();
-        let mut share_spent = 0usize;
+        let mut master_budget = CopyBudget::new(MASTER_PAGE_BUDGET);
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
 
@@ -694,35 +694,35 @@ impl HwpxDecoder {
                         .push(lost(format!("masterPage idRef {id:?} names no master page part")));
                     continue;
                 };
-                // A part is parsed once. Further references to it (sections
-                // may share a master page: `masterPage@idRef` has no owner)
-                // get a copy, within a budget: the copies may add at most the
-                // size of all master page parts again, so repeated references
-                // cannot multiply the decoded content (branch review r2 H1,
-                // r3 H2). A reference past the budget is lost content.
-                // 이것을 실패시키는 것: 공유를 손실로 보기(`a_shared_master_page_is_kept`),
-                // 예산 없이 복제하기(`a_master_page_part_is_read_once`).
-                let master = match parsed_masterpages.get(&number) {
-                    Some(master) => {
-                        share_spent = share_spent.saturating_add(xml.len());
-                        if share_spent > share_budget {
-                            warnings.push(lost(format!(
-                                "masterPage idRef {id:?} repeats master page {number} past the \
-                                 sharing budget ({share_budget} bytes of copies)"
-                            )));
-                            continue;
-                        }
-                        Clone::clone(master)
-                    }
-                    None => {
+                // A part is parsed once; every reference to it (sections may
+                // share a master page: `masterPage@idRef` has no owner) gets
+                // it, first and copies alike charged their decoded cost
+                // against one budget (`MASTER_PAGE_BUDGET`), so repeated
+                // references cannot multiply the decoded content (branch
+                // review r2 H1, r3 H2, r4 H2). Only an admitted reference is
+                // charged; one past the budget is lost content.
+                // 이것을 실패시키는 것: 공유를 손실로 보기(`shared_master_pages_are_kept`),
+                // 예산 없이 복제하기(`a_master_page_part_is_read_once`), 거절도 과금하기
+                // (`copy_budget_charges_admitted_copies_only`).
+                let (master, cost) = match parsed_masterpages.entry(number) {
+                    std::collections::btree_map::Entry::Occupied(parsed) => parsed.into_mut(),
+                    std::collections::btree_map::Entry::Vacant(slot) => {
                         let (master, mut mp_warnings) =
                             section::parse_master_page(xml, i, number, &image_pixels)?;
                         warnings.append(&mut mp_warnings);
-                        parsed_masterpages.insert(number, master.clone());
-                        master
+                        let cost = master_page_cost(&master);
+                        slot.insert((master, cost))
                     }
                 };
-                owned.push(master);
+                if !master_budget.admit(*cost) {
+                    warnings.push(lost(format!(
+                        "masterPage idRef {id:?}: master page {number} ({cost} units) does not fit \
+                         the master page budget ({MASTER_PAGE_BUDGET} units, {} used)",
+                        master_budget.spent
+                    )));
+                    continue;
+                }
+                owned.push(Clone::clone(master));
             }
             let section_master_pages =
                 if owned.is_empty() { result.master_pages } else { Some(owned) };
@@ -865,6 +865,55 @@ fn header_begin_num_warnings(header: Option<&BeginNum>) -> Vec<DecodeWarning> {
 ///
 /// Scans the raw XML for `masterPageCnt="N"` without re-parsing the full XML.
 /// Returns 0 if the attribute is absent or unparseable.
+/// The decoded size every section's master pages together may reach, in
+/// [`master_page_cost`] units (about bytes). A package entry is capped at
+/// 50 MiB, so one master page always fits; the budget lets a large one be
+/// shared by a few sections and a small one by many (64 sections of 1 MiB),
+/// and stops repeated references from multiplying the decoded content.
+const MASTER_PAGE_BUDGET: usize = 64 << 20;
+
+/// What decoding a master page holds: a fixed amount per paragraph and per
+/// run (the nodes), plus the bytes of its text — every paragraph nested in
+/// it included.
+fn master_page_cost(master: &MasterPage) -> usize {
+    const NODE: usize = 64;
+    let mut cost = 0usize;
+    for p in &master.paragraphs {
+        p.for_each_paragraph(|p| {
+            cost = cost.saturating_add(NODE.saturating_mul(1 + p.runs.len()));
+            for r in &p.runs {
+                cost = cost.saturating_add(r.content.as_text().map_or(0, str::len));
+            }
+        });
+    }
+    cost
+}
+
+/// A running total checked before each charge: a charge that does not fit
+/// is refused and leaves the total as it was.
+#[derive(Debug)]
+struct CopyBudget {
+    limit: usize,
+    spent: usize,
+}
+
+impl CopyBudget {
+    fn new(limit: usize) -> Self {
+        Self { limit, spent: 0 }
+    }
+
+    /// Charges `cost` if it fits, and says whether it did.
+    fn admit(&mut self, cost: usize) -> bool {
+        match self.spent.checked_add(cost) {
+            Some(total) if total <= self.limit => {
+                self.spent = total;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// `id → href` of every `<opf:item>` in a `content.hpf` manifest.
 fn manifest_hrefs(xml: &str) -> std::collections::HashMap<String, Option<String>> {
     use quick_xml::events::Event;
@@ -952,6 +1001,12 @@ mod tests {
 
     /// Two sections owning master pages "A" and "B", encoded.
     fn two_master_pages() -> Vec<u8> {
+        master_pages_doc(&[Some("A"), Some("B")])
+    }
+
+    /// One section per entry, owning a master page with that text (`None`:
+    /// no master page), encoded.
+    fn master_pages_doc(names: &[Option<&str>]) -> Vec<u8> {
         use hwpforge_core::run::Run;
         use hwpforge_core::section::MasterPage;
         use hwpforge_core::{PageSettings, Paragraph};
@@ -960,10 +1015,10 @@ mod tests {
             Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
         };
         let mut doc = Document::new();
-        for name in ["A", "B"] {
+        for name in names {
             let mut section = Section::with_paragraphs(vec![para("본문")], PageSettings::a4());
             section.master_pages =
-                Some(vec![MasterPage::new(ApplyPageType::Both, vec![para(name)])]);
+                name.map(|name| vec![MasterPage::new(ApplyPageType::Both, vec![para(name)])]);
             doc.add_section(section);
         }
         let store = crate::style_store_for_preset("default").unwrap();
@@ -975,18 +1030,24 @@ mod tests {
         .unwrap()
     }
 
-    /// `bytes` with each section's `masterPage@idRef` set to `ids[i]`.
-    fn with_master_page_refs(bytes: &[u8], ids: [&str; 2]) -> Vec<u8> {
+    /// `bytes` with section `i`'s `masterPage@idRef` set to `ids[i]`, or a
+    /// reference added where the section has none.
+    fn with_master_page_refs(bytes: &[u8], ids: &[&str]) -> Vec<u8> {
         let mut pkg = crate::patch::RawPackage::read(bytes).unwrap();
+        let mut part = 0;
         for (i, id) in ids.iter().enumerate() {
             let path = format!("Contents/section{i}.xml");
             let xml = pkg.read_text_entry(&path).unwrap();
-            let own = format!(r#"<hp:masterPage idRef="masterpage{i}"/>"#);
-            assert!(xml.contains(&own), "{xml}");
-            pkg.replace_text_entry(
-                &path,
-                xml.replace(&own, &format!(r#"<hp:masterPage idRef="{id}"/>"#)),
-            );
+            let own = format!(r#"<hp:masterPage idRef="masterpage{part}"/>"#);
+            let new = format!(r#"<hp:masterPage idRef="{id}"/>"#);
+            let xml = if xml.contains(&own) {
+                part += 1;
+                xml.replace(&own, &new)
+            } else {
+                let at = xml.find("</hp:secPr>").expect("secPr");
+                format!("{}{new}{}", &xml[..at], &xml[at..])
+            };
+            pkg.replace_text_entry(&path, xml);
         }
         pkg.write().unwrap()
     }
@@ -1015,7 +1076,7 @@ mod tests {
     fn swapped_master_page_references_follow_the_ids() {
         let plain = HwpxDecoder::decode(&two_master_pages()).unwrap();
         assert_eq!(master_page_texts(&plain), ["A", "B"]);
-        let swapped = with_master_page_refs(&two_master_pages(), ["masterpage1", "masterpage0"]);
+        let swapped = with_master_page_refs(&two_master_pages(), &["masterpage1", "masterpage0"]);
         let decoded = HwpxDecoder::decode(&swapped).unwrap();
         assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
         assert_eq!(master_page_texts(&decoded), ["B", "A"]);
@@ -1070,43 +1131,66 @@ mod tests {
         assert!(lost[0].contains("more than one manifest item"), "{lost:?}");
     }
 
-    /// Branch review r2 H1 / r3 H2: copies of a shared part stay within a
-    /// budget (the size of all master page parts). Fifty more references to
-    /// section 0's part from section 1: a copy or two fit, the rest are
-    /// each reported.
-    /// 이것을 실패시키는 것: 예산 없이 참조마다 복제하기(구역 1 이 바탕쪽 51 개).
+    /// Branch review r2 H1 / r4 H2: references to one large part are
+    /// admitted while their decoded size fits the master page budget; the
+    /// rest are each reported, so repeated references cannot multiply it.
+    /// 이것을 실패시키는 것: 예산 없이 참조마다 복제하기(31 개 모두 들어간다).
     #[test]
     fn a_master_page_part_is_read_once() {
+        let big = "가".repeat(1 << 20); // about 3 MiB of text
+        let bytes = master_pages_doc(&[Some(&big), Some("B")]);
         let own = r#"<hp:masterPage idRef="masterpage1"/>"#;
-        let more = r#"<hp:masterPage idRef="masterpage0"/>"#.repeat(50);
+        let more = r#"<hp:masterPage idRef="masterpage0"/>"#.repeat(30);
         let bytes = with_section1_and_manifest(
-            &two_master_pages(),
+            &bytes,
             |xml| xml.replace(own, &format!("{own}{more}")),
             str::to_string,
         );
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
-        // The budget is the two parts' size together: one or two copies of
-        // the first part fit, depending on which part is larger.
-        let kept = decoded.document.sections()[1].master_pages.as_ref().unwrap().len();
-        assert!((2..=3).contains(&kept), "{kept}");
+        let kept = decoded.document.sections()[1].master_pages.as_ref().unwrap().len() - 1;
         let lost = lost_messages(&decoded);
-        assert_eq!(lost.len(), 51 - kept, "{lost:?}");
-        assert!(lost.iter().all(|m| m.contains("past the sharing budget")));
+        // Every kept master page is charged, the first one too.
+        let pages = decoded.document.sections()[1].master_pages.as_ref().unwrap();
+        let (a, b) = (master_page_cost(&pages[1]), master_page_cost(&pages[0]));
+        assert_eq!(kept, (MASTER_PAGE_BUDGET - a - b) / a, "{kept}");
+        assert!((2..30).contains(&kept), "{kept}");
+        assert_eq!(lost.len(), 30 - kept, "{lost:?}");
+        assert!(lost.iter().all(|m| m.contains("does not fit the master page budget")));
     }
 
-    /// Branch review r3 H2: two sections naming one master page part, once
-    /// each, both keep it — the schema gives a part no single owner.
-    /// 이것을 실패시키는 것: 두 번째 참조를 손실로 보기.
+    /// Branch review r3 H2 / r4 H2: a part named by three or five sections,
+    /// once each, is kept by all — the schema gives a part no owner — and
+    /// whether the package also holds a part nobody names changes nothing.
+    /// 이것을 실패시키는 것: 공유를 손실로 보기 · 예산을 part 크기 합으로 잡기.
     #[test]
-    fn a_shared_master_page_is_kept() {
-        let bytes = with_master_page_refs(&two_master_pages(), ["masterpage0", "masterpage0"]);
-        let decoded = HwpxDecoder::decode(&bytes).unwrap();
-        assert_eq!(master_page_texts(&decoded), ["A", "A"]);
-        // The part no section names is still reported.
-        let lost = lost_messages(&decoded);
-        assert_eq!(lost.len(), 1, "{lost:?}");
-        let at = decoded.warnings.iter().find(|w| w.is_content_loss()).and_then(|w| w.location());
-        assert!(at.as_deref().is_some_and(|at| at.contains("masterpage1")), "{at:?}");
+    fn shared_master_pages_are_kept() {
+        for sections in [3, 5] {
+            let refs = vec!["masterpage0"; sections];
+            let mut names = vec![None; sections];
+            names[0] = Some("A");
+            let only = with_master_page_refs(&master_pages_doc(&names), &refs);
+            names[1] = Some("unused");
+            let with_unused = with_master_page_refs(&master_pages_doc(&names), &refs);
+            for (bytes, orphans) in [(only, 0), (with_unused, 1)] {
+                let decoded = HwpxDecoder::decode(&bytes).unwrap();
+                assert_eq!(master_page_texts(&decoded), vec!["A"; sections]);
+                assert_eq!(lost_messages(&decoded).len(), orphans, "{sections}");
+            }
+        }
+    }
+
+    /// The budget refuses a charge that does not fit without spending it,
+    /// so a smaller one after it still fits.
+    /// 이것을 실패시키는 것: 거절한 비용도 누적하기.
+    #[test]
+    fn copy_budget_charges_admitted_copies_only() {
+        let mut budget = CopyBudget::new(100);
+        assert!(budget.admit(60));
+        assert!(!budget.admit(50));
+        assert!(budget.admit(30));
+        assert_eq!(budget.spent, 90);
+        assert!(!budget.admit(11));
+        assert!(budget.admit(10));
     }
 
     /// A reference that names no master page part, and the part no section
@@ -1114,7 +1198,7 @@ mod tests {
     /// 이것을 실패시키는 것: 미해결 참조 무시 · 참조 없는 바탕쪽 무시.
     #[test]
     fn an_unresolved_master_page_reference_is_lost_content() {
-        let bytes = with_master_page_refs(&two_master_pages(), ["masterpage0", "nosuch"]);
+        let bytes = with_master_page_refs(&two_master_pages(), &["masterpage0", "nosuch"]);
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
         assert_eq!(master_page_texts(&decoded), ["A", ""]);
         let lost: Vec<String> = decoded
