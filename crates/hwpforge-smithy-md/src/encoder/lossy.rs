@@ -7,6 +7,7 @@ use hwpforge_core::{
 };
 
 use super::list_format::{format_list_continuation, format_list_item};
+use super::markup::{Cell, Md};
 use super::Part;
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
@@ -131,21 +132,20 @@ fn encode_paragraph(
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                return table_to_markdown(table, warnings, 0)
-                    + &lossy_caption(table.caption.as_ref(), warnings, 0);
+                let mut md: Md = table_to_markdown(table, warnings, 0);
+                md.push(lossy_caption(table.caption.as_ref(), warnings, 0));
+                return md.into_string();
             }
             RunContent::Image(image) => {
-                return format!(
-                    "![{}]({})",
-                    super::escape_inline_markup(&image_alt_text(&image.path), true, false, None),
-                    super::link_destination(&image.path)
-                ) + &lossy_caption(image.caption.as_ref(), warnings, 0);
+                let mut md = Md::image(Md::lossy_label(&image_alt_text(&image.path)), &image.path);
+                md.push(lossy_caption(image.caption.as_ref(), warnings, 0));
+                return md.into_string();
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_markdown(paragraph, warnings);
+    let text = paragraph_text_markdown(paragraph, warnings).into_string();
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
@@ -161,7 +161,8 @@ fn encode_paragraph(
             ParagraphKind::Heading(level) => {
                 format!("{} {}", "#".repeat(level as usize), trimmed)
             }
-            ParagraphKind::Code => format!("```\n{}\n```", text),
+            // The paragraph's own text in a fence no line of it can close.
+            ParagraphKind::Code => Md::code_block(&raw_text(paragraph)).into_string(),
             ParagraphKind::BlockQuote => {
                 text.lines().map(|line| format!("> {line}")).collect::<Vec<_>>().join("\n")
             }
@@ -218,8 +219,73 @@ fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> 
     }
 }
 
-fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> String {
+fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> Md {
     paragraph_text_at(paragraph, warnings, 0)
+}
+
+/// A paragraph's text runs as they are (a code block's content).
+fn raw_text(paragraph: &Paragraph) -> String {
+    paragraph.runs.iter().filter_map(|r| r.content.plain_text()).collect()
+}
+
+/// Where lossy markup is written: Markdown ([`Md`], outside tables) or a
+/// GFM cell ([`Cell`], inside one). Document text goes in through
+/// [`Sink::text`] only, so it is escaped once for the place it lands.
+trait Sink: Default {
+    /// Document text, judged against `after` (the next markup's first char).
+    fn text(&mut self, raw: &str, after: Option<char>);
+    /// Markup the encoder made.
+    fn md(&mut self, md: Md);
+    /// Markup already written for this place.
+    fn append(&mut self, other: Self);
+    /// Whether nothing was written.
+    fn is_empty(&self) -> bool;
+    /// The markup written (blank checks).
+    fn as_str(&self) -> &str;
+    /// A table of `rows` written for this place.
+    fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self;
+}
+
+impl Sink for Md {
+    fn text(&mut self, raw: &str, after: Option<char>) {
+        self.push(Md::lossy(raw, after));
+    }
+    fn md(&mut self, md: Md) {
+        self.push(md);
+    }
+    fn append(&mut self, other: Self) {
+        self.push(other);
+    }
+    fn is_empty(&self) -> bool {
+        Md::is_empty(self)
+    }
+    fn as_str(&self) -> &str {
+        Md::as_str(self)
+    }
+    fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self {
+        Cell::table(rows, width)
+    }
+}
+
+impl Sink for Cell {
+    fn text(&mut self, raw: &str, after: Option<char>) {
+        self.push(Cell::lossy(raw, after));
+    }
+    fn md(&mut self, md: Md) {
+        self.push_md(md);
+    }
+    fn append(&mut self, other: Self) {
+        self.push(other);
+    }
+    fn is_empty(&self) -> bool {
+        Cell::is_empty(self)
+    }
+    fn as_str(&self) -> &str {
+        Cell::as_str(self)
+    }
+    fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self {
+        Cell::nested_table(rows, width)
+    }
 }
 
 /// How many tables a lossy table may sit inside; past this depth the inner
@@ -232,26 +298,24 @@ const MAX_TABLE_NESTING: usize = 8;
 /// Written in place of a table nested deeper than [`MAX_TABLE_NESTING`].
 const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
 
-/// [`paragraph_text_markdown`] inside `depth` tables. Inside a table
-/// (`depth > 0`) the result is cell text, escaped once here and written by
-/// the cell as it is.
+/// [`paragraph_text_markdown`] inside `depth` tables, written for `S` —
+/// a cell's markup when `depth > 0`.
 ///
-/// The document's text is gathered in `pending` and escaped
-/// ([`super::escape_inline_markup`]) when markup follows it or the paragraph
-/// ends, so a sequence split across runs (`[a]` then `(javascript:…)`) is
-/// judged whole, and against the markup's first character.
-fn paragraph_text_at(
+/// The document's text is gathered in `pending` and written
+/// ([`Sink::text`]) when markup follows it or the paragraph ends, so a
+/// sequence split across runs (`[a]` then `(javascript:…)`) is judged
+/// whole, and against the markup's first character.
+fn paragraph_text_at<S: Sink>(
     paragraph: &Paragraph,
     warnings: &mut Vec<super::MdWarning>,
     depth: usize,
-) -> String {
-    let cell = depth > 0;
-    let mut output = String::new();
+) -> S {
+    let mut output = S::default();
     let mut pending = String::new();
     // Writes the gathered text, judged against `after`.
-    let flush = |output: &mut String, pending: &mut String, after: Option<char>| {
+    let flush = |output: &mut S, pending: &mut String, after: Option<char>| {
         if !pending.is_empty() {
-            output.push_str(&super::escape_inline_markup(pending, false, cell, after));
+            output.text(pending, after);
             pending.clear();
         }
     };
@@ -275,27 +339,21 @@ fn paragraph_text_at(
                 let sep = !output.is_empty() || !pending.is_empty();
                 flush(&mut output, &mut pending, Some(' '));
                 if sep {
-                    output.push(' ');
+                    output.md(Md::syntax(" "));
                 }
-                let alt =
-                    super::escape_inline_markup(&image_alt_text(&image.path), true, cell, None);
-                let path = super::link_destination(&image.path);
-                let path = if cell { escape_gfm_cell(&path) } else { path };
-                output.push_str(&format!("![{alt}]({path})"));
-                output.push_str(&lossy_caption(image.caption.as_ref(), warnings, depth));
+                let alt = Md::lossy_label(&image_alt_text(&image.path));
+                output.md(Md::image(alt, &image.path));
+                output.append(lossy_caption(image.caption.as_ref(), warnings, depth));
             }
             Part::Control(control) => match control {
                 // Only an allowed URL is written as a link (the text otherwise).
                 // Its label escapes `\`, `[` and `]`, so it cannot close the
                 // link early and start another (`a](javascript:…)[b`), and its
-                // destination cannot end early.
+                // destination reads back as the URL.
                 Control::Hyperlink { text: label, url } => {
                     if super::link_url_allowed(url) {
                         flush(&mut output, &mut pending, Some('['));
-                        let label = super::escape_inline_markup(label, true, cell, None);
-                        let url = super::link_destination(url);
-                        let url = if cell { escape_gfm_cell(&url) } else { url };
-                        output.push_str(&format!("[{label}]({url})"));
+                        output.md(Md::link(Md::lossy_label(label), url));
                     } else {
                         pending.push_str(label);
                     }
@@ -326,8 +384,7 @@ fn paragraph_text_at(
                 }
                 Control::Unknown { tag, .. } => {
                     flush(&mut output, &mut pending, Some('`'));
-                    let code = format!("`[{tag}]`");
-                    output.push_str(&if cell { escape_gfm_cell(&code) } else { code });
+                    output.md(Md::code_span(&format!("[{tag}]")));
                 }
                 Control::Line { .. } => {
                     // Lines have no text content to render in lossy mode
@@ -360,12 +417,12 @@ fn paragraph_text_at(
             },
             Part::Table(table) => {
                 let sep = !output.is_empty() || !pending.is_empty();
-                flush(&mut output, &mut pending, Some(if cell { '<' } else { '\n' }));
+                flush(&mut output, &mut pending, Some(if depth > 0 { '<' } else { '\n' }));
                 if sep {
-                    output.push_str(if cell { "<br>" } else { "\n" });
+                    output.md(Md::syntax("\n"));
                 }
-                output.push_str(&table_to_markdown(table, warnings, depth));
-                output.push_str(&lossy_caption(table.caption.as_ref(), warnings, depth));
+                output.append(table_to_markdown(table, warnings, depth));
+                output.append(lossy_caption(table.caption.as_ref(), warnings, depth));
             }
         }
     }
@@ -376,36 +433,37 @@ fn paragraph_text_at(
 
 /// A picture's or table's caption as a paragraph after it, empty without
 /// one — the caption numbers ("그림 3") live there (§19.16 J, review r1).
+/// In a cell the paragraph break is `<br><br>` (the cell's line endings).
 /// 이것을 실패시키는 것: 캡션 출력을 지우기
 /// (`f17_caption_numbers_reach_the_readable_views`).
-fn lossy_caption(
+fn lossy_caption<S: Sink>(
     caption: Option<&hwpforge_core::caption::Caption>,
     warnings: &mut Vec<super::MdWarning>,
     depth: usize,
-) -> String {
-    let Some(caption) = caption else { return String::new() };
-    let text: Vec<String> = caption
-        .paragraphs
-        .iter()
-        .map(|p| paragraph_text_at(p, warnings, depth))
-        .filter(|t| !t.trim().is_empty())
-        .collect();
-    // In a cell the paragraph break is `<br><br>` (cell-safe, see
-    // [`paragraph_text_at`]).
-    let gap = if depth > 0 { "<br><br>" } else { "\n\n" };
-    if text.is_empty() {
-        String::new()
-    } else {
-        format!("{gap}{}", text.join(gap))
+) -> S {
+    let mut out = S::default();
+    let Some(caption) = caption else { return out };
+    for p in &caption.paragraphs {
+        let text: S = paragraph_text_at(p, warnings, depth);
+        if !text.as_str().trim().is_empty() {
+            out.md(Md::syntax("\n\n"));
+            out.append(text);
+        }
     }
+    out
 }
 
-/// A table inside `depth` tables. Inside a table (`depth > 0`) it is drawn
-/// cell-safe — `\|` for its bars, `<br>` between its lines — around cell
-/// text that [`paragraph_text_at`] has already escaped, so no text is
-/// escaped twice. 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제 ·
-/// 칸 글자를 다시 escape 하기(`nested_tables_stay_small`).
-fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth: usize) -> String {
+/// A table inside `depth` tables, written for `S`: Markdown at the top, a
+/// cell's markup (`\|` bars, `<br>` between lines) inside a table — its
+/// cells' text escaped once, where it is written, so the output grows
+/// linearly with the depth. 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이
+/// 증가 삭제 · 칸 글자를 다시 escape 하기(`nested_tables_stay_small`,
+/// `nested_table_text_is_escaped_once`).
+fn table_to_markdown<S: Sink>(
+    table: &Table,
+    warnings: &mut Vec<super::MdWarning>,
+    depth: usize,
+) -> S {
     if depth >= MAX_TABLE_NESTING {
         // The place is filled in by `encode_body` once the top-level
         // paragraph is drawn. 이것을 실패시키는 것: 경고 기록 삭제
@@ -416,11 +474,12 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth:
             section: 0,
             paragraph: 0,
         });
-        return TABLE_TOO_DEEP.to_string();
+        let mut out = S::default();
+        out.md(Md::syntax(TABLE_TOO_DEEP));
+        return out;
     }
-    let (bar, line) = if depth > 0 { ("\\|", "<br>") } else { ("|", "\n") };
     if table.rows.is_empty() {
-        return format!("{bar} {bar}{line}{bar} --- {bar}");
+        return S::table(vec![vec![]], 1);
     }
 
     // Warning-first: this renderer flattens merged regions into a plain GFM
@@ -435,43 +494,27 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth:
         warnings.push(super::MdWarning::MergedCellsFlattened { merged_cells });
     }
 
-    let rows: Vec<Vec<String>> = table
+    let rows: Vec<Vec<Cell>> = table
         .rows
         .iter()
         .map(|row| {
             row.cells
                 .iter()
                 .map(|cell| {
-                    cell.paragraphs
-                        .iter()
-                        .map(|p| paragraph_text_at(p, warnings, depth + 1))
-                        .collect::<Vec<_>>()
-                        .join(" ")
+                    let mut text = Cell::new();
+                    for (i, p) in cell.paragraphs.iter().enumerate() {
+                        if i > 0 {
+                            text.push_md(Md::syntax(" "));
+                        }
+                        text.push(paragraph_text_at(p, warnings, depth + 1));
+                    }
+                    text
                 })
                 .collect()
         })
         .collect();
-
-    let header = rows.first().cloned().unwrap_or_else(|| vec![String::new()]);
-    let col_count = header.len().max(1);
-
-    let sep = format!(" {bar} ");
-    let mut lines = Vec::new();
-    lines.push(format!("{bar} {} {bar}", header.join(&sep)));
-    lines.push(format!(
-        "{bar} {} {bar}",
-        (0..col_count).map(|_| "---").collect::<Vec<_>>().join(&sep)
-    ));
-
-    for row in rows.iter().skip(1) {
-        if row.is_empty() {
-            lines.push(format!("{bar} {bar}"));
-        } else {
-            lines.push(format!("{bar} {} {bar}", row.join(&sep)));
-        }
-    }
-
-    lines.join(line)
+    let width = rows.first().map_or(1, |r| r.len().max(1));
+    S::table(rows, width)
 }
 
 fn image_alt_text(path: &str) -> String {
@@ -493,10 +536,6 @@ fn starts_with_list_marker(text: &str) -> bool {
     }
 
     false
-}
-
-fn escape_gfm_cell(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('|', "\\|").replace('\n', "<br>")
 }
 
 #[cfg(test)]
@@ -1531,7 +1570,14 @@ mod tests {
             Control::Hyperlink { text: "t".into(), url: "https://e.invalid".into() },
             CharShapeIndex::new(0),
         );
-        assert_eq!(body(vec![t("<div"), link]), "<div[t](https://e.invalid)");
+        assert_eq!(body(vec![t("<div"), link.clone()]), "<div[t](https://e.invalid)");
+        // A lone backslash before a link is escaped, so the link stays one.
+        // 이것을 실패시키는 것: `Md::push` 의 끝 역슬래시 처리 삭제.
+        assert_eq!(body(vec![t("x\\"), link.clone()]), "x\\\\[t](https://e.invalid)");
+        // `!` before a link is escaped once: an escaped one stays as it is.
+        // 이것을 실패시키는 것: `join` 의 `!` 앞 역슬래시 짝수 검사 삭제.
+        assert_eq!(body(vec![t("!"), link.clone()]), "\\![t](https://e.invalid)");
+        assert_eq!(body(vec![t("\\!"), link]), "\\![t](https://e.invalid)");
         // A picture's alt cannot close its label and its path cannot end early.
         let image = hwpforge_core::Image::new(
             "x/a](b).png",
@@ -1541,11 +1587,11 @@ mod tests {
         );
         assert_eq!(
             body(vec![Run::image(image.clone(), CharShapeIndex::new(0))]),
-            "![a\\](b)](x/a]%28b%29.png)"
+            "![a\\](b)](x/a]\\(b\\).png)"
         );
         assert_eq!(
             body(vec![t("x"), Run::image(image, CharShapeIndex::new(0))]),
-            "x ![a\\](b)](x/a]%28b%29.png)"
+            "x ![a\\](b)](x/a]\\(b\\).png)"
         );
     }
 
@@ -1580,7 +1626,7 @@ mod tests {
         // The destination cannot end early: no whitespace, so the URL passes.
         assert_eq!(
             doc("https://a)<img/src=x/onerror=y>"),
-            "[t](https://a%29%3Cimg/src=x/onerror=y%3E)"
+            "[t](https://a\\)\\<img/src=x/onerror=y\\>)"
         );
     }
 }

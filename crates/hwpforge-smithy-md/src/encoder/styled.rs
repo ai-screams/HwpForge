@@ -13,6 +13,7 @@ use hwpforge_core::{
 use hwpforge_foundation::UnderlineType;
 
 use super::list_format::{format_list_continuation, format_list_item};
+use super::markup::{Cell, Html, Md};
 use super::Part;
 use crate::eqn::{render_equation, EqnRender};
 use crate::internal_styles::parse_list_continuation_style_name;
@@ -21,7 +22,8 @@ use crate::internal_styles::parse_list_continuation_style_name;
 ///
 /// Contains the generated markdown string, any extracted images (keyed by
 /// their relative path within the output) and what the rendering left out.
-/// Built only by the encoder (`#[non_exhaustive]`): read its fields.
+/// Built only by the encoder (`#[non_exhaustive]`): read its fields, or
+/// destructure with `..` (`let MdOutput { markdown, images, .. } = out;`).
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct MdOutput {
@@ -29,8 +31,10 @@ pub struct MdOutput {
     pub markdown: String,
     /// Extracted images: relative path → binary data.
     pub images: HashMap<String, Vec<u8>>,
-    /// What the rendering left out — today a container nested too deep
-    /// ([`super::MdWarning::ContainerTooDeep`]); empty for most documents.
+    /// What the rendering left out or wrote differently — a container
+    /// nested too deep ([`super::MdWarning::ContainerTooDeep`]), an equation
+    /// written as its script text ([`super::MdWarning::EquationAsText`]);
+    /// empty for most documents.
     pub warnings: Vec<super::MdWarning>,
 }
 
@@ -50,8 +54,8 @@ struct ListContinuationContext {
 /// met at note depth 0 outside a memo are registered (see [`Ctx`]).
 struct FootnoteCollector {
     /// Per-note body paragraphs (multi-paragraph definitions).
-    footnotes: Vec<Vec<String>>,
-    endnotes: Vec<Vec<String>>,
+    footnotes: Vec<Vec<Md>>,
+    endnotes: Vec<Vec<Md>>,
 }
 
 impl FootnoteCollector {
@@ -60,17 +64,15 @@ impl FootnoteCollector {
     }
 
     /// Adds a footnote body and returns the inline marker `[^N]`.
-    fn add_footnote(&mut self, body_paragraphs: Vec<String>) -> String {
-        let n = self.footnotes.len() + 1;
+    fn add_footnote(&mut self, body_paragraphs: Vec<Md>) -> Md {
         self.footnotes.push(body_paragraphs);
-        format!("[^{n}]")
+        note_marker("", self.footnotes.len())
     }
 
     /// Adds an endnote body and returns the inline marker `[^eN]`.
-    fn add_endnote(&mut self, body_paragraphs: Vec<String>) -> String {
-        let n = self.endnotes.len() + 1;
+    fn add_endnote(&mut self, body_paragraphs: Vec<Md>) -> Md {
         self.endnotes.push(body_paragraphs);
-        format!("[^e{n}]")
+        note_marker("e", self.endnotes.len())
     }
 
     /// Renders all collected definitions as a markdown block.
@@ -92,11 +94,20 @@ impl FootnoteCollector {
     }
 }
 
+/// `[^N]` (`prefix` "") or `[^eN]` (`prefix` "e").
+fn note_marker(prefix: &'static str, n: usize) -> Md {
+    let mut m = Md::syntax("[^");
+    m.push_syntax(prefix);
+    m.push(Md::number(n));
+    m.push_syntax("]");
+    m
+}
+
 /// Renders one `[^label]:` definition with GFM multi-paragraph continuation.
-fn render_definition(label: &str, paragraphs: &[String]) -> String {
+fn render_definition(label: &str, paragraphs: &[Md]) -> String {
     let mut out = String::new();
     for (i, para) in paragraphs.iter().enumerate() {
-        let escaped = escape_footnote_paragraph(para);
+        let escaped = escape_footnote_paragraph(para.as_str());
         if i == 0 {
             out.push_str(&format!("[^{label}]: {escaped}"));
         } else {
@@ -155,13 +166,12 @@ fn is_ordered_marker(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Where a piece of content is being drawn. Every recursion passes it on;
-/// the places that change it are: an HTML table cell (`html`), a note body
-/// (Markdown, `note_depth + 1`) and a memo body (Markdown, `in_comment`).
+/// the places that change it are a note body (`note_depth + 1`) and a memo
+/// body (`in_comment`). Markdown or HTML is not part of it: each has its own
+/// renderer and output type ([`Md`], [`Html`]).
 /// Text boxes, shapes and groups pass it on unchanged.
 #[derive(Debug, Clone, Copy, Default)]
 struct Ctx {
-    /// Inside a merged or nested-table cell: inline HTML, not Markdown.
-    html: bool,
     /// How many note bodies enclose this content. Only depth 0 registers a
     /// note definition; deeper notes are written inline as `(주: …)`.
     note_depth: u32,
@@ -183,10 +193,6 @@ struct Ctx {
 const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
 
 impl Ctx {
-    fn markdown(self) -> Self {
-        Self { html: false, ..self }
-    }
-
     /// The context one container deeper, or `None` past the limit.
     /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제
     /// (`deep_containers_are_cut_off`).
@@ -220,14 +226,14 @@ impl State {
     /// The notice written for a `container` past the depth limit, recorded
     /// as a warning at the current place.
     /// 이것을 실패시키는 것: 경고 기록 삭제(`deep_containers_are_cut_off`).
-    fn too_deep(&mut self, container: &'static str) -> String {
+    fn too_deep(&mut self, container: &'static str) -> &'static str {
         self.warnings.push(super::MdWarning::ContainerTooDeep {
             container,
             limit: crate::lossless_grammar::MAX_NESTING_DEPTH,
             section: self.at.0,
             paragraph: self.at.1,
         });
-        TOO_DEEP.to_string()
+        TOO_DEEP
     }
 }
 
@@ -297,29 +303,31 @@ fn suffixed_key(key: &str, n: u32) -> String {
     }
 }
 
-/// A picture's link in the context's form — `![alt](key)` in Markdown,
-/// `<img src="key" alt="alt"/>` in HTML — with its asset registered unless
+/// A picture's link in Markdown, `![alt](key)` (the stem as Markdown text,
+/// the key written to read back exactly), with its asset registered unless
 /// inside a memo.
 fn emit_picture(
     image: &hwpforge_core::image::Image,
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
+) -> Md {
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
-    if ctx.html {
-        // Attribute values: escaped for HTML (the asset key itself is kept
-        // as it is), with the plain file stem as alt — no Markdown escaping.
-        // 이것을 실패시키는 것: src·alt 이스케이프 삭제 · alt 에 Markdown 이스케이프
-        // (`html_picture_attributes_are_escaped`).
-        format!(
-            "<img src=\"{}\" alt=\"{}\"/>",
-            escape_html(&key),
-            escape_html(image_stem(&image.path))
-        )
-    } else {
-        format!("![{}]({key})", image_alt_text(&image.path))
-    }
+    Md::image(Md::text(image_stem(&image.path)), &key)
+}
+
+/// [`emit_picture`] in an HTML cell: `<img src="key" alt="stem"/>`, both
+/// attribute-escaped (the plain file stem as alt — no Markdown escaping).
+/// 이것을 실패시키는 것: src·alt 이스케이프 삭제 · alt 에 Markdown 이스케이프
+/// (`html_picture_attributes_are_escaped`).
+fn emit_picture_html(
+    image: &hwpforge_core::image::Image,
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> Html {
+    let key = st.assets.key(&image.path, styles, !ctx.in_comment);
+    Html::image(&key, image_stem(&image.path))
 }
 
 /// Encodes a validated document into style-aware markdown.
@@ -344,7 +352,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
             if paragraph.page_break {
                 // Flush code block first
                 if !code_block_lines.is_empty() {
-                    blocks.push(format!("```\n{}\n```", code_block_lines.join("\n")));
+                    blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
                     code_block_lines.clear();
                 }
                 blocks.push("---".to_string());
@@ -369,7 +377,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
             // Flush accumulated code block
             if !code_block_lines.is_empty() {
-                blocks.push(format!("```\n{}\n```", code_block_lines.join("\n")));
+                blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
                 code_block_lines.clear();
             }
 
@@ -397,7 +405,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
         // Flush remaining code block at section end
         if !code_block_lines.is_empty() {
-            blocks.push(format!("```\n{}\n```", code_block_lines.join("\n")));
+            blocks.push(Md::code_block(&code_block_lines.join("\n")).into_string());
         }
     }
 
@@ -426,19 +434,19 @@ fn encode_paragraph_styled(
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
                 let mut md = table_to_styled_markdown(table, styles, false, st, ctx);
-                md.push_str(&styled_caption(table.caption.as_ref(), styles, st, ctx));
-                return md;
+                md.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
+                return md.into_string();
             }
             RunContent::Image(image) => {
                 let mut md = emit_picture(image, styles, st, ctx);
-                md.push_str(&styled_caption(image.caption.as_ref(), styles, st, ctx));
-                return md;
+                md.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
+                return md.into_string();
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_styled(paragraph, styles, st, ctx);
+    let text = paragraph_text_styled(paragraph, styles, st, ctx).into_string();
 
     // Shared outline/list classification (hwpforge-core). Classification is
     // text-blind; the empty-text guards below are rendering concerns (an
@@ -498,15 +506,20 @@ fn paragraph_text_styled(
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
-    let ctx = ctx.markdown();
-    let mut output = String::new();
+) -> Md {
+    let mut output = Md::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
     for (part, cs) in super::spread_groups(&paragraph.runs) {
+        // Anything but text first flushes the text group.
+        if !matches!(part, Part::Text(_)) && !current_text.is_empty() {
+            output.push(current_format.wrap(&current_text));
+            current_text.clear();
+            current_format = InlineFormat::default();
+        }
         match part {
             // InlineText folds to the same `\t`-bearing string via
             // `plain_text()` because Markdown styling has no
@@ -519,100 +532,53 @@ fn paragraph_text_styled(
                     continue;
                 };
                 let fmt = InlineFormat::from_style(cs, styles);
-                if fmt == current_format {
-                    current_text.push_str(&cow);
-                } else {
-                    // Flush previous group.
+                if fmt != current_format {
                     if !current_text.is_empty() {
-                        output.push_str(&current_format.wrap(&current_text));
+                        output.push(current_format.wrap(&current_text));
                         current_text.clear();
                     }
                     current_format = fmt;
-                    current_text.push_str(&cow);
                 }
+                current_text.push_str(&cow);
             }
             Part::Image(image) => {
-                // Flush text group.
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
                 if !output.is_empty() {
-                    output.push(' ');
+                    output.push_syntax(" ");
                 }
-                output.push_str(&emit_picture(image, styles, st, ctx));
-                output.push_str(&styled_caption(image.caption.as_ref(), styles, st, ctx));
+                output.push(emit_picture(image, styles, st, ctx));
+                output.push(styled_caption(image.caption.as_ref(), styles, st, ctx));
             }
             Part::Table(table) => {
-                // Flush text group.
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
                 if !output.is_empty() {
-                    output.push('\n');
+                    output.push_syntax("\n");
                 }
-                output.push_str(&table_to_styled_markdown(table, styles, false, st, ctx));
-                output.push_str(&styled_caption(table.caption.as_ref(), styles, st, ctx));
+                output.push(table_to_styled_markdown(table, styles, false, st, ctx));
+                output.push(styled_caption(table.caption.as_ref(), styles, st, ctx));
             }
-            Part::Control(control) => {
-                // Flush text group.
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
-                let text = encode_control_styled(control, styles, st, ctx);
-                // A caption number's prefix/suffix characters are text, not
-                // Markdown (review r1: a `*` prefix and suffix turned "3"
-                // into emphasis). 이것을 실패시키는 것: 이 이스케이프를 지우기
-                // (`caption_number_prefix_is_escaped`).
-                if matches!(*control, Control::AutoNumber { .. }) {
-                    output.push_str(&escape_markdown(&text));
-                } else {
-                    output.push_str(&text);
-                }
-            }
+            Part::Control(control) => output.push(control_md(control, styles, st, ctx)),
         }
     }
 
     // Flush remaining text.
     if !current_text.is_empty() {
-        output.push_str(&current_format.wrap(&current_text));
+        output.push(current_format.wrap(&current_text));
     }
 
     output
 }
 
 /// Encodes a single control element into styled markdown.
-fn encode_control_styled(
-    control: &Control,
-    styles: &dyn StyleLookup,
-    st: &mut State,
-    ctx: Ctx,
-) -> String {
+fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
     match control {
-        // The visible text is text in either form; in an HTML cell the link is
-        // an `<a>` element with its href attribute-escaped. Only an allowed
-        // URL (`link_url_allowed`) is written as a link.
-        // 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제(HTML·Markdown 각각) ·
-        // href 이스케이프 삭제(`link_text_cannot_inject_markup`).
+        // Only an allowed URL (`link_url_allowed`) is written as a link; its
+        // text is Markdown text either way.
+        // 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제 · 허용 검사 삭제
+        // (`link_text_cannot_inject_markup`).
         Control::Hyperlink { text, url } => {
-            match (ctx.html, super::link_url_allowed(url)) {
-                // Not an allowed link: only the visible text
-                (true, false) => escape_html(text),
-                (true, true) => {
-                    format!("<a href=\"{}\">{}</a>", escape_html(url), escape_html(text))
-                }
-                (false, false) => escape_markdown(text),
-                (false, true) => {
-                    // The destination cannot end early (`(`, `)`, `<`, `>`
-                    // encoded). 이것을 실패시키는 것: `link_destination` 대신 괄호만
-                    // 바꾸기(`link_text_cannot_inject_markup`).
-                    format!("[{}]({})", escape_markdown(text), super::link_destination(url))
-                }
+            if super::link_url_allowed(url) {
+                Md::link(Md::text(text), url)
+            } else {
+                Md::text(text)
             }
         }
         // A note at depth 0 outside a memo is a document definition; a note
@@ -620,168 +586,241 @@ fn encode_control_styled(
         // a memo is written inline. 이것을 실패시키는 것: 깊이 조건 삭제 · 메모
         // 조건 삭제(`notes_follow_depth_and_memo`).
         Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
-            let inline = ctx.note_depth > 0 || ctx.in_comment;
-            // An inline body in an HTML cell is drawn as HTML from the start
-            // (the cell passes notes through as-is), so its text is escaped
-            // once. 이것을 실패시키는 것: HTML 분기 삭제(Markdown 렌더 후 HTML
-            // escape 로 — `link_text_cannot_inject_markup`).
-            let body = extract_note_body(paragraphs, styles, st, ctx, inline && ctx.html);
-            if inline {
-                format!("(주: {})", body.join(" "))
+            let body = extract_note_body(paragraphs, styles, st, ctx);
+            if ctx.note_depth > 0 || ctx.in_comment {
+                let mut md = Md::syntax("(주: ");
+                md.push(Md::join(body, " "));
+                md.push_syntax(")");
+                md
             } else if matches!(control, Control::Footnote { .. }) {
                 st.notes.add_footnote(body)
             } else {
                 st.notes.add_endnote(body)
             }
         }
-        Control::TextBox { paragraphs, .. } => shape_text(paragraphs, styles, st, ctx),
+        Control::TextBox { paragraphs, .. }
+        | Control::Ellipse { paragraphs, .. }
+        | Control::Polygon { paragraphs, .. } => shape_text(paragraphs, styles, st, ctx),
         Control::Equation { script, .. } => match render_equation(script) {
-            EqnRender::Latex(latex) => match markdown_latex(&latex) {
+            EqnRender::Latex(latex) => match Md::math(&latex) {
                 Some(latex) => latex,
-                // The LaTeX would close its math or write Markdown markup: the
-                // script as ordinary text instead (`$` escaped too, so it opens
-                // no math), reported.
+                // The LaTeX would end its math early or write a link: the
+                // script as ordinary text instead (`$` escaped too, so it
+                // opens no math), reported.
                 None => {
                     st.warnings.push(super::MdWarning::EquationAsText {
                         section: st.at.0,
                         paragraph: st.at.1,
                     });
-                    escape_markdown(&script.split_whitespace().collect::<Vec<_>>().join(" "))
-                        .replace('$', "\\$")
+                    math_free_text(&script.split_whitespace().collect::<Vec<_>>().join(" "))
                 }
             },
-            // Written as ordinary text (whitespace already collapsed):
-            // Markdown-escaped here (`$` too, so it opens no math, as in the
-            // fallback above), and table cells apply their usual cell
-            // escaping on top, like text runs.
-            EqnRender::RawFallback(raw) => escape_markdown(&raw).replace('$', "\\$"),
+            // Too deep to convert: ordinary text (whitespace already
+            // collapsed, `$` escaped as above). Not reported as
+            // `EquationAsText`, which is for the safety fallback only.
+            EqnRender::RawFallback(raw) => math_free_text(&raw),
         },
-        Control::Chart { .. } => "<!-- chart -->".to_string(),
-        Control::Line { .. } => String::new(),
-        Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
-            shape_text(paragraphs, styles, st, ctx)
-        }
+        Control::Chart { .. } => Md::syntax("<!-- chart -->"),
         Control::Dutmal { main_text, sub_text, .. } => {
-            format!("{main_text}({sub_text})")
+            let mut md = Md::text(main_text);
+            md.push_syntax("(");
+            md.push(Md::text(sub_text));
+            md.push_syntax(")");
+            md
         }
-        Control::Compose { compose_text, .. } => compose_text.clone(),
+        Control::Compose { compose_text, .. } => Md::text(compose_text),
+        // Wave 12m Phase 2 Step 4: the visible text (display_text) if any,
+        // else the target's display form in brackets (Name → "bookmark1",
+        // SystemId → "#5"). Markdown has no anchor link here: text only.
         Control::CrossRef { target, display_text, .. } => {
-            // Wave 12m Phase 2 Step 4: display_text 추가. 사용자가 본
-            // visible body text 가 있으면 우선 사용 (e.g. "1" 페이지
-            // 번호, "see Section 1"); 비어 있으면 target 의 as_display()
-            // 로 fallback (Name → "bookmark1", SystemId → "#5").
-            // Markdown 은 anchor 링크 의미가 없으니 plain text 만 emit.
             if display_text.is_empty() {
-                format!("[{}]", target.as_display())
+                let mut md = Md::syntax("[");
+                md.push(Md::text(&target.as_display()));
+                md.push_syntax("]");
+                md
             } else {
-                display_text.clone()
+                Md::text(display_text)
             }
         }
+        // The filled value if any, else the hint — the HWPX encoder's hint
+        // fallback order (Epic 1).
         Control::Field { hint_text, display_text, .. } => {
-            // 채워진 값(display_text)이 있으면 그것을, 없으면 힌트를 보인다
-            // — HWPX 인코더의 hint 폴백과 동일한 우선순위 (Epic 1).
-            if display_text.is_empty() {
-                hint_text.as_deref().unwrap_or("____").to_string()
-            } else {
-                display_text.clone()
-            }
+            Md::text(field_text(hint_text, display_text))
         }
-        Control::Bookmark { .. } => {
-            // Bookmarks are invisible anchors — emit nothing.
-            String::new()
-        }
-        Control::Memo { content, .. } => {
-            // Drawn as Markdown (`paragraph_text_styled`); an HTML cell
-            // escapes the whole memo after.
-            let Some(inner) = ctx.enter() else { return st.too_deep("memo") };
-            let inner = Ctx { in_comment: true, ..inner };
-            let body = content
-                .iter()
-                .map(|p| paragraph_text_styled(p, styles, st, inner))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let trimmed = body.trim();
-            if trimmed.is_empty() {
-                String::new()
-            } else {
-                // Sanitize body to prevent HTML comment breakout via `-->`.
-                // Author/date are no longer carried (Wave 12e-Memo): HWPX wire
-                // never surfaced them, so omit the `(author)` segment.
-                let safe_body = trimmed.replace("--", "\\-\\-");
-                format!("<!-- memo: {safe_body} -->")
-            }
-        }
-        Control::IndexMark { .. } => {
-            // Index marks are invisible — emit nothing.
-            String::new()
-        }
-        Control::NewNumber { .. } | Control::PageHiding { .. } => {
-            // 새 번호 지정·감추기는 렌더 지시라 Markdown 본문 표현이
-            // 없다 — 명시적 no-op (W2·W3, IndexMark 와 동일 정책).
-            String::new()
-        }
-        // Plain text: the Markdown caller escapes it as Markdown, the HTML
-        // table caller as HTML (superscript is not drawn).
-        Control::AutoNumber { num, format, .. } => super::auto_number_text(*num, format),
-        Control::Arc { .. } | Control::Curve { .. } | Control::ConnectLine { .. } => {
-            // These shapes rarely contain text; render nothing.
-            String::new()
-        }
-        Control::Unknown { tag, .. } => format!("`[{tag}]`"),
-        _ => String::new(),
+        Control::Memo { content, .. } => memo(content, styles, st, ctx),
+        // A caption number's prefix/suffix characters are text, not
+        // Markdown (review r1: a `*` prefix and suffix turned "3" into
+        // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
+        // (`caption_number_prefix_is_escaped`).
+        Control::AutoNumber { num, format, .. } => Md::text(&super::auto_number_text(*num, format)),
+        Control::Unknown { tag, .. } => Md::code_span(&format!("[{tag}]")),
+        // Invisible or textless: bookmarks, index marks, number restarts and
+        // hiding, lines, arcs, curves, connectors.
+        _ => Md::new(),
     }
 }
 
-/// A note body's paragraphs, each drawn on its own (multi-paragraph
-/// preserved) one note level deeper: in Markdown (`paragraph_text_styled`),
-/// or in HTML (`extract_paragraph_text_html`) when `html`.
+/// [`control_md`] in an HTML cell. Text-bearing controls are HTML text;
+/// links are `<a>` with the href attribute-escaped; inline notes and shape
+/// text are drawn as HTML from the start.
+/// 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제 · href 이스케이프 삭제
+/// (`link_text_cannot_inject_markup`) · HTML 칸 인라인 각주를 Markdown 으로 그린
+/// 뒤 HTML escape 하기.
+fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Html {
+    match control {
+        Control::Hyperlink { text, url } => {
+            if super::link_url_allowed(url) {
+                Html::link(text, url)
+            } else {
+                Html::text(text)
+            }
+        }
+        Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+            if ctx.note_depth > 0 || ctx.in_comment {
+                let mut html = Html::syntax("(주: ");
+                html.push(Html::join(extract_note_body_html(paragraphs, styles, st, ctx), " "));
+                html.push_syntax(")");
+                html
+            } else {
+                // A definition is Markdown; its marker is written as it is.
+                let body = extract_note_body(paragraphs, styles, st, ctx);
+                let marker = if matches!(control, Control::Footnote { .. }) {
+                    st.notes.add_footnote(body)
+                } else {
+                    st.notes.add_endnote(body)
+                };
+                Html::text(marker.as_str())
+            }
+        }
+        Control::TextBox { paragraphs, .. }
+        | Control::Ellipse { paragraphs, .. }
+        | Control::Polygon { paragraphs, .. } => shape_text_html(paragraphs, styles, st, ctx),
+        // The LaTeX is cell text (a `<` or `&` in it is a character — a math
+        // renderer reads the decoded text); a script too deep to convert is
+        // ordinary cell text. 이것을 실패시키는 것: LaTeX 이스케이프 삭제
+        // (`html_cell_equation_is_escaped`).
+        Control::Equation { script, .. } => match render_equation(script) {
+            EqnRender::Latex(latex) => Html::text(&latex),
+            EqnRender::RawFallback(raw) => Html::text(&raw),
+        },
+        Control::Chart { .. } => Html::syntax("<!-- chart -->"),
+        Control::Dutmal { main_text, sub_text, .. } => {
+            Html::text(&format!("{main_text}({sub_text})"))
+        }
+        Control::Compose { compose_text, .. } => Html::text(compose_text),
+        Control::CrossRef { target, display_text, .. } => {
+            if display_text.is_empty() {
+                Html::text(&format!("[{}]", target.as_display()))
+            } else {
+                Html::text(display_text)
+            }
+        }
+        Control::Field { hint_text, display_text, .. } => {
+            Html::text(field_text(hint_text, display_text))
+        }
+        // The memo comment shown as cell text, as before.
+        Control::Memo { content, .. } => Html::text(memo(content, styles, st, ctx).as_str()),
+        Control::AutoNumber { num, format, .. } => {
+            Html::text(&super::auto_number_text(*num, format))
+        }
+        Control::Unknown { tag, .. } => Html::text(&format!("`[{tag}]`")),
+        _ => Html::new(),
+    }
+}
+
+/// A field's visible text: its filled value, else its hint, else `____`.
+fn field_text<'a>(hint_text: &'a Option<String>, display_text: &'a str) -> &'a str {
+    if display_text.is_empty() {
+        hint_text.as_deref().unwrap_or("____")
+    } else {
+        display_text
+    }
+}
+
+/// Equation script as Markdown text with `$` escaped too, so it opens no
+/// math. 이것을 실패시키는 것: `$` escape 삭제
+/// (`markdown_equation_writes_no_html_or_link`).
+fn math_free_text(raw: &str) -> Md {
+    let mut md = Md::new();
+    for (i, piece) in raw.split('$').enumerate() {
+        if i > 0 {
+            md.push_syntax("\\$");
+        }
+        md.push(Md::text(piece));
+    }
+    md
+}
+
+/// A memo as `<!-- memo: … -->`, its body drawn as Markdown with `--`
+/// broken up so it cannot close the comment. Author/date are no longer
+/// carried (Wave 12e-Memo): HWPX wire never surfaced them.
+fn memo(content: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
+    let Some(inner) = ctx.enter() else { return Md::syntax(st.too_deep("memo")) };
+    let inner = Ctx { in_comment: true, ..inner };
+    let body: Vec<Md> =
+        content.iter().map(|p| paragraph_text_styled(p, styles, st, inner)).collect();
+    let body = Md::join(body, " ");
+    if body.as_str().trim().is_empty() {
+        return Md::new();
+    }
+    body.layout(|b| format!("<!-- memo: {} -->", b.trim().replace("--", "\\-\\-")))
+}
+
+/// A note body's paragraphs in Markdown, each drawn on its own
+/// (multi-paragraph preserved) one note level deeper.
 fn extract_note_body(
     paragraphs: &[Paragraph],
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-    html: bool,
-) -> Vec<String> {
-    let Some(inner) = ctx.enter() else { return vec![st.too_deep("note")] };
+) -> Vec<Md> {
+    let Some(inner) = ctx.enter() else { return vec![Md::syntax(st.too_deep("note"))] };
     let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
     paragraphs
         .iter()
-        .map(|p| {
-            if html {
-                extract_paragraph_text_html(p, styles, st, inner)
-            } else {
-                paragraph_text_styled(p, styles, st, inner)
-            }
-            .trim()
-            .to_string()
-        })
+        .map(|p| paragraph_text_styled(p, styles, st, inner).layout(|s| s.trim().to_string()))
         .filter(|t| !t.is_empty())
         .collect()
 }
 
-/// A text box's or shape's text in the context's form: each paragraph drawn
-/// in Markdown or HTML, joined by a space and trimmed. In an HTML cell the
-/// result is HTML already and is not escaped again.
-/// 이것을 실패시키는 것: HTML 분기 삭제(Markdown 렌더러로)
-/// (`html_cell_shape_text_is_html`).
-fn shape_text(
+/// [`extract_note_body`] in HTML, for a note written inline in an HTML cell
+/// (escaped once — M2).
+fn extract_note_body_html(
     paragraphs: &[Paragraph],
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
-    let Some(ctx) = ctx.enter() else { return st.too_deep("shape text") };
-    let parts: Vec<String> = paragraphs
+) -> Vec<Html> {
+    let Some(inner) = ctx.enter() else { return vec![Html::syntax(st.too_deep("note"))] };
+    let inner = Ctx { note_depth: ctx.note_depth + 1, ..inner };
+    paragraphs
         .iter()
-        .map(|p| {
-            if ctx.html {
-                extract_paragraph_text_html(p, styles, st, ctx)
-            } else {
-                paragraph_text_styled(p, styles, st, ctx)
-            }
-        })
-        .collect();
-    parts.join(" ").trim().to_string()
+        .map(|p| extract_paragraph_text_html(p, styles, st, inner).trimmed())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// A text box's or shape's text in Markdown: each paragraph drawn, joined
+/// by a space and trimmed.
+fn shape_text(paragraphs: &[Paragraph], styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
+    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("shape text")) };
+    let parts: Vec<Md> =
+        paragraphs.iter().map(|p| paragraph_text_styled(p, styles, st, ctx)).collect();
+    Md::join(parts, " ").layout(|s| s.trim().to_string())
+}
+
+/// [`shape_text`] in an HTML cell: HTML already, not escaped again.
+/// 이것을 실패시키는 것: Markdown 렌더러로 그리기(`html_cell_shape_text_is_html`).
+fn shape_text_html(
+    paragraphs: &[Paragraph],
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> Html {
+    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("shape text")) };
+    let parts: Vec<Html> =
+        paragraphs.iter().map(|p| extract_paragraph_text_html(p, styles, st, ctx)).collect();
+    Html::join(parts, " ").trimmed()
 }
 
 // ---------------------------------------------------------------------------
@@ -814,29 +853,30 @@ impl InlineFormat {
 
     /// Wraps text with inline formatting (hybrid markdown/HTML).
     ///
-    /// Receives **raw** (unescaped) text. Strategy:
+    /// Receives **raw** (unescaped) text, Markdown-escaped either way.
+    /// Strategy:
     /// - If text contains markdown-marker chars (`*`, `_`, `~`), or text
     ///   starts/ends with punctuation (which breaks CommonMark flanking
     ///   rules when adjacent to other text), or formatting has no markdown
-    ///   equivalent → HTML tags with `escape_html`.
-    /// - Otherwise → markdown markers (`**`, `*`, `~~`) with `escape_markdown`.
-    fn wrap(&self, text: &str) -> String {
+    ///   equivalent → HTML tags.
+    /// - Otherwise → markdown markers (`**`, `*`, `~~`).
+    fn wrap(&self, text: &str) -> Md {
         if text.is_empty() {
-            return String::new();
+            return Md::new();
         }
 
         let has_basic = self.bold || self.italic || self.strikeout;
         let has_any = has_basic || self.underline || self.superscript || self.subscript;
 
         if !has_any {
-            return escape_markdown(text);
+            return Md::text(text);
         }
 
         // Move leading/trailing whitespace outside formatting markers.
         // CommonMark: `** text**` fails (space after opening marker).
         let trimmed = text.trim();
         if trimmed.is_empty() {
-            return text.to_string();
+            return Md::text(text);
         }
         let leading = &text[..text.len() - text.trim_start().len()];
         let trailing = &text[text.trim_end().len()..];
@@ -847,77 +887,72 @@ impl InlineFormat {
         let has_boundary_punct = trimmed.chars().next().is_some_and(|c| c.is_ascii_punctuation())
             || trimmed.chars().next_back().is_some_and(|c| c.is_ascii_punctuation());
 
-        let wrapped =
-            if needs_html_only || (has_basic && (has_marker_conflicts || has_boundary_punct)) {
-                // HTML path
-                let mut result = escape_html(trimmed);
-                if self.bold {
-                    result = format!("<strong>{result}</strong>");
-                }
-                if self.italic {
-                    result = format!("<em>{result}</em>");
-                }
-                if self.strikeout {
-                    result = format!("<del>{result}</del>");
-                }
-                if self.underline {
-                    result = format!("<u>{result}</u>");
-                }
-                if self.superscript {
-                    result = format!("<sup>{result}</sup>");
-                }
-                if self.subscript {
-                    result = format!("<sub>{result}</sub>");
-                }
-                result
-            } else {
-                // Markdown path: no conflicting chars, safe to use markers.
-                let mut result = escape_markdown(trimmed);
-                if self.bold && self.italic {
-                    result = format!("***{result}***");
-                } else if self.bold {
-                    result = format!("**{result}**");
-                } else if self.italic {
-                    result = format!("*{result}*");
-                }
-                if self.strikeout {
-                    result = format!("~~{result}~~");
-                }
-                result
+        let mut out = Md::text(leading);
+        if needs_html_only || (has_basic && (has_marker_conflicts || has_boundary_punct)) {
+            // HTML tags around Markdown text: a renderer still reads Markdown
+            // inside inline HTML, so the text is Markdown-escaped, not
+            // HTML-escaped. 이것을 실패시키는 것: 태그 안을 `escape_html` 로
+            // (`markup_safety` 의 밑줄 링크).
+            let tags: Vec<&'static str> = [
+                (self.subscript, "sub"),
+                (self.superscript, "sup"),
+                (self.underline, "u"),
+                (self.strikeout, "del"),
+                (self.italic, "em"),
+                (self.bold, "strong"),
+            ]
+            .into_iter()
+            .filter_map(|(on, tag)| on.then_some(tag))
+            .collect();
+            for tag in &tags {
+                out.push(Md::tag(tag, false));
+            }
+            out.push(Md::text(trimmed));
+            for tag in tags.iter().rev() {
+                out.push(Md::tag(tag, true));
+            }
+        } else {
+            // Markdown path: no conflicting chars, safe to use markers.
+            let marker = match (self.bold, self.italic) {
+                (true, true) => "***",
+                (true, false) => "**",
+                (false, true) => "*",
+                (false, false) => "",
             };
-
-        format!("{leading}{wrapped}{trailing}")
+            if self.strikeout {
+                out.push_syntax("~~");
+            }
+            out.push_syntax(marker);
+            out.push(Md::text(trimmed));
+            out.push_syntax(marker);
+            if self.strikeout {
+                out.push_syntax("~~");
+            }
+        }
+        out.push(Md::text(trailing));
+        out
     }
 
     /// Wraps text with HTML inline formatting tags.
     ///
     /// Used inside HTML table cells where markdown syntax is not valid.
-    fn wrap_html(&self, text: &str) -> String {
+    fn wrap_html(&self, text: &str) -> Html {
         if text.is_empty() {
-            return String::new();
+            return Html::new();
         }
-
-        let mut result = escape_html(text);
-
-        if self.bold {
-            result = format!("<strong>{result}</strong>");
+        let mut result = Html::text(text);
+        for (on, tag) in [
+            (self.bold, "strong"),
+            (self.italic, "em"),
+            (self.strikeout, "del"),
+            (self.underline, "u"),
+            (self.superscript, "sup"),
+            (self.subscript, "sub"),
+        ] {
+            if on {
+                result = Html::wrap(tag, result);
+            }
         }
-        if self.italic {
-            result = format!("<em>{result}</em>");
-        }
-        if self.strikeout {
-            result = format!("<del>{result}</del>");
-        }
-        if self.underline {
-            result = format!("<u>{result}</u>");
-        }
-        if self.superscript {
-            result = format!("<sup>{result}</sup>");
-        }
-        if self.subscript {
-            result = format!("<sub>{result}</sub>");
-        }
-
         result
     }
 }
@@ -953,13 +988,13 @@ fn table_to_styled_markdown(
     html_context: bool,
     st: &mut State,
     ctx: Ctx,
-) -> String {
+) -> Md {
     if table.rows.is_empty() {
-        return "| |\n| --- |".to_string();
+        return Md::syntax("| |\n| --- |");
     }
 
     if has_merge(table) || has_nested_table(table) || html_context {
-        table_to_html(table, styles, st, ctx)
+        Md::from_html(table_to_html(table, styles, st, ctx))
     } else {
         table_to_gfm(table, styles, st, ctx)
     }
@@ -969,75 +1004,47 @@ fn table_to_styled_markdown(
 /// row fixes the width; a later row's cells past it are not drawn at all,
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
-fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
-    let Some(ctx) = ctx.enter() else { return st.too_deep("table") };
-    let ctx = ctx.markdown();
+fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {
+    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("table")) };
     let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
-    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut rows: Vec<Vec<Cell>> = Vec::new();
     for (ri, row) in table.rows.iter().enumerate() {
         let mut cells = Vec::new();
         for cell in row.cells.iter().take(if ri == 0 { usize::MAX } else { width }) {
-            let mut parts = Vec::new();
-            for p in &cell.paragraphs {
-                parts.push(paragraph_text_styled(p, styles, st, ctx));
-            }
-            cells.push(escape_gfm_cell(&parts.join("\n")));
+            let parts: Vec<Md> =
+                cell.paragraphs.iter().map(|p| paragraph_text_styled(p, styles, st, ctx)).collect();
+            cells.push(Md::join(parts, "\n").into_cell());
         }
         rows.push(cells);
     }
-
-    let header = rows.first().cloned().unwrap_or_else(|| vec![String::new()]);
-    let col_count = header.len().max(1);
-
-    let mut lines = Vec::new();
-    lines.push(format!("| {} |", header.join(" | ")));
-    lines.push(format!("| {} |", (0..col_count).map(|_| "---").collect::<Vec<_>>().join(" | ")));
-
-    for row in rows.iter().skip(1) {
-        // Pad a short row to the header's column count for valid GFM.
-        let mut padded = row.clone();
-        padded.resize(col_count, String::new());
-        lines.push(format!("| {} |", padded.join(" | ")));
+    let col_count = rows.first().map_or(0, Vec::len).max(1);
+    // Pad every row (the header too) to the header's column count for
+    // valid GFM.
+    for row in &mut rows {
+        row.resize(col_count, Cell::new());
     }
-
-    lines.join("\n")
+    Cell::table(rows, col_count)
 }
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
-fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
-    let Some(ctx) = ctx.enter() else { return st.too_deep("table") };
-    let ctx = Ctx { html: true, ..ctx };
-    let mut lines = Vec::new();
-    lines.push("<table>".to_string());
-    lines.push("<tbody>".to_string());
-
+fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Html {
+    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("table")) };
+    let mut lines = vec![Html::syntax("<table>"), Html::syntax("<tbody>")];
     for row in &table.rows {
-        lines.push("<tr>".to_string());
+        lines.push(Html::syntax("<tr>"));
         for cell in &row.cells {
-            let mut parts = Vec::new();
-            for p in &cell.paragraphs {
-                parts.push(extract_paragraph_text_html(p, styles, st, ctx));
-            }
-            let text = parts.join("<br>");
-
-            let mut attrs = String::new();
-            if cell.col_span > 1 {
-                attrs.push_str(&format!(" colspan=\"{}\"", cell.col_span));
-            }
-            if cell.row_span > 1 {
-                attrs.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
-            }
-
-            let trimmed = text.trim();
-            lines.push(format!("  <td{attrs}>{trimmed}</td>"));
+            let parts: Vec<Html> = cell
+                .paragraphs
+                .iter()
+                .map(|p| extract_paragraph_text_html(p, styles, st, ctx))
+                .collect();
+            lines.push(Html::td(cell.col_span, cell.row_span, Html::join(parts, "<br>")));
         }
-        lines.push("</tr>".to_string());
+        lines.push(Html::syntax("</tr>"));
     }
-
-    lines.push("</tbody>".to_string());
-    lines.push("</table>".to_string());
-
-    lines.join("\n")
+    lines.push(Html::syntax("</tbody>"));
+    lines.push(Html::syntax("</table>"));
+    Html::join(lines, "\n")
 }
 
 /// Extracts text from a paragraph using HTML inline formatting.
@@ -1046,13 +1053,17 @@ fn extract_paragraph_text_html(
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
-    let ctx = Ctx { html: true, ..ctx };
-    let mut output = String::new();
+) -> Html {
+    let mut output = Html::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
     for (part, cs) in super::spread_groups(&paragraph.runs) {
+        if !matches!(part, Part::Text(_)) && !current_text.is_empty() {
+            output.push(current_format.wrap_html(&current_text));
+            current_text.clear();
+            current_format = InlineFormat::default();
+        }
         match part {
             // Same as the Markdown styled path (debug doc §3a-A6):
             // `InlineText` folds to its `\t`-bearing plain string via
@@ -1062,81 +1073,29 @@ fn extract_paragraph_text_html(
                     continue;
                 };
                 let fmt = InlineFormat::from_style(cs, styles);
-                if fmt == current_format {
-                    current_text.push_str(&cow);
-                } else {
+                if fmt != current_format {
                     if !current_text.is_empty() {
-                        output.push_str(&current_format.wrap_html(&current_text));
+                        output.push(current_format.wrap_html(&current_text));
                         current_text.clear();
                     }
                     current_format = fmt;
-                    current_text.push_str(&cow);
                 }
+                current_text.push_str(&cow);
             }
-            Part::Control(control) => {
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap_html(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
-                // Equations: the LaTeX is cell text, HTML-escaped (a `<` or
-                // `&` in it is a character, not markup — a math renderer reads
-                // the decoded text); a script too deep to convert is ordinary
-                // cell text (whitespace collapsed), escaped the same way.
-                // 이것을 실패시키는 것: LaTeX 이스케이프 삭제(`html_cell_equation_is_escaped`).
-                if let Control::Equation { script, .. } = control {
-                    match render_equation(script) {
-                        EqnRender::Latex(latex) => output.push_str(&escape_html(&latex)),
-                        EqnRender::RawFallback(raw) => output.push_str(&escape_html(&raw)),
-                    }
-                    continue;
-                }
-                let ctrl_output = encode_control_styled(control, styles, st, ctx);
-                // HTML-escape text-bearing control output in HTML table context.
-                // Only structural/safe outputs (footnote markers, hyperlinks,
-                // chart comments, empty shapes) and shape text — drawn as HTML
-                // already — skip escaping.
-                let escaped = match control {
-                    Control::TextBox { .. }
-                    | Control::Ellipse { .. }
-                    | Control::Polygon { .. }
-                    | Control::Hyperlink { .. }
-                    | Control::Footnote { .. }
-                    | Control::Endnote { .. }
-                    | Control::Chart { .. }
-                    | Control::Line { .. }
-                    | Control::Arc { .. }
-                    | Control::Curve { .. }
-                    | Control::ConnectLine { .. }
-                    | Control::Bookmark { .. }
-                    | Control::IndexMark { .. } => ctrl_output,
-                    _ => escape_html(&ctrl_output),
-                };
-                output.push_str(&escaped);
-            }
+            Part::Control(control) => output.push(control_html(control, styles, st, ctx)),
             Part::Image(image) => {
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap_html(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
-                output.push_str(&emit_picture(image, styles, st, ctx));
-                output.push_str(&html_caption(image.caption.as_ref(), styles, st, ctx));
+                output.push(emit_picture_html(image, styles, st, ctx));
+                output.push(html_caption(image.caption.as_ref(), styles, st, ctx));
             }
             Part::Table(table) => {
-                if !current_text.is_empty() {
-                    output.push_str(&current_format.wrap_html(&current_text));
-                    current_text.clear();
-                    current_format = InlineFormat::default();
-                }
-                output.push_str(&table_to_html(table, styles, st, ctx));
-                output.push_str(&html_caption(table.caption.as_ref(), styles, st, ctx));
+                output.push(table_to_html(table, styles, st, ctx));
+                output.push(html_caption(table.caption.as_ref(), styles, st, ctx));
             }
         }
     }
 
     if !current_text.is_empty() {
-        output.push_str(&current_format.wrap_html(&current_text));
+        output.push(current_format.wrap_html(&current_text));
     }
 
     output
@@ -1152,11 +1111,6 @@ fn image_stem(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().and_then(|name| name.split('.').next()).unwrap_or("image")
 }
 
-fn image_alt_text(path: &str) -> String {
-    // Escape characters that break markdown image syntax.
-    image_stem(path).replace('[', "\\[").replace(']', "\\]")
-}
-
 /// Converts an image source path to a relative output path.
 ///
 /// Uses `styles.image_resolve_filename()` to obtain the actual filename
@@ -1166,10 +1120,9 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
     let filename = styles
         .image_resolve_filename(path)
         .unwrap_or_else(|| path.rsplit(['/', '\\']).next().unwrap_or("image"));
-    // The path cannot end the image early (`(`, `)`, `<`, `>` encoded).
-    // 이것을 실패시키는 것: `link_destination` 대신 괄호만 바꾸기
-    // (`picture_path_cannot_end_early`).
-    let safe_filename = super::link_destination(filename);
+    // Parentheses percent-encoded in the file name (the asset key; the
+    // Markdown destination is escaped separately — `markup::destination`).
+    let safe_filename = filename.replace('(', "%28").replace(')', "%29");
     format!("images/{safe_filename}")
 }
 
@@ -1185,21 +1138,18 @@ fn styled_caption(
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
-    let Some(caption) = caption else { return String::new() };
-    let Some(ctx) = ctx.enter() else { return st.too_deep("caption") };
-    let mut text = Vec::new();
+) -> Md {
+    let Some(caption) = caption else { return Md::new() };
+    let Some(ctx) = ctx.enter() else { return Md::syntax(st.too_deep("caption")) };
+    let mut out = Md::new();
     for p in &caption.paragraphs {
         let t = paragraph_text_styled(p, styles, st, ctx);
-        if !t.trim().is_empty() {
-            text.push(t);
+        if !t.as_str().trim().is_empty() {
+            out.push_syntax("\n\n");
+            out.push(t);
         }
     }
-    if text.is_empty() {
-        String::new()
-    } else {
-        format!("\n\n{}", text.join("\n\n"))
-    }
+    out
 }
 
 /// [`styled_caption`] inside an HTML table cell: the caption's paragraphs
@@ -1212,92 +1162,18 @@ fn html_caption(
     styles: &dyn StyleLookup,
     st: &mut State,
     ctx: Ctx,
-) -> String {
-    let Some(caption) = caption else { return String::new() };
-    let Some(ctx) = ctx.enter() else { return st.too_deep("caption") };
-    let mut text = Vec::new();
+) -> Html {
+    let Some(caption) = caption else { return Html::new() };
+    let Some(ctx) = ctx.enter() else { return Html::syntax(st.too_deep("caption")) };
+    let mut out = Html::new();
     for p in &caption.paragraphs {
         let t = extract_paragraph_text_html(p, styles, st, ctx);
-        if !t.trim().is_empty() {
-            text.push(t);
-        }
-    }
-    if text.is_empty() {
-        String::new()
-    } else {
-        format!("<br>{}", text.join("<br>"))
-    }
-}
-
-/// Escapes markdown-special characters in plain text content so they render
-/// literally instead of being interpreted as formatting markers.
-///
-/// Applied to text extracted from HWPX (which is always plain text), BEFORE
-/// wrapping with inline format markers like `**bold**` or `<em>`.
-/// An equation's `$...$` LaTeX as Markdown text, `None` when it cannot be
-/// written there safely. The converter passes unknown script text through,
-/// so the LaTeX may hold markup: `<` and `>` become `\lt ` and `\gt `
-/// (the same symbols to a math renderer, no HTML tag to a Markdown one) and
-/// line breaks become spaces; a `$` or a trailing `\` would end the math
-/// early and `](` would start a link, so those give `None`. A backtick
-/// (Hancom's space) stays: a code span writes no markup. 이것을 실패시키는 것: 꺾쇠 치환 삭제 · `None` 조건 하나씩 삭제
-/// (`markdown_equation_cannot_write_markup`).
-fn markdown_latex(latex: &str) -> Option<String> {
-    let inner = latex.strip_prefix('$').and_then(|l| l.strip_suffix('$'))?;
-    if inner.contains('$') || inner.contains("](") || inner.ends_with('\\') {
-        return None;
-    }
-    let mut out = String::with_capacity(latex.len() + 8);
-    out.push('$');
-    for ch in inner.chars() {
-        match ch {
-            '<' => out.push_str("\\lt "),
-            '>' => out.push_str("\\gt "),
-            '\n' | '\r' => out.push(' '),
-            _ => out.push(ch),
-        }
-    }
-    out.push('$');
-    Some(out)
-}
-
-fn escape_markdown(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + input.len() / 8);
-    for ch in input.chars() {
-        match ch {
-            '*' | '_' | '`' | '[' | ']' | '~' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '#' => {
-                // Only escape at line start, but simpler to always escape
-                out.push('\\');
-                out.push(ch);
-            }
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
+        if !t.as_str().trim().is_empty() {
+            out.push_syntax("<br>");
+            out.push(t);
         }
     }
     out
-}
-
-/// Escapes characters that break GFM table cell rendering.
-///
-/// Only handles pipe (`|`) and newline — markdown-special characters are
-/// already escaped by [`escape_markdown`] before this point.
-fn escape_gfm_cell(input: &str) -> String {
-    input.replace('|', "\\|").replace('\n', "<br>")
-}
-
-/// Escapes HTML special characters to prevent XSS in HTML table output.
-fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
 
 /// Code font names used to detect code block paragraphs.
@@ -1336,6 +1212,7 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encoder::markup::escape_html;
     use hwpforge_core::{
         control::{DutmalAlign, DutmalPosition, ShapePoint},
         Document, Image, ImageFormat, Paragraph, Run, Section, Table, TableCell, TableRow,
@@ -1592,7 +1469,11 @@ mod tests {
     #[test]
     fn inline_format_bold_falls_back_to_html_when_text_has_asterisk() {
         let fmt = InlineFormat { bold: true, ..Default::default() };
-        assert_eq!(fmt.wrap("**산·학·연 협력** 가점"), "<strong>**산·학·연 협력** 가점</strong>");
+        // Markdown is still read inside inline HTML: the text is escaped.
+        assert_eq!(
+            fmt.wrap("**산·학·연 협력** 가점"),
+            "<strong>\\*\\*산·학·연 협력\\*\\* 가점</strong>"
+        );
     }
 
     #[test]
@@ -2576,31 +2457,31 @@ mod tests {
         assert!(output.markdown.contains("---"), "page break marker should be present");
     }
 
-    // --- escape_markdown helpers ---
+    // --- Markdown text (`Md::text`) ---
 
     #[test]
-    fn escape_markdown_escapes_special_chars() {
-        let result = escape_markdown("*bold* and _italic_ and `code`");
+    fn markdown_text_escapes_special_chars() {
+        let result = Md::text("*bold* and _italic_ and `code`");
         assert!(result.contains("\\*bold\\*"));
         assert!(result.contains("\\_italic\\_"));
         assert!(result.contains("\\`code\\`"));
     }
 
     #[test]
-    fn escape_markdown_escapes_angle_brackets() {
-        let result = escape_markdown("<tag>");
+    fn markdown_text_escapes_angle_brackets() {
+        let result = Md::text("<tag>");
         assert_eq!(result, "&lt;tag&gt;");
     }
 
     #[test]
-    fn escape_markdown_escapes_hash() {
-        let result = escape_markdown("# heading");
+    fn markdown_text_escapes_hash() {
+        let result = Md::text("# heading");
         assert!(result.contains("\\#"));
     }
 
     #[test]
-    fn escape_markdown_passes_through_normal_text() {
-        let result = escape_markdown("hello world 안녕하세요");
+    fn markdown_text_passes_through_normal_text() {
+        let result = Md::text("hello world 안녕하세요");
         assert_eq!(result, "hello world 안녕하세요");
     }
 
@@ -2615,11 +2496,11 @@ mod tests {
         assert!(result.contains("&#39;"));
     }
 
-    // --- escape_gfm_cell ---
+    // --- GFM cell (`Md::into_cell`) ---
 
     #[test]
-    fn escape_gfm_cell_escapes_pipe_and_newline() {
-        let result = escape_gfm_cell("a|b\nc");
+    fn cell_escapes_pipe_and_newline() {
+        let result = Md::text("a|b\nc").into_cell();
         assert_eq!(result, "a\\|b<br>c");
     }
 
@@ -2627,14 +2508,14 @@ mod tests {
 
     #[test]
     fn image_alt_text_extracts_stem_from_path() {
-        assert_eq!(image_alt_text("images/photo.jpg"), "photo");
-        assert_eq!(image_alt_text("BinData/logo.png"), "logo");
-        assert_eq!(image_alt_text("simple"), "simple");
+        assert_eq!(image_stem("images/photo.jpg"), "photo");
+        assert_eq!(image_stem("BinData/logo.png"), "logo");
+        assert_eq!(image_stem("simple"), "simple");
     }
 
     #[test]
     fn image_alt_text_escapes_brackets_in_stem() {
-        assert_eq!(image_alt_text("[photo].png"), "\\[photo\\]");
+        assert_eq!(Md::text(image_stem("[photo].png")), "\\[photo\\]");
     }
 
     #[test]
@@ -2659,14 +2540,17 @@ mod tests {
         assert_eq!(result, "images/file%281%29.jpg");
     }
 
-    /// A picture path cannot end the image early or hold raw HTML.
+    /// A picture path cannot end the image early or hold raw HTML: the key
+    /// is written as a destination that reads back as it is (here in the
+    /// `<…>` form, for its space).
     ///
-    /// 이것을 실패시키는 것: `<`·`>` 인코딩 삭제.
+    /// 이것을 실패시키는 것: 목적지 escape 삭제(`markup::destination`).
     #[test]
     fn picture_path_cannot_end_early() {
         let styles = MockStyles::new();
-        let result = image_rel_path("x/a)<img src=y>.png", &styles);
-        assert_eq!(result, "images/a%29%3Cimg src=y%3E.png");
+        let key = image_rel_path("x/a)<img src=y>.png", &styles);
+        assert_eq!(key, "images/a%29<img src=y>.png");
+        assert_eq!(Md::image(Md::text("a"), &key), "![a](<images/a%29\\<img src=y\\>.png>)");
     }
 
     // --- has_nested_table ---
@@ -2818,7 +2702,8 @@ mod tests {
         let styles = MockStyles::new();
 
         let output = encode_styled(&doc, &styles);
-        assert_eq!(output.markdown, "____");
+        // Markdown text: escaped, so the blank is not a thematic break.
+        assert_eq!(output.markdown, "\\_\\_\\_\\_");
     }
 
     #[test]
@@ -3127,7 +3012,7 @@ mod tests {
     // --- Hyperlink URL escaping ---
 
     #[test]
-    fn hyperlink_url_parentheses_are_percent_escaped() {
+    fn hyperlink_url_parentheses_are_escaped() {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Hyperlink {
@@ -3141,8 +3026,8 @@ mod tests {
         let styles = MockStyles::new();
 
         let output = encode_styled(&doc, &styles);
-        assert!(output.markdown.contains("%28"), "( should be escaped as %28");
-        assert!(output.markdown.contains("%29"), ") should be escaped as %29");
+        // Escaped with `\\`, so the destination reads back as the URL.
+        assert_eq!(output.markdown, "[link](https://example.com/path\\(1\\))");
     }
 
     #[test]
@@ -3636,7 +3521,7 @@ mod tests {
             &styles,
         )
         .markdown;
-        assert!(md.ends_with("](https://a%29%3Cimg/src=x/onerror=y%3E)"), "{md}");
+        assert!(md.ends_with("](https://a\\)\\<img/src=x/onerror=y\\>)"), "{md}");
         let inner_note = note(vec![t("<b>x</b>")]);
         let deep = note(vec![merged_cell_table(vec![inner_note])]);
         let md =
@@ -3738,16 +3623,18 @@ mod tests {
         );
     }
 
-    /// An equation in Markdown text writes no markup: `<` and `>` become
-    /// `\lt` and `\gt`, and LaTeX that would end its math or start a link
-    /// is written as the script text, with a warning at its place. An
-    /// ordinary equation, Hancom's backtick space included, is unchanged.
+    /// An equation in Markdown text writes no executable HTML and no
+    /// unchecked link: `<` and `>` become `\lt` and `\gt`, and LaTeX that
+    /// would end its math or start a link is written as the script text,
+    /// with a warning at its place. Other Markdown inside `$…$` (`*x*`) is
+    /// left to the math renderer, not made literal. An ordinary equation,
+    /// Hancom's backtick space included, is unchanged.
     ///
     /// 이것을 실패시키는 것: 꺾쇠 치환 삭제 · `$`·`](`·끝 `\` 조건 하나씩 삭제 ·
     /// 백틱도 거부하기 · 경고 기록 삭제 · 경고 자리 채우기 삭제 · 깊이 초과
     /// 폴백의 `$` escape 삭제.
     #[test]
-    fn markdown_equation_cannot_write_markup() {
+    fn markdown_equation_writes_no_html_or_link() {
         let styles = MockStyles::new();
         let eqn = |script: &str| {
             Run::control(
@@ -3789,7 +3676,7 @@ mod tests {
             );
             assert!(!out.markdown.replace("\\$", "").contains('$'), "{script}: {}", out.markdown);
         }
-        assert_eq!(markdown_latex("$a\nb$").as_deref(), Some("$a b$"));
+        assert_eq!(Md::math("$a\nb$").as_deref(), Some("$a b$"));
         // A script too deep to convert is text as well, its `$` escaped.
         let deep = format!("{}$x{}", "{".repeat(40), "}".repeat(40));
         let out = draw(&deep);
