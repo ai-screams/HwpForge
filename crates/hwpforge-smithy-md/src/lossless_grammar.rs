@@ -10,7 +10,8 @@ use hwpforge_core::placement::{
 };
 use hwpforge_core::table::CellLineWrap;
 use hwpforge_foundation::{
-    ArrowSize, ArrowType, Color, DropCapStyle, Flip, GradientType, PatternType, VerticalAlign,
+    ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, GradientType,
+    PatternType, VerticalAlign,
 };
 
 use crate::error::{MdError, MdResult};
@@ -177,6 +178,17 @@ pub(crate) const CENTER: [&str; 2] = ["data-cx", "data-cy"];
 pub(crate) const AXIS1: [&str; 2] = ["data-ax1-x", "data-ax1-y"];
 pub(crate) const AXIS2: [&str; 2] = ["data-ax2-x", "data-ax2-y"];
 pub(crate) const POINTS: &str = "data-points";
+pub(crate) const START1: [&str; 2] = ["data-start1-x", "data-start1-y"];
+pub(crate) const END1: [&str; 2] = ["data-end1-x", "data-end1-y"];
+pub(crate) const START2: [&str; 2] = ["data-start2-x", "data-start2-y"];
+pub(crate) const END2: [&str; 2] = ["data-end2-x", "data-end2-y"];
+pub(crate) const ARC_TYPE: &str = "data-arc-type";
+/// Curve segment kinds, `Line`/`Curve` joined by `,` (empty = none).
+pub(crate) const SEGMENTS: &str = "data-segments";
+/// Connect line routing points, `x,y;x,y` (empty = none).
+pub(crate) const CONTROL_POINTS: &str = "data-control-points";
+/// Connect line type, verbatim (escaped as an attribute).
+pub(crate) const CONNECT_TYPE: &str = "data-connect-type";
 
 /// Every STYLE attribute.
 pub(crate) fn style_attributes() -> Vec<&'static str> {
@@ -371,6 +383,40 @@ pub(crate) fn drop_cap_from(s: &str) -> Option<DropCapStyle> {
         "DoubleLine" => DropCapStyle::DoubleLine,
         "TripleLine" => DropCapStyle::TripleLine,
         "Margin" => DropCapStyle::Margin,
+        _ => return None,
+    })
+}
+
+pub(crate) fn arc_type_str(v: ArcType) -> MdResult<&'static str> {
+    Ok(match v {
+        ArcType::Normal => "Normal",
+        ArcType::Pie => "Pie",
+        ArcType::Chord => "Chord",
+        _ => return Err(unsupported("arc type")),
+    })
+}
+
+pub(crate) fn arc_type_from(s: &str) -> Option<ArcType> {
+    Some(match s {
+        "Normal" => ArcType::Normal,
+        "Pie" => ArcType::Pie,
+        "Chord" => ArcType::Chord,
+        _ => return None,
+    })
+}
+
+pub(crate) fn segment_str(v: CurveSegmentType) -> MdResult<&'static str> {
+    Ok(match v {
+        CurveSegmentType::Line => "Line",
+        CurveSegmentType::Curve => "Curve",
+        _ => return Err(unsupported("curve segment")),
+    })
+}
+
+pub(crate) fn segment_from(s: &str) -> Option<CurveSegmentType> {
+    Some(match s {
+        "Line" => CurveSegmentType::Line,
+        "Curve" => CurveSegmentType::Curve,
         _ => return None,
     })
 }

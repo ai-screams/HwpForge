@@ -283,9 +283,9 @@ fn what_shapes_cannot_hold_is_refused() {
     assert!(with(&|_, _| {}).is_ok());
 }
 
-/// A shape's text is an exact subtree, as a picture caption is: a rectangle
-/// (no grammar until the next wave), a paragraph without runs, a table
-/// without rows, a cell or a note without paragraphs refuse the document;
+/// A shape's text is an exact subtree, as a picture caption is: a paragraph
+/// without runs, a table without rows, a cell or a note without paragraphs
+/// refuse the document;
 /// and an object under a table caption inside a text box is refused too.
 ///
 /// 이것을 실패시키는 것: 글상자 문단 `runs: []` · 글상자 안 빈 각주 · 빈 행 표 · 빈 칸
@@ -306,13 +306,6 @@ fn shape_text_admission() {
         Run::table(t, CharShapeIndex::new(0))
     };
     let cases: Vec<(&str, Vec<Paragraph>)> = vec![
-        (
-            "rectangle",
-            vec![para(vec![Run::control(
-                Control::rect(u(1), u(1)).unwrap(),
-                CharShapeIndex::new(0),
-            )])],
-        ),
         ("no runs", vec![Paragraph::with_runs(Vec::new(), ParaShapeIndex::new(0))]),
         ("no rows", vec![para(vec![table(Vec::new())])]),
         ("empty cell", vec![para(vec![table(vec![TableRow::new(vec![cell(Vec::new())])])])]),
@@ -435,4 +428,86 @@ fn shape_grammar_errors() {
         decode_body(&format!(r#"<polygon {BOX} data-points="1;2" />"#)),
         Err(MdError::LosslessInvalidAttribute { .. })
     ));
+}
+
+/// Rectangles, arcs, curves and connect lines (W4) come back equal in the
+/// body and in a group: every arc point told apart, a curve whose segment
+/// list is not one shorter than its points, empty curve lists, a connect
+/// line with and without routing points and a control character in its
+/// type.
+///
+/// 이것을 실패시키는 것: `arc` 점 하나씩 누락 · `segments` 를 점 개수에서 다시 만듦 ·
+/// `control-points` 빈 값 거부 · `connect-type` 에 `escape_attr` 대신 `escape_html`.
+#[test]
+fn w4_shapes_round_trip() {
+    use hwpforge_foundation::{ArcType, CurveSegmentType};
+    let style = Some(full_style(Some(Fill::Solid { color: Color::from_rgb(1, 1, 1) }), Some(3.0)));
+    let p = |x, y| ShapePoint::new(x, y);
+    let rect = Control::Rect {
+        width: u(100),
+        height: u(50),
+        frame: ObjectFrame::new(),
+        placement: Some(floating()),
+        caption: None,
+        style: style.clone(),
+    };
+    let arc = Control::Arc {
+        arc_type: ArcType::Pie,
+        center: p(1, 2),
+        axis1: p(3, 4),
+        axis2: p(5, 6),
+        start1: p(7, 8),
+        end1: p(9, 10),
+        start2: p(11, 12),
+        end2: p(13, 14),
+        width: u(100),
+        height: u(100),
+        frame: ObjectFrame::new(),
+        placement: None,
+        caption: None,
+        style: style.clone(),
+    };
+    let curve = |points: Vec<ShapePoint>, segment_types: Vec<CurveSegmentType>| Control::Curve {
+        points,
+        segment_types,
+        width: u(100),
+        height: u(100),
+        frame: ObjectFrame::new(),
+        placement: None,
+        caption: None,
+        style: style.clone(),
+    };
+    let connect = |control_points: Vec<ShapePoint>, connect_type: &str| Control::ConnectLine {
+        start: p(0, 0),
+        end: p(100, -20),
+        control_points,
+        connect_type: connect_type.into(),
+        width: u(100),
+        height: u(20),
+        frame: ObjectFrame::new(),
+        placement: None,
+        caption: None,
+        style: None,
+    };
+    for shape in [
+        rect,
+        arc,
+        curve(vec![p(0, 0), p(5, 5), p(9, 0)], vec![CurveSegmentType::Curve]),
+        curve(Vec::new(), Vec::new()),
+        connect(Vec::new(), "STRAIGHT_ONEWAY"),
+        connect(vec![p(50, 0), p(50, -20)], "BENT\tx"),
+    ] {
+        let run = Run::control(shape.clone(), CharShapeIndex::new(3));
+        assert_eq!(round_trip(run.clone()), run);
+        let group = Control::Group {
+            children: vec![GroupChild::Shape(shape)],
+            width: u(100),
+            height: u(100),
+            frame: ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        let run = Run::control(group, CharShapeIndex::new(3));
+        assert_eq!(round_trip(run.clone()), run);
+    }
 }

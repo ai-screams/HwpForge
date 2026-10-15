@@ -134,7 +134,11 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 Control::TextBox { .. }
                 | Control::Line { .. }
                 | Control::Ellipse { .. }
-                | Control::Polygon { .. } => {
+                | Control::Polygon { .. }
+                | Control::Rect { .. }
+                | Control::Arc { .. }
+                | Control::Curve { .. }
+                | Control::ConnectLine { .. } => {
                     out.push_str(&encode_shape(control, Some(run.char_shape_id.get()))?);
                 }
                 Control::Footnote { paragraphs, .. } => {
@@ -459,7 +463,11 @@ fn encode_group(group: &Control, char_shape: Option<usize>) -> MdResult<String> 
                 shape @ (Control::TextBox { .. }
                 | Control::Line { .. }
                 | Control::Ellipse { .. }
-                | Control::Polygon { .. }),
+                | Control::Polygon { .. }
+                | Control::Rect { .. }
+                | Control::Arc { .. }
+                | Control::Curve { .. }
+                | Control::ConnectLine { .. }),
             ) => out.push_str(&encode_shape(shape, None)?),
             // Drawing shapes as children come with their own grammar later;
             // until then the group is refused whole.
@@ -647,13 +655,18 @@ fn style_attrs(style: Option<&ShapeStyle>) -> MdResult<String> {
     Ok(out)
 }
 
+/// `x,y;x,y` — empty for no points.
+fn points_str(points: &[ShapePoint]) -> String {
+    points.iter().map(|v| format!("{},{}", v.x, v.y)).collect::<Vec<_>>().join(";")
+}
+
 fn point_attrs(names: [&str; 2], p: ShapePoint) -> String {
     format!(" {}=\"{}\" {}=\"{}\"", names[0], p.x, names[1], p.y)
 }
 
-/// A drawing shape with this wave's grammar (`<textbox>`, `<line>`,
-/// `<ellipse>`, `<polygon>`): `char_shape` under a paragraph, `None` as a
-/// group child. Its text is an exact subtree; a caption has no place yet
+/// A drawing shape (`<textbox>`, `<line>`, `<ellipse>`, `<polygon>`,
+/// `<rect>`, `<arc>`, `<curve>`, `<connectline>`): `char_shape` under a
+/// paragraph, `None` as a group child. Its text is an exact subtree; a caption has no place yet
 /// and is refused.
 fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> {
     let (tag, width, height, frame, placement, caption, style) = match shape {
@@ -669,7 +682,19 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
         Control::Polygon { width, height, frame, placement, caption, style, .. } => {
             ("polygon", width, height, frame, placement, caption, style)
         }
-        _ => unreachable!("encode_shape takes a text box, line, ellipse or polygon"),
+        Control::Rect { width, height, frame, placement, caption, style, .. } => {
+            ("rect", width, height, frame, placement, caption, style)
+        }
+        Control::Arc { width, height, frame, placement, caption, style, .. } => {
+            ("arc", width, height, frame, placement, caption, style)
+        }
+        Control::Curve { width, height, frame, placement, caption, style, .. } => {
+            ("curve", width, height, frame, placement, caption, style)
+        }
+        Control::ConnectLine { width, height, frame, placement, caption, style, .. } => {
+            ("connectline", width, height, frame, placement, caption, style)
+        }
+        _ => unreachable!("encode_shape takes a drawing shape"),
     };
     // 이것을 실패시키는 것: 이 거부를 지우기(`shape_caption_is_refused`).
     if caption.is_some() {
@@ -692,8 +717,32 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
             out.push_str(&point_attrs(g::AXIS2, *axis2));
         }
         Control::Polygon { vertices, .. } => {
-            let pts: Vec<String> = vertices.iter().map(|v| format!("{},{}", v.x, v.y)).collect();
-            out.push_str(&format!(" {}=\"{}\"", g::POINTS, pts.join(";")));
+            out.push_str(&format!(" {}=\"{}\"", g::POINTS, points_str(vertices)));
+        }
+        Control::Arc { arc_type, center, axis1, axis2, start1, end1, start2, end2, .. } => {
+            out.push_str(&point_attrs(g::CENTER, *center));
+            out.push_str(&point_attrs(g::AXIS1, *axis1));
+            out.push_str(&point_attrs(g::AXIS2, *axis2));
+            out.push_str(&point_attrs(g::START1, *start1));
+            out.push_str(&point_attrs(g::END1, *end1));
+            out.push_str(&point_attrs(g::START2, *start2));
+            out.push_str(&point_attrs(g::END2, *end2));
+            out.push_str(&format!(" {}=\"{}\"", g::ARC_TYPE, g::arc_type_str(*arc_type)?));
+        }
+        // The two lists are written apart, with no length rule between
+        // them (Core has none). 이것을 실패시키는 것: 세그먼트를 점 개수에서 다시
+        // 만들기(`w4_shapes_round_trip` 의 점 3·세그먼트 1).
+        Control::Curve { points, segment_types, .. } => {
+            out.push_str(&format!(" {}=\"{}\"", g::POINTS, points_str(points)));
+            let segs =
+                segment_types.iter().map(|t| g::segment_str(*t)).collect::<MdResult<Vec<_>>>()?;
+            out.push_str(&format!(" {}=\"{}\"", g::SEGMENTS, segs.join(",")));
+        }
+        Control::ConnectLine { start, end, control_points, connect_type, .. } => {
+            out.push_str(&point_attrs(g::START, *start));
+            out.push_str(&point_attrs(g::END, *end));
+            out.push_str(&format!(" {}=\"{}\"", g::CONTROL_POINTS, points_str(control_points)));
+            out.push_str(&format!(" {}=\"{}\"", g::CONNECT_TYPE, g::escape_attr(connect_type)?));
         }
         _ => {}
     }
@@ -773,19 +822,20 @@ fn encode_caption(caption: &hwpforge_core::caption::Caption) -> MdResult<String>
     Ok(out)
 }
 
-/// The admission of an exact subtree (a picture caption, a shape's text):
-/// the objects it holds at any depth must be ones this grammar writes
-/// exactly — pictures, groups, text boxes, lines, ellipses and polygons —
-/// and no list may be empty where the decoder would make content up (a paragraph without runs, a table without rows, a cell or a
-/// note without paragraphs). Checked before anything is written, so a
-/// later comparison of paragraphs by projection cannot hide a lost object.
-/// 이것을 실패시키는 것: 도형 거부 삭제 · 빈 목록 거부 각각 삭제
-/// (`picture_caption_admission`).
+/// The admission of an exact subtree (a picture caption, a shape's text).
+/// Every picture, group and drawing shape in it is written exactly (with
+/// its own caption or text admitted when it is written), so what remains
+/// is that no list may be empty where the decoder would make content up: a
+/// paragraph without runs, a table without rows, a cell or a note without
+/// paragraphs. Checked before anything is written, so a later comparison
+/// of paragraphs by projection cannot hide a lost object.
+/// 이것을 실패시키는 것: 빈 목록 거부 각각 삭제 · 표 칸 안으로 내려가기 삭제
+/// (`picture_caption_admission`, `shape_text_admission`).
 fn admit_exact(paragraphs: &[Paragraph]) -> MdResult<()> {
     let refuse = |what: &str| {
         Err(MdError::UnsupportedStructure {
             detail: format!(
-                "{what} inside a picture caption is not carried by the lossless encoder"
+                "{what} inside a picture caption or shape text is not carried by the lossless encoder"
             ),
         })
     };
@@ -794,12 +844,10 @@ fn admit_exact(paragraphs: &[Paragraph]) -> MdResult<()> {
             return refuse("a paragraph without runs");
         }
         for run in &p.runs {
+            // A picture's caption and a shape's text are admitted when they
+            // are written; tables and notes are written as they are, so their
+            // contents are admitted here.
             match &run.content {
-                RunContent::Image(image) => {
-                    if let Some(c) = &image.caption {
-                        admit_exact(&c.paragraphs)?;
-                    }
-                }
                 RunContent::Table(t) => {
                     if t.rows.is_empty() {
                         return refuse("a table without rows");
@@ -818,12 +866,6 @@ fn admit_exact(paragraphs: &[Paragraph]) -> MdResult<()> {
                         }
                         admit_exact(paragraphs)?;
                     }
-                    // Shapes written exactly are admitted here; their own
-                    // paragraphs are admitted when they are written.
-                    Control::Rect { .. }
-                    | Control::Arc { .. }
-                    | Control::Curve { .. }
-                    | Control::ConnectLine { .. } => return refuse(c.kind_name()),
                     _ => {}
                 },
                 _ => {}
@@ -1909,28 +1951,9 @@ mod tests {
 
     #[test]
     fn lossless_unsupported_control_returns_error() {
-        use hwpforge_core::control::ShapePoint;
-        use hwpforge_foundation::{ArcType, HwpUnit};
+        // An equation has no lossless grammar (an arc has one since W4).
         let doc = validated_document(vec![Paragraph::with_runs(
-            vec![Run::control(
-                Control::Arc {
-                    frame: hwpforge_core::ObjectFrame::new(),
-                    arc_type: ArcType::Pie,
-                    center: ShapePoint::new(500, 300),
-                    axis1: ShapePoint::new(1000, 300),
-                    axis2: ShapePoint::new(500, 600),
-                    start1: ShapePoint::new(800, 100),
-                    end1: ShapePoint::new(200, 100),
-                    start2: ShapePoint::new(100, 400),
-                    end2: ShapePoint::new(900, 400),
-                    width: HwpUnit::from_mm(40.0).unwrap(),
-                    height: HwpUnit::from_mm(20.0).unwrap(),
-                    placement: None,
-                    caption: None,
-                    style: None,
-                },
-                CharShapeIndex::new(0),
-            )],
+            vec![Run::control(Control::equation("a over b"), CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )]);
 

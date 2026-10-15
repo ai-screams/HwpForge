@@ -141,20 +141,19 @@ fn group_markup_spells_core_names() {
     assert!(!md.contains("data-out-margin"), "no margin is not written: {md}");
 }
 
-/// A shape child, an equation child and a picture caption have no grammar
-/// in this wave: the whole document is refused, never a partial group.
+/// An equation child (a nested group's too) and a picture caption have no
+/// grammar: the whole document is refused, never a partial group.
 ///
-/// 이것을 실패시키는 것: 도형 자식 거부를 지우고 건너뛰기 · 그림 caption 거부 삭제.
+/// 이것을 실패시키는 것: 그리지 못하는 자식 거부를 지우고 건너뛰기 · 그림 caption 거부 삭제.
 #[test]
 fn group_with_what_it_cannot_hold_is_refused() {
-    let rect = Control::rect(u(100), u(100)).unwrap();
     let mut captioned = picture("BinData/a.png", ImageFormat::Png);
     captioned.caption = Some(Caption::new(
         vec![para(vec![Run::text("c", CharShapeIndex::new(0))])],
         hwpforge_core::caption::CaptionSide::Bottom,
     ));
     for children in [
-        vec![GroupChild::Shape(rect)],
+        vec![GroupChild::Shape(Control::equation("a"))],
         vec![GroupChild::Shape(group(vec![GroupChild::Shape(Control::equation("a"))], None, None))],
         vec![GroupChild::Picture(captioned)],
     ] {

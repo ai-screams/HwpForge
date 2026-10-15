@@ -297,7 +297,7 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
             let node = parse_group(empty, stack)?;
             attach_group(node, stack)
         }
-        "textbox" | "ellipse" | "polygon" | "line" => {
+        "textbox" | "ellipse" | "polygon" | "line" | "rect" | "arc" | "curve" | "connectline" => {
             let node = parse_shape(empty, stack)?;
             attach_shape(node, stack)
         }
@@ -339,9 +339,8 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
         "tr" => matches!(parent, Some("table")),
         "td" => matches!(parent, Some("tr")),
         "span" | "a" | "footnote" | "control" => matches!(parent, Some("p")),
-        "img" | "group" | "textbox" | "line" | "ellipse" | "polygon" => {
-            matches!(parent, Some("p" | "group"))
-        }
+        "img" | "group" | "textbox" | "line" | "ellipse" | "polygon" | "rect" | "arc" | "curve"
+        | "connectline" => matches!(parent, Some("p" | "group")),
         _ => true,
     };
 
@@ -537,9 +536,10 @@ fn attach_closed_node(
     }
 }
 
-/// `<textbox>`, `<line>`, `<ellipse>`, `<polygon>` (P5b W3): CS·BOX·FRAME·
-/// PLACE·STYLE, the defining points, VALIGN (shapes with text) and the text
-/// margin (text box). A text box's `-mm` sizes are read when its `-unit`
+/// The drawing shapes (P5b W3 `<textbox>`·`<line>`·`<ellipse>`·`<polygon>`,
+/// W4 `<rect>`·`<arc>`·`<curve>`·`<connectline>`): CS·BOX·FRAME·PLACE·STYLE,
+/// the defining points, VALIGN (shapes with text) and the text margin (text
+/// box). A text box's `-mm` sizes are read when its `-unit`
 /// ones are missing (an old file).
 fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode> {
     let name = start.name();
@@ -547,16 +547,31 @@ fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode
         "textbox" => "textbox",
         "line" => "line",
         "ellipse" => "ellipse",
-        _ => "polygon",
+        "polygon" => "polygon",
+        "rect" => "rect",
+        "arc" => "arc",
+        "curve" => "curve",
+        _ => "connectline",
     };
     let mut allowed = g::shape_attributes();
     match tag {
         "line" => allowed.extend(g::START.into_iter().chain(g::END)),
         "ellipse" => allowed.extend(g::CENTER.into_iter().chain(g::AXIS1).chain(g::AXIS2)),
         "polygon" => allowed.push(g::POINTS),
-        _ => allowed.extend(g::TEXT_MARGIN),
+        "textbox" => allowed.extend(g::TEXT_MARGIN),
+        "rect" => {}
+        "arc" => {
+            allowed.extend(g::CENTER.into_iter().chain(g::AXIS1).chain(g::AXIS2));
+            allowed.extend(g::START1.into_iter().chain(g::END1).chain(g::START2).chain(g::END2));
+            allowed.push(g::ARC_TYPE);
+        }
+        "curve" => allowed.extend([g::POINTS, g::SEGMENTS]),
+        _ => {
+            allowed.extend(g::START.into_iter().chain(g::END));
+            allowed.extend([g::CONTROL_POINTS, g::CONNECT_TYPE]);
+        }
     }
-    if tag != "line" {
+    if matches!(tag, "textbox" | "ellipse" | "polygon") {
         allowed.push(g::TEXT_VALIGN);
     }
     let attrs = Attrs::read(start, tag, &allowed)?;
@@ -612,6 +627,54 @@ fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode
             caption: None,
             style,
             text_vertical_align: valign,
+        },
+        "rect" => Control::Rect { width, height, frame, placement, caption: None, style },
+        "arc" => Control::Arc {
+            arc_type: attrs.spelled(g::ARC_TYPE, g::arc_type_from)?,
+            center: point(g::CENTER)?,
+            axis1: point(g::AXIS1)?,
+            axis2: point(g::AXIS2)?,
+            start1: point(g::START1)?,
+            end1: point(g::END1)?,
+            start2: point(g::START2)?,
+            end2: point(g::END2)?,
+            width,
+            height,
+            frame,
+            placement,
+            caption: None,
+            style,
+        },
+        "curve" => Control::Curve {
+            points: parse_points(&attrs, g::POINTS)?,
+            segment_types: {
+                let v = attrs.required(g::SEGMENTS)?;
+                if v.is_empty() {
+                    Vec::new()
+                } else {
+                    v.split(',')
+                        .map(|t| g::segment_from(t).ok_or_else(|| attrs.invalid(g::SEGMENTS, v)))
+                        .collect::<MdResult<Vec<_>>>()?
+                }
+            },
+            width,
+            height,
+            frame,
+            placement,
+            caption: None,
+            style,
+        },
+        "connectline" => Control::ConnectLine {
+            start: point(g::START)?,
+            end: point(g::END)?,
+            control_points: parse_points(&attrs, g::CONTROL_POINTS)?,
+            connect_type: attrs.required(g::CONNECT_TYPE)?.to_string(),
+            width,
+            height,
+            frame,
+            placement,
+            caption: None,
+            style,
         },
         "polygon" => Control::Polygon {
             vertices: parse_points(&attrs, g::POINTS)?,

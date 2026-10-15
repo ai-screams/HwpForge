@@ -101,26 +101,25 @@ fn picture_caption_round_trips() {
     assert_eq!(round_trip(empty.clone()), empty);
 }
 
-/// The caption is an exact subtree: a shape this wave has no grammar for (a
-/// rectangle), and every list the decoder would fill in — a paragraph
-/// without runs, a table without rows, a cell or a note without paragraphs
-/// — refuse the document, at any depth.
+/// The caption is an exact subtree: every list the decoder would fill in —
+/// a paragraph without runs, a table without rows, a cell or a note without
+/// paragraphs — refuses the document, at any depth.
 ///
-/// 이것을 실패시키는 것: 사각형 거부 · `runs: []` 거부 · 빈 행 표 거부 · 빈 칸 거부 ·
-/// 빈 각주 거부 · 표 칸 안으로 내려가기 각각 삭제.
+/// 이것을 실패시키는 것: `runs: []` 거부 · 빈 행 표 거부 · 빈 칸 거부 · 빈 각주 거부 ·
+/// 표 칸 안으로 내려가기 각각 삭제.
 #[test]
 fn picture_caption_admission() {
     let cell = |paragraphs: Vec<Paragraph>| TableCell::new(paragraphs, u(3000));
     let table = |rows: Vec<TableRow>| Run::table(Table::new(rows), CharShapeIndex::new(0));
-    let box_run = Run::control(Control::rect(u(10), u(10)).unwrap(), CharShapeIndex::new(0));
     let cases: Vec<(&str, Vec<Paragraph>)> = vec![
-        ("rectangle", vec![para(vec![box_run.clone()])]),
-        (
-            "rectangle in a cell",
-            vec![para(vec![table(vec![TableRow::new(vec![cell(vec![para(vec![box_run])])])])])],
-        ),
         ("no runs", vec![Paragraph::with_runs(Vec::new(), ParaShapeIndex::new(0))]),
         ("no rows", vec![para(vec![table(Vec::new())])]),
+        (
+            "empty note in a cell",
+            vec![para(vec![table(vec![TableRow::new(vec![cell(vec![para(vec![
+                Run::control(Control::footnote(Vec::new()), CharShapeIndex::new(0)),
+            ])])])])])],
+        ),
         ("empty cell", vec![para(vec![table(vec![TableRow::new(vec![cell(Vec::new())])])])]),
         (
             "empty note",
