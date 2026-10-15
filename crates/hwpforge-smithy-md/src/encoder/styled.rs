@@ -39,47 +39,29 @@ struct ListContinuationContext {
 // Footnote/Endnote collector
 // ---------------------------------------------------------------------------
 
-/// Collects footnote and endnote references during encoding,
-/// then renders GFM-style `[^n]` definitions at document end.
+/// Collects the document's footnote and endnote definitions (`[^N]`,
+/// `[^eN]`) during encoding and renders them at the document end. Only notes
+/// met at note depth 0 outside a memo are registered (see [`Ctx`]).
 struct FootnoteCollector {
     /// Per-note body paragraphs (multi-paragraph definitions).
     footnotes: Vec<Vec<String>>,
     endnotes: Vec<Vec<String>>,
-    /// Nested-note policy (M5): when rendering **inside** another note body,
-    /// a nested note cannot become a `[^n]` reference (a definition inside a
-    /// definition either strands the marker or, if emitted, produces output
-    /// our own decoder rejects as a nested reference). Instead its text is
-    /// inlined as plain `(주: …)` — documented lossy.
-    nested_inline: bool,
 }
 
 impl FootnoteCollector {
     fn new() -> Self {
-        Self { footnotes: Vec::new(), endnotes: Vec::new(), nested_inline: false }
+        Self { footnotes: Vec::new(), endnotes: Vec::new() }
     }
 
-    /// Collector for rendering paragraphs *inside* a note body (M5).
-    fn nested() -> Self {
-        Self { footnotes: Vec::new(), endnotes: Vec::new(), nested_inline: true }
-    }
-
-    /// Adds a footnote body and returns the inline marker `[^N]`
-    /// (or the inlined plain text in nested mode).
+    /// Adds a footnote body and returns the inline marker `[^N]`.
     fn add_footnote(&mut self, body_paragraphs: Vec<String>) -> String {
-        if self.nested_inline {
-            return format!("(주: {})", body_paragraphs.join(" "));
-        }
         let n = self.footnotes.len() + 1;
         self.footnotes.push(body_paragraphs);
         format!("[^{n}]")
     }
 
-    /// Adds an endnote body and returns the inline marker `[^eN]`
-    /// (or the inlined plain text in nested mode).
+    /// Adds an endnote body and returns the inline marker `[^eN]`.
     fn add_endnote(&mut self, body_paragraphs: Vec<String>) -> String {
-        if self.nested_inline {
-            return format!("(주: {})", body_paragraphs.join(" "));
-        }
         let n = self.endnotes.len() + 1;
         self.endnotes.push(body_paragraphs);
         format!("[^e{n}]")
@@ -162,14 +144,130 @@ fn is_ordered_marker(s: &str) -> bool {
         && matches!(s.as_bytes().get(digits + 1), Some(b' ') | None)
 }
 
+// ---------------------------------------------------------------------------
+// Render context and the document's state
+// ---------------------------------------------------------------------------
+
+/// Where a piece of content is being drawn. Every recursion passes it on;
+/// the places that change it are: an HTML table cell (`html`), a note body
+/// (Markdown, `note_depth + 1`) and a memo body (Markdown, `in_comment`).
+/// Text boxes, shapes and groups pass it on unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+struct Ctx {
+    /// Inside a merged or nested-table cell: inline HTML, not Markdown.
+    html: bool,
+    /// How many note bodies enclose this content. Only depth 0 registers a
+    /// note definition; deeper notes are written inline as `(주: …)`.
+    note_depth: u32,
+    /// Inside a memo (`<!-- memo: … -->`): pictures are written as link
+    /// text only (no asset), notes inline.
+    in_comment: bool,
+}
+
+impl Ctx {
+    fn markdown(self) -> Self {
+        Self { html: false, ..self }
+    }
+}
+
+/// What the whole document collects while it is drawn: the note
+/// definitions and the image assets.
+struct State {
+    notes: FootnoteCollector,
+    assets: Assets,
+}
+
+/// The image assets (`MdOutput::images`): one key per source picture
+/// (`Image::path`), assigned in drawing order. A link and its asset are
+/// decided in the same call, so every link written outside a memo leads to
+/// its own picture's bytes or to no file at all.
+#[derive(Default)]
+struct Assets {
+    images: HashMap<String, Vec<u8>>,
+    /// Keys used by links whose picture has no bytes: no file may take them.
+    link_only: std::collections::HashSet<String>,
+}
+
+impl Assets {
+    /// The key a picture's link uses, registering its bytes. A key already
+    /// holding the same bytes is reused (the same source drawn again, or
+    /// another with equal bytes); a key holding other bytes, or taken by a
+    /// link without bytes, moves on to `-2`, `-3` … before the extension, so
+    /// the walk always lands on the same key for the same source. A picture
+    /// without bytes gets a key no file holds and keeps it for itself. In a
+    /// memo (`register` false) the link is comment text and uses the plain
+    /// key.
+    /// 이것을 실패시키는 것: 충돌 시 덮어쓰기 · 접미사 규칙 바꾸기 · 바이트 없는 링크가
+    /// 남의 파일 키를 쓰기 · 파일이 바이트 없는 링크의 키를 쓰기
+    /// (`asset_keys_never_overwrite`).
+    fn key(&mut self, path: &str, styles: &dyn StyleLookup, register: bool) -> String {
+        let candidate = image_rel_path(path, styles);
+        if !register {
+            return candidate;
+        }
+        let data = styles.image_data(path);
+        let mut key = candidate.clone();
+        let mut n = 1;
+        loop {
+            match (self.images.get(&key), data) {
+                (Some(existing), Some(d)) if existing.as_slice() == d => break,
+                (None, Some(_)) if !self.link_only.contains(&key) => break,
+                (None, None) => break,
+                _ => {
+                    n += 1;
+                    key = suffixed_key(&candidate, n);
+                }
+            }
+        }
+        match data {
+            Some(d) => {
+                self.images.entry(key.clone()).or_insert_with(|| d.to_vec());
+            }
+            None => {
+                self.link_only.insert(key.clone());
+            }
+        }
+        key
+    }
+}
+
+/// `images/a.png` → `images/a-2.png` (`images/a` → `images/a-2`).
+fn suffixed_key(key: &str, n: u32) -> String {
+    let name_start = key.rfind('/').map_or(0, |i| i + 1);
+    match key[name_start..].rfind('.') {
+        Some(dot) if dot > 0 => {
+            let at = name_start + dot;
+            format!("{}-{n}{}", &key[..at], &key[at..])
+        }
+        _ => format!("{key}-{n}"),
+    }
+}
+
+/// A picture's link in the context's form — `![alt](key)` in Markdown,
+/// `<img src="key" alt="alt"/>` in HTML — with its asset registered unless
+/// inside a memo.
+fn emit_picture(
+    image: &hwpforge_core::image::Image,
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let alt = image_alt_text(&image.path);
+    let key = st.assets.key(&image.path, styles, !ctx.in_comment);
+    if ctx.html {
+        format!("<img src=\"{key}\" alt=\"{alt}\"/>")
+    } else {
+        format!("![{alt}]({key})")
+    }
+}
+
 /// Encodes a validated document into style-aware markdown.
 ///
 /// Queries the provided [`StyleLookup`] for character/paragraph/style
 /// properties to emit inline formatting and heading markers.
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
     let mut blocks = Vec::new();
-    let mut images = HashMap::new();
-    let mut footnotes = FootnoteCollector::new();
+    let mut st = State { notes: FootnoteCollector::new(), assets: Assets::default() };
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
@@ -215,8 +313,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
 
             let continuation_level = continuation
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
-            let (markdown, para_images) =
-                encode_paragraph_styled(paragraph, styles, &mut footnotes);
+            let markdown = encode_paragraph_styled(paragraph, styles, &mut st);
             if !markdown.trim().is_empty() {
                 if let Some(level) = continuation_level {
                     let indented = format_list_continuation(&markdown, level);
@@ -230,7 +327,6 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     blocks.push(markdown);
                 }
             }
-            images.extend(para_images);
 
             if continuation_level.is_none() {
                 continuation = list_context_for_paragraph(paragraph, styles);
@@ -244,57 +340,43 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     }
 
     // Append footnote/endnote definitions
-    let definitions = footnotes.render_definitions();
+    let definitions = st.notes.render_definitions();
     let mut markdown = blocks.join("\n\n");
     if !definitions.is_empty() {
         markdown.push_str("\n\n");
         markdown.push_str(&definitions);
     }
 
-    MdOutput { markdown, images }
+    MdOutput { markdown, images: st.assets.images }
 }
 
-/// Encodes a single paragraph into styled markdown, returning the markdown
-/// string and any extracted images.
+/// Encodes a single top-level paragraph into styled markdown.
 fn encode_paragraph_styled(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
-    let mut images = HashMap::new();
-
+    st: &mut State,
+) -> String {
+    let ctx = Ctx::default();
     // Handle single-run block elements (table, image) as standalone blocks.
+    // A paragraph whose one run is a group is not one of them, even when the
+    // group holds a single picture (WS: the group is drawn as its children).
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                let (mut md, tbl_images) =
-                    table_to_styled_markdown(table, styles, false, footnotes);
-                images.extend(tbl_images);
-                let (caption, caption_images) =
-                    styled_caption(table.caption.as_ref(), styles, footnotes);
-                md.push_str(&caption);
-                images.extend(caption_images);
-                return (md, images);
+                let mut md = table_to_styled_markdown(table, styles, false, st, ctx);
+                md.push_str(&styled_caption(table.caption.as_ref(), styles, st, ctx));
+                return md;
             }
             RunContent::Image(image) => {
-                let alt = image_alt_text(&image.path);
-                let rel_path = image_rel_path(&image.path, styles);
-                let mut md = format!("![{alt}]({rel_path})");
-                if let Some(data) = styles.image_data(&image.path) {
-                    images.insert(rel_path, data.to_vec());
-                }
-                let (caption, caption_images) =
-                    styled_caption(image.caption.as_ref(), styles, footnotes);
-                md.push_str(&caption);
-                images.extend(caption_images);
-                return (md, images);
+                let mut md = emit_picture(image, styles, st, ctx);
+                md.push_str(&styled_caption(image.caption.as_ref(), styles, st, ctx));
+                return md;
             }
             _ => {}
         }
     }
 
-    let (text, para_images) = paragraph_text_styled(paragraph, styles, footnotes);
-    images.extend(para_images);
+    let text = paragraph_text_styled(paragraph, styles, st, ctx);
 
     // Shared outline/list classification (hwpforge-core). Classification is
     // text-blind; the empty-text guards below are rendering concerns (an
@@ -304,18 +386,18 @@ fn encode_paragraph_styled(
             // Headings must be single-line: collapse lineBreak-originated newlines.
             let heading_text = text.trim().replace('\n', " ");
             if heading_text.is_empty() {
-                return (String::new(), images);
+                return String::new();
             }
-            (format!("{} {}", "#".repeat(level as usize), heading_text), images)
+            format!("{} {}", "#".repeat(level as usize), heading_text)
         }
         ParaKind::ListItem { kind, level, checked, .. } => {
             let trimmed = text.trim();
             if trimmed.is_empty() {
-                return (String::new(), images);
+                return String::new();
             }
-            (format_list_item(trimmed, kind, level, checked), images)
+            format_list_item(trimmed, kind, level, checked)
         }
-        ParaKind::Body => (text.trim_start().to_string(), images),
+        ParaKind::Body => text.trim_start().to_string(),
     }
 }
 
@@ -347,20 +429,22 @@ fn continuation_level_for_paragraph(
         .filter(|level| *level == context.level)
 }
 
-/// Extracts text from a paragraph with inline formatting applied.
+/// A paragraph in Markdown with inline formatting applied (`ctx.html` is
+/// ignored: this is the Markdown renderer).
 fn paragraph_text_styled(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let ctx = ctx.markdown();
     let mut output = String::new();
-    let mut images = HashMap::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
-    for run in &paragraph.runs {
+    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
         match &run.content {
             // InlineText folds to the same `\t`-bearing string via
             // `plain_text()` because Markdown styling has no
@@ -395,16 +479,8 @@ fn paragraph_text_styled(
                 if !output.is_empty() {
                     output.push(' ');
                 }
-                let alt = image_alt_text(&image.path);
-                let rel_path = image_rel_path(&image.path, styles);
-                output.push_str(&format!("![{alt}]({rel_path})"));
-                if let Some(data) = styles.image_data(&image.path) {
-                    images.insert(rel_path, data.to_vec());
-                }
-                let (caption, caption_images) =
-                    styled_caption(image.caption.as_ref(), styles, footnotes);
-                output.push_str(&caption);
-                images.extend(caption_images);
+                output.push_str(&emit_picture(image, styles, st, ctx));
+                output.push_str(&styled_caption(image.caption.as_ref(), styles, st, ctx));
             }
             RunContent::Table(table) => {
                 // Flush text group.
@@ -416,14 +492,8 @@ fn paragraph_text_styled(
                 if !output.is_empty() {
                     output.push('\n');
                 }
-                let (tbl_md, tbl_images) =
-                    table_to_styled_markdown(table, styles, false, footnotes);
-                output.push_str(&tbl_md);
-                images.extend(tbl_images);
-                let (caption, caption_images) =
-                    styled_caption(table.caption.as_ref(), styles, footnotes);
-                output.push_str(&caption);
-                images.extend(caption_images);
+                output.push_str(&table_to_styled_markdown(table, styles, false, st, ctx));
+                output.push_str(&styled_caption(table.caption.as_ref(), styles, st, ctx));
             }
             RunContent::Control(control) => {
                 // Flush text group.
@@ -432,7 +502,7 @@ fn paragraph_text_styled(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
-                let text = encode_control_styled(control, styles, &mut images, footnotes);
+                let text = encode_control_styled(control, styles, st, ctx);
                 // A caption number's prefix/suffix characters are text, not
                 // Markdown (review r1: a `*` prefix and suffix turned "3"
                 // into emphasis). 이것을 실패시키는 것: 이 이스케이프를 지우기
@@ -452,15 +522,15 @@ fn paragraph_text_styled(
         output.push_str(&current_format.wrap(&current_text));
     }
 
-    (output, images)
+    output
 }
 
 /// Encodes a single control element into styled markdown.
 fn encode_control_styled(
     control: &Control,
     styles: &dyn StyleLookup,
-    _images: &mut HashMap<String, Vec<u8>>,
-    footnotes: &mut FootnoteCollector,
+    st: &mut State,
+    ctx: Ctx,
 ) -> String {
     match control {
         Control::Hyperlink { text, url } => {
@@ -480,20 +550,21 @@ fn encode_control_styled(
                 format!("[{safe_text}]({safe_url})")
             }
         }
-        Control::Footnote { paragraphs, .. } => {
-            footnotes.add_footnote(extract_note_body(paragraphs, styles))
+        // A note at depth 0 outside a memo is a document definition; a note
+        // inside a note body (directly or through a shape or group) or inside
+        // a memo is written inline. 이것을 실패시키는 것: 깊이 조건 삭제 · 메모
+        // 조건 삭제(`notes_follow_depth_and_memo`).
+        Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+            let body = extract_note_body(paragraphs, styles, st, ctx);
+            if ctx.note_depth > 0 || ctx.in_comment {
+                format!("(주: {})", body.join(" "))
+            } else if matches!(control, Control::Footnote { .. }) {
+                st.notes.add_footnote(body)
+            } else {
+                st.notes.add_endnote(body)
+            }
         }
-        Control::Endnote { paragraphs, .. } => {
-            footnotes.add_endnote(extract_note_body(paragraphs, styles))
-        }
-        Control::TextBox { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            body.trim().to_string()
-        }
+        Control::TextBox { paragraphs, .. } => shape_text(paragraphs, styles, st, ctx),
         Control::Equation { script, .. } => match render_equation(script) {
             EqnRender::Latex(latex) => latex,
             // Written as ordinary text (whitespace already collapsed):
@@ -504,16 +575,7 @@ fn encode_control_styled(
         Control::Chart { .. } => "<!-- chart -->".to_string(),
         Control::Line { .. } => String::new(),
         Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            if body.trim().is_empty() {
-                String::new()
-            } else {
-                body.trim().to_string()
-            }
+            shape_text(paragraphs, styles, st, ctx)
         }
         Control::Dutmal { main_text, sub_text, .. } => {
             format!("{main_text}({sub_text})")
@@ -545,9 +607,12 @@ fn encode_control_styled(
             String::new()
         }
         Control::Memo { content, .. } => {
+            // Drawn as Markdown (`paragraph_text_styled`); an HTML cell
+            // escapes the whole memo after.
+            let inner = Ctx { in_comment: true, ..ctx };
             let body = content
                 .iter()
-                .map(|p| extract_paragraph_text(p, styles))
+                .map(|p| paragraph_text_styled(p, styles, st, inner))
                 .collect::<Vec<_>>()
                 .join(" ");
             let trimmed = body.trim();
@@ -582,31 +647,44 @@ fn encode_control_styled(
     }
 }
 
-/// Recursively extracts plain text from a paragraph using style-aware formatting.
-///
-/// Note: Uses a local `FootnoteCollector`, so footnotes nested inside control
-/// bodies (e.g. footnote inside a TextBox) will not propagate to the document-level
-/// collector. This is acceptable because HWP rarely nests footnotes inside shapes,
-/// and threading the collector through all recursive paths would require significant
-/// refactoring for marginal benefit.
-/// Renders note-body paragraphs individually (multi-paragraph preserved).
-/// Nested notes inside the body are inlined as plain text (M5).
-fn extract_note_body(paragraphs: &[Paragraph], styles: &dyn StyleLookup) -> Vec<String> {
-    let mut nested = FootnoteCollector::nested();
+/// A note body's paragraphs, each drawn on its own (multi-paragraph
+/// preserved) in Markdown (`paragraph_text_styled`) one note level deeper.
+fn extract_note_body(
+    paragraphs: &[Paragraph],
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> Vec<String> {
+    let inner = Ctx { note_depth: ctx.note_depth + 1, ..ctx };
     paragraphs
         .iter()
-        .map(|p| {
-            let (text, _images) = paragraph_text_styled(p, styles, &mut nested);
-            text.trim().to_string()
-        })
+        .map(|p| paragraph_text_styled(p, styles, st, inner).trim().to_string())
         .filter(|t| !t.is_empty())
         .collect()
 }
 
-fn extract_paragraph_text(paragraph: &Paragraph, styles: &dyn StyleLookup) -> String {
-    let mut dummy = FootnoteCollector::new();
-    let (text, _images) = paragraph_text_styled(paragraph, styles, &mut dummy);
-    text
+/// A text box's or shape's text in the context's form: each paragraph drawn
+/// in Markdown or HTML, joined by a space and trimmed. In an HTML cell the
+/// result is HTML already and is not escaped again.
+/// 이것을 실패시키는 것: HTML 분기 삭제(Markdown 렌더러로)
+/// (`html_cell_shape_text_is_html`).
+fn shape_text(
+    paragraphs: &[Paragraph],
+    styles: &dyn StyleLookup,
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let parts: Vec<String> = paragraphs
+        .iter()
+        .map(|p| {
+            if ctx.html {
+                extract_paragraph_text_html(p, styles, st, ctx)
+            } else {
+                paragraph_text_styled(p, styles, st, ctx)
+            }
+        })
+        .collect();
+    parts.join(" ").trim().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -776,35 +854,34 @@ fn table_to_styled_markdown(
     table: &Table,
     styles: &dyn StyleLookup,
     html_context: bool,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
     if table.rows.is_empty() {
-        return ("| |\n| --- |".to_string(), HashMap::new());
+        return "| |\n| --- |".to_string();
     }
 
     if has_merge(table) || has_nested_table(table) || html_context {
-        table_to_html(table, styles, footnotes)
+        table_to_html(table, styles, st, ctx)
     } else {
-        table_to_gfm(table, styles, footnotes)
+        table_to_gfm(table, styles, st, ctx)
     }
 }
 
-/// Renders a table as GFM (GitHub Flavored Markdown) pipe table.
-fn table_to_gfm(
-    table: &Table,
-    styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
-    let mut images = HashMap::new();
+/// Renders a table as GFM (GitHub Flavored Markdown) pipe table. The header
+/// row fixes the width; a later row's cells past it are not drawn at all,
+/// so they leave no picture asset and no note definition behind.
+/// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
+fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
+    let ctx = ctx.markdown();
+    let width = table.rows.first().map_or(0, |r| r.cells.len()).max(1);
     let mut rows: Vec<Vec<String>> = Vec::new();
-    for row in &table.rows {
+    for (ri, row) in table.rows.iter().enumerate() {
         let mut cells = Vec::new();
-        for cell in &row.cells {
+        for cell in row.cells.iter().take(if ri == 0 { usize::MAX } else { width }) {
             let mut parts = Vec::new();
             for p in &cell.paragraphs {
-                let (text, para_images) = paragraph_text_styled(p, styles, footnotes);
-                images.extend(para_images);
-                parts.push(text);
+                parts.push(paragraph_text_styled(p, styles, st, ctx));
             }
             cells.push(escape_gfm_cell(&parts.join("\n")));
         }
@@ -819,22 +896,18 @@ fn table_to_gfm(
     lines.push(format!("| {} |", (0..col_count).map(|_| "---").collect::<Vec<_>>().join(" | ")));
 
     for row in rows.iter().skip(1) {
-        // Pad or truncate row to match header column count for valid GFM.
+        // Pad a short row to the header's column count for valid GFM.
         let mut padded = row.clone();
         padded.resize(col_count, String::new());
         lines.push(format!("| {} |", padded.join(" | ")));
     }
 
-    (lines.join("\n"), images)
+    lines.join("\n")
 }
 
 /// Renders a table as HTML `<table>` with colspan/rowspan attributes.
-fn table_to_html(
-    table: &Table,
-    styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
-    let mut images = HashMap::new();
+fn table_to_html(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> String {
+    let ctx = Ctx { html: true, ..ctx };
     let mut lines = Vec::new();
     lines.push("<table>".to_string());
     lines.push("<tbody>".to_string());
@@ -844,9 +917,7 @@ fn table_to_html(
         for cell in &row.cells {
             let mut parts = Vec::new();
             for p in &cell.paragraphs {
-                let (text, para_images) = extract_paragraph_text_html(p, styles, footnotes);
-                images.extend(para_images);
-                parts.push(text);
+                parts.push(extract_paragraph_text_html(p, styles, st, ctx));
             }
             let text = parts.join("<br>");
 
@@ -867,21 +938,22 @@ fn table_to_html(
     lines.push("</tbody>".to_string());
     lines.push("</table>".to_string());
 
-    (lines.join("\n"), images)
+    lines.join("\n")
 }
 
 /// Extracts text from a paragraph using HTML inline formatting.
 fn extract_paragraph_text_html(
     paragraph: &Paragraph,
     styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let ctx = Ctx { html: true, ..ctx };
     let mut output = String::new();
-    let mut images = HashMap::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
 
-    for run in &paragraph.runs {
+    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
         match &run.content {
             // Same as the Markdown styled path (debug doc §3a-A6):
             // `InlineText` folds to its `\t`-bearing plain string via
@@ -918,15 +990,16 @@ fn extract_paragraph_text_html(
                     }
                     continue;
                 }
-                let mut ctrl_images = HashMap::new();
-                let ctrl_output =
-                    encode_control_styled(control, styles, &mut ctrl_images, footnotes);
-                images.extend(ctrl_images);
+                let ctrl_output = encode_control_styled(control, styles, st, ctx);
                 // HTML-escape text-bearing control output in HTML table context.
                 // Only structural/safe outputs (footnote markers, hyperlinks,
-                // chart comments, empty shapes) skip escaping.
+                // chart comments, empty shapes) and shape text — drawn as HTML
+                // already — skip escaping.
                 let escaped = match &**control {
-                    Control::Hyperlink { .. }
+                    Control::TextBox { .. }
+                    | Control::Ellipse { .. }
+                    | Control::Polygon { .. }
+                    | Control::Hyperlink { .. }
                     | Control::Footnote { .. }
                     | Control::Endnote { .. }
                     | Control::Chart { .. }
@@ -946,16 +1019,8 @@ fn extract_paragraph_text_html(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
-                let alt = image_alt_text(&image.path);
-                let rel_path = image_rel_path(&image.path, styles);
-                output.push_str(&format!("<img src=\"{rel_path}\" alt=\"{alt}\"/>"));
-                if let Some(data) = styles.image_data(&image.path) {
-                    images.insert(rel_path, data.to_vec());
-                }
-                let (caption, caption_images) =
-                    html_caption(image.caption.as_ref(), styles, footnotes);
-                output.push_str(&caption);
-                images.extend(caption_images);
+                output.push_str(&emit_picture(image, styles, st, ctx));
+                output.push_str(&html_caption(image.caption.as_ref(), styles, st, ctx));
             }
             RunContent::Table(table) => {
                 if !current_text.is_empty() {
@@ -963,13 +1028,8 @@ fn extract_paragraph_text_html(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
-                let (tbl_md, tbl_images) = table_to_html(table, styles, footnotes);
-                output.push_str(&tbl_md);
-                images.extend(tbl_images);
-                let (caption, caption_images) =
-                    html_caption(table.caption.as_ref(), styles, footnotes);
-                output.push_str(&caption);
-                images.extend(caption_images);
+                output.push_str(&table_to_html(table, styles, st, ctx));
+                output.push_str(&html_caption(table.caption.as_ref(), styles, st, ctx));
             }
             _ => {}
         }
@@ -979,7 +1039,7 @@ fn extract_paragraph_text_html(
         output.push_str(&current_format.wrap_html(&current_text));
     }
 
-    (output, images)
+    output
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,22 +1078,21 @@ fn image_rel_path(path: &str, styles: &dyn StyleLookup) -> String {
 fn styled_caption(
     caption: Option<&hwpforge_core::caption::Caption>,
     styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
-    let mut images = HashMap::new();
-    let Some(caption) = caption else { return (String::new(), images) };
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let Some(caption) = caption else { return String::new() };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
-        let (t, p_images) = paragraph_text_styled(p, styles, footnotes);
-        images.extend(p_images);
+        let t = paragraph_text_styled(p, styles, st, ctx);
         if !t.trim().is_empty() {
             text.push(t);
         }
     }
     if text.is_empty() {
-        (String::new(), images)
+        String::new()
     } else {
-        (format!("\n\n{}", text.join("\n\n")), images)
+        format!("\n\n{}", text.join("\n\n"))
     }
 }
 
@@ -1045,22 +1104,21 @@ fn styled_caption(
 fn html_caption(
     caption: Option<&hwpforge_core::caption::Caption>,
     styles: &dyn StyleLookup,
-    footnotes: &mut FootnoteCollector,
-) -> (String, HashMap<String, Vec<u8>>) {
-    let mut images = HashMap::new();
-    let Some(caption) = caption else { return (String::new(), images) };
+    st: &mut State,
+    ctx: Ctx,
+) -> String {
+    let Some(caption) = caption else { return String::new() };
     let mut text = Vec::new();
     for p in &caption.paragraphs {
-        let (t, p_images) = extract_paragraph_text_html(p, styles, footnotes);
-        images.extend(p_images);
+        let t = extract_paragraph_text_html(p, styles, st, ctx);
         if !t.trim().is_empty() {
             text.push(t);
         }
     }
     if text.is_empty() {
-        (String::new(), images)
+        String::new()
     } else {
-        (format!("<br>{}", text.join("<br>")), images)
+        format!("<br>{}", text.join("<br>"))
     }
 }
 
@@ -1787,8 +1845,8 @@ mod tests {
         // Validation rejects empty tables, so test the helper directly.
         let table = Table::new(vec![]);
         let styles = MockStyles::new();
-        let mut notes = FootnoteCollector::new();
-        let (result, _images) = table_to_styled_markdown(&table, &styles, false, &mut notes);
+        let mut st = State { notes: FootnoteCollector::new(), assets: Assets::default() };
+        let result = table_to_styled_markdown(&table, &styles, false, &mut st, Ctx::default());
         assert_eq!(result, "| |\n| --- |");
     }
 
@@ -2985,5 +3043,351 @@ mod tests {
         let output = encode_styled(&doc, &styles);
         assert!(output.markdown.contains("See"), "prefix text should be present");
         assert!(output.markdown.contains("![icon](images/icon.png)"), "inline image should render");
+    }
+
+    // -----------------------------------------------------------------------
+    // WS: groups, the render context and the asset table
+    // -----------------------------------------------------------------------
+
+    fn u(v: i32) -> HwpUnit {
+        HwpUnit::new(v).unwrap()
+    }
+
+    fn pic(path: &str) -> Image {
+        Image::new(path, u(100), u(100), ImageFormat::Png)
+    }
+
+    fn t(text: &str) -> Run {
+        Run::text(text, CharShapeIndex::new(0))
+    }
+
+    fn para(runs: Vec<Run>) -> Paragraph {
+        Paragraph::with_runs(runs, ParaShapeIndex::new(0))
+    }
+
+    fn group(children: Vec<hwpforge_core::control::GroupChild>) -> Run {
+        Run::control(
+            Control::Group {
+                children,
+                width: u(1000),
+                height: u(1000),
+                frame: hwpforge_core::ObjectFrame::new(),
+                placement: None,
+                inst_id: None,
+            },
+            CharShapeIndex::new(0),
+        )
+    }
+
+    fn text_box(paragraphs: Vec<Paragraph>) -> Control {
+        Control::text_box(paragraphs, u(100), u(100))
+    }
+
+    fn note(text: Vec<Run>) -> Run {
+        Run::control(Control::footnote(vec![para(text)]), CharShapeIndex::new(0))
+    }
+
+    fn styles_with(paths: &[(&str, &[u8])]) -> MockStyles {
+        let mut s = MockStyles::new();
+        for (p, d) in paths {
+            s.image_data.insert(p.to_string(), d.to_vec());
+        }
+        s
+    }
+
+    fn merged_cell_table(runs: Vec<Run>) -> Run {
+        let mut cell = TableCell::new(vec![para(runs)], u(1000));
+        cell.col_span = 2;
+        Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0))
+    }
+
+    /// A group is drawn as its children in z-order, at the place it stands,
+    /// like consecutive runs: a picture link (with its bytes), a text box's
+    /// text right after it, an equation, a nested group's picture.
+    ///
+    /// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기 ·
+    /// 자식 사이에 구분자 추가 · Equation 갈래 누락.
+    #[test]
+    fn styled_group_children_in_order() {
+        use hwpforge_core::control::GroupChild;
+        let styles = styles_with(&[("BinData/a.png", b"A"), ("BinData/c.png", b"C")]);
+        let g = group(vec![
+            GroupChild::Picture(pic("BinData/a.png")),
+            GroupChild::Shape(text_box(vec![para(vec![t("abc")])])),
+            GroupChild::Shape(Control::equation("a over b")),
+            GroupChild::Shape(Control::Group {
+                children: vec![GroupChild::Picture(pic("BinData/c.png"))],
+                width: u(10),
+                height: u(10),
+                frame: hwpforge_core::ObjectFrame::new(),
+                placement: None,
+                inst_id: None,
+            }),
+        ]);
+        let out = encode_styled(&validated_document(vec![para(vec![t("x"), g])]), &styles);
+        assert_eq!(out.markdown, "x ![a](images/a.png)abc$\\frac{a}{b}$ ![c](images/c.png)");
+        assert_eq!(out.images.get("images/a.png").map(Vec::as_slice), Some(&b"A"[..]));
+        assert_eq!(out.images.get("images/c.png").map(Vec::as_slice), Some(&b"C"[..]));
+    }
+
+    /// A heading whose only run is a group holding one picture is drawn by
+    /// the group path (`# ![a](…)`), not as a standalone picture block.
+    ///
+    /// 이것을 실패시키는 것: 묶음을 단독 그림 블록으로 처리.
+    #[test]
+    fn single_group_paragraph_is_not_a_picture_block() {
+        use hwpforge_core::control::GroupChild;
+        let mut styles = styles_with(&[("BinData/a.png", b"A")]);
+        styles.heading_paras.insert(1, 1);
+        let mut p = para(vec![group(vec![GroupChild::Picture(pic("BinData/a.png"))])]);
+        p.para_shape_id = ParaShapeIndex::new(1);
+        let out = encode_styled(&validated_document(vec![p]), &styles);
+        assert_eq!(out.markdown, "# ![a](images/a.png)");
+    }
+
+    /// In a merged (HTML) cell a group's picture is a real `<img>` element
+    /// and a text box's text is HTML (`<strong>`), not escaped Markdown; the
+    /// same text in the body stays Markdown (S5).
+    ///
+    /// 이것을 실패시키는 것: HTML 문맥 분기 삭제(Markdown 링크가 칸에 escape 되어 들어감) ·
+    /// 묶음 출력을 다시 escape · HTML 칸 도형 글자에 Markdown 렌더러.
+    #[test]
+    fn html_cell_shape_text_is_html() {
+        use hwpforge_core::control::GroupChild;
+        let mut styles = styles_with(&[("BinData/a.png", b"A")]);
+        styles.bold_ids.push(1);
+        let bold = Run::text("x", CharShapeIndex::new(1));
+        let cell = merged_cell_table(vec![
+            group(vec![GroupChild::Picture(pic("BinData/a.png"))]),
+            Run::control(text_box(vec![para(vec![bold])]), CharShapeIndex::new(0)),
+            Run::control(text_box(vec![para(vec![t("a*b")])]), CharShapeIndex::new(0)),
+        ]);
+        let out = encode_styled(
+            &validated_document(vec![para(vec![t("a*b")]), para(vec![cell])]),
+            &styles,
+        );
+        assert!(out.markdown.starts_with("a\\*b\n\n"), "{}", out.markdown);
+        assert!(
+            out.markdown.contains(
+                "<td colspan=\"2\"><img src=\"images/a.png\" alt=\"a\"/><strong>x</strong>a*b</td>"
+            ),
+            "{}",
+            out.markdown
+        );
+        assert!(out.images.contains_key("images/a.png"));
+    }
+
+    /// An inner shape inside an HTML-cell shape's text is HTML too (HWPX 2880
+    /// shape): `<strong>1단계</strong><strong> 서비스 구축</strong>`.
+    ///
+    /// 이것을 실패시키는 것: 안쪽 도형에 HTML 문맥 전달을 끊음 · 안쪽 출력을 다시 escape.
+    #[test]
+    fn nested_html_cell_shape_text_is_html() {
+        let mut styles = MockStyles::new();
+        styles.bold_ids.push(1);
+        let b = |s: &str| Run::text(s, CharShapeIndex::new(1));
+        let inner = Run::control(text_box(vec![para(vec![b("1단계")])]), CharShapeIndex::new(0));
+        let outer = Run::control(
+            text_box(vec![para(vec![inner, b(" 서비스 구축")])]),
+            CharShapeIndex::new(0),
+        );
+        let out = encode_styled(
+            &validated_document(vec![para(vec![merged_cell_table(vec![outer])])]),
+            &styles,
+        );
+        assert!(
+            out.markdown.contains(
+                "<td colspan=\"2\"><strong>1단계</strong><strong> 서비스 구축</strong></td>"
+            ),
+            "{}",
+            out.markdown
+        );
+    }
+
+    /// Notes follow the depth and memo rules: a note in a text box at depth 0
+    /// is a document definition (S4, numbered in drawing order); a note in a
+    /// text box inside a note body is inline (N2) and the output decodes; a
+    /// note in a memo is inline with no definition (M3).
+    ///
+    /// 이것을 실패시키는 것: 깊이 조건 삭제 · 메모 조건 삭제 · 글상자에서 수집기를 새로 만듦 ·
+    /// 각주 본문 진입 때 `note_depth` +1 삭제.
+    #[test]
+    fn notes_follow_depth_and_memo() {
+        let styles = MockStyles::new();
+        let tb = |runs: Vec<Run>| Run::control(text_box(vec![para(runs)]), CharShapeIndex::new(0));
+        let s4 = encode_styled(
+            &validated_document(vec![para(vec![
+                t("본문"),
+                tb(vec![t("글상자"), note(vec![t("각주")])]),
+                t("끝"),
+                note(vec![t("둘째")]),
+            ])]),
+            &styles,
+        );
+        assert_eq!(s4.markdown, "본문글상자[^1]끝[^2]\n\n[^1]: 각주\n\n[^2]: 둘째");
+        let n2 = encode_styled(
+            &validated_document(vec![para(vec![
+                t("a"),
+                note(vec![t("b"), tb(vec![t("c"), note(vec![t("d")])])]),
+            ])]),
+            &styles,
+        );
+        assert_eq!(n2.markdown, "a[^1]\n\n[^1]: bc(주: d)");
+        assert!(crate::MdDecoder::decode_with_default(&n2.markdown).is_ok());
+        let memo = Control::Memo {
+            content: vec![para(vec![t("m"), note(vec![t("f")])])],
+            anchor_runs: vec![t("a")],
+            metadata: Default::default(),
+        };
+        let m3 = encode_styled(
+            &validated_document(vec![para(vec![
+                t("a"),
+                Run::control(memo, CharShapeIndex::new(0)),
+            ])]),
+            &styles,
+        );
+        assert_eq!(m3.markdown, "a<!-- memo: m(주: f) -->");
+    }
+
+    /// A picture in a memo is link text only — no asset — also through a
+    /// group; a picture in a note body gets its asset (N4).
+    ///
+    /// 이것을 실패시키는 것: 메모에서 `in_comment` 미설정(자산 등록) · 메모 본문을
+    /// Markdown 렌더러가 아닌 HTML 렌더러로.
+    #[test]
+    fn memo_pictures_have_no_asset() {
+        use hwpforge_core::control::GroupChild;
+        let styles = styles_with(&[("BinData/x.png", b"X"), ("BinData/a.png", b"A")]);
+        for content in [
+            vec![t("m"), Run::image(pic("BinData/x.png"), CharShapeIndex::new(0))],
+            vec![t("m"), group(vec![GroupChild::Picture(pic("BinData/x.png"))])],
+        ] {
+            let memo = Control::Memo {
+                content: vec![para(content)],
+                anchor_runs: vec![t("a")],
+                metadata: Default::default(),
+            };
+            let out = encode_styled(
+                &validated_document(vec![para(vec![
+                    t("a"),
+                    Run::control(memo, CharShapeIndex::new(0)),
+                ])]),
+                &styles,
+            );
+            assert_eq!(out.markdown, "a<!-- memo: m ![x](images/x.png) -->");
+            assert!(out.images.is_empty());
+        }
+        let out = encode_styled(
+            &validated_document(vec![para(vec![
+                t("a"),
+                note(vec![t("b"), Run::image(pic("BinData/a.png"), CharShapeIndex::new(0))]),
+            ])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, "a[^1]\n\n[^1]: b ![a](images/a.png)");
+        assert_eq!(out.images.get("images/a.png").map(Vec::as_slice), Some(&b"A"[..]));
+    }
+
+    /// Keys follow the source picture: the same picture twice is one key and
+    /// one asset; `a(1).png` and `a%281%29.png` with different bytes want the
+    /// same key, so the second takes `-2` and every link keeps its own bytes,
+    /// whichever comes first; a picture without bytes never shares a key with
+    /// a file.
+    ///
+    /// 이것을 실패시키는 것: 충돌 시 덮어쓰기 · 접미사 규칙 바꾸기 · 바이트 없는 링크가
+    /// 남의 파일 키를 쓰기 · 파일이 바이트 없는 링크의 키를 쓰기.
+    #[test]
+    fn asset_keys_never_overwrite() {
+        let styles = styles_with(&[("BinData/a(1).png", b"ONE"), ("BinData/a%281%29.png", b"TWO")]);
+        let img = |p: &str| Run::image(pic(p), CharShapeIndex::new(0));
+        let out = encode_styled(
+            &validated_document(vec![para(vec![
+                img("BinData/a(1).png"),
+                img("BinData/a%281%29.png"),
+                img("BinData/a(1).png"),
+            ])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, "![a(1)](images/a%281%29.png) ![a%281%29](images/a%281%29-2.png) ![a(1)](images/a%281%29.png)");
+        assert_eq!(out.images.len(), 2);
+        assert_eq!(out.images["images/a%281%29.png"], b"ONE");
+        assert_eq!(out.images["images/a%281%29-2.png"], b"TWO");
+        let out = encode_styled(
+            &validated_document(vec![para(vec![
+                img("BinData/a%281%29.png"),
+                img("BinData/a(1).png"),
+            ])]),
+            &styles,
+        );
+        assert_eq!(out.images["images/a%281%29.png"], b"TWO");
+        assert_eq!(out.images["images/a%281%29-2.png"], b"ONE");
+        // A picture without bytes never shares a key with a file, in either
+        // order: its link takes a free key, and a file later wanting that key
+        // moves on.
+        let out = encode_styled(
+            &validated_document(vec![para(vec![img("BinData/a(1).png"), img("Other/a(1).png")])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, "![a(1)](images/a%281%29.png) ![a(1)](images/a%281%29-2.png)");
+        assert_eq!(out.images.len(), 1);
+        let out = encode_styled(
+            &validated_document(vec![para(vec![img("Other/a(1).png"), img("BinData/a(1).png")])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, "![a(1)](images/a%281%29.png) ![a(1)](images/a%281%29-2.png)");
+        assert_eq!(out.images["images/a%281%29-2.png"], b"ONE");
+        assert!(!out.images.contains_key("images/a%281%29.png"));
+    }
+
+    /// A GFM row's cells past the header width are not drawn: their picture
+    /// and note leave no link, asset or definition.
+    ///
+    /// 이것을 실패시키는 것: 잘린 칸을 렌더 후 버림.
+    #[test]
+    fn gfm_cut_cells_leave_nothing() {
+        let styles = styles_with(&[("BinData/a.png", b"A")]);
+        let cell = |runs: Vec<Run>| TableCell::new(vec![para(runs)], u(1000));
+        let table = Table::new(vec![
+            TableRow::new(vec![cell(vec![t("h")])]),
+            TableRow::new(vec![
+                cell(vec![t("v")]),
+                cell(vec![
+                    Run::image(pic("BinData/a.png"), CharShapeIndex::new(0)),
+                    note(vec![t("n")]),
+                ]),
+            ]),
+        ]);
+        let out = encode_styled(
+            &validated_document(vec![para(vec![Run::table(table, CharShapeIndex::new(0))])]),
+            &styles,
+        );
+        assert_eq!(out.markdown, "| h |\n| --- |\n| v |");
+        assert!(out.images.is_empty());
+    }
+
+    /// The two shapes of the earlier false positives: a group holding a text
+    /// box with only a table draws the table (S1 — lossy draws nothing, it
+    /// takes the box's plain text); a group holding a text box of spaces
+    /// draws nothing once trimmed (S2).
+    ///
+    /// 이것을 실패시키는 것: 도형 글자 잘라내기 삭제 · 묶음 글상자 표를 그리지 않기.
+    #[test]
+    fn false_positive_shapes() {
+        use hwpforge_core::control::GroupChild;
+        let styles = MockStyles::new();
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![para(vec![t("칸")])],
+            u(1000),
+        )])]);
+        let s1 = group(vec![GroupChild::Shape(text_box(vec![para(vec![Run::table(
+            table,
+            CharShapeIndex::new(0),
+        )])]))]);
+        let out = encode_styled(&validated_document(vec![para(vec![t("앞"), s1])]), &styles);
+        assert_eq!(out.markdown, "앞| 칸 |\n| --- |");
+        let s2 = group(vec![GroupChild::Shape(text_box(vec![para(vec![t("  ")])]))]);
+        let out =
+            encode_styled(&validated_document(vec![para(vec![t("앞"), s2, t("뒤")])]), &styles);
+        assert_eq!(out.markdown, "앞뒤");
     }
 }

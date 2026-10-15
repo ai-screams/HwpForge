@@ -117,3 +117,47 @@ pub(crate) fn auto_number_text(
     out.extend(format.suffix);
     out
 }
+
+/// The runs of a paragraph as the readable views draw them: a group run
+/// (묶음) stands for its children in z-order as consecutive runs of the
+/// group's char shape — a picture child as a picture run, a shape child as
+/// that control's run, a nested group recursively. Borrowed unchanged when
+/// the paragraph holds no group.
+/// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기
+/// (`lossy_group_children_in_order`, `styled_group_children_in_order`).
+pub(crate) fn runs_with_groups_spread(
+    runs: &[hwpforge_core::Run],
+) -> std::borrow::Cow<'_, [hwpforge_core::Run]> {
+    use hwpforge_core::control::GroupChild;
+    use hwpforge_core::{Control, Run, RunContent};
+    fn spread(
+        children: &[GroupChild],
+        cs: hwpforge_foundation::CharShapeIndex,
+        out: &mut Vec<Run>,
+    ) {
+        for child in children {
+            match child {
+                GroupChild::Picture(image) => out.push(Run::image(image.clone(), cs)),
+                GroupChild::Shape(Control::Group { children, .. }) => spread(children, cs, out),
+                GroupChild::Shape(shape) => out.push(Run::control(shape.clone(), cs)),
+                // A future child kind is not drawn.
+                _ => {}
+            }
+        }
+    }
+    let is_group = |r: &Run| matches!(&r.content, RunContent::Control(c) if matches!(**c, Control::Group { .. }));
+    if !runs.iter().any(is_group) {
+        return std::borrow::Cow::Borrowed(runs);
+    }
+    let mut out = Vec::with_capacity(runs.len());
+    for run in runs {
+        match &run.content {
+            RunContent::Control(c) => match c.as_ref() {
+                Control::Group { children, .. } => spread(children, run.char_shape_id, &mut out),
+                _ => out.push(run.clone()),
+            },
+            _ => out.push(run.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}

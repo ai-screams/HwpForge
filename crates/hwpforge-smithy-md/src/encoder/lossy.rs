@@ -191,7 +191,9 @@ fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> 
 fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> String {
     let mut output = String::new();
 
-    for run in &paragraph.runs {
+    // A group is drawn as its children (WS): body, table cells and captions
+    // come through here; the plain-text paths (notes, text boxes) do not.
+    for run in super::runs_with_groups_spread(&paragraph.runs).iter() {
         match &run.content {
             // Markdown cannot represent inline tab attributes, so any
             // `<hp:tab width=... leader=... type=.../>` collapses back
@@ -1110,5 +1112,113 @@ mod tests {
             encode_paragraph(&checked, Some(&mapping), Some(&registry), &mut Vec::new()),
             "  - [x] done"
         );
+    }
+
+    /// WS: a group is drawn as its children in z-order in the body and in a
+    /// table cell — picture links, a text box's text, nothing for a rectangle
+    /// or an equation, a nested group's picture; inside a text box (plain
+    /// text path) a group draws nothing.
+    ///
+    /// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기 ·
+    /// 글상자 글자 갈래 삭제 · Equation 을 lossy 에서 렌더 · 표 칸 경로에서 묶음 누락 ·
+    /// 평문 경로에서 묶음을 그림.
+    #[test]
+    fn lossy_group_children_in_order() {
+        use hwpforge_core::control::GroupChild;
+        use hwpforge_core::{Table, TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let pic =
+            |p: &str| hwpforge_core::Image::new(p, u(100), u(100), hwpforge_core::ImageFormat::Png);
+        let t = |s: &str| Run::text(s, CharShapeIndex::new(0));
+        let para = |runs: Vec<Run>| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let grp = |children: Vec<GroupChild>| Control::Group {
+            children,
+            width: u(1000),
+            height: u(1000),
+            frame: hwpforge_core::ObjectFrame::new(),
+            placement: None,
+            inst_id: None,
+        };
+        let g = Run::control(
+            grp(vec![
+                GroupChild::Picture(pic("BinData/a.png")),
+                GroupChild::Picture(pic("BinData/b.png")),
+                GroupChild::Shape(Control::text_box(vec![para(vec![t("box")])], u(10), u(10))),
+                GroupChild::Shape(Control::rect(u(10), u(10)).unwrap()),
+                GroupChild::Shape(Control::equation("a over b")),
+                GroupChild::Shape(grp(vec![GroupChild::Picture(pic("BinData/c.png"))])),
+            ]),
+            CharShapeIndex::new(0),
+        );
+        let doc = |p: Paragraph| {
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![p], hwpforge_core::PageSettings::a4()));
+            encode_without_template(&d.validate().unwrap()).unwrap()
+        };
+        assert_eq!(
+            doc(para(vec![t("x"), g.clone()])),
+            "x ![a](BinData/a.png) ![b](BinData/b.png)box ![c](BinData/c.png)"
+        );
+        let cell_group = Run::control(
+            grp(vec![GroupChild::Picture(pic("BinData/a.png"))]),
+            CharShapeIndex::new(0),
+        );
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![para(vec![cell_group.clone()])],
+            u(1000),
+        )])]);
+        assert_eq!(
+            doc(para(vec![Run::table(table, CharShapeIndex::new(0))])),
+            "| ![a](BinData/a.png) |\n| --- |"
+        );
+        let in_box = Run::control(
+            Control::text_box(vec![para(vec![t("in"), cell_group])], u(10), u(10)),
+            CharShapeIndex::new(0),
+        );
+        assert_eq!(doc(para(vec![in_box])), "in");
+    }
+
+    /// S1 and S2 in lossy: a group holding a text box with only a table, or a
+    /// text box of spaces, draws nothing (the box's plain text, trimmed).
+    ///
+    /// 이것을 실패시키는 것: lossy 묶음 글상자에 `text_content` 대신 표 렌더 ·
+    /// 도형 글자 잘라내기 삭제.
+    #[test]
+    fn lossy_false_positive_shapes() {
+        use hwpforge_core::control::GroupChild;
+        use hwpforge_core::{Table, TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let t = |s: &str| Run::text(s, CharShapeIndex::new(0));
+        let para = |runs: Vec<Run>| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let grp = |shape: Control| {
+            Run::control(
+                Control::Group {
+                    children: vec![GroupChild::Shape(shape)],
+                    width: u(1000),
+                    height: u(1000),
+                    frame: hwpforge_core::ObjectFrame::new(),
+                    placement: None,
+                    inst_id: None,
+                },
+                CharShapeIndex::new(0),
+            )
+        };
+        let doc = |p: Paragraph| {
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(vec![p], hwpforge_core::PageSettings::a4()));
+            encode_without_template(&d.validate().unwrap()).unwrap()
+        };
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![para(vec![t("칸")])],
+            u(1000),
+        )])]);
+        let s1 = grp(Control::text_box(
+            vec![para(vec![Run::table(table, CharShapeIndex::new(0))])],
+            u(10),
+            u(10),
+        ));
+        assert_eq!(doc(para(vec![t("앞"), s1])), "앞");
+        let s2 = grp(Control::text_box(vec![para(vec![t("  ")])], u(10), u(10)));
+        assert_eq!(doc(para(vec![t("앞"), s2, t("뒤")])), "앞뒤");
     }
 }
