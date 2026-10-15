@@ -650,9 +650,10 @@ fn encode_control_styled(
                 }
             },
             // Written as ordinary text (whitespace already collapsed):
-            // Markdown-escaped here, and table cells apply their usual cell
+            // Markdown-escaped here (`$` too, so it opens no math, as in the
+            // fallback above), and table cells apply their usual cell
             // escaping on top, like text runs.
-            EqnRender::RawFallback(raw) => escape_markdown(&raw),
+            EqnRender::RawFallback(raw) => escape_markdown(&raw).replace('$', "\\$"),
         },
         Control::Chart { .. } => "<!-- chart -->".to_string(),
         Control::Line { .. } => String::new(),
@@ -3722,7 +3723,8 @@ mod tests {
     /// ordinary equation, Hancom's backtick space included, is unchanged.
     ///
     /// 이것을 실패시키는 것: 꺾쇠 치환 삭제 · `$`·`](`·끝 `\` 조건 하나씩 삭제 ·
-    /// 백틱도 거부하기 · 경고 기록 삭제 · 경고 자리 채우기 삭제.
+    /// 백틱도 거부하기 · 경고 기록 삭제 · 경고 자리 채우기 삭제 · 깊이 초과
+    /// 폴백의 `$` escape 삭제.
     #[test]
     fn markdown_equation_cannot_write_markup() {
         let styles = MockStyles::new();
@@ -3767,6 +3769,11 @@ mod tests {
             assert!(!out.markdown.replace("\\$", "").contains('$'), "{script}: {}", out.markdown);
         }
         assert_eq!(markdown_latex("$a\nb$").as_deref(), Some("$a b$"));
+        // A script too deep to convert is text as well, its `$` escaped.
+        let deep = format!("{}$x{}", "{".repeat(40), "}".repeat(40));
+        let out = draw(&deep);
+        assert!(out.markdown.contains("\\$x"), "{}", out.markdown);
+        assert!(!out.markdown.replace("\\$", "").contains('$'), "{}", out.markdown);
     }
 
     /// An equation's LaTeX in an HTML cell is escaped text: a script that
