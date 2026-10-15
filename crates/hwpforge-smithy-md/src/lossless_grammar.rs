@@ -443,6 +443,31 @@ pub(crate) fn valign_from(s: &str) -> Option<VerticalAlign> {
 /// default break.
 pub(crate) const LINE_WRAP: &str = "data-line-wrap";
 
+/// How many containers (tables, groups, pictures, captions, shapes, notes)
+/// may enclose one another. The same limit the HWPX reader and writer put
+/// on nested structure; real documents stay far below it (corpus maximum
+/// 7). Both directions refuse deeper input before building it, so no
+/// recursive walk or drop meets an unbounded tree.
+pub(crate) const MAX_NESTING_DEPTH: usize = 32;
+
+/// The elements that count toward [`MAX_NESTING_DEPTH`].
+pub(crate) const CONTAINER_TAGS: [&str; 14] = [
+    "table",
+    "group",
+    "img",
+    "caption",
+    "textbox",
+    "line",
+    "ellipse",
+    "polygon",
+    "rect",
+    "arc",
+    "curve",
+    "connectline",
+    "footnote",
+    "endnote",
+];
+
 /// Every attribute `<group>` may carry.
 pub(crate) fn group_attributes() -> Vec<&'static str> {
     let mut v = vec![CHAR_SHAPE, WIDTH, HEIGHT, INST_ID];

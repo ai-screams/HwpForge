@@ -231,6 +231,7 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
     let name = start.name();
     let tag: &str = name.as_ref();
     validate_parent(tag, stack)?;
+    check_depth(tag, stack)?;
     match tag {
         "section" => Ok(OpenNode::Section(parse_section_node(start)?)),
         "p" => Ok(OpenNode::Paragraph(ParagraphNode {
@@ -288,6 +289,7 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
     let name = empty.name();
     let tag: &str = name.as_ref();
     validate_parent(tag, stack)?;
+    check_depth(tag, stack)?;
     match tag {
         "img" => {
             let (char_shape_id, image) = parse_picture(empty, stack)?;
@@ -325,6 +327,23 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
             detail: format!("unsupported empty lossless tag <{} />", other),
         }),
     }
+}
+
+/// Refuses a container element that would sit deeper than
+/// [`g::MAX_NESTING_DEPTH`] containers, before any node is built for it.
+/// 이것을 실패시키는 것: 이 검사를 지우기 · 한도 비교를 `>` 로
+/// (`nesting_depth_is_limited`).
+fn check_depth(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
+    if !g::CONTAINER_TAGS.contains(&tag) {
+        return Ok(());
+    }
+    let open = stack.iter().filter(|n| g::CONTAINER_TAGS.contains(&n.tag_name())).count();
+    if open >= g::MAX_NESTING_DEPTH {
+        return Err(MdError::LosslessParse {
+            detail: format!("<{tag}> nests deeper than {} containers", g::MAX_NESTING_DEPTH),
+        });
+    }
+    Ok(())
 }
 
 fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
