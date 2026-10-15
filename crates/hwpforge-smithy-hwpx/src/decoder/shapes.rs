@@ -1668,11 +1668,10 @@ fn settle_group_frames(
         frame.replay = Some(0);
     }
     let plain = decode_container_once(container, char_shape_id, depth, ctx)?;
+    // A retry that made fewer calls leaves slots no tree places, which the
+    // outermost group reports (`decode_container`).
     if let Some(frame) = ctx.group_calls.last_mut() {
-        let made = frame.replay.take().unwrap_or_default();
-        if made != frame.record.len() {
-            return Err(group_replay_error(made));
-        }
+        frame.replay = None;
     }
     ctx.group_sources.clear();
     let without = match plain.as_ref().map(|r| &r.content) {
@@ -7244,6 +7243,37 @@ mod group_tests {
         let mut slots: Vec<Option<super::GroupSlot>> = Vec::new();
         let mut gathered = Vec::new();
         assert!(super::resolve_group_placeholders(&mut run, &mut slots, &mut gathered).is_err());
+    }
+
+    /// The group decode's own consistency checks: a retry that makes a
+    /// nested call its first decode did not, and a kept group the outermost
+    /// group never placed, are errors.
+    /// 이것을 실패시키는 것: 두 검사 중 하나를 지우기.
+    #[test]
+    fn group_slot_bookkeeping_errors_are_errors() {
+        let leaf = rect((500, 500), &ri(ID, &[(ID, ID), (ID, ID)]));
+        let xml = section(&container_with((1000, 1000), (1000, 1000), &ri(ID, &[(ID, ID)]), &leaf));
+        let sec: HxSection = crate::decoder::xml_from_str(&xml).unwrap();
+        let container = &sec.paragraphs[0].runs[0].containers[0];
+        let char_shape = hwpforge_foundation::CharShapeIndex::new(0);
+
+        // Replaying with nothing recorded.
+        let mut ctx = crate::decoder::section::DecodeCtx::new(0);
+        ctx.group_calls
+            .push(crate::decoder::section::GroupCalls { record: Vec::new(), replay: Some(0) });
+        assert!(super::decode_container(container, char_shape, 0, &mut ctx).is_err());
+
+        // A kept group nobody placed.
+        let mut ctx = crate::decoder::section::DecodeCtx::new(0);
+        ctx.group_slots.push(Some(super::GroupSlot {
+            run: Some(hwpforge_core::run::Run::text("x", char_shape)),
+            warnings: Vec::new(),
+            children: Vec::new(),
+        }));
+        assert!(super::decode_container(container, char_shape, 0, &mut ctx).is_err());
+        // Without it the same decode succeeds.
+        let mut ctx = crate::decoder::section::DecodeCtx::new(0);
+        assert!(super::decode_container(container, char_shape, 0, &mut ctx).unwrap().is_some());
     }
 
     /// An outer group holding one text box with `paragraphs`.
