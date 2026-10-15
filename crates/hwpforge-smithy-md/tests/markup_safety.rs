@@ -346,7 +346,7 @@ fn check_html(html: &str, assets: &BTreeSet<String>, urls: &BTreeSet<String>) ->
             }
             continue;
         }
-        let Some(end) = rest.find('>') else {
+        let Some(end) = html_tag_end(rest) else {
             problems.push(format!("unclosed tag in {html:?}"));
             break;
         };
@@ -359,7 +359,11 @@ fn check_html(html: &str, assets: &BTreeSet<String>, urls: &BTreeSet<String>) ->
             problems.push(format!("tag <{tag}>"));
             continue;
         }
-        for (attr, value) in attributes(&tag[name.len()..]) {
+        let Some(attrs) = attributes(&tag[name.len()..]) else {
+            problems.push(format!("malformed attributes on <{name}>"));
+            continue;
+        };
+        for (attr, value) in attrs {
             let value = html_unescape(&value);
             let ok = match (name.as_str(), attr.as_str()) {
                 ("td", "colspan" | "rowspan") => value.chars().all(|c| c.is_ascii_digit()),
@@ -376,29 +380,54 @@ fn check_html(html: &str, assets: &BTreeSet<String>, urls: &BTreeSet<String>) ->
     problems
 }
 
-/// `name="value"` pairs (the encoder quotes every value it writes).
-fn attributes(s: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut rest = s.trim();
-    while !rest.is_empty() {
-        let Some(eq) = rest.find('=') else {
-            out.push((rest.to_string(), String::new()));
-            break;
-        };
-        let name = rest[..eq].trim().to_string();
-        let after = rest[eq + 1..].trim_start();
-        let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
-            out.push((name, after.to_string()));
-            break;
-        };
-        let Some(close) = after[1..].find(q) else {
-            out.push((name, after.to_string()));
-            break;
-        };
-        out.push((name, after[1..1 + close].to_string()));
-        rest = after[close + 2..].trim_start();
+fn html_tag_end(s: &str) -> Option<usize> {
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        if c == '>' {
+            return Some(i);
+        }
+        if matches!(c, '\'' | '"') {
+            chars.find(|&(_, next)| next == c)?;
+        }
     }
-    out
+    None
+}
+
+/// `name="value"` pairs (the encoder quotes every value it writes).
+fn attributes(s: &str) -> Option<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while !rest.trim().is_empty() {
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (name, after) = rest.trim_start().split_once('=')?;
+        let name = name.trim_end();
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+        let after = after.trim_start();
+        let q = after.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let (value, tail) = after[1..].split_once(q)?;
+        out.push((name.to_string(), value.to_string()));
+        rest = tail;
+    }
+    Some(out)
+}
+
+#[test]
+fn html_harness_rejects_malformed_attributes() {
+    let empty = BTreeSet::new();
+    for html in [
+        "<img alt=x src=x onerror=alert(1)>",
+        "<img alt=\">\" src=x onerror=alert(1)>",
+        "<img alt=\">\" onerror=\"alert(1)\">",
+        "<img alt=\"unfinished>",
+        "<img alt>",
+    ] {
+        assert!(!check_html(html, &empty, &empty).is_empty(), "{html}");
+    }
+    assert!(check_html("<img alt=\">\">", &empty, &empty).is_empty());
 }
 
 fn html_unescape(s: &str) -> String {
@@ -421,7 +450,7 @@ fn html_text(html: &str) -> String {
         let end = if rest.starts_with("<!--") {
             rest.find("-->").map(|e| e + 3)
         } else {
-            rest.find('>').map(|e| e + 1)
+            html_tag_end(rest).map(|e| e + 1)
         };
         match end {
             Some(e) => rest = &rest[e..],

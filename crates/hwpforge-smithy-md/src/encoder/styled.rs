@@ -12,7 +12,7 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::UnderlineType;
 
-use super::guard::{Block, Source};
+use super::guard::{Block, Source, TOO_DEEP};
 use super::list_format::{format_list_continuation, format_list_item};
 use super::markup::{Cell, Html, Md};
 use super::Part;
@@ -201,25 +201,19 @@ struct Ctx {
     depth: usize,
 }
 
-/// Written in place of a container nested deeper than
-/// [`MAX_NESTING_DEPTH`](crate::lossless_grammar::MAX_NESTING_DEPTH): the
-/// styled view is infallible, so it says what it left out instead of
-/// recursing without bound.
-const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
-
 impl Ctx {
     /// The context one container deeper, or `None` past the limit.
     /// 이것을 실패시키는 것: 한도 검사 삭제 · 깊이 증가 삭제
     /// (`deep_containers_are_cut_off`).
     fn enter(self) -> Option<Self> {
-        (self.depth < crate::lossless_grammar::MAX_NESTING_DEPTH)
-            .then_some(Self { depth: self.depth + 1, ..self })
+        super::guard::enter_depth(self.depth).map(|depth| Self { depth, ..self })
     }
 }
 
 /// What the whole document collects while it is drawn: the note
 /// definitions and the image assets.
 struct State {
+    destinations: std::collections::HashSet<String>,
     notes: FootnoteCollector,
     assets: Assets,
     /// What was left out, with where (`at`).
@@ -231,6 +225,7 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
+            destinations: Default::default(),
             notes: FootnoteCollector::new(),
             assets: Assets::default(),
             warnings: Vec::new(),
@@ -328,7 +323,7 @@ fn emit_picture(
     ctx: Ctx,
 ) -> Md {
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
-    Md::image(Md::text(image_stem(&image.path)), &key)
+    Md::image(Md::text(image_stem(&image.path)), &key, &mut st.destinations)
 }
 
 /// [`emit_picture`] in an HTML cell: `<img src="key" alt="stem"/>`, both
@@ -342,7 +337,7 @@ fn emit_picture_html(
     ctx: Ctx,
 ) -> Html {
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
-    Html::image(&key, image_stem(&image.path))
+    Html::image(&key, image_stem(&image.path), &mut st.destinations)
 }
 
 /// Encodes a validated document into style-aware markdown.
@@ -350,7 +345,6 @@ fn emit_picture_html(
 /// Queries the provided [`StyleLookup`] for character/paragraph/style
 /// properties to emit inline formatting and heading markers.
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
-    super::markup::start_recording();
     let mut blocks: Vec<Block> = Vec::new();
     let mut st = State::new();
     // The plain-text fallback of a block: its paragraphs' raw text.
@@ -408,7 +402,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
             let markdown = encode_paragraph_styled(paragraph, styles, &mut st);
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph);
+                let text = super::guard::deep_text(paragraph, 0);
                 match (continuation_level, blocks.last_mut()) {
                     (Some(level), Some(last)) => {
                         last.markdown.push_str("\n\n");
@@ -442,9 +436,8 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
     blocks.extend(notes.render_definitions());
 
     // The finished Markdown, parsed again, may hold only what styled writes.
-    let destinations = super::markup::recorded();
     let allowed =
-        super::guard::Allowed { tags: super::guard::STYLED_TAGS, destinations: &destinations };
+        super::guard::Allowed { tags: super::guard::STYLED_TAGS, destinations: &st.destinations };
     let markdown = super::guard::checked(blocks, &allowed, &mut st.warnings);
 
     MdOutput { markdown, images: st.assets.images, warnings: st.warnings }
@@ -606,7 +599,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         // (`link_text_cannot_inject_markup`).
         Control::Hyperlink { text, url } => {
             if super::link_url_allowed(url) {
-                Md::link(Md::text(text), url)
+                Md::link(Md::text(text), url, &mut st.destinations)
             } else {
                 Md::text(text)
             }
@@ -623,7 +616,7 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
                 md.push_syntax(")");
                 md
             } else {
-                note_definition(control, body, paragraphs, st)
+                note_definition(control, body, paragraphs, st, ctx)
             }
         }
         Control::TextBox { paragraphs, .. }
@@ -698,7 +691,7 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
     match control {
         Control::Hyperlink { text, url } => {
             if super::link_url_allowed(url) {
-                Html::link(text, url)
+                Html::link(text, url, &mut st.destinations)
             } else {
                 Html::text(text)
             }
@@ -712,7 +705,7 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             } else {
                 // A definition is Markdown; its marker is written as it is.
                 let body = extract_note_body(paragraphs, styles, st, ctx);
-                Html::text(note_definition(control, body, paragraphs, st).as_str())
+                Html::text(note_definition(control, body, paragraphs, st, ctx).as_str())
             }
         }
         Control::TextBox { paragraphs, .. }
@@ -758,8 +751,16 @@ fn note_definition(
     body: Vec<Md>,
     paragraphs: &[Paragraph],
     st: &mut State,
+    ctx: Ctx,
 ) -> Md {
-    let raw = paragraphs.iter().map(super::guard::deep_text).collect::<Vec<_>>().join(" ");
+    let raw = match ctx.enter() {
+        Some(inner) => paragraphs
+            .iter()
+            .map(|p| super::guard::deep_text(p, inner.depth))
+            .collect::<Vec<_>>()
+            .join(" "),
+        None => TOO_DEEP.to_string(),
+    };
     if matches!(control, Control::Footnote { .. }) {
         st.notes.add_footnote(body, raw, st.at)
     } else {
@@ -2589,7 +2590,10 @@ mod tests {
         let styles = MockStyles::new();
         let key = image_rel_path("x/a)<img src=y>.png", &styles);
         assert_eq!(key, "images/a%29<img src=y>.png");
-        assert_eq!(Md::image(Md::text("a"), &key), "![a](<images/a%29\\<img src=y\\>.png>)");
+        assert_eq!(
+            Md::image(Md::text("a"), &key, &mut Default::default()),
+            "![a](<images/a%29\\<img src=y\\>.png>)"
+        );
     }
 
     // --- has_nested_table ---
@@ -3598,6 +3602,72 @@ mod tests {
         assert_eq!(encode_styled(&doc, &MockStyles::new()).markdown, "core");
         assert!(super::super::lossy::encode_without_template(&doc).is_err());
         assert!(super::super::lossless::encode_lossless(&doc).is_err());
+    }
+
+    /// A callback may encode another document after the outer link was
+    /// drawn. Its destinations belong only to that inner encode.
+    /// 이것을 실패시키는 것: 목적지 기록을 중첩 호출에서 초기화하거나 공유하기.
+    #[test]
+    fn nested_encode_keeps_outer_destinations() {
+        struct Reentrant {
+            called: std::cell::Cell<bool>,
+        }
+        impl StyleLookup for Reentrant {
+            fn para_heading_level(&self, _: ParaShapeIndex) -> Option<u8> {
+                if !self.called.replace(true) {
+                    let inner = validated_document(vec![para(vec![t("inner")])]);
+                    assert_eq!(crate::MdEncoder::encode_lossy(&inner).unwrap(), "inner");
+                }
+                None
+            }
+        }
+        let styles = Reentrant { called: std::cell::Cell::new(false) };
+        let doc = validated_document(vec![para(vec![Run::control(
+            Control::Hyperlink { text: "t".into(), url: "https://e.invalid".into() },
+            CharShapeIndex::new(0),
+        )])]);
+        let out = encode_styled(&doc, &styles);
+        assert!(styles.called.get());
+        assert_eq!(out.markdown, "[t](https://e.invalid)");
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    }
+
+    /// Note fallback starts at the note's actual container depth, and a
+    /// rejected note body never exposes its original text in fallback.
+    /// 이것을 실패시키는 것: 각주 원문 깊이를 0으로 초기화 · 각주 진입 검사 삭제.
+    #[test]
+    fn note_fallback_keeps_rendered_depth() {
+        let styles = MockStyles::new();
+        for depth in [0, 31, 32] {
+            for boxes in [0, 31, 32, 128] {
+                let mut run = t("core");
+                for _ in 0..boxes {
+                    run = Run::control(text_box(vec![para(vec![run])]), CharShapeIndex::new(0));
+                }
+                let expected = if depth + 1 + boxes <= 32 { "core" } else { TOO_DEEP };
+                for control in [
+                    Control::footnote(vec![para(vec![run.clone()])]),
+                    Control::endnote(vec![para(vec![run])]),
+                ] {
+                    let mut st = State::new();
+                    control_md(&control, &styles, &mut st, Ctx { depth, ..Ctx::default() });
+                    let mut blocks = st.notes.render_definitions();
+                    assert_eq!(blocks.len(), 1);
+                    assert!(blocks[0].markdown.contains(expected));
+                    assert_eq!(blocks[0].source.as_ref().unwrap().texts, vec![expected]);
+                    blocks[0].markdown = "<script>bad</script>".into();
+                    let allowed = super::super::guard::Allowed {
+                        tags: super::super::guard::STYLED_TAGS,
+                        destinations: &st.destinations,
+                    };
+                    let md = super::super::guard::checked(blocks, &allowed, &mut st.warnings);
+                    assert!(md.ends_with(&super::super::guard::plain_text(expected)), "{md}");
+                    if expected == TOO_DEEP {
+                        assert!(!md.contains("core"));
+                    }
+                }
+            }
+        }
     }
 
     /// Containers nested past the limit are cut off with a visible notice

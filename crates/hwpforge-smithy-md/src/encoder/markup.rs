@@ -18,34 +18,13 @@
 //! (CommonMark reads each as one) and are written as `\n`, or as `<br>` in
 //! a cell or in HTML.
 
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::Write as _;
-
-thread_local! {
-    /// The link and image destinations written since [`start_recording`]:
-    /// what the final check ([`super::guard`]) accepts as the encoder's own.
-    static DESTINATIONS: RefCell<HashSet<String>> = RefCell::default();
-}
-
-/// Starts a fresh record of the destinations an encode writes.
-pub(crate) fn start_recording() {
-    DESTINATIONS.with(|d| d.borrow_mut().clear());
-}
-
-/// The destinations written since [`start_recording`].
-pub(crate) fn recorded() -> HashSet<String> {
-    DESTINATIONS.with(|d| std::mem::take(&mut *d.borrow_mut()))
-}
 
 /// A Markdown destination as a parser reads it back from [`destination`]:
 /// the URL itself, its line endings percent-encoded.
 fn read_back(url: &str) -> String {
     url.replace('\n', "%0A").replace('\r', "%0D")
-}
-
-fn record(dest: &str) {
-    DESTINATIONS.with(|d| d.borrow_mut().insert(dest.to_string()));
 }
 
 /// Markdown the encoder made.
@@ -149,14 +128,14 @@ impl Md {
     /// ([`destination`]). A line ending in the label is a space (a blank
     /// line would break the link apart).
     /// 이것을 실패시키는 것: 줄 끝을 공백으로 바꾸기 삭제(`markup_safety`).
-    pub(crate) fn link(label: Md, url: &str) -> Self {
-        record(&read_back(url));
+    pub(crate) fn link(label: Md, url: &str, destinations: &mut HashSet<String>) -> Self {
+        destinations.insert(read_back(url));
         Self(format!("[{}]({})", label.0.replace('\n', " "), destination(url)))
     }
 
     /// `![alt](path)`, the alt's line endings as spaces, as in [`Md::link`].
-    pub(crate) fn image(alt: Md, path: &str) -> Self {
-        record(&read_back(path));
+    pub(crate) fn image(alt: Md, path: &str, destinations: &mut HashSet<String>) -> Self {
+        destinations.insert(read_back(path));
         Self(format!("![{}]({})", alt.0.replace('\n', " "), destination(path)))
     }
 
@@ -379,14 +358,14 @@ impl Html {
     }
 
     /// `<a href="url">label</a>`.
-    pub(crate) fn link(label: &str, url: &str) -> Self {
-        record(url);
+    pub(crate) fn link(label: &str, url: &str, destinations: &mut HashSet<String>) -> Self {
+        destinations.insert(url.to_string());
         Self(format!("<a href=\"{}\">{}</a>", escape_attr(url), Html::text(label).0))
     }
 
     /// `<img src="key" alt="alt"/>`.
-    pub(crate) fn image(key: &str, alt: &str) -> Self {
-        record(key);
+    pub(crate) fn image(key: &str, alt: &str, destinations: &mut HashSet<String>) -> Self {
+        destinations.insert(key.to_string());
         Self(format!("<img src=\"{}\" alt=\"{}\"/>", escape_attr(key), escape_attr(alt)))
     }
 
@@ -542,7 +521,7 @@ impl<M> Piece<M> {
 ///   lone `\` before punctuation (an escape otherwise);
 /// - a backtick before markup (a code span opened there could close past
 ///   it — an escaped backtick still closes one), and a code fence at a
-///   line's start ([`fence_at`]).
+///   line's start ([`FenceScan`]).
 ///
 /// A backslash run just before an escaped character is doubled, so it stays
 /// text and the escape still applies. With `cell`, the text is a GFM table
@@ -552,6 +531,10 @@ impl<M> Piece<M> {
 /// escape 하기 · 링크 너머 글자를 따로 판정하기
 /// (`lossy_text_escapes_only_markup`, `markup_safety`).
 fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
+    escape_pieces_scanned(pieces, cell).0
+}
+
+fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, FenceScan) {
     let mut chars: Vec<char> = Vec::new();
     let mut markup: Vec<bool> = Vec::new();
     for piece in &pieces {
@@ -564,8 +547,10 @@ fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
             markup.push(is_markup);
         }
     }
+    let mut scan = FenceScan::new(&markup);
     let mut out = String::with_capacity(chars.len());
     for (i, &c) in chars.iter().enumerate() {
+        let fence = scan.at(&chars, i);
         if markup[i] {
             // Text right before markup: a `!` before a link and a lone `\`
             // before punctuation would change it.
@@ -593,12 +578,12 @@ fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
         let escape = match c {
             '\\' => cell,
             '|' => cell,
-            '`' | '~' if !cell && fence_at(&chars, i) => true,
+            '`' | '~' if !cell && fence => true,
             // A code span opened here could close past the markup after it
             // (an escaped backtick still closes a span), so before markup
             // every backtick is escaped. 이것을 실패시키는 것: 이 갈래 삭제
             // (`markup_safety` 의 링크 앞뒤 백틱).
-            '`' => markup[i + 1..].iter().any(|&m| m),
+            '`' => scan.last_markup.is_some_and(|last| i < last),
             '<' => markup_after_lt(&chars[i + 1..]),
             '&' => entity_follows(&chars[i + 1..]),
             ']' => next == Some('('),
@@ -615,22 +600,66 @@ fn escape_pieces(pieces: Vec<Piece<String>>, cell: bool) -> String {
         }
         out.push(c);
     }
-    out
+    (out, scan)
 }
 
-/// Whether the `` ` `` or `~` at `i` is in a code fence: a run of three or
-/// more at a line's start after up to three spaces (the fence would take in
-/// everything after it, markup included). Every one of the run is escaped,
-/// so no shorter run is left to open a code span.
-/// 이것을 실패시키는 것: 이 검사 삭제(`markup_safety` 의 링크 앞 울타리).
-fn fence_at(chars: &[char], i: usize) -> bool {
-    let c = chars[i];
-    let start = chars[..i].iter().rposition(|&x| x != c).map_or(0, |p| p + 1);
-    let line_start = chars[..start].iter().rposition(|&x| x == '\n').map_or(0, |p| p + 1);
-    let indent = &chars[line_start..start];
-    indent.len() <= 3
-        && indent.iter().all(|&x| x == ' ')
-        && chars[start..].iter().take_while(|&&x| x == c).count() >= 3
+/// A paragraph's line start and current backtick/tilde run. Each run is
+/// measured once, including markup characters, so every text character in
+/// a fence is escaped without rescanning its prefix or suffix.
+#[derive(Default)]
+struct FenceScan {
+    line_start: usize,
+    run_end: usize,
+    fence: bool,
+    last_markup: Option<usize>,
+    #[cfg(test)]
+    comparisons: usize,
+}
+
+impl FenceScan {
+    fn new(markup: &[bool]) -> Self {
+        let mut scan = Self::default();
+        scan.last_markup = markup.iter().rposition(|&m| {
+            scan.compared();
+            m
+        });
+        scan
+    }
+
+    fn compared(&mut self) {
+        #[cfg(test)]
+        {
+            self.comparisons += 1;
+        }
+    }
+
+    fn at(&mut self, chars: &[char], i: usize) -> bool {
+        self.compared();
+        let c = chars[i];
+        if c == '\n' {
+            self.line_start = i + 1;
+        }
+        if !matches!(c, '`' | '~') {
+            return false;
+        }
+        if i >= self.run_end {
+            self.run_end = i + 1;
+            while self.run_end < chars.len() {
+                self.compared();
+                if chars[self.run_end] != c {
+                    break;
+                }
+                self.run_end += 1;
+            }
+            self.fence = i - self.line_start <= 3
+                && chars[self.line_start..i].iter().all(|&x| {
+                    self.compared();
+                    x == ' '
+                })
+                && self.run_end - i >= 3;
+        }
+        self.fence
+    }
 }
 
 /// Whether the `[` at `i` may open a link reference definition: only
@@ -823,4 +852,87 @@ fn entity_follows(rest: &[char]) -> bool {
     };
     let n = body.iter().take_while(|c| c.is_ascii_alphanumeric()).count();
     (1..=32).contains(&n) && body.get(n) == Some(&';')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Long runs and text before later markup need only linear scanning.
+    /// 이것을 실패시키는 것: 매 글자에서 run 또는 마크업 suffix 다시 검색하기.
+    #[test]
+    fn backtick_scan_work_is_linear() {
+        for prefix in ["", "x", "   ", "    ", "x\n"] {
+            for suffix in ["", "[t](https://e.invalid)"] {
+                for cell in [false, true] {
+                    let measure = |n| {
+                        let raw = format!("{prefix}{}", "`".repeat(n));
+                        let (out, scan) = escape_pieces_scanned(
+                            vec![Piece::Text(raw), Piece::Markup(suffix.to_string())],
+                            cell,
+                        );
+                        let fenced = matches!(prefix, "" | "   " | "x\n") && !cell;
+                        let ticks = if fenced || !suffix.is_empty() {
+                            "\\`".repeat(n)
+                        } else {
+                            "`".repeat(n)
+                        };
+                        let prefix =
+                            if cell { prefix.replace('\n', "<br>") } else { prefix.into() };
+                        assert_eq!(out, format!("{prefix}{ticks}{suffix}"));
+                        scan.comparisons
+                    };
+                    let n = measure(4096);
+                    let twice = measure(8192);
+                    assert!(twice >= n && twice <= 2 * n + 8, "{n} -> {twice}");
+                    assert!(twice <= 4 * 8192 + 64, "{twice}");
+                }
+            }
+        }
+    }
+
+    /// The cached run decision agrees with the original fence rule, even
+    /// when markup and text divide a run or an indentation.
+    #[test]
+    fn fence_scan_preserves_decisions() {
+        for prefix in ["", " ", "   ", "    ", "x", "x\n", "\t", "~", "`"] {
+            for run in ["`", "``", "```", "~~~~", "```~~```", "~~~\n```"] {
+                let chars: Vec<_> = format!("{prefix}{run}").chars().collect();
+                let mut scan = FenceScan::new(&vec![false; chars.len()]);
+                let mut fences = vec![false; chars.len()];
+                for (i, &c) in chars.iter().enumerate() {
+                    let actual = scan.at(&chars, i);
+                    if !matches!(c, '`' | '~') {
+                        continue;
+                    }
+                    let start = chars[..i].iter().rposition(|&x| x != c).map_or(0, |p| p + 1);
+                    let line = chars[..start].iter().rposition(|&x| x == '\n').map_or(0, |p| p + 1);
+                    let expected = start - line <= 3
+                        && chars[line..start].iter().all(|&x| x == ' ')
+                        && chars[start..].iter().take_while(|&&x| x == c).count() >= 3;
+                    assert_eq!(actual, expected, "{prefix:?} {run:?} {i}");
+                    fences[i] = expected;
+                }
+                for start in 0..=chars.len() {
+                    for end in start..=chars.len() {
+                        let pieces = vec![
+                            Piece::Text(chars[..start].iter().collect()),
+                            Piece::Markup(chars[start..end].iter().collect()),
+                            Piece::Text(chars[end..].iter().collect()),
+                        ];
+                        let mut expected = String::new();
+                        for (i, &c) in chars.iter().enumerate() {
+                            if !(start..end).contains(&i)
+                                && (fences[i] || (c == '`' && start < end && i < end))
+                            {
+                                expected.push('\\');
+                            }
+                            expected.push(c);
+                        }
+                        assert_eq!(escape_pieces(pieces, false), expected);
+                    }
+                }
+            }
+        }
+    }
 }

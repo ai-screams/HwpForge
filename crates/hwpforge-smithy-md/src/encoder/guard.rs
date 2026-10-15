@@ -72,14 +72,15 @@ fn foreign_html(html: &str, allowed: &Allowed<'_>) -> bool {
             }
             continue;
         }
-        let Some(end) = rest.find('>') else { return true };
+        let Some(end) = tag_end(rest) else { return true };
         let tag = rest[1..end].trim_start_matches('/').trim_end_matches('/');
         rest = &rest[end + 1..];
         let name: String = tag.chars().take_while(char::is_ascii_alphanumeric).collect();
         if !allowed.tags.contains(&name.to_ascii_lowercase().as_str()) {
             return true;
         }
-        for (attr, value) in attributes(&tag[name.len()..]) {
+        let Some(attrs) = attributes(&tag[name.len()..]) else { return true };
+        for (attr, value) in attrs {
             let value = unescape_attr(&value);
             let ok = match (name.as_str(), attr.as_str()) {
                 ("td", "colspan" | "rowspan") => value.chars().all(|c| c.is_ascii_digit()),
@@ -95,26 +96,40 @@ fn foreign_html(html: &str, allowed: &Allowed<'_>) -> bool {
     false
 }
 
-/// `name="value"` pairs (the encoder quotes every value it writes; an
-/// unquoted value is returned as it is and fails the check).
-fn attributes(s: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    let mut rest = s.trim();
-    while !rest.is_empty() {
-        let Some(eq) = rest.find('=') else {
-            out.push((rest.to_string(), String::new()));
-            break;
-        };
-        let name = rest[..eq].trim().to_string();
-        let after = rest[eq + 1..].trim_start();
-        let Some(close) = after.strip_prefix('"').and_then(|a| a.find('"')) else {
-            out.push((name, format!("\u{0}{after}")));
-            break;
-        };
-        out.push((name, after[1..1 + close].to_string()));
-        rest = after[close + 2..].trim_start();
+/// A tag ends only outside quoted attribute values.
+fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if q == c => quote = None,
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '>') => return Some(i),
+            _ => {}
+        }
     }
-    out
+    None
+}
+
+/// `name="value"` pairs; malformed or unquoted values fail the entire tag.
+fn attributes(s: &str) -> Option<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    while !rest.trim().is_empty() {
+        if !rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        rest = rest.trim_start();
+        let eq = rest.find('=')?;
+        let name = rest[..eq].trim_end();
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+        let after = rest[eq + 1..].trim_start().strip_prefix('"')?;
+        let close = after.find('"')?;
+        out.push((name.to_string(), after[..close].to_string()));
+        rest = &after[close + 1..];
+    }
+    Some(out)
 }
 
 /// An attribute value as the encoder escaped it, decoded.
@@ -147,17 +162,39 @@ pub(crate) fn plain_text(raw: &str) -> String {
     out
 }
 
-/// All the text a paragraph holds, nested content included (tables,
-/// captions, notes, text boxes, groups), for [`plain_text`].
-pub(crate) fn deep_text(paragraph: &hwpforge_core::Paragraph) -> String {
+/// The rendered-depth limit shared by the styled renderer and fallback.
+pub(crate) fn enter_depth(depth: usize) -> Option<usize> {
+    (depth < crate::lossless_grammar::MAX_NESTING_DEPTH).then_some(depth + 1)
+}
+
+/// Written instead of content below the rendered-depth limit.
+pub(crate) const TOO_DEEP: &str = "(중첩 깊이 초과로 생략)";
+
+/// Paragraph text for [`plain_text`], with the same container-depth limit
+/// as styled rendering. A cut-off subtree contributes only its notice;
+/// groups are spread without consuming a level, as in the renderer.
+pub(crate) fn deep_text(paragraph: &hwpforge_core::Paragraph, depth: usize) -> String {
+    deep_text_at(paragraph, depth, &mut || {})
+}
+
+fn deep_text_at(
+    paragraph: &hwpforge_core::Paragraph,
+    depth: usize,
+    visit: &mut impl FnMut(),
+) -> String {
+    visit();
     use hwpforge_core::Control;
     let mut out = String::new();
-    let paras = |out: &mut String, ps: &[hwpforge_core::Paragraph]| {
+    let mut paras = |out: &mut String, ps: &[hwpforge_core::Paragraph]| {
+        let Some(inner) = enter_depth(depth) else {
+            out.push_str(TOO_DEEP);
+            return;
+        };
         for p in ps {
             if !out.is_empty() {
                 out.push(' ');
             }
-            out.push_str(&deep_text(p));
+            out.push_str(&deep_text_at(p, inner, visit));
         }
     };
     for (part, _) in super::spread_groups(&paragraph.runs) {
@@ -173,8 +210,12 @@ pub(crate) fn deep_text(paragraph: &hwpforge_core::Paragraph) -> String {
                 }
             }
             super::Part::Table(table) => {
-                for cell in table.rows.iter().flat_map(|r| &r.cells) {
-                    paras(&mut out, &cell.paragraphs);
+                if enter_depth(depth).is_none() {
+                    out.push_str(TOO_DEEP);
+                } else {
+                    for cell in table.rows.iter().flat_map(|r| &r.cells) {
+                        paras(&mut out, &cell.paragraphs);
+                    }
                 }
                 if let Some(c) = &table.caption {
                     paras(&mut out, &c.paragraphs);
@@ -278,6 +319,69 @@ pub(crate) fn checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parsing errors cannot be accepted as an arbitrary image alt value.
+    /// 이것을 실패시키는 것: 속성 실패를 값으로 반환 · 따옴표 안에서 태그 종료.
+    #[test]
+    fn guard_rejects_malformed_image_attributes() {
+        let destinations = HashSet::new();
+        let allowed = Allowed { tags: STYLED_TAGS, destinations: &destinations };
+        for bad in [
+            "<img alt=x src=x onerror=alert(1)>",
+            "<img alt=\">\" src=x onerror=alert(1)>",
+            "<img alt=\">\" onerror=\"alert(1)\">",
+            "<img alt>",
+        ] {
+            assert!(foreign_html(bad, &allowed), "{bad}");
+            assert!(foreign_markup(bad, &allowed), "{bad}");
+        }
+        assert!(foreign_html("<img alt=\"unfinished>", &allowed));
+        assert!(foreign_html("<img alt=\"x\"src=\"x\">", &allowed));
+        assert!(!foreign_markup("<img alt=\">\">", &allowed));
+    }
+
+    /// A deep subtree is not visited, including when collection starts
+    /// inside a note. Only the renderer's omission notice survives.
+    /// 이것을 실패시키는 것: 수집 깊이 제한 삭제 · 재귀 깊이를 0으로 초기화.
+    #[test]
+    fn fallback_text_visits_only_rendered_depth() {
+        use hwpforge_core::{Control, Paragraph, Run};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        let paragraph = |run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        for containers in [32, 33, 256] {
+            let mut p = paragraph(Run::text("core", CharShapeIndex::new(0)));
+            for _ in 0..containers {
+                p = paragraph(Run::control(
+                    Control::text_box(
+                        vec![p],
+                        HwpUnit::new(100).unwrap(),
+                        HwpUnit::new(100).unwrap(),
+                    ),
+                    CharShapeIndex::new(0),
+                ));
+            }
+            for depth in [0, 1, 31, 32] {
+                let mut visits = 0;
+                let raw = deep_text_at(&p, depth, &mut || visits += 1);
+                assert_eq!(visits, (32 - depth).min(containers) + 1);
+                let expected = if containers + depth <= 32 { "core" } else { TOO_DEEP };
+                assert_eq!(raw, expected);
+                let block = Block {
+                    markdown: "<script>bad</script>".into(),
+                    source: Some(Source {
+                        prefix: String::new(),
+                        texts: vec![raw],
+                        at: vec![(0, 0)],
+                    }),
+                };
+                let destinations = HashSet::new();
+                let allowed = Allowed { tags: STYLED_TAGS, destinations: &destinations };
+                let mut warnings = Vec::new();
+                assert_eq!(checked(vec![block], &allowed, &mut warnings), plain_text(expected));
+                assert_eq!(warnings.len(), 1);
+            }
+        }
+    }
 
     /// The check finds each kind of foreign markup and passes the encoder's
     /// own.

@@ -76,7 +76,7 @@ fn encode_body(
     warnings: &mut Vec<super::MdWarning>,
 ) -> String {
     use super::guard::{Block, Source};
-    super::markup::start_recording();
+    let mut destinations = std::collections::HashSet::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut continuation_level: Option<u8> = None;
 
@@ -91,7 +91,8 @@ fn encode_body(
                 .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
                 .filter(|level| continuation_level == Some(*level));
             let first_new = warnings.len();
-            let markdown = encode_paragraph(paragraph, mapping, registry, warnings);
+            let markdown =
+                encode_paragraph(paragraph, mapping, registry, warnings, &mut destinations);
             // Place the depth warnings this paragraph raised.
             // 이것을 실패시키는 것: 이 자리 채우기 삭제(`nested_tables_stay_small`).
             for warning in &mut warnings[first_new..] {
@@ -101,7 +102,7 @@ fn encode_body(
                 }
             }
             if !markdown.trim().is_empty() {
-                let text = super::guard::deep_text(paragraph);
+                let text = super::guard::deep_text(paragraph, 0);
                 let at = (section_index, paragraph_index);
                 match (current_continuation_level, blocks.last_mut()) {
                     (Some(level), Some(last)) => {
@@ -133,7 +134,6 @@ fn encode_body(
     }
 
     // The finished Markdown, parsed again, may hold only what lossy writes.
-    let destinations = super::markup::recorded();
     let allowed =
         super::guard::Allowed { tags: super::guard::LOSSY_TAGS, destinations: &destinations };
     super::guard::checked(blocks, &allowed, warnings)
@@ -144,24 +144,29 @@ fn encode_paragraph(
     mapping: Option<&MdMapping>,
     registry: Option<&StyleRegistry>,
     warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
 ) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                let mut md: Md = table_to_markdown(table, warnings, 0);
-                md.push(lossy_caption(table.caption.as_ref(), warnings, 0));
+                let mut md: Md = table_to_markdown(table, warnings, destinations, 0);
+                md.push(lossy_caption(table.caption.as_ref(), warnings, destinations, 0));
                 return md.into_string();
             }
             RunContent::Image(image) => {
-                let mut md = Md::image(Md::lossy_label(&image_alt_text(&image.path)), &image.path);
-                md.push(lossy_caption(image.caption.as_ref(), warnings, 0));
+                let mut md = Md::image(
+                    Md::lossy_label(&image_alt_text(&image.path)),
+                    &image.path,
+                    destinations,
+                );
+                md.push(lossy_caption(image.caption.as_ref(), warnings, destinations, 0));
                 return md.into_string();
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_markdown(paragraph, warnings).into_string();
+    let text = paragraph_text_markdown(paragraph, warnings, destinations).into_string();
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
@@ -235,8 +240,12 @@ fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> 
     }
 }
 
-fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> Md {
-    paragraph_text_at(paragraph, warnings, 0)
+fn paragraph_text_markdown(
+    paragraph: &Paragraph,
+    warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
+) -> Md {
+    paragraph_text_at(paragraph, warnings, destinations, 0)
 }
 
 /// A paragraph's text runs as they are (a code block's content).
@@ -317,6 +326,7 @@ const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
 fn paragraph_text_at<S: Sink>(
     paragraph: &Paragraph,
     warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
     let mut pieces: Vec<Piece<S>> = Vec::new();
@@ -351,8 +361,13 @@ fn paragraph_text_at<S: Sink>(
                     pieces.push(Piece::Markup(S::from_md(Md::syntax(" "))));
                 }
                 let alt = Md::lossy_label(&image_alt_text(&image.path));
-                pieces.push(Piece::Markup(S::from_md(Md::image(alt, &image.path))));
-                pieces.push(Piece::Markup(lossy_caption(image.caption.as_ref(), warnings, depth)));
+                pieces.push(Piece::Markup(S::from_md(Md::image(alt, &image.path, destinations))));
+                pieces.push(Piece::Markup(lossy_caption(
+                    image.caption.as_ref(),
+                    warnings,
+                    destinations,
+                    depth,
+                )));
             }
             Part::Control(control) => match control {
                 // Only an allowed URL is written as a link (the text otherwise).
@@ -361,7 +376,7 @@ fn paragraph_text_at<S: Sink>(
                 // destination reads back as the URL.
                 Control::Hyperlink { text: label, url } => {
                     if super::link_url_allowed(url) {
-                        let link = Md::link(Md::lossy_label(label), url);
+                        let link = Md::link(Md::lossy_label(label), url, destinations);
                         pieces.push(Piece::Markup(S::from_md(link)));
                     } else {
                         text(&mut pieces, label);
@@ -428,8 +443,13 @@ fn paragraph_text_at<S: Sink>(
                 if written(&pieces) {
                     pieces.push(Piece::Markup(S::from_md(Md::syntax("\n"))));
                 }
-                pieces.push(Piece::Markup(table_to_markdown(table, warnings, depth)));
-                pieces.push(Piece::Markup(lossy_caption(table.caption.as_ref(), warnings, depth)));
+                pieces.push(Piece::Markup(table_to_markdown(table, warnings, destinations, depth)));
+                pieces.push(Piece::Markup(lossy_caption(
+                    table.caption.as_ref(),
+                    warnings,
+                    destinations,
+                    depth,
+                )));
             }
         }
     }
@@ -444,12 +464,13 @@ fn paragraph_text_at<S: Sink>(
 fn lossy_caption<S: Sink>(
     caption: Option<&hwpforge_core::caption::Caption>,
     warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
     let mut out = S::default();
     let Some(caption) = caption else { return out };
     for p in &caption.paragraphs {
-        let text: S = paragraph_text_at(p, warnings, depth);
+        let text: S = paragraph_text_at(p, warnings, destinations, depth);
         if !text.as_str().trim().is_empty() {
             out.append(S::from_md(Md::syntax("\n\n")));
             out.append(text);
@@ -467,6 +488,7 @@ fn lossy_caption<S: Sink>(
 fn table_to_markdown<S: Sink>(
     table: &Table,
     warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
     if depth >= MAX_TABLE_NESTING {
@@ -509,7 +531,7 @@ fn table_to_markdown<S: Sink>(
                         if i > 0 {
                             text.push_md(Md::syntax(" "));
                         }
-                        text.push(paragraph_text_at(p, warnings, depth + 1));
+                        text.push(paragraph_text_at(p, warnings, destinations, depth + 1));
                     }
                     text
                 })
@@ -610,7 +632,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "[Rust](https://www.rust-lang.org)");
     }
 
@@ -628,7 +650,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "(footnote: note body)");
     }
 
@@ -730,7 +752,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| 1 | 2 |"));
@@ -752,7 +774,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("A\\|B"));
     }
 
@@ -780,7 +802,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
@@ -821,7 +843,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "(endnote: end body)");
     }
 
@@ -849,7 +871,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "box content");
     }
 
@@ -863,7 +885,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "`[mystery]`");
     }
 
@@ -887,7 +909,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         // Lines render as nothing (no text content)
         assert_eq!(md, "");
     }
@@ -919,7 +941,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "shape text");
     }
 
@@ -946,7 +968,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "");
     }
 
@@ -979,7 +1001,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "polygon text");
     }
 
@@ -1001,7 +1023,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "한글(hangeul)");
     }
 
@@ -1021,7 +1043,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "㊀");
     }
 
@@ -1039,7 +1061,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "![photo](path/to/photo.jpg)");
     }
 
@@ -1058,7 +1080,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("![figure_1]"));
     }
 
@@ -1080,7 +1102,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("before"));
         assert!(md.contains("![img](img.png)"));
         assert!(md.contains("after"));
@@ -1103,7 +1125,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("intro"));
         assert!(md.contains("| A |"));
     }
@@ -1116,7 +1138,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert_eq!(md, "| |\n| --- |");
     }
 
@@ -1139,7 +1161,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         // An empty row renders as "| |"
         assert!(md.contains("| |"));
     }
@@ -1160,7 +1182,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains(r"path\\to\\file"));
     }
 
@@ -1180,7 +1202,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
         assert!(md.contains("<br>"));
     }
 
@@ -1237,7 +1259,13 @@ mod tests {
             code_para_shape,
         );
 
-        let md = encode_paragraph(&paragraph, Some(&mapping), None, &mut Vec::new());
+        let md = encode_paragraph(
+            &paragraph,
+            Some(&mapping),
+            None,
+            &mut Vec::new(),
+            &mut Default::default(),
+        );
         assert!(md.starts_with("```\n"));
         assert!(md.ends_with("\n```"));
         assert!(md.contains("let x = 1;"));
@@ -1258,11 +1286,23 @@ mod tests {
         );
 
         assert_eq!(
-            encode_paragraph(&unchecked, Some(&mapping), Some(&registry), &mut Vec::new()),
+            encode_paragraph(
+                &unchecked,
+                Some(&mapping),
+                Some(&registry),
+                &mut Vec::new(),
+                &mut Default::default()
+            ),
             "- [ ] todo"
         );
         assert_eq!(
-            encode_paragraph(&checked, Some(&mapping), Some(&registry), &mut Vec::new()),
+            encode_paragraph(
+                &checked,
+                Some(&mapping),
+                Some(&registry),
+                &mut Vec::new(),
+                &mut Default::default()
+            ),
             "  - [x] done"
         );
     }
