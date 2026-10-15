@@ -260,8 +260,13 @@ fn paragraph_text_at(
                 output.push_str(&lossy_caption(image.caption.as_ref(), warnings, depth));
             }
             Part::Control(control) => match control {
+                // Only an allowed URL is written as a link (the text otherwise).
                 Control::Hyperlink { text, url } => {
-                    output.push_str(&format!("[{text}]({url})"));
+                    if super::link_url_allowed(url) {
+                        output.push_str(&format!("[{text}]({url})"));
+                    } else {
+                        output.push_str(text);
+                    }
                 }
                 Control::Footnote { paragraphs, .. } => {
                     let footnote = paragraphs
@@ -1365,5 +1370,29 @@ mod tests {
                 paragraph: 1,
             }]
         );
+    }
+
+    /// Lossy writes a link only for an allowed URL; otherwise its text.
+    ///
+    /// 이것을 실패시키는 것: lossy 의 허용 검사 삭제.
+    #[test]
+    fn lossy_links_follow_the_allow_list() {
+        let doc = |url: &str| {
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::control(
+                        Control::Hyperlink { text: "t".into(), url: url.into() },
+                        CharShapeIndex::new(0),
+                    )],
+                    ParaShapeIndex::new(0),
+                )],
+                hwpforge_core::PageSettings::a4(),
+            ));
+            encode_without_template(&d.validate().unwrap()).unwrap()
+        };
+        assert_eq!(doc(" javascript:x"), "t");
+        assert_eq!(doc("https://e.invalid"), "[t](https://e.invalid)");
+        assert_eq!(doc(""), "[t]()");
     }
 }

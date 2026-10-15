@@ -138,6 +138,26 @@ pub(crate) fn auto_number_text(
     out
 }
 
+/// Whether a link may be written as a link by the readable views. The same
+/// schemes the Markdown decoder accepts — `http://`, `https://`, `mailto:`
+/// (any case), and the empty URL as it does — and nothing that a browser
+/// would strip before reading the
+/// scheme: a URL holding whitespace or a control character anywhere is
+/// refused, so `" javascript:…"` or `"java\tscript:…"` cannot pass as
+/// another scheme. A refused link keeps only its visible text.
+/// 이것을 실패시키는 것: 공백·제어 문자 검사 삭제 · 허용 목록을 금지 목록으로
+/// (`link_urls_follow_the_allow_list`).
+pub(crate) fn link_url_allowed(url: &str) -> bool {
+    if url.is_empty() {
+        return true;
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
+}
+
 /// One drawn piece of a paragraph, borrowed from the document: a run's
 /// content, or a group child standing in its group's place.
 #[derive(Clone, Copy)]

@@ -592,24 +592,19 @@ fn encode_control_styled(
 ) -> String {
     match control {
         // The visible text is text in either form; in an HTML cell the link is
-        // an `<a>` element with its href attribute-escaped.
+        // an `<a>` element with its href attribute-escaped. Only an allowed
+        // URL (`link_url_allowed`) is written as a link.
         // 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제(HTML·Markdown 각각) ·
         // href 이스케이프 삭제(`link_text_cannot_inject_markup`).
         Control::Hyperlink { text, url } => {
-            // Reject dangerous URL schemes (case-insensitive)
-            let url_lower = url.to_lowercase();
-            let dangerous = url_lower.starts_with("javascript:")
-                || url_lower.starts_with("data:")
-                || url_lower.starts_with("vbscript:")
-                || url_lower.starts_with("file:");
-            match (ctx.html, dangerous) {
-                // Strip the link, emit only the visible text
-                (true, true) => escape_html(text),
-                (true, false) => {
+            match (ctx.html, super::link_url_allowed(url)) {
+                // Not an allowed link: only the visible text
+                (true, false) => escape_html(text),
+                (true, true) => {
                     format!("<a href=\"{}\">{}</a>", escape_html(url), escape_html(text))
                 }
-                (false, true) => escape_markdown(text),
-                (false, false) => {
+                (false, false) => escape_markdown(text),
+                (false, true) => {
                     // Escape ) in url to prevent markdown injection
                     let safe_url = url.replace('(', "%28").replace(')', "%29");
                     format!("[{}]({safe_url})", escape_markdown(text))
@@ -3629,5 +3624,58 @@ mod tests {
         .markdown;
         assert!(!md.contains("<img"), "{md}");
         assert!(md.contains("&lt;"), "{md}");
+    }
+
+    /// Only an allowed URL becomes a link: a leading space, a tab or newline
+    /// inside the scheme, another scheme — each keeps only the text, in an
+    /// HTML cell (direct, through a text box, through a group's text box)
+    /// and in Markdown; `HTTPS://` and `mailto:` stay links.
+    ///
+    /// 이것을 실패시키는 것: 공백·제어 문자 검사 삭제 · 허용 목록을 금지 목록으로.
+    #[test]
+    fn link_urls_follow_the_allow_list() {
+        use hwpforge_core::control::GroupChild;
+        let styles = MockStyles::new();
+        let link = |url: &str| {
+            Run::control(
+                Control::Hyperlink { text: "클릭".into(), url: url.into() },
+                CharShapeIndex::new(0),
+            )
+        };
+        let tb = |run: Run| text_box(vec![para(vec![run])]);
+        let paths = |run: Run| {
+            vec![
+                vec![para(vec![merged_cell_table(vec![run.clone()])])],
+                vec![para(vec![merged_cell_table(vec![Run::control(
+                    tb(run.clone()),
+                    CharShapeIndex::new(0),
+                )])])],
+                vec![para(vec![merged_cell_table(vec![group(vec![GroupChild::Shape(tb(
+                    run.clone()
+                ))])])])],
+                vec![para(vec![run])],
+            ]
+        };
+        for url in [
+            " javascript:alert(1)",
+            "java\tscript:alert(1)",
+            "java\nscript:x",
+            "JaVaScRiPt:x",
+            "data:text/html,x",
+            "ftp://e.invalid",
+            "https://e.invalid/a b",
+        ] {
+            for doc in paths(link(url)) {
+                let md = encode_styled(&validated_document(doc), &styles).markdown;
+                assert!(!md.contains("<a ") && !md.contains("]("), "{url:?}: {md}");
+                assert!(md.contains("클릭"), "{md}");
+            }
+        }
+        for url in ["HTTPS://e.invalid", "mailto:a@e.invalid"] {
+            for doc in paths(link(url)) {
+                let md = encode_styled(&validated_document(doc), &styles).markdown;
+                assert!(md.contains("<a href=") || md.contains("]("), "{url:?}: {md}");
+            }
+        }
     }
 }
