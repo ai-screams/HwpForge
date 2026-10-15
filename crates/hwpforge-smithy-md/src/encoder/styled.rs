@@ -169,7 +169,10 @@ struct Ctx {
     /// text only (no asset), notes inline.
     in_comment: bool,
     /// How many containers (tables, captions, shape texts, note and memo
-    /// bodies) enclose this content — each one is a level of recursion.
+    /// bodies) enclose this content — each one is a level of recursion. A
+    /// group or a picture is not one (groups are spread by an iterator), so
+    /// this is not the structural depth lossless and lossy check
+    /// (`nests_too_deep`).
     depth: usize,
 }
 
@@ -3627,6 +3630,27 @@ mod tests {
         let md =
             encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
         assert!(md.contains("(주: \\*x\\*)"), "{md}");
+    }
+
+    /// The views count depth differently (guide, `markdown-bridge.md`):
+    /// lossless and lossy count the structure, where a group and a text box
+    /// are a level each, so group → text box 17 times (34 levels) is refused;
+    /// styled counts what it draws through, the 17 text boxes, and draws it
+    /// whole.
+    ///
+    /// 이것을 실패시키는 것: styled 가 묶음도 세기 · lossy·lossless 가 구조
+    /// 깊이 검사를 건너뛰기.
+    #[test]
+    fn views_count_depth_differently() {
+        use hwpforge_core::control::GroupChild;
+        let mut run = t("core");
+        for _ in 0..17 {
+            run = group(vec![GroupChild::Shape(text_box(vec![para(vec![run])]))]);
+        }
+        let doc = validated_document(vec![para(vec![run])]);
+        assert_eq!(encode_styled(&doc, &MockStyles::new()).markdown, "core");
+        assert!(super::super::lossy::encode_without_template(&doc).is_err());
+        assert!(super::super::lossless::encode_lossless(&doc).is_err());
     }
 
     /// Containers nested past the limit are cut off with a visible notice
