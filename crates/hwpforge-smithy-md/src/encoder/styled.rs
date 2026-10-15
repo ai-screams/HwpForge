@@ -540,21 +540,29 @@ fn encode_control_styled(
     ctx: Ctx,
 ) -> String {
     match control {
+        // The visible text is text in either form; in an HTML cell the link is
+        // an `<a>` element with its href attribute-escaped.
+        // 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제(HTML·Markdown 각각) ·
+        // href 이스케이프 삭제(`link_text_cannot_inject_markup`).
         Control::Hyperlink { text, url } => {
             // Reject dangerous URL schemes (case-insensitive)
             let url_lower = url.to_lowercase();
-            if url_lower.starts_with("javascript:")
+            let dangerous = url_lower.starts_with("javascript:")
                 || url_lower.starts_with("data:")
                 || url_lower.starts_with("vbscript:")
-                || url_lower.starts_with("file:")
-            {
-                // Strip the link, emit only the visible text (escaped)
-                text.replace(']', "\\]")
-            } else {
-                // Escape ] in text and ) in url to prevent markdown injection
-                let safe_text = text.replace(']', "\\]");
-                let safe_url = url.replace('(', "%28").replace(')', "%29");
-                format!("[{safe_text}]({safe_url})")
+                || url_lower.starts_with("file:");
+            match (ctx.html, dangerous) {
+                // Strip the link, emit only the visible text
+                (true, true) => escape_html(text),
+                (true, false) => {
+                    format!("<a href=\"{}\">{}</a>", escape_html(url), escape_html(text))
+                }
+                (false, true) => escape_markdown(text),
+                (false, false) => {
+                    // Escape ) in url to prevent markdown injection
+                    let safe_url = url.replace('(', "%28").replace(')', "%29");
+                    format!("[{}]({safe_url})", escape_markdown(text))
+                }
             }
         }
         // A note at depth 0 outside a memo is a document definition; a note
@@ -564,7 +572,14 @@ fn encode_control_styled(
         Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
             let body = extract_note_body(paragraphs, styles, st, ctx);
             if ctx.note_depth > 0 || ctx.in_comment {
-                format!("(주: {})", body.join(" "))
+                // The body is Markdown text; in an HTML cell it is escaped
+                // like other text (the cell passes notes through as-is).
+                let inline = format!("(주: {})", body.join(" "));
+                if ctx.html {
+                    escape_html(&inline)
+                } else {
+                    inline
+                }
             } else if matches!(control, Control::Footnote { .. }) {
                 st.notes.add_footnote(body)
             } else {
@@ -987,12 +1002,14 @@ fn extract_paragraph_text_html(
                     current_text.clear();
                     current_format = InlineFormat::default();
                 }
-                // Equations: LaTeX is written verbatim; a script too deep to
-                // convert is ordinary cell text (whitespace collapsed),
-                // HTML-escaped like `wrap_html` does.
+                // Equations: the LaTeX is cell text, HTML-escaped (a `<` or
+                // `&` in it is a character, not markup — a math renderer reads
+                // the decoded text); a script too deep to convert is ordinary
+                // cell text (whitespace collapsed), escaped the same way.
+                // 이것을 실패시키는 것: LaTeX 이스케이프 삭제(`html_cell_equation_is_escaped`).
                 if let Control::Equation { script, .. } = control {
                     match render_equation(script) {
-                        EqnRender::Latex(latex) => output.push_str(&latex),
+                        EqnRender::Latex(latex) => output.push_str(&escape_html(&latex)),
                         EqnRender::RawFallback(raw) => output.push_str(&escape_html(&raw)),
                     }
                     continue;
@@ -3439,5 +3456,82 @@ mod tests {
                 assert_eq!(unescape(&attr(img, "alt")), image_stem(path), "{img}");
             }
         }
+    }
+
+    /// A link's visible text cannot inject markup: in an HTML cell — direct,
+    /// through a text box, through a shape in a text box — the link is an
+    /// `<a>` with an escaped href and escaped text (a dangerous scheme keeps
+    /// only the escaped text); in Markdown the text is Markdown-escaped. An
+    /// inline note in an HTML cell is escaped too.
+    ///
+    /// 이것을 실패시키는 것: 표시 문자열 이스케이프 삭제(HTML·Markdown 각각) ·
+    /// href 이스케이프 삭제 · HTML 칸 인라인 각주 이스케이프 삭제.
+    #[test]
+    fn link_text_cannot_inject_markup() {
+        let styles = MockStyles::new();
+        let evil = "<img src=x onerror=alert(1)>";
+        let link = |url: &str| {
+            Run::control(
+                Control::Hyperlink { text: evil.into(), url: url.into() },
+                CharShapeIndex::new(0),
+            )
+        };
+        let tb = |run: Run| Run::control(text_box(vec![para(vec![run])]), CharShapeIndex::new(0));
+        let ellipse = |run: Run| {
+            let mut e = Control::ellipse(u(10), u(10));
+            if let Control::Ellipse { paragraphs, .. } = &mut e {
+                *paragraphs = vec![para(vec![run])];
+            }
+            Run::control(e, CharShapeIndex::new(0))
+        };
+        let url = "https://e.invalid/?a=\"b";
+        for cell in [
+            merged_cell_table(vec![link(url)]),
+            merged_cell_table(vec![tb(link(url))]),
+            merged_cell_table(vec![tb(ellipse(link(url)))]),
+        ] {
+            let md = encode_styled(&validated_document(vec![para(vec![cell])]), &styles).markdown;
+            assert!(!md.contains("<img"), "{md}");
+            assert!(
+                md.contains("<a href=\"https://e.invalid/?a=&quot;b\">&lt;img src=x onerror=alert(1)&gt;</a>"),
+                "{md}"
+            );
+        }
+        let md = encode_styled(
+            &validated_document(vec![para(vec![merged_cell_table(vec![link("javascript:x")])])]),
+            &styles,
+        )
+        .markdown;
+        assert!(md.contains("<td colspan=\"2\">&lt;img src=x onerror=alert(1)&gt;</td>"), "{md}");
+        let md = encode_styled(
+            &validated_document(vec![para(vec![link("https://e.invalid")])]),
+            &styles,
+        )
+        .markdown;
+        assert_eq!(md, "[&lt;img src=x onerror=alert(1)&gt;](https://e.invalid)");
+        let inner_note = note(vec![t("<b>x</b>")]);
+        let deep = note(vec![merged_cell_table(vec![inner_note])]);
+        let md =
+            encode_styled(&validated_document(vec![para(vec![t("a"), deep])]), &styles).markdown;
+        assert!(!md.contains("<b>"), "{md}");
+        assert!(md.contains("(주: &amp;lt;b&amp;gt;x&amp;lt;/b&amp;gt;)"), "{md}");
+    }
+
+    /// An equation's LaTeX in an HTML cell is escaped text: a script that
+    /// writes markup characters cannot open an element there.
+    ///
+    /// 이것을 실패시키는 것: LaTeX 이스케이프 삭제.
+    #[test]
+    fn html_cell_equation_is_escaped() {
+        let styles = MockStyles::new();
+        let eq =
+            Run::control(Control::equation("<img src=x onerror=alert(1)>"), CharShapeIndex::new(0));
+        let md = encode_styled(
+            &validated_document(vec![para(vec![merged_cell_table(vec![eq])])]),
+            &styles,
+        )
+        .markdown;
+        assert!(!md.contains("<img"), "{md}");
+        assert!(md.contains("&lt;"), "{md}");
     }
 }
