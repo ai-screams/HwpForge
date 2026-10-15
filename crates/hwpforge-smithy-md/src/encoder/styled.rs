@@ -252,12 +252,19 @@ fn emit_picture(
     st: &mut State,
     ctx: Ctx,
 ) -> String {
-    let alt = image_alt_text(&image.path);
     let key = st.assets.key(&image.path, styles, !ctx.in_comment);
     if ctx.html {
-        format!("<img src=\"{key}\" alt=\"{alt}\"/>")
+        // Attribute values: escaped for HTML (the asset key itself is kept
+        // as it is), with the plain file stem as alt — no Markdown escaping.
+        // 이것을 실패시키는 것: src·alt 이스케이프 삭제 · alt 에 Markdown 이스케이프
+        // (`html_picture_attributes_are_escaped`).
+        format!(
+            "<img src=\"{}\" alt=\"{}\"/>",
+            escape_html(&key),
+            escape_html(image_stem(&image.path))
+        )
     } else {
-        format!("![{alt}]({key})")
+        format!("![{}]({key})", image_alt_text(&image.path))
     }
 }
 
@@ -1047,11 +1054,14 @@ fn extract_paragraph_text_html(
 // ---------------------------------------------------------------------------
 
 /// Extracts the filename stem as alt text from an image path.
+/// The file stem of an image path (alt text before any escaping).
+fn image_stem(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().and_then(|name| name.split('.').next()).unwrap_or("image")
+}
+
 fn image_alt_text(path: &str) -> String {
-    let name =
-        path.rsplit(['/', '\\']).next().and_then(|name| name.split('.').next()).unwrap_or("image");
     // Escape characters that break markdown image syntax.
-    name.replace('[', "\\[").replace(']', "\\]")
+    image_stem(path).replace('[', "\\[").replace(']', "\\]")
 }
 
 /// Converts an image source path to a relative output path.
@@ -3389,5 +3399,46 @@ mod tests {
         let out =
             encode_styled(&validated_document(vec![para(vec![t("앞"), s2, t("뒤")])]), &styles);
         assert_eq!(out.markdown, "앞뒤");
+    }
+
+    /// In an HTML cell (directly or through a text box) a picture's `src`
+    /// and `alt` are attribute-escaped: the decoded `src` is the asset key,
+    /// the decoded `alt` the plain stem, and a quote in the name cannot open
+    /// another attribute.
+    ///
+    /// 이것을 실패시키는 것: src·alt 이스케이프 삭제 · alt 에 Markdown 이스케이프.
+    #[test]
+    fn html_picture_attributes_are_escaped() {
+        let unescape = |v: &str| {
+            v.replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&")
+        };
+        let attr = |html: &str, name: &str| {
+            let start = html.find(&format!("{name}=\"")).unwrap() + name.len() + 2;
+            let end = start + html[start..].find('"').unwrap();
+            html[start..end].to_string()
+        };
+        for path in ["BinData/a\"b.png", "BinData/[x]&y.png", "BinData/x\" onerror=\"alert(1)"] {
+            let styles = styles_with(&[(path, b"P")]);
+            let pic_run = Run::image(pic(path), CharShapeIndex::new(0));
+            for cell in [
+                merged_cell_table(vec![pic_run.clone()]),
+                merged_cell_table(vec![Run::control(
+                    text_box(vec![para(vec![pic_run])]),
+                    CharShapeIndex::new(0),
+                )]),
+            ] {
+                let out = encode_styled(&validated_document(vec![para(vec![cell])]), &styles);
+                let img = &out.markdown[out.markdown.find("<img").unwrap()..];
+                let img = &img[..img.find("/>").unwrap()];
+                assert!(!img.contains("onerror=\""), "{img}");
+                let key = unescape(&attr(img, "src"));
+                assert_eq!(out.images.get(&key).map(Vec::as_slice), Some(&b"P"[..]), "{img}");
+                assert_eq!(unescape(&attr(img, "alt")), image_stem(path), "{img}");
+            }
+        }
     }
 }
