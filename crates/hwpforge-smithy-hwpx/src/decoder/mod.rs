@@ -1184,7 +1184,24 @@ mod tests {
         let big = "가".repeat(1 << 20);
         let para = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
         let text = |t: &str| Run::text(t, CharShapeIndex::new(0));
-        let tabbed = text(&format!("{big}\t끝"));
+        // A tab with a width is kept as tab-mixed text (a bare tab would
+        // decode as plain text).
+        let tabbed = Run {
+            content: hwpforge_core::run::RunContent::InlineText(
+                hwpforge_core::inline::InlineText::from_segments([
+                    hwpforge_core::inline::InlineSegment::Plain(big.clone()),
+                    hwpforge_core::inline::InlineSegment::Tab(
+                        hwpforge_core::inline::InlineTabAttr {
+                            width: HwpUnit::new(1).unwrap(),
+                            leader: 0,
+                            tab_type: 0,
+                        },
+                    ),
+                    hwpforge_core::inline::InlineSegment::Plain("끝".into()),
+                ]),
+            ),
+            char_shape_id: CharShapeIndex::new(0),
+        };
         let w = HwpUnit::new(1000).unwrap();
         let captioned = Run::image(
             Image::new("BinData/image1.png", w, w, ImageFormat::Png)
@@ -1217,8 +1234,27 @@ mod tests {
             let len = part_len(&bytes, 0);
             assert!(len > 3 << 20, "{len}");
             let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            // The content decodes in the form it was written, whole.
+            let first = &decoded.document.sections()[0].master_pages.as_ref().unwrap()[0];
+            match (&run.content, &first.paragraphs[0].runs[0].content) {
+                (
+                    hwpforge_core::run::RunContent::InlineText(_),
+                    hwpforge_core::run::RunContent::InlineText(got),
+                ) => assert!(got.plain_text().starts_with(&big)),
+                (
+                    hwpforge_core::run::RunContent::Image(_),
+                    hwpforge_core::run::RunContent::Image(got),
+                ) => {
+                    let caption = got.caption.as_ref().unwrap();
+                    assert_eq!(caption.paragraphs[0].runs[0].content.as_text(), Some(big.as_str()));
+                }
+                (want, got) => panic!("{want:?} decoded as {got:?}"),
+            }
             let kept = decoded.document.sections()[1].master_pages.as_ref().map_or(0, Vec::len);
             assert_eq!(kept, (MASTER_PAGE_BUDGET - len) / len, "{len}");
+            let lost = lost_messages(&decoded);
+            assert_eq!(lost.len(), 30 - kept, "{lost:?}");
+            assert!(lost.iter().all(|m| m.contains("does not fit the master page budget")));
         }
     }
 
