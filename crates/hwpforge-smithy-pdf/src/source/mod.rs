@@ -762,7 +762,8 @@ pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32)
     Ok(box_height.max(with_margins))
 }
 
-/// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
+/// 렌더 replay 가 소비하는 0폭 marker 또는 본문과 분리된 필드 경계인지.
+/// 필드 경계는 그릴 글자가 없고, 표시값은 인접한 일반 run 이 이미 담는다.
 ///
 /// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
@@ -776,6 +777,7 @@ fn is_replay_consumed_marker(content: &RunContent) -> bool {
             kind: hwpforge_core::control::NewNumberKind::Page,
             ..
         } | hwpforge_core::control::Control::PageHiding { .. }
+            | hwpforge_core::control::Control::FieldBoundary { .. }
     ))
 }
 
@@ -5540,6 +5542,35 @@ mod tests {
         let doc2 = doc_of(vec![para_with_cache("가나다라", vec![seg(3, 0), seg(1, 1600)])]);
         let err2 = replay(&doc2, &PdfOptions::default()).unwrap_err();
         assert!(matches!(err2, PdfError::InvalidCache { .. }));
+    }
+
+    /// 이것을 실패시키는 것: 필드 경계를 비텍스트 개체로 거부하기.
+    #[test]
+    fn field_boundaries_do_not_hide_visible_body() {
+        use hwpforge_core::control::{Control, FieldBoundary, FieldStart};
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        let mut start = FieldStart::default();
+        start.id = "7".into();
+        start.kind = "CLICK_HERE".into();
+        para.runs.insert(
+            0,
+            Run::control(
+                Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                CharShapeIndex::new(0),
+            ),
+        );
+        para.runs.push(Run::control(
+            Control::FieldBoundary {
+                boundary: FieldBoundary::End { begin_id: "7".into(), field_id: "7".into() },
+            },
+            CharShapeIndex::new(0),
+        ));
+        let doc = doc_of(vec![para]);
+        let plain = doc_of(vec![para_with_cache("본문", vec![seg(0, 0)])]);
+        assert_eq!(
+            format!("{:?}", replay(&doc, &PdfOptions::default()).unwrap()),
+            format!("{:?}", replay(&plain, &PdfOptions::default()).unwrap())
+        );
     }
 
     #[test]

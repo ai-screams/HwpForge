@@ -84,9 +84,9 @@ use self::chart::{build_embedded_chart_run_xml, encode_chart_switch};
 use self::equation::encode_equation_to_hx;
 use self::field::{
     build_auto_number_run_xml, build_autonum_run_xml, build_bookmark_span_end_run_xml,
-    build_bookmark_span_start_run_xml, build_crossref_run_xml, build_field_run_xml,
-    build_hyperlink_run_xml, build_path_field_run_xml_raw, build_summary_run_xml_raw,
-    unix_to_ymdhms,
+    build_bookmark_span_start_run_xml, build_crossref_run_xml, build_field_boundary_xml,
+    build_field_run_xml, build_hyperlink_run_xml, build_path_field_run_xml_raw,
+    build_summary_run_xml_raw, unix_to_ymdhms,
 };
 #[cfg(test)]
 use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string};
@@ -1524,6 +1524,52 @@ fn build_runs(
                             // 무짝 SpanEnd 방출 스킵 — choke 경유 (v5 변경 4).
                             ledger.mark_cache_inadmissible("unmatched bookmark span end");
                         }
+                    }
+                    Control::FieldBoundary { boundary } => {
+                        use hwpforge_core::control::FieldBoundary;
+                        let annotation_xml = match boundary {
+                            FieldBoundary::Start(start) => start
+                                .annotation
+                                .as_ref()
+                                .map(|paragraphs| {
+                                    encode_memo_sublist(
+                                        paragraphs,
+                                        depth,
+                                        hyperlink_entries,
+                                        options,
+                                        sink,
+                                    )
+                                })
+                                .transpose()?
+                                .unwrap_or_default(),
+                            _ => String::new(),
+                        };
+                        let Some(real_xml) =
+                            build_field_boundary_xml(boundary, &annotation_xml, char_pr_id_ref)
+                        else {
+                            sink.content_lost(
+                                "field_boundary",
+                                "unsupported field boundary parameter".into(),
+                            );
+                            ledger.mark_cache_inadmissible("unsupported field boundary");
+                            continue;
+                        };
+                        ledger.token(match boundary {
+                            FieldBoundary::Start(_) => {
+                                hwpforge_core::layout::WireTokenKind::FieldBegin
+                            }
+                            FieldBoundary::End { .. } => {
+                                hwpforge_core::layout::WireTokenKind::FieldEnd
+                            }
+                            _ => unreachable!("builder rejected unknown boundary"),
+                        });
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFB", field_id);
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
                     }
                     Control::Field { field_type, hint_text, help_text, name, display_text } => {
                         let field_id = hyperlink_entries.len();

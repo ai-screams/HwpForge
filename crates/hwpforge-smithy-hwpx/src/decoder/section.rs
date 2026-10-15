@@ -468,6 +468,101 @@ fn build_paragraph_wire_map(
     build_wire_map_over_runs(&hx.runs, 0)
 }
 
+/// 필드 경계와 일반 run 으로 남길 시작을 wire 구조로 고른다.
+/// 같은 run 의 텍스트만 사이에 둔 일치하는 끝만 기존 접힌 control 로
+/// 표현할 수 있다. BOOKMARK·FORMULA 는 본문 저장 칸이 없어 항상 범위다.
+/// 이것을 실패시키는 것: 열린 시작을 접기, 두 번째 begin 을 끝으로 간주하기.
+pub(crate) fn carried_field_starts(
+    run: &crate::schema::section::HxRun,
+    order: &[(crate::schema::section::HxRunChildKind, usize)],
+) -> Vec<bool> {
+    use crate::schema::section::HxRunChildKind as K;
+    let mut carried = vec![false; run.ctrls.len()];
+    let mut next_non_text: Option<(K, usize)> = None;
+    for &(kind, idx) in order.iter().rev() {
+        if kind == K::Text {
+            continue;
+        }
+        if kind == K::Ctrl {
+            if let Some(fb) = &run.ctrls[idx].field_begin {
+                let closed = next_non_text.is_some_and(|(k, i)| {
+                    k == K::Ctrl
+                        && run.ctrls[i]
+                            .field_end
+                            .as_ref()
+                            .is_some_and(|end| end.begin_id_ref == fb.id)
+                });
+                // MEMO subList 는 메모 문단이며 경계가 별도로 운반한다.
+                // 다른 종류의 미해석 subList 는 기존 소실 보고를 유지한다.
+                let supported = matches!(
+                    fb.field_type.as_str(),
+                    "CLICK_HERE"
+                        | "MEMO"
+                        | "HYPERLINK"
+                        | "BOOKMARK"
+                        | "FORMULA"
+                        | "SUMMERY"
+                        | "PATH"
+                        | "CROSSREF"
+                        | "DATE"
+                        | "TIME"
+                        | "PAGE_NUM"
+                        | "DOC_SUMMARY"
+                        | "USER_INFO"
+                );
+                carried[idx] = supported
+                    && (fb.sub_list.is_none() || fb.field_type == "MEMO")
+                    && (!closed || matches!(fb.field_type.as_str(), "BOOKMARK" | "FORMULA"));
+            }
+        }
+        next_non_text = Some((kind, idx));
+    }
+    carried
+}
+
+/// 원문 메타데이터만 운반한다. 계산값·누름틀 값을 합성하지 않는다.
+fn field_start_boundary(
+    fb: &HxFieldBegin,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Control> {
+    use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart};
+    let mut start = FieldStart::default();
+    start.id = fb.id.clone();
+    start.kind = fb.field_type.clone();
+    start.name = fb.name.clone();
+    start.editable = fb.editable.clone();
+    start.dirty = fb.dirty.clone();
+    start.z_order = fb.zorder.clone();
+    start.field_id = fb.fieldid.clone();
+    start.meta_tag = fb.meta_tag.clone();
+    if let Some(p) = &fb.parameters {
+        start.parameter_name = Some(p.name.clone());
+        start.parameters.extend(
+            p.integer_params
+                .iter()
+                .map(|p| FieldParameter::Integer { name: p.name.clone(), value: p.value.clone() }),
+        );
+        start.parameters.extend(p.string_params.iter().map(|p| FieldParameter::String {
+            name: p.name.clone(),
+            value: p.value.clone(),
+            xml_space: p.xml_space.clone(),
+        }));
+        start.parameters.extend(
+            p.boolean_params
+                .iter()
+                .map(|p| FieldParameter::Boolean { name: p.name.clone(), value: p.value.clone() }),
+        );
+    }
+    if let Some(sub_list) = &fb.sub_list {
+        ctx.enter(super::PathSeg::Memo);
+        let result = decode_sublist_paragraphs(sub_list, depth, ctx);
+        ctx.leave();
+        start.annotation = Some(result?);
+    }
+    Ok(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) })
+}
+
 /// [`build_paragraph_wire_map`] 의 본체 — 인코더도 **방출한 run 트리**에
 /// 동일 맵을 적용해 왕복 대칭을 구성적으로 보장한다 (§1g v5 변경 4:
 /// 방출-통합). `injected_leading_ctrls` = 인코더가 직렬화 후 문자열로
@@ -497,6 +592,7 @@ pub(crate) fn build_wire_map_over_runs(
         } else {
             hx_run.child_order.clone()
         };
+        let carried_starts = carried_field_starts(hx_run, &order);
         // convert_run 의 run-local field 접힘 상태 미러.
         let mut in_field = false;
         for &(kind, idx) in &order {
@@ -596,7 +692,7 @@ pub(crate) fn build_wire_map_over_runs(
                     };
                     zero(&mut b, 8, kind);
                     if ctrl.field_begin.is_some() {
-                        in_field = true;
+                        in_field = !carried_starts[idx];
                     }
                     if ctrl.field_end.is_some() {
                         in_field = false;
@@ -705,8 +801,8 @@ fn convert_paragraph_from(
     let body_runs = &hx_runs[..hx_runs.len() - usize::from(end_mark.is_some())];
 
     let mut runs = Vec::new();
-    // S22 r2: text the run conversion folded into a field whose end is not
-    // in the same run, then left out of Core.
+    // 지원하지 않는 필드 표현에서 버린 본문은 문단 단위로 보고한다.
+    // 운반 가능한 열린 경계와 BOOKMARK·FORMULA 본문은 일반 run 으로 남는다.
     let mut lost_field_body = false;
     let mut has_title_mark = false;
     for (run_idx, hx_run) in body_runs.iter().enumerate() {
@@ -940,12 +1036,12 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
         hx.child_order.clone()
     };
 
+    let carried_starts = carried_field_starts(hx, &order);
     let mut field_begin: Option<&HxFieldBegin> = None;
     let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
     let mut field_body = String::new();
-    // S22 r3: body text dropped without being emitted, wherever it is
-    // dropped in this run (a second begin over an open one, a closed field
-    // with no Core form, the run's end).
+    // 지원하지 않는 필드의 소실은 캐시 유무와 무관하게 보고한다.
+    // 운반 가능한 경계는 field_begin 에 넣지 않아 본문이 일반 run 으로 남는다.
     let mut lost_body = false;
 
     for &(kind, idx) in &order {
@@ -979,6 +1075,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             HxRunChildKind::Ctrl => {
                 convert_ctrl_child(
                     &hx.ctrls[idx],
+                    carried_starts[idx],
                     char_shape_id,
                     depth,
                     &mut runs,
@@ -1082,6 +1179,7 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
 #[allow(clippy::too_many_arguments)]
 fn convert_ctrl_child<'a>(
     ctrl: &'a HxCtrl,
+    carry_boundary: bool,
     char_shape_id: CharShapeIndex,
     depth: usize,
     runs: &mut Vec<Run>,
@@ -1122,18 +1220,22 @@ fn convert_ctrl_child<'a>(
         // Field begin: remember for pairing with fieldEnd — 사이드카 순서
         // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다 (W1a).
         if let Some(fb) = &ctrl.field_begin {
-            // S22 r3: a begin over one still open drops the open one's body.
-            // 이것을 실패시키는 것: 이 누적 삭제
-            // (`a_field_body_lost_anywhere_in_its_run_drops_the_cache`).
+            // 미지원 시작을 덮는 경우도 앞 본문의 소실을 보고한다.
+            // 이것을 실패시키는 것: 이 누적 삭제.
             *lost_body |= field_begin.is_some() && !field_body.is_empty();
-            *field_begin = Some(fb);
+            if carry_boundary {
+                runs.push(Run::control(field_start_boundary(fb, depth, ctx)?, char_shape_id));
+                *field_begin = None;
+            } else {
+                *field_begin = Some(fb);
+            }
             *field_begin_char_shape = char_shape_id;
             field_body.clear();
         }
         // Field end: pair with remembered fieldBegin and emit control.
         // 본문 = begin 이후 누적된 field_body — 문서 순서라 무모호하므로
         // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
-        if ctrl.field_end.is_some() {
+        if let Some(end) = &ctrl.field_end {
             if let Some(fb) = field_begin.take() {
                 let run = decode_field_control(
                     fb,
@@ -1143,11 +1245,9 @@ fn convert_ctrl_child<'a>(
                     true,
                     ctx,
                 )?;
-                // S22 r3: a closed field keeps its body only in the controls
-                // that hold it as text; any other (a bookmark span, a cross
-                // reference, a memo, a type with no Core form) drops it.
-                // 이것을 실패시키는 것: 이 누적 삭제
-                // (`a_field_body_lost_anywhere_in_its_run_drops_the_cache`).
+                // 접힌 본문의 보존 목록. 범위로 운반한 BOOKMARK·FORMULA 와
+                // 열린 필드는 이 갈래를 타지 않고 일반 run 으로 본문을 남긴다.
+                // 이것을 실패시키는 것: Memo 를 빼기 또는 미지원 종류까지 승인하기.
                 let carried = run.as_ref().is_some_and(|r| {
                     matches!(
                         &r.content,
@@ -1158,12 +1258,23 @@ fn convert_ctrl_child<'a>(
                                 | Control::UnknownSummary { .. }
                                 | Control::PathField { .. }
                                 | Control::CrossRef { .. }
+                                | Control::Memo { .. }
                         )
                     )
                 });
                 *lost_body |= !carried && !field_body.is_empty();
                 runs.extend(run);
                 field_body.clear();
+            } else {
+                runs.push(Run::control(
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::End {
+                            begin_id: end.begin_id_ref.clone(),
+                            field_id: end.fieldid.clone(),
+                        },
+                    },
+                    char_shape_id,
+                ));
             }
         }
         // AutoNum (inline page number) — Wave 12n: routed to
@@ -2208,7 +2319,13 @@ fn decode_field_control(
             };
             Control::Memo {
                 content,
-                anchor_runs: Vec::new(),
+                // fieldBegin 의 subList 는 메모, begin/end 사이 글자는 앵커다.
+                // 이것을 실패시키는 것: 앵커를 빈 목록으로 되돌리기.
+                anchor_runs: if text.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Run::text(text, char_shape_id)]
+                },
                 metadata: hwpforge_core::MemoMetadata::default(),
             }
         }
@@ -3471,17 +3588,8 @@ mod tests {
         );
     }
 
-    /// S22 r1: a field that crosses paragraphs (Hancom's press-release
-    /// templates wrap the whole body in one "본문" click-here field). Its
-    /// begin and end tokens are zero-width and the text around them is one to
-    /// one, so every paragraph keeps its cache and each line lands on its own
-    /// character. A paragraph whose body text shares the begin's run loses
-    /// that text from Core, so it drops its cache wherever its lines start
-    /// (S22 r2); a line inside a field closed within the paragraph drops by
-    /// the field rule; a line right after an end keeps.
-    /// 이것을 실패시키는 것: 끝이 다른 문단에 있는 필드의 시작·끝 문단 캐시를
-    /// 버리는 것(첫 경우의 두 문단이 캐시를 잃는다), 본문 소실 검사 삭제(접힌
-    /// 본문 밖에서 시작하는 줄 `[0,14]` 의 캐시가 남는다).
+    /// 열린 필드와 책갈피 범위는 본문·경계 모두 1:1 로 보존한다.
+    /// 이것을 실패시키는 것: 열린 필드를 접거나 원장 텍스트 길이를 0 으로 세기.
     #[test]
     fn a_field_across_paragraphs_keeps_its_one_to_one_caches() {
         let lines = |starts: &[u32]| -> String {
@@ -3534,9 +3642,7 @@ mod tests {
         assert_eq!(out[0], (Some(vec![0, 1]), "abcd".to_string()));
         assert_eq!(out[1], (Some(vec![0, 2]), "efgh".to_string()));
 
-        // S22 r2: the body "abcd" folded into the begin's run is left out of
-        // Core ("efgh" stays), so the cache drops though no line starts
-        // inside the folded body (wire 0, and 14 = "g").
+        // 같은 run 의 본문도 일반 run 으로 살아서 wire 14 는 Core 6 이다.
         let click_here = |id: u32| {
             format!(
                 r#"<ctrl><fieldBegin id="{id}" type="CLICK_HERE" name="본문" editable="1" dirty="1" zorder="-1" fieldid="{id}"/></ctrl>"#
@@ -3546,8 +3652,8 @@ mod tests {
             para(run(click_here(7) + &t("abcd")) + &run(t("efgh")), &[0, 14]),
             para(run(t("ij")) + &run(end_ctrl(7)), &[0, 1]),
         ]);
-        assert_eq!(warnings, 2, "a cache drop and the lost body");
-        assert_eq!(out[0].0, None);
+        assert_eq!(warnings, 0);
+        assert_eq!(out[0], (Some(vec![0, 6]), "abcdefgh".into()));
         assert_eq!(out[1].0, Some(vec![0, 1]));
 
         // The same with a line inside the folded body (wire 9).
@@ -3555,8 +3661,8 @@ mod tests {
             para(run(begin_ctrl(7) + &t("abcd")), &[0, 9]),
             para(run(t("efgh")) + &run(end_ctrl(7)), &[0, 2]),
         ]);
-        assert_eq!(warnings, 2, "a cache drop and the lost body");
-        assert_eq!(out[0].0, None);
+        assert_eq!(warnings, 0);
+        assert_eq!(out[0], (Some(vec![0, 1]), "abcd".into()));
         assert_eq!(out[1].0, Some(vec![0, 2]));
 
         // Across three: the middle paragraph has no field token and keeps.
@@ -3571,13 +3677,12 @@ mod tests {
             [Some(vec![0, 1]), Some(vec![0, 1]), Some(vec![0, 1]),]
         );
 
-        // Nested in one run: a line inside the inner field, which closes
-        // within the paragraph (begin 9, end token ends at 26), drops.
+        // 중첩 책갈피 안의 줄도 실제 텍스트 좌표를 유지한다.
         let (out, _) = decode(vec![para(
             run(begin_ctrl(1) + &t("가") + &begin_ctrl(2) + &t("나") + &end_ctrl(2) + &t("다")),
             &[0, 17],
         )]);
-        assert_eq!(out[0].0, None);
+        assert_eq!(out[0].0, Some(vec![0, 1]));
 
         // Closed within the paragraph: an empty field, then a line right
         // after the field end (wire 16).
@@ -3586,19 +3691,10 @@ mod tests {
         assert_eq!((out[0].0.clone(), warnings), (Some(vec![0, 0]), 0));
     }
 
-    /// S22 r3: field body text dropped anywhere in its run drops the
-    /// paragraph's cache — at the run's end, under a second begin (nested,
-    /// with the inner field open or closed in the same run), or in a closed
-    /// field whose control does not hold its text (a bookmark span, a type
-    /// with no Core form) — in a body paragraph, a table cell or a text box.
-    /// A begin with no body text, and a closed field that keeps its text,
-    /// keep the cache.
-    /// 이것을 실패시키는 것: 두 번째 시작에서의 누적 삭제(중첩 경우가 캐시 유지),
-    /// 닫힌 필드에서의 누적 삭제(책갈피·FORMULA 경우가 캐시 유지), 보존 목록에
-    /// 메모를 더하기(그 경우가 캐시 유지), 보존 목록에서 필드·요약·경로·상호참조를
-    /// 빼기(날짜·요약·경로·상호참조 경우가 drop).
+    /// 복구된 경로는 캐시를 유지하고, 지원하지 않는 종류는 소실을 보고한다.
+    /// 이것을 실패시키는 것: MEMO 보존 목록 삭제, FORMULA·BOOKMARK 경계 운반 삭제.
     #[test]
-    fn a_field_body_lost_anywhere_in_its_run_drops_the_cache() {
+    fn recovered_field_bodies_keep_the_cache() {
         let lines = |starts: &[u32]| -> String {
             starts
                 .iter()
@@ -3634,16 +3730,16 @@ mod tests {
             (kept, drops)
         };
         let ch = "CLICK_HERE";
-        // The review's case: begin 7, "abcd", begin 8 in one run (the second
-        // begin drops "abcd"), "efgh" in the next; the line at 22 is "g".
+        // 시작 두 개가 같은 run 에 있어도 "abcd" 를 보존한다.
+        // wire 22 는 두 경계와 "abcdef" 뒤의 "g" 다.
         let nested = || {
             para(run(begin(7, ch) + &t("abcd") + &begin(8, ch)) + &run(t("efgh")), &[0, 22])
                 + &para(run(t("ij")) + &run(end(8) + &end(7)), &[0, 1])
         };
         let (kept, drops) = decode(nested());
-        assert_eq!((kept, drops.len()), (vec![false, true], 1), "nested");
+        assert_eq!((kept, drops.len()), (vec![true, true], 0), "nested");
 
-        // The inner field closes in the same run: "abcd" is still dropped.
+        // 안쪽만 같은 run 에서 닫히더라도 바깥 본문은 보존한다.
         let (kept, drops) = decode(
             para(
                 run(begin(7, ch) + &t("abcd") + &begin(8, ch) + &t("xy") + &end(8))
@@ -3651,7 +3747,7 @@ mod tests {
                 &[0, 32],
             ) + &para(run(t("ij")) + &run(end(7)), &[0, 1]),
         );
-        assert_eq!((kept, drops.len()), (vec![false, true], 1), "inner closed");
+        assert_eq!((kept, drops.len()), (vec![true, true], 0), "inner closed");
 
         // The same in a table cell and in a text box.
         let cell = format!(
@@ -3659,20 +3755,19 @@ mod tests {
             nested()
         );
         let (_, drops) = decode(cell);
-        assert!(drops.len() == 1 && drops[0].contains("TableCell"), "cell: {drops:?}");
+        assert!(drops.is_empty(), "cell: {drops:?}");
         let text_box = format!(
             r#"<p paraPrIDRef="0"><run charPrIDRef="0"><rect id="1"><sz width="1000" height="1000"/><pos treatAsChar="1"/><drawText><subList>{}</subList></drawText></rect></run></p>"#,
             nested()
         );
         let (_, drops) = decode(text_box);
-        assert!(drops.len() == 1 && drops[0].contains("TextBox"), "text box: {drops:?}");
+        assert!(drops.is_empty(), "text box: {drops:?}");
 
-        // A closed field whose control does not hold its text (begin 0, "abc"
-        // folded 8..11, end 11..19, "def" from 19 — the line at 20 is "e").
+        // 새 보존 종류: wire 20 은 끝 경계 뒤 "def" 의 "e" 다.
         for kind in ["BOOKMARK", "FORMULA", "MEMO"] {
             let (kept, drops) =
                 decode(para(run(begin(7, kind) + &t("abc") + &end(7)) + &run(t("def")), &[0, 20]));
-            assert_eq!((kept, drops.len()), (vec![false], 1), "{kind}");
+            assert_eq!((kept, drops.len()), (vec![true], 0), "{kind}");
         }
 
         // Kept: a begin with no body text in its run, and closed fields
@@ -5732,7 +5827,7 @@ mod tests {
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <fieldBegin id="0" type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
                             <parameters cnt="5" name="">
                                 <stringParam name="RefPath">?#mybook</stringParam>
                                 <stringParam name="RefType">CURRENT</stringParam>
@@ -5770,7 +5865,7 @@ mod tests {
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
+                        <fieldBegin id="0" type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
                             <parameters cnt="5" name="">
                                 <stringParam name="RefPath">?#1108165592;</stringParam>
                                 <stringParam name="RefType">TARGET_TABLE</stringParam>
@@ -5808,7 +5903,7 @@ mod tests {
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
+                        <fieldBegin id="0" type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
                             <parameters cnt="5" name="">
                                 <stringParam name="RefPath">?target1;</stringParam>
                                 <stringParam name="RefType">TARGET_BOOKMARK</stringParam>
@@ -5850,19 +5945,10 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let controls = find_controls(&result);
-        let bm = controls.iter().find(|c| {
-            matches!(
-                c,
-                hwpforge_core::Control::Bookmark {
-                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
-                    ..
-                }
-            )
-        });
-        assert!(bm.is_some(), "self-closing BOOKMARK fieldBegin must produce SpanStart");
-        if let Some(hwpforge_core::Control::Bookmark { name, .. }) = bm {
-            assert_eq!(name, "spanmark");
-        }
+        assert!(controls.iter().any(|c| matches!(c,
+            Control::FieldBoundary { boundary: hwpforge_core::control::FieldBoundary::Start(start) }
+                if start.kind == "BOOKMARK" && start.name == "spanmark"
+        )));
     }
 
     #[test]
@@ -5871,7 +5957,7 @@ mod tests {
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <fieldBegin id="0" type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
                             <parameters cnt="4" name="">
                                 <stringParam name="Path">https://example.com</stringParam>
                             </parameters>
@@ -5899,7 +5985,7 @@ mod tests {
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="MEMO" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <fieldBegin id="0" type="MEMO" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
                             <parameters cnt="2" name="">
                                 <integerParam name="MemoShapeID">0</integerParam>
                                 <stringParam name="MemoType">DEFAULT</stringParam>
@@ -5946,7 +6032,7 @@ mod tests {
             <p paraPrIDRef="1">
                 <run charPrIDRef="0">
                     <ctrl>
-                        <fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <fieldBegin id="0" type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
                             <parameters cnt="1" name="">
                                 <stringParam name="Path">https://example.com</stringParam>
                             </parameters>

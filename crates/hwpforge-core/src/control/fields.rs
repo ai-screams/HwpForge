@@ -185,3 +185,85 @@ pub enum NewNumberKind {
     /// Unmapped wire value (6-15) — preserved as a warning signal only.
     Unknown,
 }
+
+/// A field boundary whose body remains in the surrounding ordinary runs.
+///
+/// Unlike a folded field control, this representation can cross run and
+/// paragraph boundaries. Identifiers and parameters are carried verbatim;
+/// the body is never a synthesized evaluation of a formula or placeholder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum FieldBoundary {
+    /// Start of the range.
+    Start(Box<FieldStart>),
+    /// End of the range, referring to the start's instance identifier.
+    End {
+        /// Identifier of the matching start.
+        begin_id: String,
+        /// Original field tag.
+        field_id: String,
+    },
+}
+
+/// Metadata of a field whose text lives in ordinary runs.
+///
+/// String-valued flags retain the authored spelling without inventing a
+/// value when the source omitted one. Parameters retain their scalar type,
+/// name and value; none are evaluated by Core.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct FieldStart {
+    /// Instance identifier, shared by the end marker.
+    pub id: String,
+    /// Field kind, such as `CLICK_HERE`, `BOOKMARK` or `FORMULA`.
+    pub kind: String,
+    /// Authored field name.
+    pub name: String,
+    /// Editability flag.
+    pub editable: String,
+    /// Recalculation flag.
+    pub dirty: String,
+    /// Stacking order.
+    pub z_order: String,
+    /// Original field tag.
+    pub field_id: String,
+    /// Authored metadata tag.
+    pub meta_tag: String,
+    /// Optional parameter group name; `None` means no parameter group.
+    pub parameter_name: Option<String>,
+    /// Scalar field parameters in their source order within each type.
+    pub parameters: Vec<FieldParameter>,
+    /// Annotation paragraphs owned by the start, distinct from the visible
+    /// range body in ordinary runs. `None` means no annotation list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<Vec<crate::paragraph::Paragraph>>,
+}
+
+/// A typed scalar parameter of a range field.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum FieldParameter {
+    /// String parameter, including its whitespace-preservation attribute.
+    String {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+        /// Original whitespace-preservation attribute.
+        xml_space: String,
+    },
+    /// Integer parameter; spelling is retained without numeric coercion.
+    Integer {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+    },
+    /// Boolean parameter; spelling is retained without coercion.
+    Boolean {
+        /// Parameter name.
+        name: String,
+        /// Parameter value.
+        value: String,
+    },
+}

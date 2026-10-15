@@ -43,7 +43,7 @@ pub(super) fn build_hyperlink_run_xml(
     // beginIDRef must reference this id, NOT the fieldid.
     // Hancom reads `fieldBegin id` as a signed 32-bit int; this base + field_id
     // must stay well below i32::MAX (2_147_483_647). Distinct per builder.
-    let begin_id = 1_100_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_100_000_000_u64 + field_id as u64);
     // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
     // value; `fieldid="0"` is treated as an invalid instance. Distinct base
     // keeps it unique vs other field types and stays under 2^31.
@@ -96,7 +96,7 @@ pub(super) fn build_bookmark_span_start_run_xml(
     let escaped_name = escape_xml(name);
     // Signed-32-bit-safe base; MUST match `build_bookmark_span_end_run_xml`
     // so the paired fieldEnd `beginIDRef` references this `id`.
-    let begin_id = 1_200_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_200_000_000_u64 + field_id as u64);
     // Non-zero 32-bit field instance id; must match the paired fieldEnd.
     let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
@@ -118,7 +118,7 @@ pub(super) fn build_bookmark_span_start_run_xml(
 /// Builds a `<hp:run>` containing only `<hp:fieldEnd>` for bookmark span end.
 pub(super) fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> String {
     // Signed-32-bit-safe base; MUST match `build_bookmark_span_start_run_xml`.
-    let begin_id = 1_200_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_200_000_000_u64 + field_id as u64);
     // Non-zero 32-bit field instance id; must match the paired fieldBegin.
     let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
@@ -197,6 +197,7 @@ pub(super) fn build_clickhere_field_xml(
     begin_id: u64,
     body: &str,
 ) -> String {
+    let begin_id = super::super::object_ids::field_id(begin_id);
     let escaped_hint = escape_xml(hint);
     let escaped_name = escape_xml(name);
     let hint_len = hint.encode_utf16().count();
@@ -302,6 +303,7 @@ pub(super) fn build_summary_run_xml_raw(
     begin_id: u64,
     editable: bool,
 ) -> String {
+    let begin_id = super::super::object_ids::field_id(begin_id);
     let escaped_name = escape_xml(name);
     let escaped_cmd = escape_xml(command);
     let editable_bit = u8::from(editable);
@@ -361,6 +363,7 @@ pub(super) fn build_path_field_run_xml_raw(
     char_pr_id_ref: u32,
     begin_id: u64,
 ) -> String {
+    let begin_id = super::super::object_ids::field_id(begin_id);
     let escaped_cmd = escape_xml(command);
     // Wave 12n Step 6.5 / #120: the body between fieldBegin/fieldEnd carries
     // the cached resolved path (was a bare `<hp:t/>`; an empty body triggers
@@ -591,7 +594,7 @@ pub(super) fn build_crossref_run_xml(
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
     // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative
     // and the field is no longer recognized.
-    let begin_id = 1_300_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_300_000_000_u64 + field_id as u64);
     // Wave 12m Phase 2 Step 4 fixup: `fieldid` is a Hancom **type tag**,
     // not an instance id. Native Hancom HWPX emits the ctrl_id's ASCII
     // big-endian u32 — same convention as ClickHere (`%clk`=0x25636C6B),
@@ -664,7 +667,7 @@ pub(super) fn build_hwp5_crossref_run_xml(
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
     // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative and
     // the field is no longer recognized (click / F9 / Ctrl+click jump fail).
-    let begin_id = 1_400_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_400_000_000_u64 + field_id as u64);
     // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
     // value. A raw 0-based `field_id` would emit `fieldid="0"`, which Hancom
     // treats as an invalid instance (F9 refresh / Ctrl+click jump break).
@@ -801,4 +804,66 @@ mod bookmarkname_collapse_tests {
         // Display 불변도 함께 잠금.
         assert_eq!(RefContentType::Contents.to_string(), "OBJECT_TYPE_CONTENTS");
     }
+}
+
+/// 범위 본문은 인접한 일반 run 이 쓴다. 이 함수는 원문 경계만 쓴다.
+/// 이것을 실패시키는 것: 끝을 시작 바로 뒤에 합성하거나 파라미터 값을 버리기.
+pub(super) fn build_field_boundary_xml(
+    boundary: &hwpforge_core::control::FieldBoundary,
+    annotation_xml: &str,
+    char_pr_id_ref: u32,
+) -> Option<String> {
+    use hwpforge_core::control::{FieldBoundary, FieldParameter};
+    let inner = match boundary {
+        FieldBoundary::Start(start) => {
+            let mut parameters = String::new();
+            for parameter in &start.parameters {
+                let (tag, name, value, space) = match parameter {
+                    FieldParameter::String { name, value, xml_space } => {
+                        ("stringParam", name, value, xml_space.as_str())
+                    }
+                    FieldParameter::Integer { name, value } => ("integerParam", name, value, ""),
+                    FieldParameter::Boolean { name, value } => ("booleanParam", name, value, ""),
+                    _ => return None,
+                };
+                let space = if space.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#" xml:space="{}""#, escape_xml(space))
+                };
+                parameters.push_str(&format!(
+                    r#"<hp:{tag} name="{}"{space}>{}</hp:{tag}>"#,
+                    escape_xml(name),
+                    escape_xml(value),
+                ));
+            }
+            if let Some(name) = &start.parameter_name {
+                parameters = format!(
+                    r#"<hp:parameters cnt="{}" name="{}">{parameters}</hp:parameters>"#,
+                    start.parameters.len(),
+                    escape_xml(name)
+                );
+            } else if !parameters.is_empty() {
+                return None;
+            }
+            format!(
+                r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" dirty="{}" zorder="{}" fieldid="{}" metaTag="{}">{parameters}{annotation_xml}</hp:fieldBegin>"#,
+                escape_xml(&start.id),
+                escape_xml(&start.kind),
+                escape_xml(&start.name),
+                escape_xml(&start.editable),
+                escape_xml(&start.dirty),
+                escape_xml(&start.z_order),
+                escape_xml(&start.field_id),
+                escape_xml(&start.meta_tag)
+            )
+        }
+        FieldBoundary::End { begin_id, field_id } => format!(
+            r#"<hp:fieldEnd beginIDRef="{}" fieldid="{}"/>"#,
+            escape_xml(begin_id),
+            escape_xml(field_id),
+        ),
+        _ => return None,
+    };
+    Some(format!(r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:ctrl>{inner}</hp:ctrl></hp:run>"#))
 }

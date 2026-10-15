@@ -668,7 +668,18 @@ fn control_md(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx: 
         Control::Field { hint_text, display_text, .. } => {
             Md::text(field_text(hint_text, display_text))
         }
-        Control::Memo { content, .. } => memo(content, styles, st, ctx),
+        Control::FieldBoundary {
+            boundary: hwpforge_core::control::FieldBoundary::Start(start),
+        } => {
+            start.annotation.as_ref().map_or_else(Md::new, |content| memo(content, styles, st, ctx))
+        }
+        Control::Memo { content, anchor_runs, .. } => {
+            let mut md = Md::text(
+                &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
+            );
+            md.push(memo(content, styles, st, ctx));
+            md
+        }
         // A caption number's prefix/suffix characters are text, not
         // Markdown (review r1: a `*` prefix and suffix turned "3" into
         // emphasis). 이것을 실패시키는 것: 텍스트 escape 삭제
@@ -735,7 +746,19 @@ fn control_html(control: &Control, styles: &dyn StyleLookup, st: &mut State, ctx
             Html::text(field_text(hint_text, display_text))
         }
         // The memo comment shown as cell text, as before.
-        Control::Memo { content, .. } => Html::text(memo(content, styles, st, ctx).as_str()),
+        Control::FieldBoundary {
+            boundary: hwpforge_core::control::FieldBoundary::Start(start),
+        } => start
+            .annotation
+            .as_ref()
+            .map_or_else(Html::new, |content| Html::text(memo(content, styles, st, ctx).as_str())),
+        Control::Memo { content, anchor_runs, .. } => {
+            let mut html = Html::text(
+                &anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect::<String>(),
+            );
+            html.push(Html::text(memo(content, styles, st, ctx).as_str()));
+            html
+        }
         Control::AutoNumber { num, format, .. } => {
             Html::text(&super::auto_number_text(*num, format))
         }
@@ -3321,7 +3344,7 @@ mod tests {
             ])]),
             &styles,
         );
-        assert_eq!(m3.markdown, "a<!-- memo: m(주: f) -->");
+        assert_eq!(m3.markdown, "aa<!-- memo: m(주: f) -->");
     }
 
     /// A picture in a memo is link text only — no asset — also through a
@@ -3349,7 +3372,7 @@ mod tests {
                 ])]),
                 &styles,
             );
-            assert_eq!(out.markdown, "a<!-- memo: m ![x](images/x.png) -->");
+            assert_eq!(out.markdown, "aa<!-- memo: m ![x](images/x.png) -->");
             assert!(out.images.is_empty());
         }
         let out = encode_styled(
@@ -3723,7 +3746,7 @@ mod tests {
             ]),
             &styles,
         );
-        assert_eq!(out.markdown, format!("x\n\n<!-- memo: {TOO_DEEP} -->"));
+        assert_eq!(out.markdown, format!("x\n\na<!-- memo: {TOO_DEEP} -->"));
         assert_eq!(
             out.warnings,
             vec![super::super::MdWarning::ContainerTooDeep {

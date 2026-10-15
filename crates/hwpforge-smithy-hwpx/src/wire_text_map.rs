@@ -343,9 +343,9 @@ pub(crate) struct TokenLedger {
     tokens: Vec<ZeroToken>,
     /// Core 위치별 토큰 번호, wire 순서.
     by_core: std::collections::BTreeMap<u32, Vec<usize>>,
-    /// 아직 닫히지 않은 필드 시작 토큰의 wire 시작, 안쪽이 끝.
-    open: Vec<u32>,
-    /// 닫힌 필드 구간 `(시작 토큰의 시작, 끝 토큰의 끝)`, 닫힌 순서.
+    /// 아직 닫히지 않은 필드 시작의 (wire, Core) 위치, 안쪽이 끝.
+    open: Vec<(u32, u32)>,
+    /// 닫힌 접힌 필드 구간 `(시작 토큰의 시작, 끝 토큰의 끝)`, 닫힌 순서.
     fields: Vec<(u32, u32)>,
     /// `fields` 를 시작 순으로 정렬하고 끝을 앞에서부터의 최댓값으로 바꾼 것 —
     /// 첫 조회 때 만든다.
@@ -372,11 +372,16 @@ impl TokenLedger {
             }
         }
         match token.kind {
-            FieldBegin => self.open.push(token.wire_start),
+            FieldBegin => self.open.push((token.wire_start, token.core)),
             FieldEnd => {
-                if let Some(start) = self.open.pop() {
-                    self.fields.push((start, token.wire_start + token.wire_len));
-                    self.field_index = std::cell::OnceCell::new();
+                if let Some((start, core)) = self.open.pop() {
+                    // 일반 run 으로 운반한 본문은 Core 좌표가 전진하므로
+                    // 필드 안의 줄도 표현 가능하다. 접힌 본문만 거부한다.
+                    // 이것을 실패시키는 것: Core 좌표 비교를 없애기.
+                    if core == token.core {
+                        self.fields.push((start, token.wire_start + token.wire_len));
+                        self.field_index = std::cell::OnceCell::new();
+                    }
                 }
             }
             _ => {}
@@ -385,9 +390,9 @@ impl TokenLedger {
         self.tokens.push(token);
     }
 
-    /// `wire` 가 필드 안(필드 시작 토큰의 시작 < `wire` < 필드 끝 토큰의 끝)인지
-    /// (S22 설계 3.3 — 한컴 쌍둥이 22,356 줄 중 0). 그런 줄은 세 경로 모두
-    /// 캐시를 버린다.
+    /// `wire` 가 접힌 필드 안(시작 토큰의 시작 < `wire` < 끝 토큰의 끝)인지.
+    /// 그런 줄은 세 경로 모두 캐시를 버린다. 일반 run 으로 운반한 본문은
+    /// Core 좌표가 전진하므로 이 거부 구간에 넣지 않는다.
     ///
     /// 시작과 끝이 이 문단에 다 있는 필드만 본다. 문단을 가로지르는 필드(한컴
     /// 보도자료 서식의 "본문" 누름틀 — 한컴 저장 HWPX 3,517 문서 중 858)는

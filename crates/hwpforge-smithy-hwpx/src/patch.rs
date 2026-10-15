@@ -988,6 +988,9 @@ fn collect_raw_run_slots(
         run.child_order.clone()
     };
 
+    // 디코더와 같은 경계 판정이어야 이후 편집 슬롯의 run 번호가 맞는다.
+    // 이것을 실패시키는 것: 범위 시작·끝을 semantic_run_idx 에 세지 않기.
+    let carried_starts = crate::decoder::section::carried_field_starts(run, &order);
     let mut pending_field_begin: Option<&HxFieldBegin> = None;
     // begin/end 사이 본문 텍스트 추적: (locator 인덱스, 사이 텍스트 개수).
     // 슬롯은 본문이 정확히 1개 `<hp:t>` 일 때만 만든다 (단일 요소 교체
@@ -1048,6 +1051,7 @@ fn collect_raw_run_slots(
                     xml,
                     ctrl_spans[idx].clone(),
                     &run.ctrls[idx],
+                    carried_starts[idx],
                     prefix,
                     semantic_run_idx,
                     sink,
@@ -1168,6 +1172,7 @@ fn collect_raw_ctrl_child_slots<'a>(
     xml: &str,
     ctrl_span: Range<usize>,
     ctrl: &'a HxCtrl,
+    carry_boundary: bool,
     prefix: &str,
     mut semantic_run_idx: usize,
     sink: &mut RawSlotSink<'_>,
@@ -1216,7 +1221,12 @@ fn collect_raw_ctrl_child_slots<'a>(
             semantic_run_idx += 1;
         }
         if let Some(field_begin) = &ctrl.field_begin {
-            *pending_field_begin = Some(field_begin);
+            if carry_boundary {
+                *pending_field_begin = None;
+                semantic_run_idx += 1;
+            } else {
+                *pending_field_begin = Some(field_begin);
+            }
             *field_body_locator = None;
             *field_body_count = 0;
             field_body_text.clear();
@@ -1242,6 +1252,8 @@ fn collect_raw_ctrl_child_slots<'a>(
                 *field_body_locator = None;
                 *field_body_count = 0;
                 field_body_text.clear();
+                semantic_run_idx += 1;
+            } else {
                 semantic_run_idx += 1;
             }
         }

@@ -26,6 +26,7 @@ use hwpforge_core::ObjectId;
 struct IdAllocator {
     next: u64,
     reserved: HashSet<u64>,
+    field_ids: BTreeMap<u64, u64>,
     /// The Core ids the encoder actually wrote, with the kind of object, in
     /// document order — what the duplicate-id diagnostic counts. A parent
     /// reserves its slot ([`reserve`]) before its children are encoded, so a
@@ -47,7 +48,12 @@ impl IdScope {
     /// Opens an allocator that skips `reserved`.
     pub(crate) fn enter(reserved: HashSet<u64>) -> Self {
         SCOPES.with(|s| {
-            s.borrow_mut().push(IdAllocator { next: 1, reserved, written: Vec::new() });
+            s.borrow_mut().push(IdAllocator {
+                next: 1,
+                reserved,
+                field_ids: BTreeMap::new(),
+                written: Vec::new(),
+            });
         });
         Self(std::marker::PhantomData)
     }
@@ -74,7 +80,12 @@ pub(crate) fn next_id() -> u64 {
         // call; they get one allocator for the test thread.
         #[cfg(test)]
         if scopes.is_empty() {
-            scopes.push(IdAllocator { next: 1, reserved: HashSet::new(), written: Vec::new() });
+            scopes.push(IdAllocator {
+                next: 1,
+                reserved: HashSet::new(),
+                field_ids: BTreeMap::new(),
+                written: Vec::new(),
+            });
         }
         #[allow(clippy::expect_used)] // invariant: encode entry points open a scope
         let alloc = scopes.last_mut().expect("object id drawn outside an encode scope");
@@ -85,6 +96,52 @@ pub(crate) fn next_id() -> u64 {
                 return id;
             }
         }
+    })
+}
+
+/// 원문 범위의 id 를 예약해 새로 쓰는 접힌 필드와 충돌하지 않게 한다.
+pub(crate) fn reserve_field_ids<S>(document: &Document<S>) {
+    let mut ids = Vec::new();
+    for_each_top_paragraph(document, &mut |p| {
+        walk(p, &mut |q| {
+            for run in &q.runs {
+                if let Some(Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                }) = run.content.as_control()
+                {
+                    if let Ok(id) = start.id.parse::<u64>() {
+                        ids.push(id);
+                    }
+                }
+            }
+        })
+    });
+    SCOPES.with(|s| {
+        if let Some(alloc) = s.borrow_mut().last_mut() {
+            alloc.reserved.extend(ids);
+        }
+    });
+}
+
+/// 기존 필드 id 를 우선하되 예약된 범위 id 와 충돌하면 빈 id 로 옮긴다.
+/// 같은 키의 시작과 끝은 항상 같은 id 를 받는다.
+/// 이것을 실패시키는 것: 예약 검사를 없애기.
+pub(crate) fn field_id(preferred: u64) -> u64 {
+    SCOPES.with(|s| {
+        let mut scopes = s.borrow_mut();
+        let Some(alloc) = scopes.last_mut() else {
+            return preferred;
+        };
+        if let Some(id) = alloc.field_ids.get(&preferred) {
+            return *id;
+        }
+        let mut id = preferred;
+        while alloc.reserved.contains(&id) {
+            id -= 1;
+        }
+        alloc.reserved.insert(id);
+        alloc.field_ids.insert(preferred, id);
+        id
     })
 }
 

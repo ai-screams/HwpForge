@@ -83,6 +83,11 @@ use crate::run::Run;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub enum Control {
+    /// A range field marker; its visible text remains in ordinary runs.
+    FieldBoundary {
+        /// Start metadata or a reference to the matching start.
+        boundary: FieldBoundary,
+    },
     /// An inline text box with its own paragraph content.
     /// Maps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).
     TextBox {
@@ -1078,6 +1083,13 @@ impl Control {
                     }
                 }
             }
+            Self::FieldBoundary { boundary } => {
+                if let FieldBoundary::Start(start) = boundary {
+                    if let Some(paragraphs) = &mut start.annotation {
+                        walk_vec(paragraphs, f);
+                    }
+                }
+            }
             Self::Memo { content, anchor_runs, .. } => {
                 walk_vec(content, f);
                 for run in anchor_runs {
@@ -1151,6 +1163,13 @@ impl Control {
                     }
                 }
             }
+            Self::FieldBoundary { boundary } => {
+                if let FieldBoundary::Start(start) = boundary {
+                    if let Some(paragraphs) = &start.annotation {
+                        walk_vec(paragraphs, f);
+                    }
+                }
+            }
             Self::Memo { content, anchor_runs, .. } => {
                 walk_vec(content, f);
                 for run in anchor_runs {
@@ -1207,6 +1226,7 @@ impl Control {
             Self::TextArt { .. } => "text_art",
             Self::Bookmark { .. } => "bookmark",
             Self::CrossRef { .. } => "cross_ref",
+            Self::FieldBoundary { .. } => "field_boundary",
             Self::Field { .. } => "field",
             Self::Memo { .. } => "memo",
             Self::IndexMark { .. } => "index_mark",
@@ -2197,6 +2217,7 @@ impl std::fmt::Display for Control {
             Self::CrossRef { target, ref_type, .. } => {
                 write!(f, "CrossRef({:?}, {ref_type})", target.as_display())
             }
+            Self::FieldBoundary { boundary } => write!(f, "FieldBoundary({boundary:?})"),
             Self::Field { field_type, hint_text, name, .. } => {
                 let hint = hint_text.as_deref().unwrap_or("");
                 match name.as_deref().filter(|s| !s.is_empty()) {

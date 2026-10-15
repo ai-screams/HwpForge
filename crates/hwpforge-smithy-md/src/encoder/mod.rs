@@ -366,6 +366,13 @@ pub(crate) fn nests_too_deep(document: &Document<Validated>) -> bool {
                 Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
                     stack.push((Item::Paras(paragraphs), depth + 1))
                 }
+                Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                } => {
+                    if let Some(content) = &start.annotation {
+                        stack.push((Item::Paras(content), depth + 1));
+                    }
+                }
                 Control::Memo { content, anchor_runs, .. } => {
                     stack.push((Item::Paras(content), depth + 1));
                     stack.push((Item::Runs(anchor_runs), depth + 1));

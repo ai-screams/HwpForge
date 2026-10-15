@@ -21,7 +21,7 @@ pub(super) fn build_memo_run_xml(
     memo_create_time: Option<u64>,
 ) -> String {
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
-    let begin_id = 1_500_000_000_u64 + field_id as u64;
+    let begin_id = super::super::object_ids::field_id(1_500_000_000_u64 + field_id as u64);
     // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
     let field_uid = 2_028_000_000_u64 + field_id as u64;
 

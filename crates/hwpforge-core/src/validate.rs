@@ -555,6 +555,7 @@ fn validate_control_run(
         | Control::ConnectLine { .. }
         | Control::Bookmark { .. }
         | Control::CrossRef { .. }
+        | Control::FieldBoundary { .. }
         | Control::Field { .. }
         | Control::Memo { .. }
         | Control::IndexMark { .. } => Ok(()),

@@ -228,7 +228,21 @@ fn deep_text_at(
                 | Control::TextBox { paragraphs, .. }
                 | Control::Ellipse { paragraphs, .. }
                 | Control::Polygon { paragraphs, .. } => paras(&mut out, paragraphs),
-                Control::Memo { content, .. } => paras(&mut out, content),
+                Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                } => {
+                    if let Some(content) = &start.annotation {
+                        paras(&mut out, content);
+                    }
+                }
+                Control::Memo { content, anchor_runs, .. } => {
+                    for run in anchor_runs {
+                        if let Some(text) = run.content.plain_text() {
+                            out.push_str(&text);
+                        }
+                    }
+                    paras(&mut out, content);
+                }
                 Control::Dutmal { main_text, sub_text, .. } => {
                     out.push_str(&format!("{main_text}({sub_text})"));
                 }

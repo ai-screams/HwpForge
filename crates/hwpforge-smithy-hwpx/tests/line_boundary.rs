@@ -268,12 +268,10 @@ fn folded_field_body_is_one_token_on_both_sides() {
     assert_eq!(cache.lines[1].boundary, after);
 }
 
-/// Design 3.3: a line that starts inside a field drops the paragraph's
-/// cache — on encode (inside a bookmark span's text) and on decode (between
-/// a folded field's text pieces, where the coordinate map alone accepts it).
-/// 이것을 실패시키는 것: 인코더·디코더의 필드 안쪽 검사 삭제.
+/// 일반 run 본문은 범위 안에서도 줄을 배치할 수 있다. 접힌 본문은
+/// 여전히 거부한다. 이것을 실패시키는 것: 모든 필드를 허용하거나 거부하기.
 #[test]
-fn line_inside_a_field_drops_the_cache() {
+fn only_folded_field_interiors_drop_the_cache() {
     use hwpforge_foundation::BookmarkType;
     use hwpforge_smithy_hwpx::HwpxDecoder;
     let mark = |bookmark_type| {
@@ -286,8 +284,8 @@ fn line_inside_a_field_drops_the_cache() {
         Run::text("끝", CharShapeIndex::new(0)),
     ];
     let (cache, warnings) = encode(host(runs, vec![line(0, None), line(1, None)]), false);
-    assert_eq!(cache, None, "{warnings:?}");
-    assert!(warnings.iter().any(|w| w == "LAYOUT_CACHE_DROPPED"), "{warnings:?}");
+    assert_eq!(cache, Some(vec![0, 25]), "{warnings:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
 
     // Decode: secPr 0, colPr 8, fieldBegin 16, "a" 24, tab 25, "b" 33,
     // fieldEnd 34 — a line at 25 (between the field's pieces).

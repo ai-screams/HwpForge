@@ -406,6 +406,13 @@ fn paragraph_text_at<S: Sink>(
                         .join(" ");
                     text(&mut pieces, body.trim());
                 }
+                Control::Memo { anchor_runs, .. } => {
+                    for run in anchor_runs {
+                        if let Some(value) = run.content.plain_text() {
+                            text(&mut pieces, &value);
+                        }
+                    }
+                }
                 Control::Unknown { tag, .. } => {
                     let code = Md::code_span(&format!("[{tag}]"));
                     pieces.push(Piece::Markup(S::from_md(code)));

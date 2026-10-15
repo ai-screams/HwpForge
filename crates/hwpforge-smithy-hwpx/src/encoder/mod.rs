@@ -1422,6 +1422,7 @@ impl HwpxEncoder {
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
         let core_ids = object_ids::core_object_ids(document);
         let _ids = object_ids::IdScope::enter(core_ids.iter().map(|&(_, id)| id).collect());
+        object_ids::reserve_field_ids(document);
         // Core already follows the decoder's manifest-resolved spine order.
         // Number output parts from that order; never reconstruct original filenames.
         let sections = document.sections();
