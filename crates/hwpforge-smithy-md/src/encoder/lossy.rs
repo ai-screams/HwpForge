@@ -122,12 +122,12 @@ fn encode_paragraph(
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => {
-                return table_to_markdown(table, warnings)
-                    + &lossy_caption(table.caption.as_ref(), warnings);
+                return table_to_markdown(table, warnings, 0)
+                    + &lossy_caption(table.caption.as_ref(), warnings, 0);
             }
             RunContent::Image(image) => {
                 return format!("![{}]({})", image_alt_text(&image.path), image.path)
-                    + &lossy_caption(image.caption.as_ref(), warnings);
+                    + &lossy_caption(image.caption.as_ref(), warnings, 0);
             }
             _ => {}
         }
@@ -207,6 +207,25 @@ fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> 
 }
 
 fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> String {
+    paragraph_text_at(paragraph, warnings, 0)
+}
+
+/// How many tables a lossy table may sit inside. A table in a cell is
+/// written as cell text, escaped once more for every level (`\` doubles),
+/// so the output — and the time to build it — doubles per level; past this
+/// depth the inner table is replaced by [`TABLE_TOO_DEEP`]. No corpus
+/// document reaches it (lossy output unchanged across the corpus).
+const MAX_TABLE_NESTING: usize = 8;
+
+/// Written in place of a table nested deeper than [`MAX_TABLE_NESTING`].
+const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
+
+/// [`paragraph_text_markdown`] inside `depth` tables.
+fn paragraph_text_at(
+    paragraph: &Paragraph,
+    warnings: &mut Vec<super::MdWarning>,
+    depth: usize,
+) -> String {
     let mut output = String::new();
 
     // A group is drawn as its children (WS): body, table cells and captions
@@ -229,7 +248,7 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                     output.push(' ');
                 }
                 output.push_str(&format!("![{}]({})", image_alt_text(&image.path), image.path));
-                output.push_str(&lossy_caption(image.caption.as_ref(), warnings));
+                output.push_str(&lossy_caption(image.caption.as_ref(), warnings, depth));
             }
             Part::Control(control) => match control {
                 Control::Hyperlink { text, url } => {
@@ -295,8 +314,8 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                 if !output.is_empty() {
                     output.push('\n');
                 }
-                output.push_str(&table_to_markdown(table, warnings));
-                output.push_str(&lossy_caption(table.caption.as_ref(), warnings));
+                output.push_str(&table_to_markdown(table, warnings, depth));
+                output.push_str(&lossy_caption(table.caption.as_ref(), warnings, depth));
             }
         }
     }
@@ -311,12 +330,13 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
 fn lossy_caption(
     caption: Option<&hwpforge_core::caption::Caption>,
     warnings: &mut Vec<super::MdWarning>,
+    depth: usize,
 ) -> String {
     let Some(caption) = caption else { return String::new() };
     let text: Vec<String> = caption
         .paragraphs
         .iter()
-        .map(|p| paragraph_text_markdown(p, warnings))
+        .map(|p| paragraph_text_at(p, warnings, depth))
         .filter(|t| !t.trim().is_empty())
         .collect();
     if text.is_empty() {
@@ -326,7 +346,12 @@ fn lossy_caption(
     }
 }
 
-fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>) -> String {
+/// A table inside `depth` tables. 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서
+/// 깊이 증가 삭제(`nested_tables_stay_small`).
+fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>, depth: usize) -> String {
+    if depth >= MAX_TABLE_NESTING {
+        return TABLE_TOO_DEEP.to_string();
+    }
     if table.rows.is_empty() {
         return "| |\n| --- |".to_string();
     }
@@ -353,7 +378,7 @@ fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>) -> Str
                     let text = cell
                         .paragraphs
                         .iter()
-                        .map(|p| paragraph_text_markdown(p, warnings))
+                        .map(|p| paragraph_text_at(p, warnings, depth + 1))
                         .collect::<Vec<_>>()
                         .join(" ");
                     escape_gfm_cell(&text)
@@ -1270,5 +1295,39 @@ mod tests {
             encode_without_template(&nest(33)),
             Err(crate::error::MdError::UnsupportedStructure { .. })
         ));
+    }
+
+    /// Tables nested in cells stay small: the output of 24 nested tables is
+    /// bounded (each level past the limit is not drawn), while 8 nested
+    /// tables are drawn whole as before (the escaping doubles per level).
+    ///
+    /// 이것을 실패시키는 것: 깊이 한도 삭제 · 칸에서 깊이 증가 삭제.
+    #[test]
+    fn nested_tables_stay_small() {
+        use hwpforge_core::{Table, TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let nest = |n: usize| {
+            let mut run = Run::text("core", CharShapeIndex::new(0));
+            for _ in 0..n {
+                let cell = TableCell::new(
+                    vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                    u(1000),
+                );
+                run =
+                    Run::table(Table::new(vec![TableRow::new(vec![cell])]), CharShapeIndex::new(0));
+            }
+            let mut d = Document::new();
+            d.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(vec![run], ParaShapeIndex::new(0))],
+                hwpforge_core::PageSettings::a4(),
+            ));
+            encode_without_template(&d.validate().unwrap()).unwrap()
+        };
+        assert_eq!(nest(2), "| \\| core \\|<br>\\| --- \\| |\n| --- |");
+        let eight = nest(8);
+        assert!(eight.contains("core") && !eight.contains(TABLE_TOO_DEEP));
+        let deep = nest(24);
+        assert!(deep.contains(TABLE_TOO_DEEP) && !deep.contains("core"));
+        assert!(deep.len() < 4 * eight.len(), "{} vs {}", deep.len(), eight.len());
     }
 }
