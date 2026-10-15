@@ -634,7 +634,20 @@ fn encode_control_styled(
         }
         Control::TextBox { paragraphs, .. } => shape_text(paragraphs, styles, st, ctx),
         Control::Equation { script, .. } => match render_equation(script) {
-            EqnRender::Latex(latex) => latex,
+            EqnRender::Latex(latex) => match markdown_latex(&latex) {
+                Some(latex) => latex,
+                // The LaTeX would close its math or write Markdown markup: the
+                // script as ordinary text instead (`$` escaped too, so it opens
+                // no math), reported.
+                None => {
+                    st.warnings.push(super::MdWarning::EquationAsText {
+                        section: st.at.0,
+                        paragraph: st.at.1,
+                    });
+                    escape_markdown(&script.split_whitespace().collect::<Vec<_>>().join(" "))
+                        .replace('$', "\\$")
+                }
+            },
             // Written as ordinary text (whitespace already collapsed):
             // Markdown-escaped here, and table cells apply their usual cell
             // escaping on top, like text runs.
@@ -1206,6 +1219,33 @@ fn html_caption(
 ///
 /// Applied to text extracted from HWPX (which is always plain text), BEFORE
 /// wrapping with inline format markers like `**bold**` or `<em>`.
+/// An equation's `$...$` LaTeX as Markdown text, `None` when it cannot be
+/// written there safely. The converter passes unknown script text through,
+/// so the LaTeX may hold markup: `<` and `>` become `\lt ` and `\gt `
+/// (the same symbols to a math renderer, no HTML tag to a Markdown one) and
+/// line breaks become spaces; a `$` or a trailing `\` would end the math
+/// early and `](` would start a link, so those give `None`. A backtick
+/// (Hancom's space) stays: a code span writes no markup. 이것을 실패시키는 것: 꺾쇠 치환 삭제 · `None` 조건 하나씩 삭제
+/// (`markdown_equation_cannot_write_markup`).
+fn markdown_latex(latex: &str) -> Option<String> {
+    let inner = latex.strip_prefix('$').and_then(|l| l.strip_suffix('$'))?;
+    if inner.contains('$') || inner.contains("](") || inner.ends_with('\\') {
+        return None;
+    }
+    let mut out = String::with_capacity(latex.len() + 8);
+    out.push('$');
+    for ch in inner.chars() {
+        match ch {
+            '<' => out.push_str("\\lt "),
+            '>' => out.push_str("\\gt "),
+            '\n' | '\r' => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out.push('$');
+    Some(out)
+}
+
 fn escape_markdown(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + input.len() / 8);
     for ch in input.chars() {
@@ -3606,6 +3646,59 @@ mod tests {
                 paragraph: 1,
             }]
         );
+    }
+
+    /// An equation in Markdown text writes no markup: `<` and `>` become
+    /// `\lt` and `\gt`, and LaTeX that would end its math or start a link
+    /// is written as the script text, with a warning at its place. An
+    /// ordinary equation, Hancom's backtick space included, is unchanged.
+    ///
+    /// 이것을 실패시키는 것: 꺾쇠 치환 삭제 · `$`·`](`·끝 `\` 조건 하나씩 삭제 ·
+    /// 백틱도 거부하기 · 경고 기록 삭제 · 경고 자리 채우기 삭제.
+    #[test]
+    fn markdown_equation_cannot_write_markup() {
+        let styles = MockStyles::new();
+        let eqn = |script: &str| {
+            Run::control(
+                Control::Equation {
+                    script: script.to_string(),
+                    width: HwpUnit::from_mm(30.0).unwrap(),
+                    height: HwpUnit::from_mm(10.0).unwrap(),
+                    base_line: 70,
+                    text_color: hwpforge_foundation::Color::BLACK,
+                    font: "HancomEQN".to_string(),
+                    inst_id: None,
+                },
+                CharShapeIndex::new(0),
+            )
+        };
+        let draw = |script: &str| {
+            encode_styled(
+                &validated_document(vec![para(vec![t("x")]), para(vec![eqn(script)])]),
+                &styles,
+            )
+        };
+        let out = draw("{a+b} over {c+d}");
+        assert_eq!(out.markdown, "x\n\n$\\frac{a+b}{c+d}$");
+        assert!(out.warnings.is_empty());
+        let out = draw("<img src=x onerror=y>");
+        assert!(!out.markdown.contains(['<', '>']), "{}", out.markdown);
+        assert!(out.markdown.contains("\\lt ") && out.markdown.contains("\\gt "));
+        assert!(out.warnings.is_empty());
+        let out = draw("a`b");
+        assert_eq!(out.markdown, "x\n\n$a`b$");
+        assert!(out.warnings.is_empty());
+        for script in ["a $ b", "[a](b)", "a \\"] {
+            let out = draw(script);
+            assert_eq!(
+                out.warnings,
+                vec![super::super::MdWarning::EquationAsText { section: 0, paragraph: 1 }],
+                "{script}: {}",
+                out.markdown
+            );
+            assert!(!out.markdown.replace("\\$", "").contains('$'), "{script}: {}", out.markdown);
+        }
+        assert_eq!(markdown_latex("$a\nb$").as_deref(), Some("$a b$"));
     }
 
     /// An equation's LaTeX in an HTML cell is escaped text: a script that

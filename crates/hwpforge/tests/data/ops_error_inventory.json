@@ -1187,6 +1187,12 @@
           "shape": "struct",
           "cfg": [],
           "discriminant": null
+        },
+        {
+          "name": "EquationAsText",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
         }
       ]
     },

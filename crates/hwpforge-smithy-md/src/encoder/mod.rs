@@ -55,6 +55,15 @@ pub enum MdWarning {
         /// Index of the section's top-level paragraph holding it.
         paragraph: usize,
     },
+    /// HWPX→MD (styled view, Markdown text): an equation whose LaTeX cannot
+    /// be written in Markdown safely — it would end its `$...$` early or
+    /// start a link — was written as its script text instead.
+    EquationAsText {
+        /// Index of the section holding it.
+        section: usize,
+        /// Index of the section's top-level paragraph holding it.
+        paragraph: usize,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -72,6 +81,11 @@ impl core::fmt::Display for MdWarning {
                 f,
                 "{container} nested deeper than {limit} levels left out \
                  (section {section}, paragraph {paragraph})"
+            ),
+            Self::EquationAsText { section, paragraph } => write!(
+                f,
+                "equation written as its script text, its LaTeX cannot be written \
+                 in Markdown safely (section {section}, paragraph {paragraph})"
             ),
         }
     }

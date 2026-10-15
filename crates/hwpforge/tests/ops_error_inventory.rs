@@ -310,6 +310,7 @@ const WARNING_MAPPING: Table = &[
             ("MergedCellsFlattened", "TABLE_MERGE_FLATTENED"),
             ("ImageEmbedSkipped", "IMAGE_EMBED_SKIPPED"),
             ("ContainerTooDeep", "CONTAINER_TOO_DEEP"),
+            ("EquationAsText", "EQUATION_AS_TEXT"),
         ],
     ),
     (
@@ -855,6 +856,10 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
                     section: 0,
                     paragraph: 1,
                 }),
+            ),
+            (
+                "EquationAsText",
+                OpsWarning::Md(MdWarning::EquationAsText { section: 0, paragraph: 0 }),
             ),
         ],
     );
