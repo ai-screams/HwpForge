@@ -414,14 +414,6 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
             out.push_str("<tr>");
         }
         for cell in &row.cells {
-            // §19.22 D3: the lossless grammar has no place for a cell's line
-            // wrap yet (P5b) — refuse rather than write a breaking cell.
-            // 이것을 실패시키는 것: 이 거부를 지우기(`squeezed_cell_is_refused`).
-            if cell.line_wrap != hwpforge_core::table::CellLineWrap::Break {
-                return Err(MdError::UnsupportedStructure {
-                    detail: "cell line wrap is not carried by the lossless encoder".to_string(),
-                });
-            }
             out.push_str(&format!(
                 "<td data-col-span=\"{}\" data-row-span=\"{}\" data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
                 cell.col_span,
@@ -429,6 +421,13 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
                 cell.width.as_i32(),
                 cell.width.to_mm()
             ));
+            // §19.22 D3: a cell's line wrap other than the default break,
+            // spelled as its Core serde name (`SQUEEZE`, `KEEP`).
+            // 이것을 실패시키는 것: 방출 삭제 · 기본값에도 쓰기
+            // (`cell_line_wrap_round_trips`).
+            if let Some(wrap) = g::line_wrap_str(cell.line_wrap)? {
+                out.push_str(&format!(" {}=\"{wrap}\"", g::LINE_WRAP));
+            }
             if let Some(background) = cell.background {
                 out.push_str(&format!(" data-background=\"{}\"", background));
             }
@@ -1207,10 +1206,11 @@ mod tests {
         assert!(encode_lossless(&doc(283)).is_ok());
     }
 
-    /// A squeezed cell is refused (§19.22 D3 — the grammar cannot carry it
-    /// yet); a breaking one is written.
+    /// §19.22 D3: every cell line wrap comes back as written; the default
+    /// break writes nothing, so a breaking cell's markup is the one written
+    /// before.
     #[test]
-    fn squeezed_cell_is_refused() {
+    fn cell_line_wrap_round_trips() {
         use hwpforge_core::table::{CellLineWrap, Table};
         let doc = |wrap: CellLineWrap| {
             let para = Paragraph::with_runs(
@@ -1229,11 +1229,18 @@ mod tests {
             d.add_section(Section::with_paragraphs(vec![host], hwpforge_core::PageSettings::a4()));
             d.validate().unwrap()
         };
-        assert!(matches!(
-            encode_lossless(&doc(CellLineWrap::Squeeze)),
-            Err(MdError::UnsupportedStructure { .. })
-        ));
-        assert!(encode_lossless(&doc(CellLineWrap::Break)).is_ok());
+        for (wrap, attr) in [
+            (CellLineWrap::Break, None),
+            (CellLineWrap::Squeeze, Some(r#"data-line-wrap="SQUEEZE""#)),
+            (CellLineWrap::Keep, Some(r#"data-line-wrap="KEEP""#)),
+        ] {
+            let md = encode_lossless(&doc(wrap)).unwrap();
+            assert_eq!(attr.map(|a| md.contains(a)), attr.map(|_| true), "{md}");
+            assert_eq!(md.contains("data-line-wrap"), attr.is_some(), "{md}");
+            let back = crate::MdDecoder::decode_lossless(&md).unwrap();
+            let RunContent::Table(t) = first_run(&back) else { panic!() };
+            assert_eq!(t.rows[0].cells[0].line_wrap, wrap);
+        }
     }
     use hwpforge_core::{
         Control, Document, Image, ImageFormat, Paragraph, Run, Section, TableCell, TableRow,

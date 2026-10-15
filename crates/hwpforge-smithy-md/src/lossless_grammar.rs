@@ -6,6 +6,7 @@
 use hwpforge_core::placement::{
     HorzAlign, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
 };
+use hwpforge_core::table::CellLineWrap;
 use hwpforge_foundation::Color;
 
 use crate::error::{MdError, MdResult};
@@ -79,6 +80,10 @@ pub(crate) const CROP: [&str; 4] =
 /// EXTENT (`Image::image_extent`): both or none.
 pub(crate) const EXTENT: [&str; 2] =
     ["data-image-extent-width-unit", "data-image-extent-height-unit"];
+
+/// A table cell's line wrap (`<td>`), written only when it is not the
+/// default break.
+pub(crate) const LINE_WRAP: &str = "data-line-wrap";
 
 /// Every attribute `<group>` may carry.
 pub(crate) fn group_attributes() -> Vec<&'static str> {
@@ -261,6 +266,25 @@ pub(crate) fn horz_align_from(s: &str) -> Option<HorzAlign> {
         "RIGHT" => HorzAlign::Right,
         "INSIDE" => HorzAlign::Inside,
         "OUTSIDE" => HorzAlign::Outside,
+        _ => return None,
+    })
+}
+
+/// The spelling of a cell line wrap; `None` for the default break (not
+/// written).
+pub(crate) fn line_wrap_str(v: CellLineWrap) -> MdResult<Option<&'static str>> {
+    Ok(match v {
+        CellLineWrap::Break => None,
+        CellLineWrap::Squeeze => Some("SQUEEZE"),
+        CellLineWrap::Keep => Some("KEEP"),
+        _ => return Err(unsupported("cell line wrap")),
+    })
+}
+
+pub(crate) fn line_wrap_from(s: &str) -> Option<CellLineWrap> {
+    Some(match s {
+        "SQUEEZE" => CellLineWrap::Squeeze,
+        "KEEP" => CellLineWrap::Keep,
         _ => return None,
     })
 }

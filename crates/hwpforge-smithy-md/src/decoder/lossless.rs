@@ -164,6 +164,7 @@ struct CellNode {
     row_span: u16,
     width: HwpUnit,
     background: Option<Color>,
+    line_wrap: hwpforge_core::table::CellLineWrap,
     paragraphs: Vec<Paragraph>,
 }
 
@@ -231,6 +232,7 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
             row_span: parse_optional_u16_attr(start, "td", "data-row-span")?.unwrap_or(1),
             width: parse_length_attr(start, "td", "data-width-unit", "data-width-mm")?,
             background: parse_optional_color_attr(start, "td", "data-background")?,
+            line_wrap: parse_line_wrap_attr(start)?,
             paragraphs: Vec::new(),
         })),
         "span" => Ok(OpenNode::Span(SpanNode {
@@ -453,7 +455,8 @@ fn attach_closed_node(
             };
 
             let mut table_cell =
-                TableCell::with_span(paragraphs, cell.width, cell.col_span, cell.row_span);
+                TableCell::with_span(paragraphs, cell.width, cell.col_span, cell.row_span)
+                    .with_line_wrap(cell.line_wrap);
             if let Some(background) = cell.background {
                 table_cell = table_cell.with_background(background);
             }
@@ -1276,6 +1279,26 @@ fn parse_optional_u16_attr(
     }
 }
 
+/// §19.22 D3: `data-line-wrap` (`SQUEEZE`, `KEEP`); missing = the default
+/// break. `BREAK` itself is not a written value and is refused like any
+/// other unknown spelling; a repeated name is refused.
+/// 이것을 실패시키는 것: 읽기 삭제 · 모르는 값을 기본값으로
+/// (`cell_line_wrap_round_trips`, `cell_line_wrap_attribute_errors`). The
+/// repeat is refused here; quick-xml's own duplicate check also catches it
+/// whenever another `<td>` lookup scans the whole list (one for an absent
+/// attribute does), so dropping this scan alone still refuses the repeat in
+/// `cell_line_wrap_attribute_errors`.
+fn parse_line_wrap_attr(start: &BytesStart<'_>) -> MdResult<hwpforge_core::table::CellLineWrap> {
+    match unique_attr(start, "td", g::LINE_WRAP)? {
+        None => Ok(hwpforge_core::table::CellLineWrap::Break),
+        Some(v) => g::line_wrap_from(&v).ok_or(MdError::LosslessInvalidAttribute {
+            element: "td",
+            attribute: g::LINE_WRAP,
+            value: v,
+        }),
+    }
+}
+
 fn parse_optional_color_attr(
     start: &BytesStart<'_>,
     element: &'static str,
@@ -1406,6 +1429,31 @@ mod tests {
         let sections = table(r#"data-caption="" data-caption-side="top""#).unwrap();
         let RunContent::Table(t) = &sections[0].paragraphs[0].runs[0].content else { panic!() };
         assert_eq!(t.caption.as_ref().unwrap().side, hwpforge_core::caption::CaptionSide::Top);
+    }
+
+    /// §19.22 D3: an unknown or default spelling, or a repeat, of
+    /// `data-line-wrap` is refused.
+    #[test]
+    fn cell_line_wrap_attribute_errors() {
+        let td = |attrs: &str| {
+            decode_lossless_sections(&section_wrap(&format!(
+                r#"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-col-span="1" data-row-span="1" data-width-unit="9000" {attrs}><p data-para-shape="0"><span data-char-shape="0">t</span></p></td></tr></table></p>"#
+            )))
+        };
+        for v in ["squeeze", "BREAK", ""] {
+            assert!(
+                matches!(
+                    td(&format!(r#"data-line-wrap="{v}""#)),
+                    Err(MdError::LosslessInvalidAttribute { attribute: "data-line-wrap", .. })
+                ),
+                "{v}"
+            );
+        }
+        assert!(matches!(
+            td(r#"data-line-wrap="KEEP" data-line-wrap="KEEP""#),
+            Err(MdError::LosslessParse { .. })
+        ));
+        assert!(td(r#"data-line-wrap="KEEP""#).is_ok());
     }
 
     /// F: `data-cell-zones` — each zone exactly five integers in range; an
