@@ -787,6 +787,10 @@ fn convert_paragraph_from(
         };
         // ledger↔방출 정합 자가검증: 예측 Core 총길이 == 실제 방출 텍스트
         // 총길이 (불일치 = ledger/방출 분기 — choke, §1g v5 변경 4).
+        // Both sides consume the parsed tree: this cannot detect characters
+        // lost before deserialization. Raw mixed-text fixtures independently
+        // assert wire lengths, Core text and cache boundaries below; comparing
+        // another tree-derived total here would retain the same blind spot.
         let emitted_core: u32 = runs
             .iter()
             .filter_map(|r| r.content.plain_text())
@@ -6811,6 +6815,48 @@ mod tests {
 mod ws_preserve_tests {
     use super::*;
     use crate::wire_xml::preserve_ws_only_text;
+
+    // 이것을 실패시키는 것: 선두·중간·꼬리 중 한 구간이라도 보호하지 않기,
+    // 또는 CDATA 공백을 무시하거나 ledger 에서 표식을 글자로 세기.
+    // Expected wire lengths come from the source fixture, never the parsed tree.
+    #[test]
+    fn mixed_spaces_keep_core_text_and_independent_wire_lengths() {
+        for (body, text, wire_len) in [
+            ("  <hp:fwSpace/>작계훈련", "  \u{1f}작계훈련", 7),
+            ("□<hp:fwSpace/> ", "□\u{1f} ", 3),
+            (" <hp:fwSpace/>  <hp:tab/>   <hp:lineBreak/> ", " \u{1f}  \t   \n ", 17),
+            ("&#32;<hp:nbSpace/>&#x20;<hp:fwSpace/>&#13;", " \u{a0} \u{1f}\r", 5),
+            ("\n \t<hp:fwSpace/>\n \t", "\n \t\u{1f}\n \t", 7),
+            ("<![CDATA[ ]]><hp:fwSpace/><![CDATA[ ]]>", " \u{1f} ", 3),
+            (" <![CDATA[ ]]> <!--x--><?pi x?><hp:fwSpace/> <![CDATA[끝]]>", "   \u{1f} 끝", 6),
+            (" <hp:markpenBegin/> <hp:markpenEnd/> ", "   ", 3),
+        ] {
+            let raw = format!("<hp:p><hp:run><hp:t>{body}</hp:t></hp:run></hp:p>");
+            let marked = preserve_ws_only_text(&raw);
+            let hx: HxParagraph = crate::decoder::xml_from_str(&marked).expect("parse");
+            let (map, _) = build_paragraph_wire_map(&hx).expect("map");
+            assert_eq!(map.wire_end(), wire_len, "{body}");
+            assert_eq!(map.core_end(), text.encode_utf16().count() as u32, "{body}");
+            assert_eq!(run_texts(&format!("<sec>{raw}</sec>")).concat(), text, "{body}");
+        }
+    }
+
+    // 이것을 실패시키는 것: ledger 에서 표식 제거를 빼거나 줄 경계 기록을 생략하기.
+    // The bookmark is at wire 15 / Core 8 (tab takes eight wire units).
+    #[test]
+    fn mixed_spaces_keep_cache_positions_and_zero_token_boundaries() {
+        let raw = r#"<sec><p><run><t>  <fwSpace/> <tab/>  끝</t><ctrl><bookmark name="b"/></ctrl><t>뒤</t></run><linesegarray><lineseg textpos="0"/><lineseg textpos="15"/><lineseg textpos="23"/></linesegarray></p></sec>"#;
+        let result = parse_section(raw, 0, &HashMap::new()).expect("parse");
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("cache");
+        assert_eq!(cache.lines.iter().map(|l| l.textpos).collect::<Vec<_>>(), [0, 8, 8]);
+        use hwpforge_core::layout::{LineBoundary, WireTokenKind};
+        assert_eq!(cache.lines[1].boundary, None);
+        assert_eq!(
+            cache.lines[2].boundary,
+            Some(LineBoundary::new(vec![WireTokenKind::Bookmark], None))
+        );
+    }
 
     #[test]
     fn ws_only_run_survives_section_parse() {

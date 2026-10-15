@@ -8,7 +8,7 @@
 //! - text-art line breaks: [`textart_text_to_wire`] and
 //!   [`textart_text_from_wire`] convert between Core's `\r\n` and Hancom's
 //!   `␍␊` in `hp:textart@text`;
-//! - whitespace-only text runs: [`preserve_ws_only_text`] marks them before
+//! - whitespace-only text nodes: [`preserve_ws_only_text`] marks them before
 //!   quick-xml's serde decode would drop them, and [`strip_ws_sentinel`]
 //!   removes the mark again.
 //!
@@ -398,33 +398,91 @@ fn push_tag<'a>(
 /// (a private-use character a real document has no reason to hold there).
 const WS_SENTINEL: char = '\u{E000}';
 
-/// A text element spelling the scanner looks for: opening prefix, closing tag.
-type TextTag = (&'static str, &'static str);
-
-/// Section parts write `<hp:t>`; the fragments some tests parse write `<t>`.
-const TEXT_TAGS: [TextTag; 2] = [("<hp:t", "</hp:t>"), ("<t", "</t>")];
-
-/// Marks every whitespace-only `<hp:t>` so quick-xml's serde decode keeps it.
+/// Marks whitespace-only character data directly inside every `<hp:t>` (or
+/// unprefixed `<t>`), including the gaps before, between and after children.
 ///
-/// quick-xml's serde decoder drops a text node that holds only whitespace,
-/// so `<hp:t> </hp:t>` (a space-only run, which Hancom writes too) would
-/// vanish. It judges after unescaping, so a run of whitespace references
-/// (`&#32;`, and `&#13;`, which quick-xml 0.42 writes for a lone CR) vanishes
-/// the same way. Before the parse, [`WS_SENTINEL`] is put in front of such
-/// content; [`strip_ws_sentinel`] takes it off where the text is read
-/// ([`HxText`](crate::schema::section::HxText) and the wire map). A document
-/// that itself holds a run of exactly the sentinel plus whitespace would lose
-/// that sentinel; no real document has been seen to.
+/// The serde decoder skips blank mixed-content entries independently of the
+/// reader's text-trimming setting. A mark keeps each entry alive; both Core
+/// emission and the wire ledger remove it with [`strip_ws_sentinel`].
+/// Consecutive text, character references and CDATA are one entry, even across
+/// comments and processing instructions, so they receive at most one mark.
 ///
-/// Mixed content (an element inside `<hp:t>`) and CDATA are left alone. A
-/// section uses one spelling of the text element, so the unprefixed `<t>`
-/// pass runs only when the prefixed pass found nothing to mark.
+/// Hancom writes spaces before `fwSpace` and after inline elements as document
+/// characters. The `<hp:t>` parent is the distinction: all its character data
+/// is text, including XML whitespace; indentation between paragraphs, runs or
+/// other structural elements is not. Guessing from newlines or the presence of
+/// children would erase valid text in pretty-printed documents too.
+///
+/// A document containing exactly the sentinel followed by whitespace retains
+/// the pre-existing sentinel ambiguity; no real document has been seen to.
 pub(crate) fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
-    let [prefixed, unprefixed] = TEXT_TAGS;
-    match mark_ws_only_text(xml, prefixed) {
-        Cow::Borrowed(_) => mark_ws_only_text(xml, unprefixed),
-        marked => marked,
+    let mut out: Option<String> = None;
+    let mut copied = 0;
+    let mut at = 0;
+    let mut parents = Vec::new();
+    while at < xml.len() {
+        let (end, blank) = text_group(xml, at);
+        if blank && parents.last() == Some(&true) {
+            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len()));
+            buf.push_str(&xml[copied..at]);
+            buf.push(WS_SENTINEL);
+            copied = at;
+        }
+        at = end;
+        if at == xml.len() {
+            break;
+        }
+        let rest = &xml[at..];
+        if rest.starts_with("<!DOCTYPE") {
+            at += doctype_len(rest.as_bytes());
+            continue;
+        }
+        let end = at + tag_len(rest.as_bytes());
+        let tag = &xml[at..end];
+        if tag.starts_with("</") {
+            parents.pop();
+        } else if !tag.ends_with("/>") {
+            let name_end = tag[1..]
+                .find(|c: char| is_xml_space(c) || c == '/' || c == '>')
+                .map_or(tag.len(), |p| p + 1);
+            parents.push(matches!(&tag[1..name_end], "hp:t" | "t"));
+        }
+        at = end;
     }
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&xml[copied..]);
+            Cow::Owned(buf)
+        }
+        None => Cow::Borrowed(xml),
+    }
+}
+
+/// Finds one serde character-data entry, stopping at an element or declaration.
+/// Comments and processing instructions contribute no characters; CDATA is
+/// literal text (its `&#32;` is not a character reference).
+fn text_group(xml: &str, mut at: usize) -> (usize, bool) {
+    let mut blank = true;
+    let mut nonempty = false;
+    while at < xml.len() {
+        let rest = &xml[at..];
+        if let Some(len) = markup_len(rest.as_bytes(), &NON_ELEMENT_MARKUP) {
+            if let Some(cdata) = rest[..len].strip_prefix("<![CDATA[") {
+                let content = cdata.strip_suffix("]]>").unwrap_or(cdata);
+                nonempty |= !content.is_empty();
+                blank &= content.chars().all(is_xml_space);
+            }
+            at += len;
+        } else if rest.starts_with('<') {
+            break;
+        } else {
+            let len = rest.find('<').unwrap_or(rest.len());
+            nonempty = true;
+            blank &= is_ws_only_wire_text(&rest[..len]);
+            at += len;
+        }
+    }
+    (at, nonempty && blank)
 }
 
 /// Whether escaped element content holds only XML whitespace: literal
@@ -492,65 +550,6 @@ fn doctype_len(rest: &[u8]) -> usize {
         i += 1;
     }
     rest.len()
-}
-
-/// One pass of [`preserve_ws_only_text`] for one spelling of the text element.
-///
-/// Comments, CDATA sections, processing instructions and the document type
-/// declaration are skipped: `<hp:t>`-shaped text inside them is character
-/// data, and marking it would plant [`WS_SENTINEL`] in, e.g., an equation
-/// script, or let a fake opening tag hide the real run after it.
-fn mark_ws_only_text<'a>(xml: &'a str, (open, close): TextTag) -> Cow<'a, str> {
-    let mut out: Option<String> = None;
-    let mut last = 0usize;
-    let mut search = 0usize;
-    while let Some(rel) = xml[search..].find('<') {
-        let tag_start = search + rel;
-        let rest = &xml[tag_start..];
-        if let Some(len) = markup_len(rest.as_bytes(), &NON_ELEMENT_MARKUP) {
-            search = tag_start + len;
-            continue;
-        }
-        if rest.starts_with("<!DOCTYPE") {
-            search = tag_start + doctype_len(rest.as_bytes());
-            continue;
-        }
-        if !rest.starts_with(open) {
-            search = tag_start + 1;
-            continue;
-        }
-        let after = &xml[tag_start + open.len()..];
-        // Not `<hp:tab/>` and the like: the name ends at `>` or whitespace.
-        let Some(first) = after.chars().next() else { break };
-        if first != '>' && !is_xml_space(first) {
-            search = tag_start + open.len();
-            continue;
-        }
-        let Some(gt_rel) = after.find('>') else { break };
-        // A self-closing `<hp:t/>` has no content.
-        if after[..gt_rel].ends_with('/') {
-            search = tag_start + open.len() + gt_rel + 1;
-            continue;
-        }
-        let content_start = tag_start + open.len() + gt_rel + 1;
-        let Some(close_rel) = xml[content_start..].find(close) else { break };
-        let content = &xml[content_start..content_start + close_rel];
-        if !content.is_empty() && is_ws_only_wire_text(content) {
-            let buf = out
-                .get_or_insert_with(|| String::with_capacity(xml.len() + WS_SENTINEL.len_utf8()));
-            buf.push_str(&xml[last..content_start]);
-            buf.push(WS_SENTINEL);
-            last = content_start;
-        }
-        search = content_start + close_rel + close.len();
-    }
-    match out {
-        Some(mut buf) => {
-            buf.push_str(&xml[last..]);
-            Cow::Owned(buf)
-        }
-        None => Cow::Borrowed(xml),
-    }
 }
 
 /// Takes off the [`WS_SENTINEL`] that [`preserve_ws_only_text`] put in front
@@ -704,18 +703,57 @@ mod ws_scanner_tests {
         );
     }
 
-    // Mixed content is left alone, and an element whose name only starts like
-    // the text element (`<hp:tbl>`) is not read as a run.
+    // An element whose name only starts like the text element (`<hp:tbl>`)
+    // is not read as text; spaces directly inside `<hp:t>` are characters.
     // 이것을 실패시키는 것: 요소 이름 뒤 글자 검사를 빼는 것 — `<hp:tbl>` 을 run 으로 읽어
     // 첫 `</hp:t>` 까지 건너뛰므로 그 안의 진짜 공백 run 이 표시되지 않는다.
     #[test]
-    fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
+    fn preserve_ws_only_text_distinguishes_text_from_structural_spaces() {
         let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
-        assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
+        assert_eq!(preserve_ws_only_text(xml), "<hp:t>\u{E000} <hp:tab/></hp:t><hp:tbl> </hp:tbl>");
         assert_eq!(
             preserve_ws_only_text("<hp:tbl><hp:t> </hp:t></hp:tbl>"),
             "<hp:tbl><hp:t>\u{E000} </hp:t></hp:tbl>"
         );
+    }
+
+    // 이것을 실패시키는 것: 선두·중간·꼬리 중 한 구간을 건너뛰거나, `hp:t` 만 보호하기.
+    #[test]
+    fn mixed_text_marks_each_blank_entry_in_both_spellings() {
+        let xml =
+            "<hp:t>  <hp:fwSpace/> &#32;<hp:tab/>끝<hp:lineBreak/>   </hp:t><t> <fwSpace/> </t>";
+        assert_eq!(
+            preserve_ws_only_text(xml),
+            "<hp:t>\u{E000}  <hp:fwSpace/>\u{E000} &#32;<hp:tab/>끝<hp:lineBreak/>\u{E000}   </hp:t><t>\u{E000} <fwSpace/>\u{E000} </t>"
+        );
+    }
+
+    // 이것을 실패시키는 것: 주석에서 글자 구간을 끊기, 또는 CDATA 를 무시하기.
+    #[test]
+    fn adjacent_character_data_gets_one_mark_only_when_all_blank() {
+        for (body, blank) in [
+            (" <!--x--> <![CDATA[ ]]> &#32;<?pi x?>", true),
+            ("<![CDATA[  ]]>", true),
+            (" <!--x-->끝", false),
+            (" <![CDATA[끝]]>", false),
+            ("<![CDATA[&#32;]]>", false),
+            ("<!--x--><?pi x?><![CDATA[]]>", false),
+        ] {
+            let xml = format!("<hp:t>{body}<hp:fwSpace/></hp:t>");
+            let mark = if blank { "\u{E000}" } else { "" };
+            assert_eq!(
+                preserve_ws_only_text(&xml),
+                format!("<hp:t>{mark}{body}<hp:fwSpace/></hp:t>")
+            );
+        }
+    }
+
+    // 이것을 실패시키는 것: 부모가 `<t>` 인지 확인하지 않기, 또는 속성 안 `>` 에서 태그를 끊기.
+    #[test]
+    fn indentation_and_child_payloads_are_not_text_entries() {
+        let xml =
+            "<sec>\n <p> <run> <hp:t attr='>'> <hp:tab> </hp:tab> </hp:t> </run> </p>\n</sec>";
+        assert_eq!(preserve_ws_only_text(xml), "<sec>\n <p> <run> <hp:t attr='>'>\u{E000} <hp:tab> </hp:tab>\u{E000} </hp:t> </run> </p>\n</sec>");
     }
 
     // 이것을 실패시키는 것: 공백이 아닌 참조(`&#65;`)나 escape 된 `&amp;#13;` 까지 공백으로
