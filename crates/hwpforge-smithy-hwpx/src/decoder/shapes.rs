@@ -191,7 +191,16 @@ pub(crate) fn settle_shape_frame(
         .chain(defining_points(control).iter().map(|p| (f64::from(p.x), f64::from(p.y))))
         .map(|p| map.apply(p))
         .collect();
+    // r4 M1 (same shape): the copy that tries the dropped box holds only the
+    // control's own fields — its text, caption and group children are set
+    // aside, the frame plan reads none of them — so a text box holding a
+    // chain of groups is not copied whole at every level.
+    // 이것을 실패시키는 것: 통째 복제로 되돌리기(`frame_checks_copy_no_text`).
+    let contents = take_contents(control);
     let mut dropped = control.clone();
+    put_contents(control, contents);
+    #[cfg(test)]
+    crate::work::tick_n(text_bytes_of(&dropped));
     drop_original_size(&mut dropped);
     let (Some(kept_plan), Some(dropped_plan)) =
         (frame_plan(control, &HWPX_POLICY), frame_plan(&dropped, &HWPX_POLICY))
@@ -212,11 +221,76 @@ pub(crate) fn settle_shape_frame(
     ) {
         FrameCheck::Kept => {}
         FrameCheck::Dropped(reason) => {
+            let contents = take_contents(control);
             *control = dropped;
+            put_contents(control, contents);
             ctx.content_lost("object_original_size", reason);
         }
         FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
     }
+}
+
+/// What a control holds besides its own fields: text, caption, group
+/// children.
+#[derive(Default)]
+struct Contents {
+    paragraphs: Vec<hwpforge_core::paragraph::Paragraph>,
+    caption: Option<hwpforge_core::caption::Caption>,
+    children: Vec<GroupChild>,
+}
+
+/// Moves `control`'s [`Contents`] out, leaving it empty of them.
+fn take_contents(control: &mut Control) -> Contents {
+    let mut out = Contents::default();
+    match control {
+        Control::TextBox { paragraphs, caption, .. }
+        | Control::Ellipse { paragraphs, caption, .. }
+        | Control::Polygon { paragraphs, caption, .. } => {
+            out.paragraphs = std::mem::take(paragraphs);
+            out.caption = caption.take();
+        }
+        Control::Rect { caption, .. }
+        | Control::Line { caption, .. }
+        | Control::Arc { caption, .. }
+        | Control::Curve { caption, .. }
+        | Control::ConnectLine { caption, .. } => out.caption = caption.take(),
+        Control::Group { children, .. } => out.children = std::mem::take(children),
+        _ => {}
+    }
+    out
+}
+
+/// Puts [`take_contents`]'s result back.
+fn put_contents(control: &mut Control, contents: Contents) {
+    match control {
+        Control::TextBox { paragraphs, caption, .. }
+        | Control::Ellipse { paragraphs, caption, .. }
+        | Control::Polygon { paragraphs, caption, .. } => {
+            *paragraphs = contents.paragraphs;
+            *caption = contents.caption;
+        }
+        Control::Rect { caption, .. }
+        | Control::Line { caption, .. }
+        | Control::Arc { caption, .. }
+        | Control::Curve { caption, .. }
+        | Control::ConnectLine { caption, .. } => *caption = contents.caption,
+        Control::Group { children, .. } => *children = contents.children,
+        _ => {}
+    }
+}
+
+/// Text bytes held in `control`'s paragraphs (tests count what a copy
+/// carries).
+#[cfg(test)]
+fn text_bytes_of(control: &Control) -> usize {
+    let mut holder =
+        hwpforge_core::paragraph::Paragraph::new(hwpforge_foundation::ParaShapeIndex::new(0));
+    holder.runs.push(Run::control(control.clone(), hwpforge_foundation::CharShapeIndex::new(0)));
+    let mut bytes = 0;
+    holder.for_each_paragraph(|p| {
+        bytes += p.runs.iter().filter_map(|r| r.content.as_text()).map(str::len).sum::<usize>();
+    });
+    bytes
 }
 
 /// S20: a top-level picture's size lock, and its original box checked
@@ -259,12 +333,17 @@ pub(crate) fn settle_picture_frame(
     .into_iter()
     .map(|p| map.apply(p))
     .collect();
-    let mut dropped = image.clone();
-    dropped.frame.original_size = None;
+    // The dropped box differs only in the frame field, so the plan is taken
+    // with it unset and the field put back — no copy of the picture and its
+    // caption (see `settle_shape_frame`).
+    let kept_plan = picture_frame_plan(image, &HWPX_POLICY);
+    let original = image.frame.original_size.take();
+    let dropped_plan = picture_frame_plan(image, &HWPX_POLICY);
+    image.frame.original_size = original;
     let extent = (map.a * f64::from(org.0), map.e * f64::from(org.1));
     match check_frame(
-        picture_frame_plan(image, &HWPX_POLICY).stored_positions(),
-        picture_frame_plan(&dropped, &HWPX_POLICY).stored_positions(),
+        kept_plan.stored_positions(),
+        dropped_plan.stored_positions(),
         &source,
         extent,
         displayed,
@@ -272,7 +351,7 @@ pub(crate) fn settle_picture_frame(
     ) {
         FrameCheck::Kept => {}
         FrameCheck::Dropped(reason) => {
-            *image = dropped;
+            image.frame.original_size = None;
             ctx.content_lost("object_original_size", reason);
         }
         FrameCheck::DrawnExtent(reason) => ctx.content_lost("shape_drawn_extent", reason),
@@ -7521,6 +7600,33 @@ mod frame_tests {
 
     const R6_POINTS: &str = r#"<hc:center x="280" y="280"/><hc:ax1 x="280" y="0"/><hc:ax2 x="560" y="280"/><hc:start1 x="0" y="0"/><hc:end1 x="0" y="0"/><hc:start2 x="0" y="0"/><hc:end2 x="0" y="0"/>"#;
 
+    /// Branch review r4 M1 (same shape): the copy the frame check tries the
+    /// dropped box on holds none of the shape's text — an ellipse with
+    /// 100,000 bytes of text copies none of them.
+    /// 이것을 실패시키는 것: 도형을 통째 복제하기(글 바이트만큼 센다).
+    #[test]
+    fn frame_checks_copy_no_text() {
+        let big = "x".repeat(100_000);
+        let text = format!(
+            r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>{big}</hp:t></hp:run></hp:p></hp:subList></hp:drawText>"#
+        );
+        let xml = shape(
+            "ellipse",
+            (560, 560),
+            (850, 850),
+            ("1.517943", "1.517943"),
+            1,
+            &format!("{text}{R6_POINTS}"),
+        );
+        crate::work::WORK.with(|w| w.set(0));
+        let (content, _) = decode(&xml);
+        let copied = crate::work::WORK.with(std::cell::Cell::get);
+        let Control::Ellipse { paragraphs, frame, .. } = control(content) else { panic!() };
+        assert_eq!(frame.original_size, Some(size(560, 560)), "the frame check ran");
+        assert_eq!(paragraphs[0].runs[0].content.as_text().map(str::len), Some(100_000));
+        assert_eq!(copied, 0);
+    }
+
     /// FR-T1/T2: the ministry's r6 bullet — original 560, shown 850, scale
     /// 1.517943, defining points in the original box, size locked — decodes
     /// to its frame with the points as stored, and writes them back.
@@ -7642,6 +7748,19 @@ mod frame_tests {
         let out = encode(content);
         assert!(out.contains(r#"<hp:orgSz width="1002" height="1000"/>"#), "{out}");
         assert!(out.contains(r#"protect="1""#), "{out}");
+    }
+
+    /// The same with text in the box: the dropped box keeps the text.
+    /// 이것을 실패시키는 것: 상자를 바꿀 때 글을 되돌려 넣지 않기.
+    #[test]
+    fn a_dropped_frame_keeps_the_shape_text() {
+        let text = r#"<hp:drawText lastWidth="0" name="" editable="0"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>안</hp:t></hp:run></hp:p></hp:subList></hp:drawText>"#;
+        let xml = shape("rect", (5_000_000, 1000), (1002, 1000), ("0.000200498", "1"), 1, text);
+        let (content, lost) = decode(&xml);
+        assert_eq!(lost, ["object_original_size"]);
+        let Control::TextBox { paragraphs, frame, .. } = control(content) else { panic!() };
+        assert_eq!(frame.original_size, None);
+        assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("안"));
     }
 
     /// §19.23.17 M2: original 10,000,000, shown 1004, scale 0.000100 — the
