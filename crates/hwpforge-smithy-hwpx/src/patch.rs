@@ -564,7 +564,12 @@ fn build_section_preservation(
     // the spans below still come from the original XML.
     // 이것을 실패시키는 것: 이 정규화를 지우기(F17 캡션의 " " 슬롯이 사라져
     // 보존 슬롯 수 불일치 — `caption_text_after_its_number_is_patched`).
-    let normalized = crate::wire_xml::preserve_ws_only_text(section_xml);
+    let normalized = crate::wire_xml::preserve_ws_only_text(section_xml).map_err(|error| {
+        HwpxError::XmlParse {
+            file: section_path.to_string(),
+            detail: crate::decoder::xml_error_detail(&error.into()),
+        }
+    })?;
     let hx_section: HxSection = xml_from_str(&normalized).map_err(|error| HwpxError::XmlParse {
         file: section_path.to_string(),
         detail: crate::decoder::xml_error_detail(&error),
@@ -2144,6 +2149,24 @@ mod tests {
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;
+
+    // 이것을 실패시키는 것: 보존 슬롯 전처리 생략(원문 표식 손실), 또는
+    // 전처리의 네임스페이스 오류 무시.
+    #[test]
+    fn source_marks_and_namespace_errors_in_preservation() {
+        let xml =
+            "<hs:sec><hp:p><hp:run><hp:t>&#xE000; <hp:fwSpace/>끝</hp:t></hp:run></hp:p></hs:sec>";
+        let section = section_from_parsed(parse_section(xml, 0, &HashMap::new()).unwrap());
+        let preservation =
+            build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
+        assert_eq!(preservation.text_slots[0].original_text, "\u{E000} \u{1f}끝");
+        let xml = "<q:sec xmlns:q='urn:&unknown;'/>";
+        let section = Section::with_paragraphs(Vec::new(), hwpforge_core::PageSettings::a4());
+        let error = build_section_preservation(xml, "Contents/section2.xml", &section).unwrap_err();
+        assert!(
+            matches!(error, HwpxError::XmlParse { file, .. } if file == "Contents/section2.xml")
+        );
+    }
 
     /// Builds an in-memory ZIP whose entries are `(name, size)` runs of zeros.
     fn zeros_zip(entries: &[(&str, usize)]) -> Vec<u8> {

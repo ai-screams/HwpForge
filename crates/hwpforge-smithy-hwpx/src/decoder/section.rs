@@ -158,7 +158,10 @@ pub(crate) fn parse_section_with_images(
     image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let xml = crate::wire_xml::preserve_ws_only_text(xml);
+    let xml = crate::wire_xml::preserve_ws_only_text(xml).map_err(|e| HwpxError::XmlParse {
+        file: file_hint.clone(),
+        detail: xml_error_detail(&e.into()),
+    })?;
     let section: HxSection = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: xml_error_detail(&e) })?;
 
@@ -496,7 +499,7 @@ pub(crate) fn build_wire_map_over_runs(
                             HxTextPart::Text(s) => {
                                 // The ws-only sentinel is the decoder's own mark,
                                 // not wire text: count what the run emits.
-                                let s = crate::wire_xml::strip_ws_sentinel(s);
+                                let s = s.as_str();
                                 let n = s.encode_utf16().count() as u32;
                                 if n == 0 {
                                     continue;
@@ -883,7 +886,7 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
         // (review r1). 이것을 실패시키는 것: 내용 없는 표지 `<hp:t>` 를 끝 run
         // 으로 보기(`marker_runs_are_not_end_marks`).
         [(HxRunChildKind::Text, idx)] => hx.texts.get(idx).is_some_and(|t| {
-            t.parts.iter().all(|part| matches!(part, HxTextPart::Text(s) if s.is_empty()))
+            t.parts.iter().all(|part| matches!(part, HxTextPart::Text(s) if s.as_str().is_empty()))
         }),
         _ => false,
     }
@@ -2982,7 +2985,10 @@ pub(crate) fn parse_master_page(
     use hwpforge_core::section::{MasterPage, MasterPageSpecial};
 
     let file = format!("Contents/masterpage{global}.xml");
-    let xml = crate::wire_xml::preserve_ws_only_text(xml);
+    let xml = crate::wire_xml::preserve_ws_only_text(xml).map_err(|e| HwpxError::XmlParse {
+        file: file.clone(),
+        detail: xml_error_detail(&e.into()),
+    })?;
     let hx: crate::schema::section::HxMasterPage = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file, detail: xml_error_detail(&e) })?;
     let mut ctx = DecodeCtx::for_master_page(section_index, global);
@@ -6816,6 +6822,66 @@ mod ws_preserve_tests {
     use super::*;
     use crate::wire_xml::preserve_ws_only_text;
 
+    // 이것을 실패시키는 것: 원문 U+E000 삭제, q 접두사의 공백 보호 누락,
+    // ledger에서 이스케이프 표식 집계, 또는 바탕쪽의 공백 전처리 생략.
+    #[test]
+    fn source_marks_and_namespace_aliases_keep_text_ledger_and_master_page() {
+        for (body, expected) in
+            [("&#xE000; <q:fwSpace/>끝", "\u{E000} \u{1f}끝"), ("  <q:fwSpace/>끝", "  \u{1f}끝")]
+        {
+            let para = format!(
+                "<q:p><q:run><q:t>{body}</q:t></q:run><q:linesegarray><q:lineseg textpos='0'/><q:lineseg textpos='2'/><q:lineseg textpos='4'/></q:linesegarray></q:p>"
+            );
+            let ns = "xmlns:q='http://www.hancom.co.kr/hwpml/2011/paragraph'";
+            let raw = format!("<q:p {ns}><q:run><q:t>{body}</q:t></q:run></q:p>");
+            let marked = preserve_ws_only_text(&raw).unwrap();
+            let hx: HxParagraph = crate::decoder::xml_from_str(&marked).unwrap();
+            let (map, _) = build_paragraph_wire_map(&hx).unwrap();
+            assert_eq!((map.wire_end(), map.core_end()), (4, 4));
+            let result =
+                parse_section(&format!("<sec {ns}>{para}</sec>"), 0, &HashMap::new()).unwrap();
+            assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+            let p = &result.paragraphs[0];
+            assert_eq!(p.text_content(), expected);
+            assert_eq!(
+                p.layout_cache
+                    .as_ref()
+                    .unwrap()
+                    .lines
+                    .iter()
+                    .map(|l| l.textpos)
+                    .collect::<Vec<_>>(),
+                [0, 2, 4]
+            );
+            let (master, warnings) = parse_master_page(
+                &format!("<masterPage {ns}><q:subList>{para}</q:subList></masterPage>"),
+                0,
+                0,
+                &HashMap::new(),
+            )
+            .unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(master.paragraphs[0], *p);
+        }
+    }
+
+    // 이것을 실패시키는 것: 섹션/바탕쪽 전처리의 네임스페이스 오류 무시.
+    #[test]
+    fn namespace_scan_errors_name_the_section_or_master_part() {
+        let invalid = "xmlns:q='urn:&unknown;'";
+        let section =
+            parse_section(&format!("<q:sec {invalid}/>"), 2, &HashMap::new()).unwrap_err();
+        assert!(
+            matches!(section, HwpxError::XmlParse { file, .. } if file == "Contents/section2.xml")
+        );
+        let master =
+            parse_master_page(&format!("<q:masterPage {invalid}/>"), 2, 3, &HashMap::new())
+                .unwrap_err();
+        assert!(
+            matches!(master, HwpxError::XmlParse { file, .. } if file == "Contents/masterpage3.xml")
+        );
+    }
+
     // 이것을 실패시키는 것: 선두·중간·꼬리 중 한 구간이라도 보호하지 않기,
     // 또는 CDATA 공백을 무시하거나 ledger 에서 표식을 글자로 세기.
     // Expected wire lengths come from the source fixture, never the parsed tree.
@@ -6832,7 +6898,7 @@ mod ws_preserve_tests {
             (" <hp:markpenBegin/> <hp:markpenEnd/> ", "   ", 3),
         ] {
             let raw = format!("<hp:p><hp:run><hp:t>{body}</hp:t></hp:run></hp:p>");
-            let marked = preserve_ws_only_text(&raw);
+            let marked = preserve_ws_only_text(&raw).unwrap();
             let hx: HxParagraph = crate::decoder::xml_from_str(&marked).expect("parse");
             let (map, _) = build_paragraph_wire_map(&hx).expect("map");
             assert_eq!(map.wire_end(), wire_len, "{body}");
@@ -6911,6 +6977,7 @@ mod ws_preserve_tests {
             let xml = preserve_ws_only_text(&format!(
                 r#"<hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>가</hp:t></hp:run><hp:run charPrIDRef="0"><hp:t>{wire}</hp:t></hp:run></hp:p>"#
             ))
+            .unwrap()
             .into_owned();
             let hx: HxParagraph = crate::decoder::xml_from_str(&xml).expect("parse");
             let (map, _) = build_paragraph_wire_map(&hx).expect("map");
@@ -6921,7 +6988,7 @@ mod ws_preserve_tests {
     // Inside a run-local field the body text is a zero-Core span `(n,0)`, which
     // the length check cannot see; a miscounted `n` would shift every later
     // textpos silently. A one-unit `&#13;` body must map like a one-unit `x`.
-    // 이것을 실패시키는 것: 와이어 맵에서 `strip_ws_sentinel` 을 빼는 것 — `&#13;` 가 2 로
+    // 이것을 실패시키는 것: 와이어 맵에서 `PreservedText::as_str` 을 빼는 것 — `&#13;` 가 2 로
     // 세어져 뒤 줄의 Core 좌표가 `x` 판과 달라진다.
     #[test]
     fn a_field_body_of_whitespace_references_maps_like_one_character() {

@@ -1,7 +1,7 @@
 //! Whitespace is text at every mixed-content boundary, including nested paragraphs.
 #![cfg(feature = "hwpx")]
 
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
 use hwpforge::core::control::Control;
 use hwpforge::core::image::ImageStore;
@@ -156,5 +156,68 @@ fn to_md_keeps_spaces_around_inline_elements() {
         let md = to_md(&bytes, &MdExportOptions::default().with_mode(MdMode::Styled)).unwrap();
         assert!(md.markdown.contains("  \u{1f}  "), "{}", md.markdown);
         assert!(md.markdown.contains("끝\u{1f} "), "{}", md.markdown);
+    }
+}
+
+// 이것을 실패시키는 것: 선두 원문 표식 이스케이프 생략, q 별칭 공백 보호 누락,
+// 또는 속성 탭 경로에서 이중 표식 복원 생략(캐시 유무·본문·칸·글상자 모두 검사).
+#[test]
+fn source_marks_and_namespace_aliases_round_trip_with_cache_and_rich_tabs() {
+    for cached in [false, true] {
+        for rich_tab in [false, true] {
+            let bytes = package(cached, rich_tab);
+            let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            for i in 0..input.len() {
+                let mut entry = input.by_index(i).unwrap();
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                if entry.name() == "Contents/section0.xml" {
+                    body = String::from_utf8(body)
+                        .unwrap()
+                        .replace("<hp:t>  <hp:fwSpace/>", "<hp:t>&#xE000; <hp:fwSpace/>")
+                        .replace("hp:", "q:")
+                        .replace("xmlns:hp=", "xmlns:q=")
+                        .into_bytes();
+                }
+                output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                output.write_all(&body).unwrap();
+            }
+            let bytes = output.finish().unwrap().into_inner();
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+            let expected = TEXT.replacen("  ", "\u{E000} ", 1);
+            let mut count = 0;
+            decoded.document.for_each_paragraph(|p| {
+                if p.text_content().contains('끝') {
+                    count += 1;
+                    assert_eq!(p.text_content(), format!("{expected}뒤"));
+                    assert_eq!(p.layout_cache.is_some(), cached);
+                    if let Some(cache) = &p.layout_cache {
+                        assert_eq!(
+                            cache.lines.iter().map(|l| l.textpos).collect::<Vec<_>>(),
+                            [0, 3, 15]
+                        );
+                    }
+                }
+            });
+            assert_eq!(count, 3);
+            let encoded = HwpxEncoder::encode_with_diagnostics(
+                &decoded.document.clone().validate().unwrap(),
+                &decoded.style_store,
+                &decoded.image_store,
+                EncodeOptions::default().with_emit_layout_cache(cached),
+            )
+            .unwrap();
+            assert!(encoded.warnings.is_empty(), "{:?}", encoded.warnings);
+            let canonical = if rich_tab {
+                WIRE.replace("<hp:tab/>", r#"<hp:tab width="1200" leader="1" type="2"/>"#)
+            } else {
+                WIRE.into()
+            }
+            .replacen("  ", "\u{E000} ", 1);
+            assert_eq!(section(&encoded.bytes).matches(&canonical).count(), 3);
+            assert_eq!(HwpxDecoder::decode(&encoded.bytes).unwrap().document, decoded.document);
+        }
     }
 }

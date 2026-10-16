@@ -889,7 +889,7 @@ impl HxText {
         if s.is_empty() {
             Self { parts: Vec::new() }
         } else {
-            Self { parts: vec![HxTextPart::Text(s)] }
+            Self { parts: vec![HxTextPart::Text(crate::wire_xml::PreservedText::new(s))] }
         }
     }
 
@@ -907,7 +907,7 @@ impl HxText {
         self.parts
             .iter()
             .map(|p| match p {
-                HxTextPart::Text(s) => crate::wire_xml::strip_ws_sentinel(s),
+                HxTextPart::Text(s) => s.as_str(),
                 HxTextPart::LineBreak {} => "\n",
                 HxTextPart::Tab { .. } => "\t",
                 HxTextPart::FwSpace {} => "\u{001F}",
@@ -956,11 +956,9 @@ impl HxText {
         }
 
         let segments = self.parts.iter().filter_map(|p| match p {
-            HxTextPart::Text(s) if s.is_empty() => None,
+            HxTextPart::Text(s) if s.as_str().is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => {
-                Some(InlineSegment::Plain(crate::wire_xml::strip_ws_sentinel(s).to_string()))
-            }
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.as_str().to_string())),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
@@ -983,7 +981,7 @@ impl HxText {
 pub enum HxTextPart {
     /// Plain text content.
     #[serde(rename = "$text")]
-    Text(String),
+    Text(crate::wire_xml::PreservedText),
     /// `<hp:lineBreak/>` — line break within a text run.
     #[serde(rename(serialize = "hp:lineBreak", deserialize = "lineBreak"))]
     LineBreak {},

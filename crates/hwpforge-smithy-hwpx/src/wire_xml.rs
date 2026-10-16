@@ -9,10 +9,10 @@
 //!   [`textart_text_from_wire`] convert between Core's `\r\n` and Hancom's
 //!   `␍␊` in `hp:textart@text`;
 //! - whitespace-only text nodes: [`preserve_ws_only_text`] marks them before
-//!   quick-xml's serde decode would drop them, and [`strip_ws_sentinel`]
+//!   quick-xml's serde decode would drop them, and [`PreservedText::as_str`]
 //!   removes the mark again.
 //!
-//! Every function here scans raw XML text; none of them parses XML.
+//! The whitespace scanner also resolves namespace declarations on start tags.
 
 use std::borrow::Cow;
 
@@ -394,16 +394,16 @@ fn push_tag<'a>(
     }
 }
 
-/// The mark [`preserve_ws_only_text`] puts in front of a whitespace-only run
-/// (a private-use character a real document has no reason to hold there).
+/// The mark for blank entries; a source entry starting with this character
+/// is escaped by prepending one more, so even repeated marks are reversible.
 const WS_SENTINEL: char = '\u{E000}';
 
-/// Marks whitespace-only character data directly inside every `<hp:t>` (or
-/// unprefixed `<t>`), including the gaps before, between and after children.
+/// Marks whitespace-only character data directly inside paragraph-namespace
+/// `t` elements (or unqualified `t`), including gaps around children.
 ///
 /// The serde decoder skips blank mixed-content entries independently of the
 /// reader's text-trimming setting. A mark keeps each entry alive; both Core
-/// emission and the wire ledger remove it with [`strip_ws_sentinel`].
+/// emission and the wire ledger remove it with [`PreservedText::as_str`].
 /// Consecutive text, character references and CDATA are one entry, even across
 /// comments and processing instructions, so they receive at most one mark.
 ///
@@ -413,16 +413,77 @@ const WS_SENTINEL: char = '\u{E000}';
 /// other structural elements is not. Guessing from newlines or the presence of
 /// children would erase valid text in pretty-printed documents too.
 ///
-/// A document containing exactly the sentinel followed by whitespace retains
-/// the pre-existing sentinel ambiguity; no real document has been seen to.
-pub(crate) fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
+/// Source entries starting with the mark are escaped, including references
+/// and CDATA. Serde accepts `t` by local name even in other namespaces, so
+/// escaping covers those entries too; only paragraph text gets blank marks.
+/// Namespace errors are returned before any partially rewritten XML is used.
+pub(crate) fn preserve_ws_only_text(xml: &str) -> Result<Cow<'_, str>, quick_xml::Error> {
+    preserve_ws_only_text_counted(xml, &mut NamespaceWork::default())
+}
+
+// Counts actual URI input traversed by the classifier, not elapsed time or an
+// estimate from document size. No counters are stored in production builds.
+#[derive(Default, Debug)]
+struct NamespaceWork {
+    #[cfg(test)]
+    uri_bytes: usize,
+    #[cfg(test)]
+    classifications: usize,
+    #[cfg(test)]
+    binding_probes: usize,
+}
+
+const PARAGRAPH_NS: &str = "http://www.hancom.co.kr/hwpml/2011/paragraph";
+
+impl NamespaceWork {
+    fn classify(&mut self, uri: &str) -> Result<bool, quick_xml::Error> {
+        #[cfg(test)]
+        {
+            self.uri_bytes += uri.len();
+            self.classifications += 1;
+        }
+        Ok(quick_xml::escape::unescape(uri)? == PARAGRAPH_NS)
+    }
+
+    fn probe(&mut self) {
+        #[cfg(test)]
+        {
+            self.binding_probes += 1;
+        }
+    }
+}
+
+fn preserve_ws_only_text_counted<'a>(
+    xml: &'a str,
+    work: &mut NamespaceWork,
+) -> Result<Cow<'a, str>, quick_xml::Error> {
+    use quick_xml::events::BytesStart;
+    use quick_xml::name::{Namespace, NamespaceError, NamespaceResolver, PrefixDeclaration};
+
+    let mut namespaces = NamespaceResolver::default();
+    let namespace_limit = crate::decoder::XML_MAX_NAMESPACE_BINDINGS;
+    // One extra slot is for our implicit binding, not a source declaration.
+    // 이것을 실패시키는 것: +1 생략 — 유효한 원문 128개 바인딩을 거부한다.
+    namespaces.set_max_namespace_bindings(namespace_limit + 1);
+    namespaces.add(PrefixDeclaration::Named("hp"), Namespace(PARAGRAPH_NS))?;
+    // Cache declaration classifications with the same scope as the resolver.
+    // Only prefixes are compared at element lookup; URI bytes are never hashed,
+    // compared or unescaped again. The binding count is bounded above by 131.
+    let mut bindings = vec![
+        (Some("xml".to_owned()), false),
+        (Some("xmlns".to_owned()), false),
+        (Some("hp".to_owned()), true),
+    ];
     let mut out: Option<String> = None;
     let mut copied = 0;
     let mut at = 0;
     let mut parents = Vec::new();
     while at < xml.len() {
-        let (end, blank) = text_group(xml, at);
-        if blank && parents.last() == Some(&true) {
+        let (end, blank, first) = text_group(xml, at);
+        let (is_text, preserve_blank, _) = parents.last().copied().unwrap_or((false, false, 0));
+        // 이것을 실패시키는 것: 원문 선두 표식 이스케이프 생략 또는 URI 제한으로
+        // 외부 네임스페이스의 serde `t` 텍스트를 이스케이프하지 않기.
+        if is_text && PreservedText::needs_mark(blank && preserve_blank, first) {
             let buf = out.get_or_insert_with(|| String::with_capacity(xml.len()));
             buf.push_str(&xml[copied..at]);
             buf.push(WS_SENTINEL);
@@ -440,28 +501,78 @@ pub(crate) fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
         let end = at + tag_len(rest.as_bytes());
         let tag = &xml[at..end];
         if tag.starts_with("</") {
-            parents.pop();
-        } else if !tag.ends_with("/>") {
+            if let Some((_, _, bindings_before)) = parents.pop() {
+                namespaces.pop();
+                bindings.truncate(bindings_before);
+            }
+        } else {
             let name_end = tag[1..]
                 .find(|c: char| is_xml_space(c) || c == '/' || c == '>')
                 .map_or(tag.len(), |p| p + 1);
-            parents.push(matches!(&tag[1..name_end], "hp:t" | "t"));
+            let content = tag[1..].trim_end_matches('>').trim_end_matches('/');
+            let start = BytesStart::from_content(content, name_end - 1);
+            // 이것을 실패시키는 것: 내부 여유 슬롯을 오류의 제한값으로 보고하기.
+            namespaces.push(&start).map_err(|error| match error {
+                NamespaceError::TooManyBindings(_) => {
+                    NamespaceError::TooManyBindings(namespace_limit)
+                }
+                other => other,
+            })?;
+            let bindings_before = bindings.len();
+            // Mirror push's attribute iteration, including its malformed-attribute
+            // stop rule. The downstream XML parser diagnoses malformed attributes.
+            for attr in start.attributes().with_checks(false) {
+                let Ok(attr) = attr else { break };
+                if let Some(prefix) = attr.key.as_namespace_binding() {
+                    let prefix = match prefix {
+                        PrefixDeclaration::Default => None,
+                        // Resolver validates these but does not allocate a binding.
+                        // 이것을 실패시키는 것: 예약 접두사 재선언을 캐시에 누적하기.
+                        PrefixDeclaration::Named("xml" | "xmlns") => continue,
+                        PrefixDeclaration::Named(prefix) => Some(prefix.to_owned()),
+                    };
+                    // 이것을 실패시키는 것: 분류를 요소 조회로 이동하여 URI를 재처리하기,
+                    // 참조 해석 생략, 또는 default/named 빈 URI를 같은 뜻으로 취급하기.
+                    let paragraph =
+                        work.classify(&attr.value)? || (prefix.is_none() && attr.value.is_empty());
+                    bindings.push((prefix, paragraph));
+                }
+            }
+            let (local, prefix) = start.name().decompose();
+            let prefix = prefix.map(|p| p.into_inner());
+            let is_text = local.as_ref() == "t";
+            let paragraph = bindings
+                .iter()
+                .rev()
+                .find(|(bound, _)| {
+                    work.probe();
+                    bound.as_deref() == prefix
+                })
+                .map_or(prefix.is_none(), |(_, paragraph)| *paragraph);
+            // 이것을 실패시키는 것: 빈 요소의 xmlns 범위를 다음 형제로 누출하기.
+            if tag.ends_with("/>") {
+                namespaces.pop();
+                bindings.truncate(bindings_before);
+            } else {
+                parents.push((is_text, is_text && paragraph, bindings_before));
+            }
         }
         at = end;
     }
     match out {
         Some(mut buf) => {
             buf.push_str(&xml[copied..]);
-            Cow::Owned(buf)
+            Ok(Cow::Owned(buf))
         }
-        None => Cow::Borrowed(xml),
+        None => Ok(Cow::Borrowed(xml)),
     }
 }
 
 /// Finds one serde character-data entry, stopping at an element or declaration.
 /// Comments and processing instructions contribute no characters; CDATA is
 /// literal text (its `&#32;` is not a character reference).
-fn text_group(xml: &str, mut at: usize) -> (usize, bool) {
+fn text_group(xml: &str, mut at: usize) -> (usize, bool, Option<char>) {
+    let mut first = None;
     let mut blank = true;
     let mut nonempty = false;
     while at < xml.len() {
@@ -469,6 +580,11 @@ fn text_group(xml: &str, mut at: usize) -> (usize, bool) {
         if let Some(len) = markup_len(rest.as_bytes(), &NON_ELEMENT_MARKUP) {
             if let Some(cdata) = rest[..len].strip_prefix("<![CDATA[") {
                 let content = cdata.strip_suffix("]]>").unwrap_or(cdata);
+                // 이것을 실패시키는 것: CDATA 선두 표식을 읽지 않거나, 앞선
+                // 텍스트가 있는데 CDATA의 선두로 덮어쓰기.
+                if first.is_none() {
+                    first = content.chars().next();
+                }
                 nonempty |= !content.is_empty();
                 blank &= content.chars().all(is_xml_space);
             }
@@ -478,11 +594,23 @@ fn text_group(xml: &str, mut at: usize) -> (usize, bool) {
         } else {
             let len = rest.find('<').unwrap_or(rest.len());
             nonempty = true;
+            // Only the first character matters for escaping. Unescape just a
+            // leading reference, not the whole entry (later entities may be
+            // unknown to this scanner and are diagnosed by serde).
+            if first.is_none() {
+                first = if rest.starts_with('&') {
+                    rest[..len].find(';').and_then(|end| {
+                        quick_xml::escape::unescape(&rest[..=end]).ok()?.chars().next()
+                    })
+                } else {
+                    rest.chars().next()
+                };
+            }
             blank &= is_ws_only_wire_text(&rest[..len]);
             at += len;
         }
     }
-    (at, nonempty && blank)
+    (at, nonempty && blank, first)
 }
 
 /// Whether escaped element content holds only XML whitespace: literal
@@ -552,16 +680,42 @@ fn doctype_len(rest: &[u8]) -> usize {
     rest.len()
 }
 
-/// Takes off the [`WS_SENTINEL`] that [`preserve_ws_only_text`] put in front
-/// of a whitespace-only run. It mirrors that condition exactly: the mark comes
-/// off only when the rest is non-empty XML whitespace.
-pub(crate) fn strip_ws_sentinel(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix(WS_SENTINEL) {
-        if !rest.is_empty() && rest.chars().all(is_xml_space) {
-            return rest;
+/// Character data in the preprocessed XML representation, never a raw Core string.
+/// The private payload prevents inline parts and `HxText::new` from bypassing
+/// the same escaping rule. Deserialize accepts only the scanner's wire form;
+/// consumers get source text exclusively through `as_str`.
+#[derive(Debug, Clone, serde::Deserialize, PartialEq)]
+#[serde(transparent)]
+pub(crate) struct PreservedText(String);
+
+impl PreservedText {
+    fn needs_mark(blank: bool, first: Option<char>) -> bool {
+        blank || first == Some(WS_SENTINEL)
+    }
+
+    pub(crate) fn new(source: String) -> Self {
+        let blank = !source.is_empty() && source.chars().all(is_xml_space);
+        // 이것을 실패시키는 것: 생성자에서 원문을 그대로 저장하기.
+        if Self::needs_mark(blank, source.chars().next()) {
+            Self(format!("{WS_SENTINEL}{source}"))
+        } else {
+            Self(source)
         }
     }
-    s
+
+    /// Removes exactly one transport mark; the returned source is never
+    /// passed through this operation again, even when it looks like an escape.
+    pub(crate) fn as_str(&self) -> &str {
+        let s = self.0.as_str();
+        if let Some(rest) = s.strip_prefix(WS_SENTINEL) {
+            // 이것을 실패시키는 것: 이중 표식 복원 생략 또는 모든 선두 표식 제거.
+            if rest.starts_with(WS_SENTINEL) || (!rest.is_empty() && rest.chars().all(is_xml_space))
+            {
+                return rest;
+            }
+        }
+        s
+    }
 }
 
 #[cfg(test)]
@@ -677,6 +831,147 @@ mod clean_font_name_tests {
 #[cfg(test)]
 mod ws_scanner_tests {
     use super::*;
+
+    fn preserve_ws_only_text(xml: &str) -> Cow<'_, str> {
+        super::preserve_ws_only_text(xml).expect("namespace scan")
+    }
+
+    // 이것을 실패시키는 것: 선두 원문 표식 이스케이프 생략, CDATA/참조의 첫 문자
+    // 누락, 이전 첫 문자 덮어쓰기, 또는 두 표식 복원 시 전부 제거하기.
+    #[test]
+    fn source_marks_are_reversibly_escaped_across_character_data() {
+        for (wire, decoded) in [
+            ("\u{E000} ", "\u{E000} "),
+            ("&#xE000; ", "\u{E000} "),
+            ("&#57344; ", "\u{E000} "),
+            ("&#x000e000; ", "\u{E000} "),
+            ("<![CDATA[\u{E000} ]]>", "\u{E000} "),
+            ("<!--x--><?pi x?><![CDATA[]]>&#xE000; ", "\u{E000} "),
+            ("\u{E000}<!--x--><![CDATA[ ]]>&#32;", "\u{E000}  "),
+            ("<![CDATA[\u{E000}]]><!--x-->끝", "\u{E000}끝"),
+            ("\u{E000}", "\u{E000}"),
+            ("\u{E000}\u{E000} ", "\u{E000}\u{E000} "),
+            ("&#xE000;&#xE000;&#xE000;끝", "\u{E000}\u{E000}\u{E000}끝"),
+            ("&#xE000;끝", "\u{E000}끝"),
+            ("&amp;#xE000; ", "&#xE000; "),
+            ("x<![CDATA[\u{E000} ]]>", "x\u{E000} "),
+            ("<![CDATA[x]]>&#xE000; ", "x\u{E000} "),
+            (" <!--x-->&#xE000; ", " \u{E000} "),
+        ] {
+            // Foreign/unknown t is still accepted by serde's local-name mapping.
+            for tag in ["t", "hp:t", "q:t xmlns:q='urn:foreign'", "z:t"] {
+                let end = tag.split_whitespace().next().unwrap();
+                let xml = format!("<{tag}>{wire}</{end}>");
+                let marked = preserve_ws_only_text(&xml);
+                let want = if decoded.starts_with(WS_SENTINEL) {
+                    format!("<{tag}>{WS_SENTINEL}{wire}</{end}>")
+                } else {
+                    xml.clone()
+                };
+                assert_eq!(marked, want, "{wire:?}");
+                let hx: crate::schema::section::HxText =
+                    crate::decoder::xml_from_str(&marked).unwrap();
+                assert_eq!(hx.text(), decoded, "{wire:?}");
+            }
+        }
+        let script = "<hp:script>\u{E000} </hp:script>";
+        assert_eq!(preserve_ws_only_text(script), script);
+    }
+
+    // 이것을 실패시키는 것: 접두사 철자 비교, URI 무시, local name 무시,
+    // 무접두 호환 삭제, 미선언 접두사 허용, 닫는/빈 요소에서 xmlns 범위 복구 생략,
+    // 또는 참조로 쓴 URI를 원문 바이트로 비교하기.
+    #[test]
+    fn namespace_uri_local_name_and_scope_select_blank_text() {
+        let ns = "http://www.hancom.co.kr/hwpml/2011/paragraph";
+        for (xml, count) in [
+            (format!("<q:t xmlns:q='{ns}'>  <q:fwSpace/>끝</q:t>"), 1),
+            (format!("<t xmlns='{ns}'>  <fwSpace/>끝</t>"), 1),
+            ("<t>  <fwSpace/>끝</t>".into(), 1),
+            ("<hp:t>  <hp:fwSpace/>끝</hp:t>".into(), 1),
+            ("<q:t>  <q:fwSpace/>끝</q:t>".into(), 0),
+            ("<hp:t xmlns:hp='urn:foreign'>  <hp:fwSpace/>끝</hp:t>".into(), 0),
+            ("<t xmlns='urn:foreign'>  <fwSpace/>끝</t>".into(), 0),
+            (format!("<q:tbl xmlns:q='{ns}'> </q:tbl>"), 0),
+            (
+                format!(
+                    "<r xmlns:q='{ns}'><x xmlns:q='urn:foreign'><q:t> </q:t></x><q:t> </q:t></r>"
+                ),
+                1,
+            ),
+            (format!("<r xmlns:q='{ns}'><x xmlns:q='urn:foreign'/><q:t> </q:t></r>"), 1),
+            (format!("<r xmlns='{ns}'><x xmlns='urn:foreign'><t> </t></x><t> </t></r>"), 1),
+            ("<r xmlns='urn:foreign'><t xmlns=''> </t><t> </t></r>".into(), 1),
+            (format!("<q:t xmlns:q='{}'> </q:t>", ns.replace("paragraph", "paragr&#x61;ph")), 1),
+        ] {
+            let marked = preserve_ws_only_text(&xml);
+            assert_eq!(marked.matches(WS_SENTINEL).count(), count, "{xml}");
+            assert_eq!(marked.replace(WS_SENTINEL, ""), xml);
+        }
+    }
+
+    // 이것을 실패시키는 것: 네임스페이스 오류를 무시하고 부분 수정 XML을 반환하기.
+    #[test]
+    fn namespace_errors_do_not_return_partially_marked_xml() {
+        for binding in ["xmlns:xml='urn:invalid'", "xmlns:q='urn:&unknown;'"] {
+            let xml = format!("<r><t> </t><q:t {binding}> </q:t></r>");
+            assert!(super::preserve_ws_only_text(&xml).is_err());
+        }
+    }
+
+    // 이것을 실패시키는 것: 선언의 URI 해석을 매 요소 조회 때 반복하기.
+    // 입력 K배 긴 URI와 K개 요소에서 실제 해석 바이트/접두사 조회를 센다.
+    #[test]
+    fn namespace_uri_work_is_linear_in_declaration_and_element_bytes() {
+        let mut totals = Vec::new();
+        for k in [1_000, 2_000, 4_000] {
+            let uri = format!("urn:{}", "&#97;".repeat(k));
+            let xml = format!("<r xmlns:q='{uri}'>{}</r>", "<q:x/>".repeat(k));
+            let mut work = NamespaceWork::default();
+            assert_eq!(preserve_ws_only_text_counted(&xml, &mut work).unwrap(), xml);
+            assert_eq!(work.classifications, 1);
+            assert_eq!(work.uri_bytes, 4 + 5 * k);
+            assert_eq!(work.binding_probes, k + 4);
+            totals.push(work.uri_bytes + work.binding_probes);
+        }
+        assert_eq!(totals, [6_008, 12_008, 24_008]);
+    }
+
+    // 이것을 실패시키는 것: 캐시를 접두사별 전역 값으로 두어 재선언/해제를
+    // 덮어쓰기, 닫는/빈 요소의 범위 복구 생략, 또는 선언 없이 URI를 재분류하기.
+    #[test]
+    fn namespace_cache_restores_shadowed_and_undeclared_bindings() {
+        let ns = PARAGRAPH_NS.replace("paragraph", "paragr&#97;ph");
+        let xml = format!(
+            "<r xmlns:q='{ns}' xmlns='{ns}'>\
+             <q:t> </q:t><q:t xmlns:q=''> </q:t><q:t> </q:t>\
+             <x xmlns:q='urn:foreign'><q:t> </q:t></x><q:t> </q:t>\
+             <x xmlns:q='urn:other'/><q:t> </q:t>\
+             <x xmlns='urn:foreign'><t xmlns=''> </t><t> </t></x><t> </t>\
+             <xml:t> </xml:t><xmlns:t> </xmlns:t></r>"
+        );
+        let mut work = NamespaceWork::default();
+        let out = preserve_ws_only_text_counted(&xml, &mut work).unwrap();
+        assert_eq!(out.matches(WS_SENTINEL).count(), 6);
+        assert_eq!(out.replace(WS_SENTINEL, ""), xml);
+        assert_eq!(work.classifications, 7);
+        assert_eq!(work.uri_bytes, 2 * ns.len() + 2 * "urn:foreign".len() + "urn:other".len());
+    }
+
+    // 이것을 실패시키는 것: resolver가 저장하지 않는 예약 xml 재선언을
+    // 캐시에 쌓아, 긴 형제 요소열의 조회량이 다시 제곱으로 증가하기.
+    #[test]
+    fn namespace_cache_excludes_reserved_redeclarations() {
+        for k in [1_000, 2_000, 4_000] {
+            let start = "<r xmlns:xml='http://www.w3.org/XML/1998/namespace'>";
+            let xml = format!("{}{}{}", start.repeat(k), "<t> </t>".repeat(k), "</r>".repeat(k));
+            let mut work = NamespaceWork::default();
+            let out = preserve_ws_only_text_counted(&xml, &mut work).unwrap();
+            assert_eq!(out.matches(WS_SENTINEL).count(), k);
+            assert_eq!(work.classifications, 0);
+            assert_eq!(work.binding_probes, 6 * k);
+        }
+    }
 
     // An unclosed comment runs to the end for both scanners that share
     // `markup_len`: nothing after `<!--` is marked or rewritten (the parser
@@ -938,5 +1233,113 @@ mod edit_text_tests {
     #[test]
     fn a_value_of_only_forbidden_characters_becomes_empty() {
         assert_eq!(run("\u{1}\u{2}"), (String::new(), removed(2)));
+    }
+}
+
+#[cfg(test)]
+mod sentinel_invariant_tests {
+    use super::*;
+    use crate::schema::section::{HxText, HxTextPart};
+    use proptest::prelude::*;
+
+    fn decode_text(xml: &str) -> HxText {
+        crate::decoder::xml_from_str(&preserve_ws_only_text(xml).unwrap()).unwrap()
+    }
+
+    fn assert_plain_round_trip(source: &str) {
+        use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+        use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+        let text = HxText::new(source);
+        assert_eq!(text.text(), source);
+        // Exercise the text-only serde boundary directly, as permitted for tests
+        // by .clippy.toml; HxText has no attributes to normalize here.
+        #[allow(clippy::disallowed_methods)]
+        let xml = quick_xml::se::to_string_with_root("hp:t", &text).unwrap();
+        assert!(!xml.contains("<hp:tab"));
+        // Decimal/hex references must enter the same transport representation
+        // as literal characters. No inline child can bypass HxText::serialize.
+        for xml in [xml.clone(), xml.replace(WS_SENTINEL, "&#xE000;")] {
+            let decoded = decode_text(&xml);
+            assert_eq!(decoded.text(), source);
+            assert_eq!(decoded, text);
+        }
+
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text(source, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let styles = crate::style_store_for_preset("default").unwrap();
+        let bytes =
+            crate::HwpxEncoder::encode(&doc.validate().unwrap(), &styles, &ImageStore::new())
+                .unwrap();
+        let decoded = crate::HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(decoded.document.sections()[0].paragraphs[0].text_content(), source);
+        let bytes = crate::HwpxEncoder::encode(
+            &decoded.document.clone().validate().unwrap(),
+            &decoded.style_store,
+            &decoded.image_store,
+        )
+        .unwrap();
+        assert_eq!(crate::HwpxDecoder::decode(&bytes).unwrap().document, decoded.document);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { failure_persistence: None, ..ProptestConfig::with_cases(64) })]
+
+        // 이것을 실패시키는 것: HxText::new 원문 이스케이프 생략 — 인라인 없는
+        // &#xE000;&#xE000;끝 경로가 재인코딩 시 표식을 하나 잃는다.
+        #[test]
+        fn repeated_marks_without_inline_round_trip(count in 2usize..65) {
+            for count in [2, count] {
+                assert_plain_round_trip(&format!("{}끝", "\u{E000}".repeat(count)));
+            }
+        }
+
+        // 이것을 실패시키는 것: 표식만 있는 원문을 빈 문자열로 보거나,
+        // 되돌릴 때 선두 표식을 하나가 아닌 전부 제거하기.
+        #[test]
+        fn marks_only_round_trip(count in 1usize..65) {
+            for count in [1, count] {
+                assert_plain_round_trip(&"\u{E000}".repeat(count));
+            }
+        }
+
+        // 이것을 실패시키는 것: 이미 이스케이프된 꼴의 원문은 재이스케이프하지
+        // 않기, 원문에 포함된 문자참조 글자열을 참조로 풀기, 또는 이중 복원.
+        #[test]
+        fn escape_shaped_source_round_trip(
+            count in 1usize..33,
+            tail in prop::collection::vec(prop::sample::select(vec![
+                " ", "끝", "&#xE000;", "&#57344;", "&", "<", "\u{E000}", "😀",
+            ]), 0..24),
+        ) {
+            for suffix in [" ".repeat(count), format!("\u{E000}{}", tail.concat())] {
+                assert_plain_round_trip(&format!("\u{E000}{suffix}"));
+            }
+        }
+
+        // 이것을 실패시키는 것: 인라인 텍스트 생성·역직렬화가 전용 타입을
+        // 우회하거나, 속성 탭의 Plain 투영에서 표식을 복원하지/두 번 복원하기.
+        #[test]
+        fn inline_parts_share_the_text_invariant(count in 1usize..33, spaces in 1usize..16) {
+            assert_plain_round_trip(&" ".repeat(spaces));
+            let source = format!("{}{}", "\u{E000}".repeat(count), " ".repeat(spaces));
+            let text = HxText { parts: vec![
+                HxTextPart::Text(PreservedText::new(source.clone())),
+                HxTextPart::Tab { width: Some(1200), leader: Some(1), tab_type: Some(2) },
+                HxTextPart::Text(PreservedText::new(source.clone())),
+            ] };
+            let xml = format!("<hp:t>{source}<hp:tab width='1200' leader='1' type='2'/>{source}</hp:t>");
+            let decoded = decode_text(&xml);
+            prop_assert_eq!(&decoded, &text);
+            let expected = format!("{source}\t{source}");
+            prop_assert_eq!(text.text(), expected.as_str());
+            prop_assert_eq!(decoded.to_run_content().plain_text().unwrap().into_owned(), expected);
+        }
     }
 }
