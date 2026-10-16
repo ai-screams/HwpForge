@@ -278,7 +278,9 @@ pub enum ValidationError {
         cell_index: usize,
     },
 
-    /// A header row appears after a non-header row.
+    /// Legacy error for a header row after a non-header row.
+    /// Retained for API compatibility; validation now normalizes row flags
+    /// from effective cell markers instead of emitting this error.
     #[error("Table header row is not part of the leading header block (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index})")]
     NonLeadingTableHeaderRow {
         /// Zero-based section index.

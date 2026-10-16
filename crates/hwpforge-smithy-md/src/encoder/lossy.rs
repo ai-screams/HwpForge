@@ -538,6 +538,8 @@ fn table_to_markdown<S: Sink>(
                 .collect()
         })
         .collect();
+    // GFM always uses the first physical row as its header; row/cell title
+    // markers do not change this existing readable projection.
     let width = rows.first().map_or(1, |r| r.len().max(1));
     S::table(rows, width)
 }

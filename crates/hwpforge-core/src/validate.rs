@@ -382,9 +382,8 @@ fn validate_table_run(
         && crate::table::grid::TableGrid::from_table(table)
             .is_ok_and(|grid| grid.dimensions().1 > 0);
 
-    let mut seen_non_header_row: bool = false;
     for (row_i, row) in table.rows.iter().enumerate() {
-        validate_table_row(row, ctx, row_i, &mut seen_non_header_row, empty_rows_covered)?;
+        validate_table_row(row, ctx, row_i, empty_rows_covered)?;
     }
     Ok(())
 }
@@ -431,7 +430,6 @@ fn validate_table_row(
     row: &crate::table::TableRow,
     ctx: RunValidationContext,
     row_i: usize,
-    seen_non_header_row: &mut bool,
     empty_rows_covered: bool,
 ) -> Result<(), ValidationError> {
     if row.cells.is_empty() && !empty_rows_covered {
@@ -441,19 +439,6 @@ fn validate_table_row(
             run_index: ctx.run_index,
             row_index: row_i,
         });
-    }
-
-    if row.is_header {
-        if *seen_non_header_row {
-            return Err(ValidationError::NonLeadingTableHeaderRow {
-                section_index: ctx.section_index,
-                paragraph_index: ctx.paragraph_index,
-                run_index: ctx.run_index,
-                row_index: row_i,
-            });
-        }
-    } else {
-        *seen_non_header_row = true;
     }
 
     for (cell_i, cell) in row.cells.iter().enumerate() {
@@ -1827,7 +1812,7 @@ mod tests {
     }
 
     #[test]
-    fn non_leading_table_header_row_rejected() {
+    fn non_leading_table_header_row_structurally_valid() {
         let header_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
         let data_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
         let table = Table::new(vec![
@@ -1840,15 +1825,70 @@ mod tests {
             PageSettings::a4(),
         )];
 
-        let result = validate_sections(&sections);
+        // 이것을 실패시키는 것: 비선두 제목칸을 구조 오류로 거부.
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    /// 이것을 실패시키는 것: validate 정규화 삭제/최상위로 한정 ·
+    /// 칸 실효값 변경 · 제목칸을 비선두라는 이유로 거부.
+    #[test]
+    fn cell_header_validation_normalizes_every_table() {
+        use crate::{Caption, CaptionSide, Document, HeaderFooter, Image, ImageFormat};
+        let host = |run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        let table = || {
+            Table::new(vec![
+                TableRow::new(vec![simple_cell().with_header(Some(true))]),
+                TableRow::new(vec![simple_cell(), simple_cell().with_header(Some(false))])
+                    .with_header(true),
+                TableRow::new(vec![simple_cell()]).with_header(true),
+            ])
+        };
+        let paragraph = || host(Run::table(table(), CharShapeIndex::new(0)));
+        let mut outer = table();
+        outer.rows[0].cells[0].paragraphs.push(paragraph());
+        outer.caption = Some(Caption::new(vec![paragraph()], CaptionSide::Bottom));
+        let mut image = Image::new("a.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png);
+        image.caption = Some(Caption::new(vec![paragraph()], CaptionSide::Bottom));
+        let mut section = Section::with_paragraphs(
+            vec![
+                host(Run::table(outer, CharShapeIndex::new(0))),
+                host(Run::image(image, CharShapeIndex::new(0))),
+                host(Run::control(
+                    Control::memo_with_anchor(
+                        vec![paragraph()],
+                        vec![Run::table(table(), CharShapeIndex::new(0))],
+                    ),
+                    CharShapeIndex::new(0),
+                )),
+            ],
+            PageSettings::a4(),
+        );
+        section.headers.push(HeaderFooter::all_pages(vec![paragraph()]));
+        section.footers.push(HeaderFooter::all_pages(vec![paragraph()]));
+        section.master_pages = Some(vec![MasterPage::new(ApplyPageType::Both, vec![paragraph()])]);
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().unwrap();
+        let mut count = 0;
+        doc.sections()[0].for_each_table(|table| {
+            count += 1;
+            assert_eq!(table.header_row_count(), 1);
+            assert_eq!(
+                table.rows.iter().map(|r| r.is_header).collect::<Vec<_>>(),
+                [true, false, false]
+            );
+            assert_eq!(table.rows[1].cells[0].header, Some(true));
+            assert_eq!(table.rows[1].cells[1].header, Some(false));
+            assert_eq!(table.rows[2].cells[0].header, Some(true));
+        });
+        assert_eq!(count, 9);
+        let once = doc.clone();
         assert_eq!(
-            result,
-            Err(ValidationError::NonLeadingTableHeaderRow {
-                section_index: 0,
-                paragraph_index: 0,
-                run_index: 0,
-                row_index: 1,
-            })
+            serde_json::from_value::<Document>(serde_json::to_value(&doc).unwrap())
+                .unwrap()
+                .validate()
+                .unwrap(),
+            once
         );
     }
 

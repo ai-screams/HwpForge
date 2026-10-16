@@ -1041,7 +1041,9 @@ fn table_to_styled_markdown(
 }
 
 /// Renders a table as GFM (GitHub Flavored Markdown) pipe table. The header
-/// row fixes the width; a later row's cells past it are not drawn at all,
+/// row is always the first physical row, irrespective of row/cell title
+/// markers (GFM cannot represent per-cell titles). Existing output is retained.
+/// It fixes the width; a later row's cells past it are not drawn at all,
 /// so they leave no picture asset and no note definition behind.
 /// 이것을 실패시키는 것: 잘릴 칸도 그린 뒤 버리기(`gfm_cut_cells_leave_nothing`).
 fn table_to_gfm(table: &Table, styles: &dyn StyleLookup, st: &mut State, ctx: Ctx) -> Md {

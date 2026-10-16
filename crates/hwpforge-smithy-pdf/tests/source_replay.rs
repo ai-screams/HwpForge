@@ -355,3 +355,65 @@ fn cell_zone_with_an_unknown_inner_line_answer_warns() {
     let Some(layout) = replay_with_zone_fill("#FF0000", true, true, &|_| {}) else { return };
     assert_eq!(zone_warnings(&layout, "cell zone border"), 1);
 }
+
+/// 이것을 실패시키는 것: validate 정규화 누락 · HWPX 칸 값의 행 복제 ·
+/// PDF 반복행을 0 또는 첫 행으로 고정. 실제 반복 줄 수를 왕복 전후 대조한다.
+#[test]
+fn cell_header_pdf_repetition_survives_hwpx_roundtrip() {
+    use hwpforge_smithy_hwpx::{EncodeOptions, HwpxDecoder, HwpxEncoder};
+    let bytes = include_bytes!("../../../tests/fixtures/pdf-rules/rules-pagespan3-repeat.hwpx");
+    for (flag, marker, mixed, expected_rows) in [
+        (false, Some(true), false, 1),
+        (true, Some(false), false, 0),
+        (true, None, true, 0),
+        (true, None, false, 1),
+    ] {
+        let mut decoded = HwpxDecoder::decode(bytes).unwrap();
+        decoded.document.for_each_table_mut(|t| {
+            t.repeat_header = true;
+            let row = &mut t.rows[0];
+            row.is_header = flag;
+            for cell in &mut row.cells {
+                cell.header = marker;
+            }
+            if mixed {
+                row.cells[1].header = Some(false);
+            }
+        });
+        let doc = decoded.document.validate().unwrap();
+        doc.for_each_table(|t| assert_eq!(t.header_row_count(), expected_rows));
+        let before = replay_layout(
+            &PdfInput { document: &doc, styles: &decoded.style_store },
+            &PdfOptions::default(),
+        )
+        .unwrap();
+        let mut options = EncodeOptions::default();
+        options.emit_layout_cache = true;
+        let encoded = HwpxEncoder::encode_with_options(
+            &doc,
+            &decoded.style_store,
+            &decoded.image_store,
+            options,
+        )
+        .unwrap();
+        let back = HwpxDecoder::decode(&encoded).unwrap();
+        let doc = back.document.validate().unwrap();
+        doc.for_each_table(|t| assert_eq!(t.header_row_count(), expected_rows));
+        let after = replay_layout(
+            &PdfInput { document: &doc, styles: &back.style_store },
+            &PdfOptions::default(),
+        )
+        .unwrap();
+        let repeated = |layout: &hwpforge_smithy_pdf::source::ReplayLayout| {
+            layout
+                .pages
+                .iter()
+                .map(|p| p.lines.iter().filter(|l| l.location.contains("/rep")).count())
+                .collect::<Vec<_>>()
+        };
+        let counts = repeated(&before);
+        assert!(counts.len() >= 3);
+        assert_eq!(counts.iter().sum::<usize>() > 0, expected_rows > 0);
+        assert_eq!(repeated(&after), counts);
+    }
+}

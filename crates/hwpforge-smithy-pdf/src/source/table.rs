@@ -144,8 +144,11 @@ pub(crate) fn replay_table(
     let row_heights =
         compute_row_heights(input, table, &anchors, row_count, location, depth, warnings)?;
 
+    // Keep row-based repetition: mixed title cells are preserved but do not
+    // promote a row. Hancom's help requires the first row, but does not specify
+    // mixed-row repetition; we have no verified layout oracle for that case.
     // ── 제목행 반복 블록 ─────────────────────────────────────────
-    let header_rows = table.rows.iter().take_while(|r| r.is_header).count();
+    let header_rows = table.header_row_count();
     let repeat = table.repeat_header && header_rows > 0;
     for anchor in &anchors {
         let (r, s) = (anchor.anchor.row as usize, anchor.row_span as usize);

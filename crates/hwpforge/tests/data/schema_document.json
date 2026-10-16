@@ -536,7 +536,7 @@
           ]
         },
         "is_header": {
-          "description": "Whether this row is part of the table's leading header-row block.",
+          "description": "Whether this row is part of the table's leading header-row block.\nA compatibility fallback for cells with `header: None`, and otherwise a\nderived convenience flag. Importers and `Document::validate()` refresh\nit with [`TableRow::derive_header_rows`], preserving effective cell values.\nConsumers use [`Table::header_row_count`] rather than trusting this flag.",
           "type": "boolean",
           "default": false
         }
@@ -549,6 +549,13 @@
       "description": "A single cell within a table row.\n\nEach cell contains its own paragraphs (rich content). Spans\ndefault to 1 (no spanning).\n\n# Examples\n\n```\nuse hwpforge_core::table::TableCell;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet cell = TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(40.0).unwrap(),\n);\nassert_eq!(cell.col_span, 1);\nassert_eq!(cell.row_span, 1);\n```",
       "type": "object",
       "properties": {
+        "header": {
+          "description": "Cell-local title marker. `Some` preserves the source value; `None`\ninherits [`TableRow::is_header`] for legacy JSON and generated cells.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "paragraphs": {
           "description": "Rich content within the cell.",
           "type": "array",

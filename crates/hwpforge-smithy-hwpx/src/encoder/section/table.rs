@@ -50,6 +50,7 @@ pub(super) fn build_table(
     // The caption is written before the cells but encoded after them: its
     // diagnostic records go here (review S22 r1 LOW).
     let caption_at = super::super::object_ids::mark();
+    let header_rows = table.header_row_count();
     let rows = table
         .rows
         .iter()
@@ -58,6 +59,7 @@ pub(super) fn build_table(
             build_table_row(
                 row,
                 row_idx as u32,
+                row_idx < header_rows,
                 &cell_addrs[row_idx],
                 table_border_fill_id,
                 table.in_margin,
@@ -189,6 +191,7 @@ pub(crate) fn table_default_placement() -> ObjectPlacement {
 fn build_table_row(
     row: &TableRow,
     row_idx: u32,
+    row_is_header: bool,
     col_addrs: &[u32],
     table_border_fill_id: u32,
     table_in_margin: Option<TableMargin>,
@@ -211,7 +214,7 @@ fn build_table_row(
                 TableCellBuildContext {
                     col_idx: col_addr,
                     row_idx,
-                    row_is_header: row.is_header,
+                    row_is_header,
                     row_height: row_fallback_height,
                     table_border_fill_id,
                     table_in_margin,
@@ -253,7 +256,7 @@ fn build_table_cell(
 ) -> HwpxResult<HxTableCell> {
     Ok(HxTableCell {
         name: String::new(),
-        header: u32::from(ctx.row_is_header),
+        header: u32::from(cell.effective_header(ctx.row_is_header)),
         has_margin: u32::from(cell.margin.is_some()),
         protect: 0,
         editable: 0,

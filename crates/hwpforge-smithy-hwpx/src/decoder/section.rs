@@ -30,7 +30,7 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     legacy_child_order, HxAutoNum, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation,
     HxFieldBegin, HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildKind,
-    HxSection, HxSubList, HxTable, HxTableCell, HxTableRow,
+    HxSection, HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -1237,10 +1237,9 @@ fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
             Some(value) => TableRow::with_height(cells, value),
             None => TableRow::new(cells),
         };
-        let is_header: bool = decode_table_row_header(hx_row)?;
-        rows.push(row.with_header(is_header));
+        rows.push(row);
     }
-    validate_leading_header_rows(&rows)?;
+    TableRow::derive_header_rows(&mut rows);
 
     // Validate declared row count matches actual row count
     if hx.rows.len() != hx.row_cnt as usize {
@@ -1511,8 +1510,9 @@ fn convert_table_cell(
         }
     };
 
-    let mut cell: TableCell =
-        TableCell::with_span(paragraphs, width, col_span, row_span).with_line_wrap(line_wrap);
+    let mut cell: TableCell = TableCell::with_span(paragraphs, width, col_span, row_span)
+        .with_line_wrap(line_wrap)
+        .with_header(Some(hx.header != 0));
     if let Some(value) = height {
         cell = cell.with_height(value);
     }
@@ -1527,45 +1527,6 @@ fn convert_table_cell(
     }
     cell.dormant_margin = dormant_margin;
     Ok(cell)
-}
-
-fn decode_table_row_header(hx: &HxTableRow) -> HwpxResult<bool> {
-    if hx.cells.is_empty() {
-        return Ok(false);
-    }
-
-    let header_count = hx.cells.iter().filter(|cell| cell.header != 0).count();
-    if header_count == 0 {
-        Ok(false)
-    } else if header_count == hx.cells.len() {
-        Ok(true)
-    } else {
-        Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "mixed table header markers within a row: header_cells={} total_cells={}",
-                header_count,
-                hx.cells.len()
-            ),
-        })
-    }
-}
-
-fn validate_leading_header_rows(rows: &[TableRow]) -> HwpxResult<()> {
-    let mut seen_non_header_row: bool = false;
-    for (row_index, row) in rows.iter().enumerate() {
-        if row.is_header {
-            if seen_non_header_row {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!(
-                        "non-leading table header row at index {row_index}; header rows must form a leading block"
-                    ),
-                });
-            }
-        } else {
-            seen_non_header_row = true;
-        }
-    }
-    Ok(())
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
@@ -4488,7 +4449,7 @@ mod tests {
     }
 
     #[test]
-    fn table_decode_rejects_non_leading_header_rows() {
+    fn table_decode_preserves_non_leading_header_cells() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -4508,14 +4469,13 @@ mod tests {
             </p>
         </sec>"#;
 
-        let err =
-            parse_section(xml, 0, &HashMap::new()).expect_err("non-leading header rows must fail");
-        match err {
-            HwpxError::InvalidStructure { detail } => {
-                assert!(detail.contains("non-leading table header row"));
-            }
-            other => panic!("expected InvalidStructure, got {other:?}"),
-        }
+        // 이것을 실패시키는 것: 비선두 칸 거부 복원 / 칸 값 누락 / 행 파생 생략.
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+        assert!(!table.rows[0].is_header);
+        assert!(!table.rows[1].is_header);
+        assert_eq!(table.rows[0].cells[0].header, Some(false));
+        assert_eq!(table.rows[1].cells[0].header, Some(true));
     }
 
     #[test]

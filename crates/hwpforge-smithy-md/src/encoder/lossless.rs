@@ -304,16 +304,20 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
     }
     out.push('>');
 
-    for row in &table.rows {
+    let header_rows = table.header_row_count();
+    for (row_index, row) in table.rows.iter().enumerate() {
+        out.push_str("<tr");
+        if row_index < header_rows {
+            out.push_str(&format!(" {}=\"true\"", g::ROW_HEADER));
+        }
         if let Some(height) = row.height {
             out.push_str(&format!(
-                "<tr data-height-unit=\"{}\" data-height-mm=\"{:.2}\">",
+                " data-height-unit=\"{}\" data-height-mm=\"{:.2}\"",
                 height.as_i32(),
                 height.to_mm()
             ));
-        } else {
-            out.push_str("<tr>");
         }
+        out.push('>');
         for cell in &row.cells {
             out.push_str(&format!(
                 "<td data-col-span=\"{}\" data-row-span=\"{}\" data-width-unit=\"{}\" data-width-mm=\"{:.2}\"",
@@ -322,6 +326,10 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
                 cell.width.as_i32(),
                 cell.width.to_mm()
             ));
+            // Preserve explicit false as well as true; absence means inheritance.
+            if let Some(header) = cell.header {
+                out.push_str(&format!(" {}=\"{}\"", g::CELL_HEADER, g::bool_str(header)));
+            }
             // §19.22 D3: a cell's line wrap other than the default break,
             // spelled as its Core serde name (`SQUEEZE`, `KEEP`).
             // 이것을 실패시키는 것: 방출 삭제 · 기본값에도 쓰기

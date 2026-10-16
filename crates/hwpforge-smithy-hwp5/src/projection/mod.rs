@@ -4373,7 +4373,6 @@ fn build_table_with_images(
         .into_iter()
         .map(|mut cells| {
             cells.sort_by_key(|cell| cell.column);
-            let row_is_header = projected_row_is_header(&cells, &mut projection_images.warnings);
             let projected = cells
                 .iter()
                 .copied()
@@ -4381,15 +4380,13 @@ fn build_table_with_images(
                 .collect();
             let row_height = cells.iter().map(|cell| cell.height).max().unwrap_or(0);
             match HwpUnit::new(row_height) {
-                Ok(height) if row_height > 0 => {
-                    TableRow::with_height(projected, height).with_header(row_is_header)
-                }
-                _ => TableRow::new(projected).with_header(row_is_header),
+                Ok(height) if row_height > 0 => TableRow::with_height(projected, height),
+                _ => TableRow::new(projected),
             }
         })
         .collect();
 
-    demote_non_leading_header_rows(&mut rows, &mut projection_images.warnings);
+    TableRow::derive_header_rows(&mut rows);
     restore_placeholder_cells_for_uncovered_rows(&mut rows, &mut projection_images.warnings);
 
     let mut core_table = Table::new(rows);
@@ -4515,64 +4512,6 @@ fn restore_placeholder_cells_for_uncovered_rows(
                 ),
             );
         }
-    }
-}
-
-/// Enforces the Core/HWPX invariant that header rows form a single leading
-/// contiguous block.
-///
-/// Real 한글 documents sometimes mark a repeat-header row in the middle of a
-/// table (for example a column header restated after a sectioning row).
-/// `hwpforge_core` validation rejects such a layout
-/// ([`ValidationError::NonLeadingTableHeaderRow`]), which previously aborted
-/// the whole `convert-hwp5` run. We keep the leading header block and demote
-/// any later header row to a normal row, emitting a warning so the dropped
-/// repeat-header semantic is surfaced rather than silently lost.
-///
-/// The traversal mirrors `hwpforge_core::validate`'s `seen_non_header_row`
-/// logic exactly, so the demoted result is guaranteed to pass validation.
-fn demote_non_leading_header_rows(rows: &mut [TableRow], warnings: &mut Vec<Hwp5Warning>) {
-    let mut seen_non_header = false;
-    for (row_idx, row) in rows.iter_mut().enumerate() {
-        if row.is_header {
-            if seen_non_header {
-                row.is_header = false;
-                push_projection_fallback(
-                    warnings,
-                    "table.header_row",
-                    format!(
-                        "non_leading_hwp5_table_header_row row={row_idx}; demoting_to=non_header_row (HWPX requires a single leading header block)"
-                    ),
-                );
-            }
-        } else {
-            seen_non_header = true;
-        }
-    }
-}
-
-fn projected_row_is_header(cells: &[&Hwp5TableCell], warnings: &mut Vec<Hwp5Warning>) -> bool {
-    if cells.is_empty() {
-        return false;
-    }
-
-    let header_count = cells.iter().filter(|cell| cell.is_header).count();
-    if header_count == 0 {
-        false
-    } else if header_count == cells.len() {
-        true
-    } else {
-        push_projection_fallback(
-            warnings,
-            "table.header_row",
-            format!(
-                "mixed_hwp5_table_header_cells row={} header_cells={} total_cells={}; defaulting_to=non_header_row",
-                cells[0].row,
-                header_count,
-                cells.len()
-            ),
-        );
-        false
     }
 }
 
@@ -4727,6 +4666,7 @@ fn project_table_cell_with_images(
 
     let mut core_cell =
         TableCell::with_span(paragraphs, width, cell.col_span.max(1), cell.row_span.max(1));
+    core_cell.header = Some(cell.is_header);
     core_cell.height =
         (cell.height > 0).then(|| HwpUnit::new(cell.height)).transpose().unwrap_or(None);
     core_cell.border_fill_id = cell.border_fill_id.map(u32::from);
@@ -7387,7 +7327,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_table_header_cells_emit_warning_and_do_not_promote_header_row() {
+    fn mixed_table_header_cells_are_preserved_without_warning() {
         let para = Hwp5Paragraph {
             end_char_shape: None,
             silent_wires: Vec::new(),
@@ -7489,20 +7429,18 @@ mod tests {
             .find_map(|run| run.content.as_table())
             .expect("expected table run");
         assert!(!table.rows[0].is_header, "mixed header cells must not promote header row");
-        assert!(warnings.iter().any(|warning| matches!(
+        // 이것을 실패시키는 것: 셀 값 강등 / 옛 경고 복원.
+        assert_eq!(table.rows[0].cells[0].header, Some(true));
+        assert_eq!(table.rows[0].cells[1].header, Some(false));
+        assert!(!warnings.iter().any(|warning| matches!(
             warning,
-            Hwp5Warning::ProjectionFallback { subject, reason }
-                if *subject == "table.header_row"
-                    && reason == "mixed_hwp5_table_header_cells row=0 header_cells=1 total_cells=2; defaulting_to=non_header_row"
+            Hwp5Warning::ProjectionFallback { subject: "table.header_row", .. }
         )));
     }
 
     #[test]
-    fn non_leading_header_row_is_demoted_and_warns() {
-        // A real 한글 layout: header row (0), body row (1), then a *second*
-        // header row (2). Core validation requires header rows to form a single
-        // leading block, so the trailing header row must be demoted instead of
-        // aborting the whole conversion.
+    fn non_leading_header_cells_are_preserved_without_warning() {
+        // 이것을 실패시키는 것: 비선두 칸 값 제거 / 행 파생 생략 / 옛 경고 복원.
         fn header_cell(row: u16, is_header: bool, text: &str) -> Hwp5TableCell {
             Hwp5TableCell {
                 has_margin: true,
@@ -7580,17 +7518,13 @@ mod tests {
 
         assert!(table.rows[0].is_header, "leading header row must be kept");
         assert!(!table.rows[1].is_header, "body row stays non-header");
-        assert!(!table.rows[2].is_header, "trailing header row must be demoted");
-        assert!(warnings.iter().any(|warning| matches!(
+        assert!(!table.rows[2].is_header, "trailing title cells are not repeat rows");
+        assert_eq!(table.rows[2].cells[0].header, Some(true));
+        assert!(!warnings.iter().any(|warning| matches!(
             warning,
-            Hwp5Warning::ProjectionFallback { subject, reason }
-                if *subject == "table.header_row"
-                    && reason.starts_with("non_leading_hwp5_table_header_row row=2")
+            Hwp5Warning::ProjectionFallback { subject: "table.header_row", .. }
         )));
-
-        // The demoted layout must now pass Core validation (previously aborted
-        // with NonLeadingTableHeaderRow).
-        assert!(doc.validate().is_ok(), "demoted table must satisfy Core validation");
+        assert!(doc.validate().is_ok(), "explicit non-leading title cells are valid");
     }
 
     #[test]

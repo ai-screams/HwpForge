@@ -355,6 +355,9 @@ impl Document<Draft> {
     /// Consumes `self` (move semantics). On success, returns a
     /// `Document<Validated>`. On failure, returns a `CoreError`.
     ///
+    /// Normalizes table header-row convenience flags from effective cell
+    /// markers, preserving their meaning (including non-leading title cells).
+    ///
     /// # Errors
     ///
     /// Returns [`CoreError::Validation`](crate::error::CoreError::Validation) if the document violates any
@@ -389,7 +392,16 @@ impl Document<Draft> {
     /// let doc = Document::new(); // empty
     /// assert!(doc.validate().is_err());
     /// ```
-    pub fn validate(self) -> CoreResult<Document<Validated>> {
+    pub fn validate(mut self) -> CoreResult<Document<Validated>> {
+        // Cell meaning is canonical. Normalize even tables in nested containers
+        // and bands; the shared walk includes picture captions and memo anchors.
+        // 이것을 실패시키는 것: 정규화 삭제 · 본문 표만 순회
+        // (`cell_header_validation_normalizes_every_table`).
+        for section in &mut self.sections {
+            section.for_each_table_mut(|table| {
+                crate::table::TableRow::derive_header_rows(&mut table.rows);
+            });
+        }
         validate_sections(&self.sections)?;
         Ok(Document { sections: self.sections, metadata: self.metadata, _state: PhantomData })
     }

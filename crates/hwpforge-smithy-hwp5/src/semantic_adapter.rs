@@ -980,19 +980,16 @@ fn structural_table_width_hwp(table: &Hwp5Table) -> Option<i32> {
 }
 
 fn structural_header_row_count(table: &Hwp5Table) -> u16 {
-    let mut row_flags: BTreeMap<u16, (usize, usize)> = BTreeMap::new();
+    // Include missing physical rows; a rowspan-covered empty row ends the
+    // leading block, exactly as it does in Core and the rendering consumers.
+    // 이것을 실패시키는 것: 빈 물리 행을 제거하고 제목행 수 계산.
+    let mut rows = vec![Vec::new(); usize::from(table.rows)];
     for cell in &table.cells {
-        let entry = row_flags.entry(cell.row).or_insert((0, 0));
-        entry.0 += 1;
-        if cell.is_header {
-            entry.1 += 1;
-        }
+        let row = usize::from(cell.row);
+        rows.resize_with(rows.len().max(row + 1), Vec::new);
+        rows[row].push(cell.is_header);
     }
-
-    row_flags
-        .into_iter()
-        .take_while(|(_, (cells, header_cells))| *cells > 0 && *cells == *header_cells)
-        .count() as u16
+    hwpforge_core::table::header_row_count(rows) as u16
 }
 
 fn structural_row_max_cell_heights_hwp(table: &Hwp5Table) -> Vec<i32> {
@@ -1327,6 +1324,50 @@ mod tests {
             body_ole_controls[0].notes.iter().any(|note| note == "storage_extension=OLE"),
             "OLE notes must preserve the storage extension as factual evidence"
         );
+    }
+
+    /// 이것을 실패시키는 것: 빈 물리 행 건너뛰기 · 선언 rows 밖의 칸 무시 ·
+    /// all 대신 any · 선두 제한 제거 · rowspan으로 빈 행 채우기.
+    #[test]
+    fn cell_header_semantic_uses_physical_rows() {
+        let cell = |row, is_header, row_span| Hwp5TableCell {
+            row,
+            column: 0,
+            row_span,
+            col_span: 1,
+            width: 1000,
+            height: 1000,
+            is_header,
+            has_margin: false,
+            line_wrap: 0,
+            border_fill_id: None,
+            margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+            vertical_align: Hwp5TableCellVerticalAlign::Top,
+            paragraphs: vec![],
+        };
+        for (cells, expected) in [
+            (vec![cell(0, true, 2), cell(2, true, 1)], 1),
+            (vec![cell(1, true, 1)], 0),
+            (vec![cell(0, true, 1), cell(0, false, 1)], 0),
+            (vec![cell(0, true, 1), cell(1, true, 1), cell(2, false, 1)], 2),
+        ] {
+            let table = Hwp5Table {
+                rows: 0,
+                cols: 1,
+                cells,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: true,
+                cell_spacing: 0,
+                border_fill_id: None,
+                instance_id: 0,
+                ctrl: None,
+                inner_margin: None,
+                no_adjust: false,
+                cell_zones: vec![],
+                caption: None,
+            };
+            assert_eq!(structural_header_row_count(&table), expected);
+        }
     }
 
     #[test]

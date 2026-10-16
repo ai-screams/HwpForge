@@ -6495,3 +6495,25 @@ fn hwp5_conversion_is_byte_stable_across_processes() {
         }
     }
 }
+
+/// 이것을 실패시키는 것: 감사의 칸 제목값을 행 플래그로 복제.
+#[test]
+fn audit_hwp5_cell_header_mixedhdr_matches_source() {
+    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/tables");
+    let (value, _, code) = run_json(&[
+        "audit-hwp5",
+        base.join("mixedhdr-original.hwp").to_str().unwrap(),
+        base.join("r4-mixedhdr-hancom.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    for side in ["source", "output"] {
+        let cells =
+            value[side]["table_properties"]["cell_evidence"].as_array().expect("cell evidence");
+        let flags: Vec<_> = cells
+            .iter()
+            .filter(|c| c["table_ordinal"] == 14 && c["row"] == 0)
+            .map(|c| c["is_header"].as_bool().unwrap_or(false))
+            .collect();
+        assert_eq!(flags, [false, false, true, false], "{side}");
+    }
+}

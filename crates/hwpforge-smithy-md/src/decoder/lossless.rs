@@ -158,12 +158,14 @@ struct TableNode {
 
 #[derive(Debug)]
 struct RowNode {
+    is_header: bool,
     cells: Vec<TableCell>,
     height: Option<HwpUnit>,
 }
 
 #[derive(Debug)]
 struct CellNode {
+    header: Option<bool>,
     col_span: u16,
     row_span: u16,
     width: HwpUnit,
@@ -240,10 +242,12 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
         })),
         "table" => Ok(OpenNode::Table(parse_table_node(start)?)),
         "tr" => Ok(OpenNode::Row(RowNode {
+            is_header: parse_flag_attr(start, "tr", g::ROW_HEADER)?,
             cells: Vec::new(),
             height: parse_optional_length_attr(start, "tr", "data-height-unit", "data-height-mm")?,
         })),
         "td" => Ok(OpenNode::Cell(CellNode {
+            header: parse_optional_flag_attr(start, "td", g::CELL_HEADER)?,
             col_span: parse_optional_u16_attr(start, "td", "data-col-span")?.unwrap_or(1),
             row_span: parse_optional_u16_attr(start, "td", "data-row-span")?.unwrap_or(1),
             width: parse_length_attr(start, "td", "data-width-unit", "data-width-mm")?,
@@ -478,7 +482,7 @@ fn attach_closed_node(
                     Some(height) => TableRow::with_height(row.cells, height),
                     None => TableRow::new(row.cells),
                 };
-                table.rows.push(core_row);
+                table.rows.push(core_row.with_header(row.is_header));
                 Ok(())
             } else {
                 Err(MdError::LosslessParse {
@@ -498,7 +502,8 @@ fn attach_closed_node(
 
             let mut table_cell =
                 TableCell::with_span(paragraphs, cell.width, cell.col_span, cell.row_span)
-                    .with_line_wrap(cell.line_wrap);
+                    .with_line_wrap(cell.line_wrap)
+                    .with_header(cell.header);
             if let Some(background) = cell.background {
                 table_cell = table_cell.with_background(background);
             }
@@ -1440,9 +1445,19 @@ fn parse_flag_attr(
     element: &'static str,
     attribute: &'static str,
 ) -> MdResult<bool> {
+    Ok(parse_optional_flag_attr(start, element, attribute)?.unwrap_or(false))
+}
+
+/// The same strict boolean grammar, retaining absence for cell inheritance.
+fn parse_optional_flag_attr(
+    start: &BytesStart<'_>,
+    element: &'static str,
+    attribute: &'static str,
+) -> MdResult<Option<bool>> {
     match unique_attr(start, element, attribute)?.as_deref() {
-        None | Some("false") => Ok(false),
-        Some("true") => Ok(true),
+        None => Ok(None),
+        Some("false") => Ok(Some(false)),
+        Some("true") => Ok(Some(true)),
         Some(other) => {
             Err(MdError::LosslessInvalidAttribute { element, attribute, value: other.to_string() })
         }

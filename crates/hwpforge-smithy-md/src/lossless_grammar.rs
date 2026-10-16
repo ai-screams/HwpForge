@@ -443,6 +443,10 @@ pub(crate) fn valign_from(s: &str) -> Option<VerticalAlign> {
 /// default break.
 pub(crate) const LINE_WRAP: &str = "data-line-wrap";
 
+// Title markers: a missing cell attribute retains row inheritance.
+pub(crate) const CELL_HEADER: &str = "data-header";
+pub(crate) const ROW_HEADER: &str = "data-is-header";
+
 /// How many containers (tables, groups, pictures, captions, shapes, notes)
 /// may enclose one another. The same limit the HWPX reader and writer put
 /// on nested structure; real documents stay far below it (corpus maximum

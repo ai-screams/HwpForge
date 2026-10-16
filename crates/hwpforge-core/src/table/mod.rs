@@ -45,6 +45,25 @@ use crate::caption::Caption;
 use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
 
+/// Counts the leading nonempty physical rows whose effective cell markers are
+/// all true. Empty rows end the block even when covered by a rowspan; spans do
+/// not promote rows. Importers can adapt their source cells to this same rule.
+/// This count is independent of the table's repeat-header switch.
+///
+/// 이것을 실패시키는 것: 첫 false/빈 행 건너뛰기 · all 대신 any 사용
+/// (`cell_header_effective_values_survive_derivation`).
+pub fn header_row_count(rows: impl IntoIterator<Item = impl IntoIterator<Item = bool>>) -> usize {
+    let mut count = 0;
+    for row in rows {
+        let mut cells = row.into_iter();
+        if cells.next() != Some(true) || !cells.all(|header| header) {
+            break;
+        }
+        count += 1;
+    }
+    count
+}
+
 /// Page-break policy for a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -436,6 +455,12 @@ impl Table {
         self
     }
 
+    /// Returns the leading header-row count derived from effective cell values.
+    /// See [`header_row_count`]; `repeat_header` does not affect this count.
+    pub fn header_row_count(&self) -> usize {
+        TableRow::header_row_count(&self.rows)
+    }
+
     /// Returns the number of rows.
     pub fn row_count(&self) -> usize {
         self.rows.len()
@@ -483,6 +508,10 @@ pub struct TableRow {
     /// Optional fixed row height. `None` means auto-height.
     pub height: Option<HwpUnit>,
     /// Whether this row is part of the table's leading header-row block.
+    /// A compatibility fallback for cells with `header: None`, and otherwise a
+    /// derived convenience flag. Importers and `Document::validate()` refresh
+    /// it with [`TableRow::derive_header_rows`], preserving effective cell values.
+    /// Consumers use [`Table::header_row_count`] rather than trusting this flag.
     #[serde(default)]
     pub is_header: bool,
 }
@@ -530,6 +559,35 @@ impl TableRow {
         Self { cells, height: Some(height), is_header: false }
     }
 
+    /// Counts header rows using the shared physical-row rule.
+    pub fn header_row_count(rows: &[Self]) -> usize {
+        header_row_count(
+            rows.iter()
+                .map(|row| row.cells.iter().map(|cell| cell.effective_header(row.is_header))),
+        )
+    }
+
+    /// Refreshes the derived leading header flags without changing any cell's
+    /// effective value. Before changing a row flag, inherited (`None`) markers
+    /// in that row are materialized as `Some(old_flag)`. Unchanged rows retain
+    /// `None`, preserving legacy generation and lossless Markdown inheritance.
+    /// Call after editing cell markers; document validation also does this.
+    ///
+    /// 이것을 실패시키는 것: 구체화 생략 · 새 행 값으로 구체화 · Some 덮기
+    /// (`cell_header_effective_values_survive_derivation`).
+    pub fn derive_header_rows(rows: &mut [Self]) {
+        let count = Self::header_row_count(rows);
+        for (index, row) in rows.iter_mut().enumerate() {
+            let derived = index < count;
+            if row.is_header != derived {
+                for cell in &mut row.cells {
+                    cell.header.get_or_insert(row.is_header);
+                }
+                row.is_header = derived;
+            }
+        }
+    }
+
     /// Marks whether this row belongs to the table's leading header-row block.
     #[must_use]
     pub fn with_header(mut self, is_header: bool) -> Self {
@@ -560,6 +618,10 @@ impl TableRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct TableCell {
+    /// Cell-local title marker. `Some` preserves the source value; `None`
+    /// inherits [`TableRow::is_header`] for legacy JSON and generated cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<bool>,
     /// Rich content within the cell.
     pub paragraphs: Vec<Paragraph>,
     /// Number of columns this cell spans. Must be >= 1.
@@ -617,6 +679,7 @@ impl TableCell {
     #[must_use]
     pub fn new(paragraphs: Vec<Paragraph>, width: HwpUnit) -> Self {
         Self {
+            header: None,
             paragraphs,
             col_span: 1,
             row_span: 1,
@@ -657,6 +720,7 @@ impl TableCell {
         row_span: u16,
     ) -> Self {
         Self {
+            header: None,
             paragraphs,
             col_span,
             row_span,
@@ -669,6 +733,19 @@ impl TableCell {
             line_wrap: CellLineWrap::Break,
             dormant_margin: None,
         }
+    }
+
+    /// Resolves the title marker, giving an explicit cell value precedence.
+    #[must_use]
+    pub fn effective_header(&self, row_is_header: bool) -> bool {
+        self.header.unwrap_or(row_is_header)
+    }
+
+    /// Sets a cell-local title marker, or restores row inheritance with `None`.
+    #[must_use]
+    pub fn with_header(mut self, header: Option<bool>) -> Self {
+        self.header = header;
+        self
     }
 
     /// Sets how the cell's text breaks into lines.
@@ -790,6 +867,107 @@ mod tests {
         let json = serde_json::to_value(&squeezed).unwrap();
         assert_eq!(json["line_wrap"], "SQUEEZE");
         assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), squeezed);
+    }
+
+    /// 이것을 실패시키는 것: Some(false)를 행 true로 덮기 / None 기본값 변경 /
+    /// JSON의 None 생략 삭제 / 빌더가 값을 버리기 / with_span 기본값 변경.
+    #[test]
+    fn cell_header_json_and_precedence() {
+        let cell = simple_cell();
+        assert_eq!(cell.header, None);
+        let json = serde_json::to_value(&cell).unwrap();
+        assert!(json.get("header").is_none());
+        assert_eq!(serde_json::from_value::<TableCell>(json.clone()).unwrap().header, None);
+        let mut explicit_null = json;
+        explicit_null["header"] = serde_json::Value::Null;
+        assert_eq!(serde_json::from_value::<TableCell>(explicit_null).unwrap().header, None);
+        assert_eq!(TableCell::with_span(vec![simple_paragraph()], cell.width, 2, 1).header, None);
+        for marker in [None, Some(false), Some(true)] {
+            let cell = cell.clone().with_header(marker);
+            assert_eq!(cell.header, marker);
+            for row in [false, true] {
+                assert_eq!(cell.effective_header(row), marker.unwrap_or(row));
+            }
+            let json = serde_json::to_value(&cell).unwrap();
+            if let Some(value) = marker {
+                assert_eq!(json["header"], value);
+            }
+            assert_eq!(serde_json::from_value::<TableCell>(json).unwrap(), cell);
+        }
+    }
+
+    /// 이것을 실패시키는 것: all→any / 빈 행 허용 / 선두 제한 제거 /
+    /// 기존 행 값 fallback 제거 / 파생하면서 원본 칸 값을 바꾸기.
+    #[test]
+    fn cell_header_derivation_is_leading_and_non_destructive() {
+        let row = |markers: &[Option<bool>], flag| {
+            TableRow::new(markers.iter().map(|v| simple_cell().with_header(*v)).collect())
+                .with_header(flag)
+        };
+        for stop in
+            [vec![], vec![Some(false), Some(false)], vec![Some(true), Some(false)], vec![None]]
+        {
+            let mut rows = vec![
+                row(&[None, Some(true)], true),
+                row(&[Some(true), Some(true)], false),
+                row(&stop, false),
+                row(&[Some(true), Some(true)], false),
+            ];
+            let original: Vec<_> = rows.iter().map(|r| r.cells.clone()).collect();
+            TableRow::derive_header_rows(&mut rows);
+            assert_eq!(
+                rows.iter().map(|r| r.is_header).collect::<Vec<_>>(),
+                [true, true, false, false]
+            );
+            assert_eq!(rows.iter().map(|r| r.cells.clone()).collect::<Vec<_>>(), original);
+            let once = rows.clone();
+            TableRow::derive_header_rows(&mut rows);
+            assert_eq!(rows, once);
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(512))]
+        /// 이것을 실패시키는 것: None 구체화 생략/반전 · 명시값 덮기 ·
+        /// 선두/빈 행/all 규칙 변경 · rowspan으로 제목행을 늘리기.
+        #[test]
+        fn cell_header_effective_values_survive_derivation(
+            input in proptest::collection::vec(
+                (proptest::bool::ANY, proptest::collection::vec(
+                    (proptest::option::of(proptest::bool::ANY), 1u16..5), 0..6)), 0..8)
+        ) {
+            let mut rows: Vec<_> = input.iter().map(|(flag, cells)| {
+                TableRow::new(cells.iter().map(|(marker, span)| {
+                    let mut cell = simple_cell().with_header(*marker);
+                    cell.row_span = *span;
+                    cell
+                }).collect()).with_header(*flag)
+            }).collect();
+            let values = |rows: &[TableRow]| rows.iter().map(|r| {
+                r.cells.iter().map(|c| c.effective_header(r.is_header)).collect::<Vec<_>>()
+            }).collect::<Vec<_>>();
+            let before = values(&rows);
+            // Independent oracle: first row containing no cells or a false cell.
+            let expected = before.iter().position(|r| r.is_empty() || r.contains(&false))
+                .unwrap_or(before.len());
+            proptest::prop_assert_eq!(TableRow::header_row_count(&rows), expected);
+            TableRow::derive_header_rows(&mut rows);
+            proptest::prop_assert_eq!(values(&rows), before);
+            for (index, row) in rows.iter().enumerate() {
+                proptest::prop_assert_eq!(row.is_header, index < expected);
+                for (cell, (marker, span)) in row.cells.iter().zip(&input[index].1) {
+                    proptest::prop_assert_eq!(cell.row_span, *span);
+                    if marker.is_some() || input[index].0 == row.is_header {
+                        proptest::prop_assert_eq!(cell.header, *marker);
+                    } else {
+                        proptest::prop_assert_eq!(cell.header, Some(input[index].0));
+                    }
+                }
+            }
+            let once = rows.clone();
+            TableRow::derive_header_rows(&mut rows);
+            proptest::prop_assert_eq!(rows, once);
+        }
     }
 
     fn simple_paragraph() -> Paragraph {
