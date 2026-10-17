@@ -551,3 +551,32 @@ def test_document_does_not_widen_a_string_into_a_sequence(
     """
     with pytest.raises(TypeError):
         call(Document.from_bytes(generated_bytes))
+
+
+@pytest.mark.parametrize(("sample", "count"), [("basic", 1), ("multiple", 2)])
+def test_converted_memos_remain_public_controls_and_markdown_comments(
+    sample: str, count: int
+) -> None:
+    from conftest import USER_SAMPLES
+
+    result = hwpforge.convert_hwp5((USER_SAMPLES / f"sample-memo-{sample}.hwp").read_bytes())
+    exported = json.loads(result.document.to_json().text)
+
+    def memos(value):
+        if isinstance(value, dict):
+            found = [value["Memo"]] if "Memo" in value else []
+            return found + [memo for child in value.values() for memo in memos(child)]
+        if isinstance(value, list):
+            return [memo for child in value for memo in memos(child)]
+        return []
+
+    annotations = memos(exported)
+    assert len(annotations) == count
+    assert all(memo["anchor_runs"] and memo["content"] for memo in annotations)
+    for mode in ["styled", "lossy"]:
+        markdown = result.document.to_md(mode=mode).text
+        assert markdown.count("<!-- memo:") == (count if mode == "styled" else 0)
+        if sample == "basic":
+            assert "메모 대상 문장" in markdown
+            if mode == "styled":
+                assert "쇠부리야 여기가 메모야" in markdown

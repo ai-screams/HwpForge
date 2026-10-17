@@ -570,3 +570,36 @@ fn the_hint_tells_a_missing_cache_from_unsupported_content() {
     let hint = invalid.hint().expect("a hint");
     assert!(hint.contains("re-saving in Hancom rewrites it"), "{hint}");
 }
+
+#[test]
+fn unclosed_source_field_warns_without_blocking_pdf_reading() {
+    // 이것을 실패시키는 것: 원본 없는 bool을 복구 권한으로 인정하거나 PDF 경고 누락.
+    use std::io::{Cursor, Read, Write};
+    let base = retyped("rules-justify.hwpx", false);
+    let mut zip = zip::ZipArchive::new(Cursor::new(base)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).unwrap();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        if entry.name() == "Contents/section0.xml" {
+            let mut xml = String::from_utf8(data).unwrap();
+            let at = xml.rfind("</hp:run>").unwrap();
+            xml.insert_str(
+                at,
+                "<hp:ctrl><hp:fieldBegin id=\"open-source\" type=\"FORMULA\"/></hp:ctrl>",
+            );
+            data = xml.into_bytes();
+        }
+        out.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        out.write_all(&data).unwrap();
+    }
+    let bytes = out.finish().unwrap().into_inner();
+    let output = to_pdf(&bytes, &options()).expect("recovered field is readable");
+    assert!(output.bytes.starts_with(b"%PDF-"));
+    assert!(output.pages >= 1);
+    assert_eq!(
+        codes(&output.warnings).iter().filter(|code| *code == "UNCLOSED_FIELD_BOUNDARY").count(),
+        1
+    );
+}

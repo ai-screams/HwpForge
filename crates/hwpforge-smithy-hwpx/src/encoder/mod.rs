@@ -451,6 +451,13 @@ use self::section::encode_section_with_note_counters;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EncodeWarning {
+    /// A source-backed unmatched field is carried without inventing an end.
+    UnclosedFieldBoundary {
+        /// Original section part.
+        part: String,
+        /// Core location and recovery reason.
+        reason: String,
+    },
     /// 문단 캐시가 방출되지 않음 — 방출 wire map 구축 실패, 좌표
     /// 역변환 실패(축약점 모호 등), 또는 cache-inadmissible 방출
     /// (차트 재배치·스킵된 컨트롤 등).
@@ -634,7 +641,8 @@ impl EncodeWarning {
             | Self::ContentLost { .. }
             | Self::PackageIdConflict { .. }
             | Self::ImageReferenceUnresolved { .. } => true,
-            Self::LayoutCacheDropped { .. }
+            Self::UnclosedFieldBoundary { .. }
+            | Self::LayoutCacheDropped { .. }
             | Self::XmlForbiddenCharsRemoved { .. }
             | Self::ObjectIdConflict { .. } => false,
         }
@@ -659,6 +667,7 @@ impl EncodeWarning {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::NoteHeadSkipped { .. } => "NOTE_HEAD_SKIPPED",
             Self::TitleMarkSkipped { .. } => "TITLE_MARK_SKIPPED",
@@ -698,7 +707,8 @@ impl EncodeWarning {
             | Self::TitleMarkSkipped { .. }
             | Self::NoteRestartIgnored { .. }
             | Self::ObjectIdConflict { .. } => None,
-            Self::XmlForbiddenCharsRemoved { part, .. }
+            Self::UnclosedFieldBoundary { part, .. }
+            | Self::XmlForbiddenCharsRemoved { part, .. }
             | Self::ContentLost { part, .. }
             | Self::ImageReferenceUnresolved { part, .. } => Some(part),
             Self::PackageIdConflict { .. } => Some(CONTENT_HPF_PART),
@@ -732,6 +742,7 @@ impl EncodeWarning {
             | Self::ImageReferenceUnresolved { part, location, .. } => {
                 Some(format!("{part} {location}"))
             }
+            Self::UnclosedFieldBoundary { part, .. } => Some(part.clone()),
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
             Self::PackageIdConflict { .. } => Some(format!("{CONTENT_HPF_PART} opf:item@id")),
             // The holders can sit in different parts; the place is the value.
@@ -758,6 +769,9 @@ impl EncodeWarning {
     #[must_use]
     pub fn message(&self) -> String {
         match self {
+            Self::UnclosedFieldBoundary { reason, .. } => {
+                format!("unclosed source field: {reason}")
+            }
             Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
             Self::NoteHeadSkipped { reason, .. } => format!("note number head skipped: {reason}"),
             Self::TitleMarkSkipped { reason, .. } => format!("titleMark skipped: {reason}"),
@@ -857,6 +871,9 @@ impl std::fmt::Display for EncodeWarning {
                 "binaryItemIDRef \"{reference}\" at {location} in {part} does not resolve to \
                  image or OLE data in the package"
             ),
+            Self::UnclosedFieldBoundary { part, reason } => {
+                write!(f, "unclosed source field in {part}: {reason}")
+            }
             Self::ObjectIdConflict { .. } => f.write_str(&self.message()),
         }
     }
@@ -934,6 +951,7 @@ mod is_semantic_loss_tests {
                 "OBJECT_ID_CONFLICT",
                 "PACKAGE_ID_CONFLICT",
                 "TITLE_MARK_SKIPPED",
+                "UNCLOSED_FIELD_BOUNDARY",
                 "XML_FORBIDDEN_CHARS_REMOVED",
             ]
         );
@@ -989,7 +1007,8 @@ mod is_semantic_loss_tests {
         let reasons = |ws: &[EncodeWarning]| {
             ws.iter()
                 .map(|w| match w {
-                    EncodeWarning::LayoutCacheDropped { reason, .. }
+                    EncodeWarning::UnclosedFieldBoundary { reason, .. }
+                    | EncodeWarning::LayoutCacheDropped { reason, .. }
                     | EncodeWarning::NoteHeadSkipped { reason, .. }
                     | EncodeWarning::TitleMarkSkipped { reason, .. }
                     | EncodeWarning::NoteRestartIgnored { reason, .. }
@@ -1246,8 +1265,28 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
-        let decoded = crate::HwpxDecoder::decode(base)?;
-        if crate::layout_edit::unchanged(&decoded, document, style_store, image_store)? {
+        let base = crate::decoder::HwpxEditBase::read(base)?;
+        Self::encode_with_edit_base(&base, document, style_store, image_store, options)
+    }
+
+    /// Encode against an immutable base already decoded for this operation.
+    /// Source claims are reverified against original bytes at output, including
+    /// when the complete original package can be returned unchanged.
+    ///
+    /// # Errors
+    /// Returns provenance, layout-analysis and encoding errors as
+    /// [`Self::encode_with_base`] does.
+    pub fn encode_with_edit_base(
+        base: &crate::decoder::HwpxEditBase,
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<EncodeOutcome> {
+        let decoded = base.decoded();
+        let base = base.bytes();
+        crate::HwpxDecoder::verify_source_provenance(document.sections(), decoded)?;
+        if crate::layout_edit::unchanged(decoded, document, style_store, image_store)? {
             // 이것을 실패시키는 것: Core만 비교하고 스타일/이미지/메타데이터를
             // 무시하거나 이 분기에서 새로 인코딩한 XML에 원본 캐시를 붙이기.
             // No token positions or layout inputs move: even unsupported XML
@@ -1258,7 +1297,8 @@ impl HwpxEncoder {
             crate::patch::RawPackage::read(base)?;
             let warnings = decoded
                 .warnings
-                .into_iter()
+                .iter()
+                .cloned()
                 .filter_map(|warning| match warning {
                     crate::DecodeWarning::ContentLost { part, path, kind, reason } => {
                         Some(EncodeWarning::ContentLost {
@@ -1270,6 +1310,9 @@ impl HwpxEncoder {
                             ),
                         })
                     }
+                    crate::DecodeWarning::UnclosedFieldBoundary { part, reason } => {
+                        Some(EncodeWarning::UnclosedFieldBoundary { part, reason })
+                    }
                     _ => None,
                 })
                 .collect();
@@ -1277,13 +1320,13 @@ impl HwpxEncoder {
         }
         let (prepared, mut warnings, output) = crate::layout_edit::prepare(
             base,
-            &decoded,
+            decoded,
             document,
             style_store,
             image_store,
             options,
         )?;
-        warnings.extend(decoded.warnings.into_iter().filter_map(|warning| match warning {
+        warnings.extend(decoded.warnings.iter().cloned().filter_map(|warning| match warning {
             crate::DecodeWarning::LayoutCacheDropped { path, reason } => {
                 Some(EncodeWarning::LayoutCacheDropped {
                     path,
@@ -1416,6 +1459,7 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<(EncodeOutcome, Vec<Vec<EncodeWarning>>)> {
+        crate::HwpxDecoder::verify_document_source(document)?;
         refuse_unknown_cell_zone_fills(document, style_store)?;
         // W0: ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
@@ -1431,7 +1475,25 @@ impl HwpxEncoder {
         // Step 1: Encode header
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
-        let mut warnings: Vec<EncodeWarning> = Vec::new();
+        let mut warnings: Vec<EncodeWarning> =
+            hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections())
+                .warnings()
+                .iter()
+                .filter_map(|w| {
+                    if let hwpforge_core::ValidationError::InvalidFieldBoundary {
+                        section_index,
+                        ..
+                    } = w
+                    {
+                        Some(EncodeWarning::UnclosedFieldBoundary {
+                            part: format!("Contents/section{section_index}.xml"),
+                            reason: w.to_string(),
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
         // #198: a font face loses its forbidden characters (with the other
         // controls) to `clean_font_name` before serialization, so the part
         // scan below cannot see them; they are counted here instead.

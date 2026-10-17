@@ -99,6 +99,7 @@ fn decode_optional_hwp_unit(value: i32, field_name: &str) -> HwpxResult<Option<H
 /// Result of parsing a section XML file.
 #[derive(Debug)]
 pub struct SectionParseResult {
+    pub(crate) source: super::source_map::SourceRecorder,
     /// Paragraphs extracted from the section.
     pub paragraphs: Vec<Paragraph>,
     /// Page settings extracted from `<hp:secPr>`, if present.
@@ -161,9 +162,13 @@ pub(crate) fn parse_section_with_images(
     chart_xmls: &HashMap<String, String>,
     image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<SectionParseResult> {
-    let xml = crate::wire_xml::preserve_ws_only_text(xml).map_err(|e| HwpxError::XmlParse {
-        file: part.into(),
-        detail: xml_error_detail(&e.into()),
+    let (annotated, source) =
+        super::source_map::SourceRecorder::read(xml).map_err(|error| match error {
+            HwpxError::XmlParse { detail, .. } => HwpxError::XmlParse { file: part.into(), detail },
+            other => other,
+        })?;
+    let xml = crate::wire_xml::preserve_ws_only_text(&annotated).map_err(|e| {
+        HwpxError::XmlParse { file: part.into(), detail: xml_error_detail(&e.into()) }
     })?;
     let section: HxSection = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: part.into(), detail: xml_error_detail(&e) })?;
@@ -172,6 +177,7 @@ pub(crate) fn parse_section_with_images(
     let mut headers = Vec::new();
     let mut footers = Vec::new();
     let mut ctx = DecodeCtx::for_section(section_index, part);
+    ctx.source = source;
     ctx.image_pixels = image_pixels.clone();
     let mut page_number = None;
     let mut column_settings = None;
@@ -287,6 +293,7 @@ pub(crate) fn parse_section_with_images(
         text_direction,
         begin_num,
         warnings: ctx.warnings,
+        source: ctx.source,
     })
 }
 
@@ -298,6 +305,8 @@ pub(crate) fn parse_section_with_images(
 /// [`enter`]: DecodeCtx::enter
 /// [`leave`]: DecodeCtx::leave
 pub(crate) struct DecodeCtx {
+    source: super::source_map::SourceRecorder,
+    last_origins: Vec<super::source_map::RunOrigin>,
     /// 수집된 비치명 경고 (SectionParseResult.warnings 로 흘러감).
     pub(crate) warnings: Vec<super::DecodeWarning>,
     path: Vec<super::PathSeg>,
@@ -352,6 +361,8 @@ impl DecodeCtx {
 
     pub(crate) fn for_section(section_index: usize, part: &str) -> Self {
         Self {
+            source: super::source_map::SourceRecorder::default(),
+            last_origins: Vec::new(),
             warnings: Vec::new(),
             path: vec![super::PathSeg::Section(section_index)],
             part: part.into(),
@@ -371,6 +382,8 @@ impl DecodeCtx {
     /// 용 문맥. `global` 은 패키지 전역 바탕쪽 번호(파일 번호)다.
     pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
         Self {
+            source: super::source_map::SourceRecorder::default(),
+            last_origins: Vec::new(),
             warnings: Vec::new(),
             path: vec![super::PathSeg::Section(section_index), super::PathSeg::MasterPage(global)],
             part: format!("Contents/masterpage{global}.xml"),
@@ -479,8 +492,10 @@ pub(crate) fn carried_field_starts(
     use crate::schema::section::HxRunChildKind as K;
     let mut carried = vec![false; run.ctrls.len()];
     let mut next_non_text: Option<(K, usize)> = None;
+    let mut text_elements = 0usize;
     for &(kind, idx) in order.iter().rev() {
         if kind == K::Text {
+            text_elements += 1;
             continue;
         }
         if kind == K::Ctrl {
@@ -512,10 +527,16 @@ pub(crate) fn carried_field_starts(
                 );
                 carried[idx] = supported
                     && (fb.sub_list.is_none() || fb.field_type == "MEMO")
-                    && (!closed || matches!(fb.field_type.as_str(), "BOOKMARK" | "FORMULA"));
+                    && (!closed
+                        || (fb.field_type == "CLICK_HERE" && text_elements > 1)
+                        || matches!(
+                            fb.field_type.as_str(),
+                            "BOOKMARK" | "FORMULA" | "MEMO" | "PAGE_NUM"
+                        ));
             }
         }
         next_non_text = Some((kind, idx));
+        text_elements = 0;
     }
     carried
 }
@@ -561,6 +582,74 @@ fn field_start_boundary(
         start.annotation = Some(result?);
     }
     Ok(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) })
+}
+
+/// Closed text-only memo spans use the public annotation control. Open or
+/// structurally interleaved spans remain boundaries so no body is invented.
+fn fold_closed_memos(runs: &mut Vec<Run>, origins: &mut Vec<super::source_map::RunOrigin>) {
+    use hwpforge_core::control::{FieldBoundary, FieldParameter};
+    let mut i = 0;
+    while i < runs.len() {
+        let Some(Control::FieldBoundary { boundary: FieldBoundary::Start(start) }) =
+            runs[i].content.as_control()
+        else {
+            i += 1;
+            continue;
+        };
+        if !hwpforge_core::field_view::memo_is_representable(start) {
+            i += 1;
+            continue;
+        }
+        let end = (i + 1..runs.len()).find(|&j| runs[j].content.plain_text().is_none());
+        let Some(end) = end.filter(|&j| {
+            matches!(runs[j].content.as_control(),
+            Some(Control::FieldBoundary { boundary: FieldBoundary::End { begin_id, .. } })
+                if begin_id == &start.id)
+        }) else {
+            i += 1;
+            continue;
+        };
+        let param = |key: &str| {
+            start
+                .parameters
+                .iter()
+                .find_map(|p| match p {
+                    FieldParameter::String { name, value, .. }
+                    | FieldParameter::Integer { name, value }
+                        if name == key =>
+                    {
+                        Some(value.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let mut metadata = hwpforge_core::MemoMetadata::default();
+        metadata.preserve_empty = true;
+        metadata.author = param("Author");
+        metadata.create_datetime = param("CreateDateTime");
+        metadata.command = param("Command");
+        metadata.id = param("ID");
+        metadata.number = param("Number").parse().unwrap_or_default();
+        metadata.shape_id_ref = param("MemoShapeIDRef").parse().unwrap_or(65535);
+        let cs = runs[i].char_shape_id;
+        let mut removed: Vec<_> = runs.drain(i..=end).collect();
+        let first = removed.remove(0);
+        removed.pop();
+        let RunContent::Control(c) = first.content else { unreachable!() };
+        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = *c else {
+            unreachable!()
+        };
+        let content = start.annotation.unwrap_or_default();
+        runs.insert(i, Run::control(Control::Memo { content, anchor_runs: removed, metadata }, cs));
+        let mut mapped: Vec<_> = origins.drain(i..=end).collect();
+        let mut first = mapped.remove(0);
+        let last = mapped.pop().unwrap_or_default();
+        first.boundaries = vec![first.node, last.node];
+        first.anchors = mapped;
+        origins.insert(i, first);
+        i += 1;
+    }
 }
 
 /// [`build_paragraph_wire_map`] 의 본체 — 인코더도 **방출한 run 트리**에
@@ -801,6 +890,7 @@ fn convert_paragraph_from(
     let body_runs = &hx_runs[..hx_runs.len() - usize::from(end_mark.is_some())];
 
     let mut runs = Vec::new();
+    let mut origins = Vec::new();
     // 지원하지 않는 필드 표현에서 버린 본문은 문단 단위로 보고한다.
     // 운반 가능한 열린 경계와 BOOKMARK·FORMULA 본문은 일반 run 으로 남는다.
     let mut lost_field_body = false;
@@ -826,7 +916,9 @@ fn convert_paragraph_from(
         let (mut converted_runs, lost) = result?;
         lost_field_body |= lost;
         runs.append(&mut converted_runs);
+        origins.append(&mut ctx.last_origins);
     }
+    fold_closed_memos(&mut runs, &mut origins);
     // Branch review A1: the dropped field body is lost content whether or
     // not the paragraph carries a line cache — editors that re-encode the
     // decode refuse it (`DecodeWarning::is_content_loss`), readers report it.
@@ -850,6 +942,13 @@ fn convert_paragraph_from(
             .first()
             .map_or(CharShapeIndex::new(0), |r| CharShapeIndex::new(r.char_pr_id_ref as usize));
         runs.push(Run::text("", char_shape_id));
+        let node = hx_runs.first().map_or(0, |r| r.origin);
+        let text = ctx.source.child(node, "t", 0);
+        origins.push(super::source_map::RunOrigin {
+            node,
+            texts: (text != 0).then_some(text).into_iter().collect(),
+            ..Default::default()
+        });
     }
 
     // Best-effort heading level: always decodes as `Some(1)` when a titleMark
@@ -898,8 +997,7 @@ fn convert_paragraph_from(
         // lost before deserialization. Raw mixed-text fixtures independently
         // assert wire lengths, Core text and cache boundaries below; comparing
         // another tree-derived total here would retain the same blind spot.
-        let emitted_core: u32 = runs
-            .iter()
+        let emitted_core: u32 = hwpforge_core::field_view::display_runs(&runs)
             .filter_map(|r| r.content.plain_text())
             .map(|t| t.encode_utf16().count() as u32)
             .sum();
@@ -968,6 +1066,7 @@ fn convert_paragraph_from(
         style_id,
         layout_cache,
     };
+    ctx.source.record_paragraph(hx.source_origin, &paragraph, origins);
     Ok((paragraph, page_settings))
 }
 
@@ -1015,6 +1114,9 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     }
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
+    let mut origins = Vec::new();
+    let mut body_sources = Vec::new();
+    let mut folded_begin = 0usize;
 
     // W1a (이미지/글상자 에픽): 자식을 **문서 순서**(child_order 사이드카)로
     // 평탄화한다 — 종전 by-kind 고정 순서는 `<t>a</t><pic/><t>b</t>` 를
@@ -1045,12 +1147,36 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
     let mut lost_body = false;
 
     for &(kind, idx) in &order {
+        let tag = match kind {
+            HxRunChildKind::Text => "t",
+            HxRunChildKind::Table => "tbl",
+            HxRunChildKind::Picture => "pic",
+            HxRunChildKind::Ctrl => "ctrl",
+            HxRunChildKind::Rect => "rect",
+            HxRunChildKind::Line => "line",
+            HxRunChildKind::Ellipse => "ellipse",
+            HxRunChildKind::Polygon => "polygon",
+            HxRunChildKind::Curve => "curve",
+            HxRunChildKind::TextArt => "textart",
+            HxRunChildKind::ConnectLine => "connectLine",
+            HxRunChildKind::Container => "container",
+            HxRunChildKind::Equation => "equation",
+            HxRunChildKind::Dutmal => "dutmal",
+            HxRunChildKind::Compose => "compose",
+            _ => "",
+        };
+        let source_id = ctx.source.child(hx.origin, tag, idx);
+        if kind == HxRunChildKind::Ctrl && hx.ctrls[idx].field_begin.is_some() {
+            folded_begin = ctx.source.child(source_id, "fieldBegin", 0);
+        }
+        let emitted_before = runs.len();
         match kind {
             HxRunChildKind::Text => {
                 let text = &hx.texts[idx];
                 if field_begin.is_some() {
                     // 마커 사이 텍스트 = 필드 본문 (문서 순서라 무모호).
                     field_body.push_str(&text.text());
+                    body_sources.push(source_id);
                     continue;
                 }
                 let content = text.to_run_content();
@@ -1152,6 +1278,48 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             }
             HxRunChildKind::SecPr | HxRunChildKind::TitleMark | HxRunChildKind::StrayText => {}
         }
+        for run in &mut runs[emitted_before..] {
+            let texts = match &run.content {
+                RunContent::Text(_) | RunContent::InlineText(_) => vec![source_id],
+                RunContent::Control(_) if !body_sources.is_empty() => {
+                    std::mem::take(&mut body_sources)
+                }
+                _ => Vec::new(),
+            };
+            let node = match run.content.as_control() {
+                Some(Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(_),
+                }) => ctx.source.child(source_id, "fieldBegin", 0),
+                Some(Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::End { .. },
+                }) => ctx.source.child(source_id, "fieldEnd", 0),
+                _ => source_id,
+            };
+            if let RunContent::Control(c) = &mut run.content {
+                if let Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                } = c.as_mut()
+                {
+                    ctx.source.order_parameters(node, &mut start.parameters);
+                }
+            }
+            let end = ctx.source.child(source_id, "fieldEnd", 0);
+            let boundaries = if folded_begin != 0
+                && end != 0
+                && run.content.as_control().is_some()
+                && !hwpforge_core::field_view::is_boundary(&run.content)
+            {
+                vec![folded_begin, end]
+            } else {
+                Vec::new()
+            };
+            origins.push(super::source_map::RunOrigin {
+                node,
+                texts,
+                boundaries,
+                ..Default::default()
+            });
+        }
     }
 
     // A begin left open at the run's end: its body text is not emitted.
@@ -1169,6 +1337,8 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
         }
     }
 
+    origins.resize_with(runs.len(), Default::default);
+    ctx.last_origins = origins;
     Ok((runs, lost_body))
 }
 
@@ -1237,17 +1407,10 @@ fn convert_ctrl_child<'a>(
         // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
         if let Some(end) = &ctrl.field_end {
             if let Some(fb) = field_begin.take() {
-                let run = decode_field_control(
-                    fb,
-                    field_body,
-                    *field_begin_char_shape,
-                    depth,
-                    true,
-                    ctx,
-                )?;
+                let run = decode_field_control(fb, field_body, *field_begin_char_shape, true);
                 // 접힌 본문의 보존 목록. 범위로 운반한 BOOKMARK·FORMULA 와
                 // 열린 필드는 이 갈래를 타지 않고 일반 run 으로 본문을 남긴다.
-                // 이것을 실패시키는 것: Memo 를 빼기 또는 미지원 종류까지 승인하기.
+                // 이것을 실패시키는 것: 미지원 종류의 본문까지 보존됐다고 승인하기.
                 let carried = run.as_ref().is_some_and(|r| {
                     matches!(
                         &r.content,
@@ -2079,6 +2242,7 @@ fn is_injected_note_spacer_run(run: &HxRun) -> bool {
 /// 구조적으로 방지한다.
 fn hx_run_has_no_objects(run: &HxRun) -> bool {
     let HxRun {
+        origin: _,
         char_pr_id_ref: _,
         sec_pr,
         texts: _, // head 는 비어야·spacer 는 " " 하나 — 호출부 별도 검사
@@ -2173,10 +2337,8 @@ fn decode_field_control(
     fb: &HxFieldBegin,
     text: &str,
     char_shape_id: CharShapeIndex,
-    depth: usize,
     unambiguous_body: bool,
-    ctx: &mut DecodeCtx,
-) -> HwpxResult<Option<Run>> {
+) -> Option<Run> {
     let control = match fb.field_type.as_str() {
         "HYPERLINK" => {
             let url = get_field_param(fb, "Path").unwrap_or_default();
@@ -2186,8 +2348,8 @@ fn decode_field_control(
             name: fb.name.clone(),
             bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
         },
-        "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
-            let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
+        "CLICK_HERE" | "DATE" | "TIME" | "DOC_SUMMARY" | "USER_INFO" => {
+            let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().ok()?;
             // #120/#136: round-trip the cached body value. ClickHere 의 본문
             // `<hp:t>` 는 사용자가 채운 값이다 — 미채움 상태에서는 본문 ==
             // Direction 힌트이고, 인코더가 이를 그대로 방출하므로 verbatim
@@ -2307,31 +2469,9 @@ fn decode_field_control(
                 display_text: if unambiguous_body { text.to_string() } else { String::new() },
             }
         }
-        "MEMO" => {
-            // Memo body is in subList inside fieldBegin
-            let content = if let Some(sub_list) = &fb.sub_list {
-                ctx.enter(super::PathSeg::Memo);
-                let result = decode_sublist_paragraphs(sub_list, depth, ctx);
-                ctx.leave();
-                result?
-            } else {
-                Vec::new()
-            };
-            Control::Memo {
-                content,
-                // fieldBegin 의 subList 는 메모, begin/end 사이 글자는 앵커다.
-                // 이것을 실패시키는 것: 앵커를 빈 목록으로 되돌리기.
-                anchor_runs: if text.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![Run::text(text, char_shape_id)]
-                },
-                metadata: hwpforge_core::MemoMetadata::default(),
-            }
-        }
-        _ => return Ok(None),
+        _ => return None,
     };
-    Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
+    Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
 }
 
 // Shape decode functions (decode_textbox, decode_line, decode_ellipse, decode_polygon)
@@ -3381,6 +3521,7 @@ mod tests {
     /// 빈 HxRun (HxRun 은 Default 미파생: 신규 필드 시 여기서 컴파일 실패).
     fn empty_hx_run() -> crate::schema::section::HxRun {
         crate::schema::section::HxRun {
+            origin: 0,
             char_pr_id_ref: 0,
             sec_pr: None,
             texts: Vec::new(),
@@ -6002,9 +6143,14 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let controls = find_controls(&result);
-        let memo = controls.iter().find(|c| matches!(c, hwpforge_core::Control::Memo { .. }));
-        assert!(memo.is_some(), "MEMO field must produce Memo control");
-        if let Some(hwpforge_core::Control::Memo { content, .. }) = memo {
+        let memo = controls.iter().find_map(|c| match c {
+            Control::FieldBoundary {
+                boundary: hwpforge_core::control::FieldBoundary::Start(s),
+            } => s.annotation.as_ref(),
+            _ => None,
+        });
+        assert!(memo.is_some(), "MEMO field must preserve annotation");
+        if let Some(content) = memo {
             assert_eq!(content.len(), 1, "memo should have 1 paragraph from subList");
             assert_eq!(
                 content[0].runs[0].content.as_text(),

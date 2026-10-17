@@ -37,7 +37,7 @@ pub(super) fn build_hyperlink_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let escaped_url = escape_xml(url);
+    let escaped_url = escape_field_value(url);
     let text_xml = build_text_element_xml(text);
     // Unique begin_id per field instance (matches build_field_run_xml pattern).
     // beginIDRef must reference this id, NOT the fieldid.
@@ -93,7 +93,7 @@ pub(super) fn build_bookmark_span_start_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let escaped_name = escape_xml(name);
+    let escaped_name = escape_field_value(name);
     // Signed-32-bit-safe base; MUST match `build_bookmark_span_end_run_xml`
     // so the paired fieldEnd `beginIDRef` references this `id`.
     let begin_id = super::super::object_ids::field_id(1_200_000_000_u64 + field_id as u64);
@@ -198,8 +198,8 @@ pub(super) fn build_clickhere_field_xml(
     body: &str,
 ) -> String {
     let begin_id = super::super::object_ids::field_id(begin_id);
-    let escaped_hint = escape_xml(hint);
-    let escaped_name = escape_xml(name);
+    let escaped_hint = escape_field_value(hint);
+    let escaped_name = escape_field_value(name);
     let hint_len = hint.encode_utf16().count();
     let help_len = help.encode_utf16().count();
     let command = clickhere_command_string(hint, help, hint_len, help_len);
@@ -225,7 +225,7 @@ pub(super) fn build_clickhere_field_xml(
         cpr = char_pr_id_ref,
         bid = begin_id,
         name = escaped_name,
-        cmd = escape_xml(&command),
+        cmd = escape_field_value(&command),
         hint = escaped_hint,
         display = build_text_element_xml(if body.is_empty() { hint } else { body }),
     )
@@ -304,8 +304,8 @@ pub(super) fn build_summary_run_xml_raw(
     editable: bool,
 ) -> String {
     let begin_id = super::super::object_ids::field_id(begin_id);
-    let escaped_name = escape_xml(name);
-    let escaped_cmd = escape_xml(command);
+    let escaped_name = escape_field_value(name);
+    let escaped_cmd = escape_field_value(command);
     let editable_bit = u8::from(editable);
     format!(
         concat!(
@@ -364,7 +364,7 @@ pub(super) fn build_path_field_run_xml_raw(
     begin_id: u64,
 ) -> String {
     let begin_id = super::super::object_ids::field_id(begin_id);
-    let escaped_cmd = escape_xml(command);
+    let escaped_cmd = escape_field_value(command);
     // Wave 12n Step 6.5 / #120: the body between fieldBegin/fieldEnd carries
     // the cached resolved path (was a bare `<hp:t/>`; an empty body triggers
     // the "낮은 보안 수준 복구" warning — verified against
@@ -476,7 +476,7 @@ pub(super) fn build_auto_number_run_xml(
         AutoNumberKind::Equation => "EQUATION",
         _ => return None,
     };
-    let ch = |c: Option<char>| c.map(|c| escape_xml(&c.to_string())).unwrap_or_default();
+    let ch = |c: Option<char>| c.map(|c| escape_field_value(&c.to_string())).unwrap_or_default();
     Some(format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -584,7 +584,7 @@ pub(super) fn build_crossref_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let target_token = escape_xml(&crossref_target_for_command(target, ref_type));
+    let target_token = escape_field_value(&crossref_target_for_command(target, ref_type));
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let n1 = ref_type_wire_code(ref_type);
@@ -659,7 +659,7 @@ pub(super) fn build_hwp5_crossref_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let escaped_target_name = escape_xml(target_name);
+    let escaped_target_name = escape_field_value(target_name);
     let escaped_display_text = build_text_element_xml(display_text);
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
@@ -829,41 +829,47 @@ pub(super) fn build_field_boundary_xml(
                 let space = if space.is_empty() {
                     String::new()
                 } else {
-                    format!(r#" xml:space="{}""#, escape_xml(space))
+                    format!(r#" xml:space="{}""#, escape_field_value(space))
                 };
                 parameters.push_str(&format!(
                     r#"<hp:{tag} name="{}"{space}>{}</hp:{tag}>"#,
-                    escape_xml(name),
-                    escape_xml(value),
+                    escape_field_value(name),
+                    escape_field_value(value),
                 ));
             }
             if let Some(name) = &start.parameter_name {
                 parameters = format!(
                     r#"<hp:parameters cnt="{}" name="{}">{parameters}</hp:parameters>"#,
                     start.parameters.len(),
-                    escape_xml(name)
+                    escape_field_value(name)
                 );
             } else if !parameters.is_empty() {
                 return None;
             }
             format!(
                 r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" dirty="{}" zorder="{}" fieldid="{}" metaTag="{}">{parameters}{annotation_xml}</hp:fieldBegin>"#,
-                escape_xml(&start.id),
-                escape_xml(&start.kind),
-                escape_xml(&start.name),
-                escape_xml(&start.editable),
-                escape_xml(&start.dirty),
-                escape_xml(&start.z_order),
-                escape_xml(&start.field_id),
-                escape_xml(&start.meta_tag)
+                escape_field_value(&start.id),
+                escape_field_value(&start.kind),
+                escape_field_value(&start.name),
+                escape_field_value(&start.editable),
+                escape_field_value(&start.dirty),
+                escape_field_value(&start.z_order),
+                escape_field_value(&start.field_id),
+                escape_field_value(&start.meta_tag)
             )
         }
         FieldBoundary::End { begin_id, field_id } => format!(
             r#"<hp:fieldEnd beginIDRef="{}" fieldid="{}"/>"#,
-            escape_xml(begin_id),
-            escape_xml(field_id),
+            escape_field_value(begin_id),
+            escape_field_value(field_id),
         ),
         _ => return None,
     };
     Some(format!(r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:ctrl>{inner}</hp:ctrl></hp:run>"#))
+}
+
+/// XML normalizes literal control whitespace; references preserve its value.
+pub(super) fn escape_field_value(value: &str) -> String {
+    // 이것을 실패시키는 것: CR·TAB·LF 를 문자 참조 대신 그대로 출력하기.
+    super::escape_xml(value).replace('\r', "&#13;").replace('\t', "&#9;").replace('\n', "&#10;")
 }

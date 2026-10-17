@@ -213,6 +213,18 @@ pub enum FieldBoundary {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct FieldStart {
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) recovery: crate::source_xml::RecoveryStamp,
+    /// The source has no matching end in this flow. Readers retain the
+    /// original start and body without synthesizing an end. The remaining
+    /// flow is protected from editing. This serialized flag is descriptive,
+    /// not validation authority: recovery requires original package bytes
+    /// with a matching unmatched start. HWPX output also verifies the original
+    /// SourceMap address and the current Core address/ID. Source claims and
+    /// package bytes are never serialized; the flag alone is invalid.
+    #[serde(default)]
+    pub unclosed: bool,
     /// Instance identifier, shared by the end marker.
     pub id: String,
     /// Field kind, such as `CLICK_HERE`, `BOOKMARK` or `FORMULA`.
@@ -231,7 +243,7 @@ pub struct FieldStart {
     pub meta_tag: String,
     /// Optional parameter group name; `None` means no parameter group.
     pub parameter_name: Option<String>,
-    /// Scalar field parameters in their source order within each type.
+    /// Scalar field parameters in their original cross-type child order.
     pub parameters: Vec<FieldParameter>,
     /// Annotation paragraphs owned by the start, distinct from the visible
     /// range body in ordinary runs. `None` means no annotation list.
@@ -266,4 +278,12 @@ pub enum FieldParameter {
         /// Parameter value.
         value: String,
     },
+}
+
+impl FieldStart {
+    /// Descriptive source claim. HWPX output checks the independent base SourceMap;
+    /// local Core pairing validation alone does not certify this correspondence.
+    pub fn source_claim(&self) -> Option<&crate::source_xml::UnclosedOrigin> {
+        self.recovery.0.as_ref()
+    }
 }

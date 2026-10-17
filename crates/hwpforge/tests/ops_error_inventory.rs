@@ -279,6 +279,7 @@ const WARNING_MAPPING: Table = &[
     (
         "EncodeWarning",
         &[
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             ("NoteHeadSkipped", "NOTE_HEAD_SKIPPED"),
             ("TitleMarkSkipped", "TITLE_MARK_SKIPPED"),
@@ -293,6 +294,8 @@ const WARNING_MAPPING: Table = &[
     (
         "DecodeWarning",
         &[
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
+            ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             ("ContentLost", "CONTENT_LOST"),
@@ -703,6 +706,13 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
         "EncodeWarning",
         vec![
             (
+                "UnclosedFieldBoundary",
+                OpsWarning::Encode(EncodeWarning::UnclosedFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "source open".into(),
+                }),
+            ),
+            (
                 "LayoutCacheDropped",
                 OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
                     path: path(),
@@ -801,6 +811,20 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "DecodeWarning",
         vec![
+            (
+                "UnclosedFieldBoundary",
+                OpsWarning::Decode(DecodeWarning::UnclosedFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "unpaired source start".into(),
+                }),
+            ),
+            (
+                "InvalidFieldBoundary",
+                OpsWarning::Decode(DecodeWarning::InvalidFieldBoundary {
+                    part: "Contents/section0.xml".into(),
+                    reason: "unpaired end".into(),
+                }),
+            ),
             (
                 "UnknownEnumValue",
                 OpsWarning::Decode(DecodeWarning::UnknownEnumValue {

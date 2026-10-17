@@ -147,7 +147,7 @@ pub enum CellEditError {
         /// How many cells matched.
         count: usize,
     },
-    /// The target cell contains non-text content (table/image/control).
+    /// The target cell contains non-text content or lies within a protected field.
     NonTextContent {
         /// Table ordinal.
         table: usize,
@@ -282,6 +282,7 @@ pub fn apply_set_cells(
 ) -> Result<SetCellOutcome, CellEditError> {
     // ── preflight: resolve every spec before touching anything ──────
     let entries = tables_in_document(document);
+    let fields = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());
     let mut grids: HashMap<usize, TableGrid> = HashMap::new();
     let mut resolved: Vec<ResolvedEdit> = Vec::with_capacity(specs.len());
 
@@ -341,7 +342,7 @@ pub fn apply_set_cells(
         };
 
         let target_cell = &entry.table.rows[cell.row_idx].cells[cell.cell_idx];
-        if !cell_is_text_only(target_cell) {
+        if crate::stamp::table_in_field(entry, &fields) || !cell_is_text_only(target_cell) {
             return Err(CellEditError::NonTextContent { table: spec.table, anchor: cell.anchor });
         }
 
@@ -624,7 +625,17 @@ impl HwpxCellEditor {
         // their error code.
         reject_input_content_loss(&d0.warnings).map_err(map_admission_error)?;
 
-        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
+        for spec in specs {
+            d0.require_source_table(spec.table).map_err(|e| CellEditError::Codec(e.to_string()))?;
+        }
+        let HwpxDocument {
+            source_maps: _,
+            source_basis: _,
+            mut document,
+            style_store,
+            image_store,
+            warnings: decode_warnings,
+        } = d0;
         // Each text is cleaned once, before the edit, so the cell holds the
         // cleaned text and the encoder's part scan finds nothing left of it to
         // report. The warning names the anchor the edit resolved to, which is

@@ -7,7 +7,7 @@
 use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
-use hwpforge_foundation::{CharShapeIndex, FieldType, FontIndex, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
 use serde::{Deserialize, Serialize};
 
@@ -310,12 +310,12 @@ pub fn inspect(hwpx: &[u8], opts: &InspectOptions) -> Result<InspectOutput, OpsE
     let document = &decoded.document;
     let metadata = document.metadata();
 
-    let mut fields: Vec<String> = Vec::new();
+    let fields = field_names(document.sections());
     let mut section_details: Vec<InspectSection> = Vec::new();
 
     for (index, section) in document.sections().iter().enumerate() {
         let mut counts = Counts::default();
-        section.for_each_paragraph(|paragraph| counts.visit(paragraph, &mut fields));
+        section.for_each_paragraph(|paragraph| counts.visit(paragraph));
         let top_level = section.content_counts();
         let objects = walk::object_counts(section);
         let paragraphs = walk::paragraph_counts(section);
@@ -385,7 +385,7 @@ impl Counts {
     ///
     /// The traversal already descends into nested paragraphs, so this only
     /// looks at the runs the paragraph owns directly.
-    fn visit(&mut self, paragraph: &Paragraph, fields: &mut Vec<String>) {
+    fn visit(&mut self, paragraph: &Paragraph) {
         self.paragraphs += 1;
         for run in &paragraph.runs {
             match &run.content {
@@ -396,11 +396,6 @@ impl Counts {
                     // A group's pictures are not runs; the paragraph walk
                     // does not reach them as it does a text box's runs.
                     Control::Group { children, .. } => self.images += group_pictures(children),
-                    Control::Field {
-                        field_type: FieldType::ClickHere, name: Some(name), ..
-                    } => {
-                        fields.push(name.clone());
-                    }
                     _ => {}
                 },
                 RunContent::Text(_) | RunContent::InlineText(_) => {}
@@ -408,6 +403,15 @@ impl Counts {
             }
         }
     }
+}
+
+fn field_names(sections: &[hwpforge_core::Section]) -> Vec<String> {
+    hwpforge_core::field_inventory::FieldInventory::from_sections(sections)
+        .fields()
+        .iter()
+        .filter(|f| f.kind() == "CLICK_HERE")
+        .filter_map(|f| f.name().clone())
+        .collect()
 }
 
 /// Pictures in a group, nested groups included.
@@ -472,7 +476,7 @@ fn summarize_styles(store: &HwpxStyleStore) -> InspectStyles {
 mod tests {
     use super::*;
     use hwpforge_core::run::Run;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, FieldType, ParaShapeIndex};
 
     fn click_here(name: Option<&str>) -> Control {
         Control::Field {
@@ -494,8 +498,11 @@ mod tests {
         paragraph.runs.push(Run::control(click_here(Some("소속")), shape));
 
         let mut counts = Counts::default();
-        let mut fields = Vec::new();
-        counts.visit(&paragraph, &mut fields);
+        counts.visit(&paragraph);
+        let fields = field_names(&[hwpforge_core::Section::with_paragraphs(
+            vec![paragraph],
+            hwpforge_core::PageSettings::a4(),
+        )]);
 
         assert_eq!(fields, ["성명", "소속"], "unnamed fields cannot be addressed");
         assert_eq!(counts.paragraphs, 1);
@@ -505,8 +512,8 @@ mod tests {
     #[test]
     fn a_paragraph_without_runs_still_counts_as_one() {
         let mut counts = Counts::default();
-        let mut fields = Vec::new();
-        counts.visit(&Paragraph::new(ParaShapeIndex::new(0)), &mut fields);
+        counts.visit(&Paragraph::new(ParaShapeIndex::new(0)));
+        let fields = field_names(&[]);
 
         assert_eq!(counts.paragraphs, 1);
         assert!(fields.is_empty());
@@ -540,7 +547,7 @@ mod tests {
         let mut paragraph = Paragraph::new(ParaShapeIndex::new(0));
         paragraph.runs.push(Run::control(outer, CharShapeIndex::new(0)));
         let mut counts = Counts::default();
-        counts.visit(&paragraph, &mut Vec::new());
+        counts.visit(&paragraph);
         assert_eq!(counts.images, 2);
     }
 }

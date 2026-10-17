@@ -34,13 +34,13 @@
 //! removed. Interleaved inserts can therefore surface as change pairs —
 //! a documented limitation (LCS alignment is follow-up work).
 
+#[cfg(test)]
 use hwpforge_core::control::Control;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
 use hwpforge_core::table::grid::TableGrid;
 use hwpforge_core::table::Table;
-use hwpforge_foundation::FieldType;
 
 use crate::decoder::package::PackageReader;
 use crate::error::HwpxResult;
@@ -511,39 +511,24 @@ fn classify_pair(
 /// Blanks every field body (recursing into table cells) so field-value
 /// changes are owned by the field axis alone.
 fn strip_field_bodies(paragraph: &Paragraph) -> Paragraph {
-    let mut p = paragraph.clone();
-    strip_in_paragraph(&mut p);
-    p
-}
-
-fn strip_in_paragraph(paragraph: &mut Paragraph) {
-    for run in &mut paragraph.runs {
-        match &mut run.content {
-            RunContent::Control(control) => {
-                // Mirror the field axis EXACTLY: `diff_fields` only reports
-                // named ClickHere fields (that is all `list_fields` emits by
-                // name), so only those bodies may be blanked here. Blanking
-                // any wider set would let a field-body change vanish from
-                // every semantic axis at once — unnamed or non-ClickHere
-                // field changes must instead fall through to `raw`.
-                if let Control::Field { field_type, name, display_text, .. } = control.as_mut() {
-                    if *field_type == FieldType::ClickHere && name.is_some() {
-                        display_text.clear();
-                    }
-                }
-            }
-            RunContent::Table(table) => {
-                for row in &mut table.rows {
-                    for cell in &mut row.cells {
-                        for p in &mut cell.paragraphs {
-                            strip_in_paragraph(p);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+    use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
+    let mut sections =
+        [Section::with_paragraphs(vec![paragraph.clone()], hwpforge_core::PageSettings::a4())];
+    let snapshot = sections.clone();
+    let inventory = FieldInventory::from_sections(&snapshot);
+    let values: Vec<_> = inventory
+        .fields()
+        .iter()
+        .filter(|f| {
+            f.kind() == "CLICK_HERE"
+                && f.name().is_some()
+                && f.editability() == FieldEditability::Editable
+        })
+        .map(|f| (f, ""))
+        .collect();
+    // Unsupported ranges remain visible on the raw axis as well.
+    FieldInventory::replace_values(&mut sections, &values);
+    sections[0].paragraphs.remove(0)
 }
 
 /// Attempts to explain a paragraph pair entirely as table-cell text

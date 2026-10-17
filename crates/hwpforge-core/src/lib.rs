@@ -87,6 +87,7 @@ pub mod column;
 pub mod control;
 pub mod document;
 pub mod error;
+pub mod field_inventory;
 pub mod frame;
 pub mod image;
 pub mod inline;
@@ -136,3 +137,12 @@ pub use section::{
 pub use style_lookup::{BorderFillLines, BorderLine, BorderLineKind, FillKind, StyleLookup};
 pub use tab::{TabDef, TabStop};
 pub use table::{CellZone, Table, TableCell, TableRow};
+
+/// Shared semantic node paths and categories.
+pub mod node_path;
+
+/// Immutable original XML evidence.
+pub mod source_xml;
+
+/// Shared field presentation for output consumers.
+pub mod field_view;

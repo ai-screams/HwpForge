@@ -169,6 +169,14 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
         }
     }
 
+    // 이것을 실패시키는 것: 독립 흐름의 경계 검증을 생략하기.
+    if let Some(error) = crate::field_inventory::FieldInventory::from_sections(sections)
+        .diagnostics()
+        .first()
+        .cloned()
+    {
+        return Err(error);
+    }
     Ok(())
 }
 

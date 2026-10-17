@@ -76,7 +76,7 @@ pub(crate) fn stale_paragraphs(
 /// whose direct children the paragraphs are) and the paragraph hosting that
 /// list. Element names are compared without their prefix, as the decoder
 /// does.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ParagraphFlow {
     spans: Vec<Range<usize>>,
     caches: Vec<Vec<Range<usize>>>,
@@ -88,106 +88,40 @@ pub(crate) struct ParagraphFlow {
 }
 
 impl ParagraphFlow {
-    /// Scans `xml` (a section part).
-    ///
-    /// # Errors
-    ///
-    /// [`HwpxError::XmlParse`] when the XML cannot be read.
-    pub(crate) fn scan(xml: &str) -> HwpxResult<Self> {
-        use crate::patch::{buffer_position, event_start};
-        use quick_xml::events::Event;
-        use quick_xml::Reader;
-
+    /// Build from the decoder's original-element records, without reading XML.
+    pub(crate) fn from_source(source: &hwpforge_core::source_xml::XmlSource) -> Self {
         let mut flow = Self::default();
-        let mut reader = Reader::from_str(xml);
-        reader.config_mut().trim_text(false);
-        let mut buf = Vec::new();
-        let mut stack: Vec<Open> = Vec::new();
-        loop {
-            let event = reader.read_event_into(&mut buf).map_err(|e| HwpxError::XmlParse {
-                file: "section.xml".into(),
-                detail: e.to_string(),
-            })?;
-            let end = buffer_position(&reader)?;
-            let (start, is_empty) = match &event {
-                Event::Start(start) => (start, false),
-                Event::Empty(start) => (start, true),
-                Event::End(_) => {
-                    flow.close(stack.pop(), end);
-                    buf.clear();
-                    continue;
-                }
-                Event::Eof => break,
-                _ => {
-                    buf.clear();
-                    continue;
-                }
-            };
-            let begin = event_start(end, start.len(), is_empty)?;
-            let local = start.local_name();
-            let mut open = Open {
-                paragraph: None,
-                list: None,
-                cache: None,
-                page_level: matches!(local.as_ref(), "header" | "footer"),
-            };
-            match local.as_ref() {
+        let mut nearest = vec![None; source.elements().len()];
+        let mut hosts = nearest.clone();
+        let mut lists = std::collections::HashMap::new();
+        for (id, element) in source.elements().iter().enumerate().skip(1) {
+            let parent = element.parent();
+            nearest[id] = nearest[parent];
+            hosts[id] = hosts[parent];
+            match element.name() {
+                "header" | "footer" => hosts[id] = None,
                 "p" => {
-                    let parent = stack.iter().rev().find_map(|o| o.paragraph);
-                    // A header or footer is laid out apart from the body: its
-                    // text does not move the lines of the paragraph holding
-                    // its control, so its flow has no host.
-                    // 이것을 실패시키는 것: 머리말·꼬리말도 host 사슬로 잇기
-                    // (`patch_drops_the_changed_flow_tail_and_host_chain` 의
-                    // 머리말 편집이 본문 캐시를 모두 지운다).
-                    let host =
-                        stack.iter().rev().take_while(|o| !o.page_level).find_map(|o| o.paragraph);
-                    let list = match stack.last_mut() {
-                        Some(parent) => match parent.list {
-                            Some(list) => list,
-                            None => {
-                                flow.list_host.push(host);
-                                parent.list = Some(flow.list_host.len() - 1);
-                                flow.list_host.len() - 1
-                            }
-                        },
-                        None => {
-                            flow.list_host.push(None);
-                            flow.list_host.len() - 1
-                        }
-                    };
-                    flow.spans.push(begin..end);
+                    let list = *lists.entry(parent).or_insert_with(|| {
+                        flow.list_host.push(hosts[parent]);
+                        flow.list_host.len() - 1
+                    });
+                    let paragraph = flow.spans.len();
+                    flow.spans.push(element.outer());
                     flow.caches.push(Vec::new());
                     flow.para_list.push(list);
-                    flow.parent.push(parent);
-                    open.paragraph = Some(flow.spans.len() - 1);
+                    flow.parent.push(nearest[parent]);
+                    nearest[id] = Some(paragraph);
+                    hosts[id] = Some(paragraph);
                 }
-                "linesegarray" => {
-                    open.cache = stack.last().and_then(|o| o.paragraph).map(|p| (p, begin));
+                "linesegarray" if source.elements()[parent].name() == "p" => {
+                    if let Some(paragraph) = nearest[parent] {
+                        flow.caches[paragraph].push(element.outer());
+                    }
                 }
                 _ => {}
             }
-            if is_empty {
-                flow.close(Some(open), end);
-            } else {
-                stack.push(open);
-            }
-            buf.clear();
         }
-        Ok(flow)
-    }
-
-    /// Ends the element `open`, which closed at byte `end`.
-    fn close(&mut self, open: Option<Open>, end: usize) {
-        let Some(open) = open else {
-            return;
-        };
-        if let Some(paragraph) = open.paragraph {
-            self.spans[paragraph].end = end;
-        }
-        if let Some((paragraph, start)) = open.cache {
-            self.caches[paragraph].push(start..end);
-        }
+        flow
     }
 
     /// The innermost paragraph whose span holds byte `offset`.
@@ -214,18 +148,6 @@ impl ParagraphFlow {
     ) -> Vec<Range<usize>> {
         stale_caches(&self.caches, &self.para_list, &self.list_host, paragraphs, &mut || {})
     }
-}
-
-/// One open element of [`ParagraphFlow::scan`].
-struct Open {
-    /// This element's index when it is a paragraph.
-    paragraph: Option<usize>,
-    /// The list its direct paragraph children form, made on the first.
-    list: Option<usize>,
-    /// The paragraph and start of a `linesegarray` directly under it.
-    cache: Option<(usize, usize)>,
-    /// A header or footer: the flows inside it have no host.
-    page_level: bool,
 }
 
 /// Writes `xml` with each `(range, replacement)` applied, in one pass.

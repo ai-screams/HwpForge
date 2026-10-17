@@ -96,6 +96,7 @@ const AUDITED: &[Audited] = &[
         file: "crates/hwpforge-smithy-hwpx/src/encoder/mod.rs",
         enum_name: "EncodeWarning",
         table: &[
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("LayoutCacheDropped", "LAYOUT_CACHE_DROPPED"),
             // OTHER by design: these three carry no CLI wording, so `ops`
             // keeps their Debug text under the CLI's own `OTHER` spelling
@@ -124,6 +125,8 @@ const AUDITED: &[Audited] = &[
             // Reported under the decoder's own code (`DecodeWarning::code`).
             ("ContentLost", "CONTENT_LOST"),
             ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
+            ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
+            ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
         ],
     },
     Audited {

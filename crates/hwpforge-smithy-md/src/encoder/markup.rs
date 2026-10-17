@@ -854,6 +854,21 @@ fn entity_follows(rest: &[char]) -> bool {
     (1..=32).contains(&n) && body.get(n) == Some(&';')
 }
 
+/// A closed-grammar element opening. Document values enter only as escaped
+/// attributes; element and attribute names are static encoder syntax.
+pub(crate) fn lossless_element(
+    tag: &'static str,
+    attrs: &[(&'static str, &str)],
+    empty: bool,
+) -> crate::error::MdResult<Html> {
+    let mut out = format!("<{tag}");
+    for (name, value) in attrs {
+        write!(out, " {name}=\"{}\"", crate::lossless_grammar::escape_attr(value)?).unwrap();
+    }
+    out.push_str(if empty { "/>" } else { ">" });
+    Ok(Html(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3220,6 +3220,11 @@
       "description": "Metadata of a field whose text lives in ordinary runs.\n\nString-valued flags retain the authored spelling without inventing a\nvalue when the source omitted one. Parameters retain their scalar type,\nname and value; none are evaluated by Core.",
       "type": "object",
       "properties": {
+        "unclosed": {
+          "description": "The source has no matching end in this flow. Readers retain the\noriginal start and body without synthesizing an end. The remaining\nflow is protected from editing. This serialized flag is descriptive,\nnot validation authority: recovery requires original package bytes\nwith a matching unmatched start. HWPX output also verifies the original\nSourceMap address and the current Core address/ID. Source claims and\npackage bytes are never serialized; the flag alone is invalid.",
+          "type": "boolean",
+          "default": false
+        },
         "id": {
           "description": "Instance identifier, shared by the end marker.",
           "type": "string"
@@ -3260,7 +3265,7 @@
           ]
         },
         "parameters": {
-          "description": "Scalar field parameters in their source order within each type.",
+          "description": "Scalar field parameters in their original cross-type child order.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/FieldParameter"
@@ -4326,6 +4331,11 @@
         "command": {
           "description": "Raw wire `Command` parameter (`\"MEMO/{shape}/{number}/…\"` from HWP5).\nEmpty for HwpForge-authored memos — encoders synthesise a minimum\n`MEMO/{shape}/{number}/` form in that case.",
           "type": "string"
+        },
+        "preserve_empty": {
+          "description": "Preserve empty source metadata instead of generating ID, command or\ncreation time. Set by readers; newly authored memos keep the defaults.",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [

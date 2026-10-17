@@ -46,6 +46,7 @@ zip = { workspace = true }
 # and rewrites `DocInfo` (raw DEFLATE) for the BinData reference tests.
 cfb = { workspace = true }
 flate2 = { workspace = true }
+hwpforge = { path = "../hwpforge", features = ["ops"] }
 # Per-variant decode warning samples for the mapping tests (test-only feature).
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0", features = ["test-support"] }
 serde_json = { workspace = true }

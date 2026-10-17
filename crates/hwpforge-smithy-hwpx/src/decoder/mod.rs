@@ -15,6 +15,8 @@ pub(crate) mod package_order;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
+pub mod source_map;
+
 use std::path::Path;
 
 use hwpforge_core::document::{Document, Draft};
@@ -97,6 +99,8 @@ pub(crate) fn xml_error_detail(error: &quick_xml::DeError) -> String {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct HwpxDocument {
+    pub(crate) source_basis: Option<std::sync::Arc<SourceBasis>>,
+    pub(crate) source_maps: Vec<source_map::SourceMap>,
     /// The decoded document in Core's DOM.
     pub document: Document<Draft>,
     /// Style information parsed from `header.xml`.
@@ -105,6 +109,69 @@ pub struct HwpxDocument {
     pub image_store: ImageStore,
     /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — warning-first).
     pub warnings: Vec<DecodeWarning>,
+}
+
+/// Immutable decoded base for one editing operation. Sharing this context
+/// avoids decoding the same package again for provenance and layout planning.
+/// The original document, styles and images cannot be changed through it.
+#[derive(Debug)]
+pub struct HwpxEditBase {
+    decoded: HwpxDocument,
+}
+
+impl HwpxEditBase {
+    /// Decode and retain an independent original package.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`HwpxDecoder::decode`].
+    pub fn read(bytes: &[u8]) -> HwpxResult<Self> {
+        Ok(Self { decoded: HwpxDecoder::decode(bytes)? })
+    }
+
+    /// Read-only original model and source addresses.
+    pub fn decoded(&self) -> &HwpxDocument {
+        &self.decoded
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.decoded.source_basis.as_ref().expect("decoded edit base").package
+    }
+}
+
+impl HwpxDocument {
+    /// Decoder-owned original locations for a section's Core nodes.
+    pub fn source_map(&self, section: usize) -> Option<&source_map::SourceMap> {
+        self.source_maps.get(section)
+    }
+    pub(crate) fn require_source_table(&self, table: usize) -> HwpxResult<()> {
+        let tables = crate::table_inventory::tables_in_document(&self.document);
+        let Some(entry) = tables.get(table) else {
+            return Ok(());
+        };
+        let path = crate::table_inventory::core_path(entry);
+        if self.source_map(path.section()).and_then(|m| m.node(&path)).is_none() {
+            return Err(crate::HwpxError::InvalidStructure {
+                detail: format!("internal decoder source-map defect: no table {}", path.relative()),
+            });
+        }
+        Ok(())
+    }
+    pub(crate) fn require_source_slot(&self, section: usize, path: &str) -> HwpxResult<()> {
+        let Some(core) = self.document.sections().get(section) else {
+            return Ok(());
+        };
+        if !crate::patch::collect_semantic_text_slots(core, section).iter().any(|s| s.path == path)
+        {
+            return Ok(());
+        }
+        let key = hwpforge_core::node_path::CorePath::new(section, path);
+        if self.source_map(section).and_then(|m| m.node(&key)).is_none() {
+            return Err(crate::HwpxError::InvalidStructure {
+                detail: format!("internal decoder source-map defect: no slot {path}"),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// 디코드 중 표면화된 비치명 경고.
@@ -116,6 +183,22 @@ pub struct HwpxDocument {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeWarning {
+    /// A source start has no end. The original boundary and body are retained;
+    /// reading is allowed, while edits touching the remaining flow are refused.
+    UnclosedFieldBoundary {
+        /// Package part containing the range.
+        part: String,
+        /// Semantic location of the recovered start.
+        reason: String,
+    },
+    /// A recovered field range has invalid boundaries. Its source content
+    /// remains in Draft, but editing and validated export are refused.
+    InvalidFieldBoundary {
+        /// Package part containing the range.
+        part: String,
+        /// Semantic location and pairing failure.
+        reason: String,
+    },
     /// 알 수 없는 enum 문자열을 기본값으로 폴백함.
     UnknownEnumValue {
         /// 요소@속성 경로 (예: `hp:header@applyPageType`).
@@ -192,6 +275,8 @@ impl DecodeWarning {
             Self::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::ContentLost { .. } => "CONTENT_LOST",
+            Self::InvalidFieldBoundary { .. } => "INVALID_FIELD_BOUNDARY",
+            Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
             Self::BeginNumRepaired { .. } => "BEGIN_NUM_REPAIRED",
         }
     }
@@ -220,7 +305,9 @@ impl DecodeWarning {
     pub fn part(&self) -> Option<&str> {
         match self {
             Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => None,
-            Self::ContentLost { part, .. } => Some(part),
+            Self::ContentLost { part, .. }
+            | Self::InvalidFieldBoundary { part, .. }
+            | Self::UnclosedFieldBoundary { part, .. } => Some(part),
             Self::BeginNumRepaired { .. } => Some(HEADER_PART),
         }
     }
@@ -249,6 +336,9 @@ impl DecodeWarning {
             Self::UnknownEnumValue { attribute, .. } => Some((*attribute).to_string()),
             Self::LayoutCacheDropped { path, .. } => Some(path.to_string()),
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
+            Self::InvalidFieldBoundary { part, .. } | Self::UnclosedFieldBoundary { part, .. } => {
+                Some(part.clone())
+            }
             Self::BeginNumRepaired { .. } => Some("hh:beginNum".to_string()),
         }
     }
@@ -279,13 +369,15 @@ impl DecodeWarning {
             }
             Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
             Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
+            Self::InvalidFieldBoundary { reason, .. }
+            | Self::UnclosedFieldBoundary { reason, .. } => reason.clone(),
             Self::BeginNumRepaired { axes } => {
                 format!("start number 0 on {} is not valid; a re-encode writes 1", axes.join(", "))
             }
         }
     }
 
-    /// 입력 내용이 디코드에서 빠졌거나 근사됐음을 뜻하는 경고인지.
+    /// 입력 내용의 소실·근사 또는 불완전 경계 때문에 편집을 거부해야 하는지.
     ///
     /// `true` 인 경고가 있는 입력을 재인코드하면 손실이 굳으므로, 입력을
     /// 다시 써서 돌려주는 편집기는 그 입력을 거부한다. 판정 정의는 이
@@ -314,8 +406,9 @@ impl DecodeWarning {
         match self {
             Self::UnknownEnumValue { .. }
             | Self::LayoutCacheDropped { .. }
-            | Self::BeginNumRepaired { .. } => false,
-            Self::ContentLost { .. } => true,
+            | Self::BeginNumRepaired { .. }
+            | Self::UnclosedFieldBoundary { .. } => false,
+            Self::ContentLost { .. } | Self::InvalidFieldBoundary { .. } => true,
         }
     }
 }
@@ -323,6 +416,12 @@ impl DecodeWarning {
 impl std::fmt::Display for DecodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::UnclosedFieldBoundary { part, reason } => {
+                write!(f, "unclosed source field at {part}: {reason}")
+            }
+            Self::InvalidFieldBoundary { part, reason } => {
+                write!(f, "invalid field boundary at {part}: {reason}")
+            }
             Self::UnknownEnumValue { attribute, raw, fallback } => {
                 write!(f, "{attribute}: \"{raw}\" unknown — fell back to {fallback}")
             }
@@ -366,6 +465,10 @@ pub mod warning_samples {
     pub fn encode() -> Vec<EncodeWarning> {
         let path = || ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(0)]);
         let samples = vec![
+            EncodeWarning::UnclosedFieldBoundary {
+                part: "Contents/section0.xml".into(),
+                reason: "sample".into(),
+            },
             EncodeWarning::LayoutCacheDropped { path: path(), reason: "sample".to_string() },
             EncodeWarning::NoteHeadSkipped { path: path(), reason: "sample".to_string() },
             EncodeWarning::TitleMarkSkipped { path: path(), reason: "sample".to_string() },
@@ -399,7 +502,8 @@ pub mod warning_samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
             // 그때 위 표본에도 하나를 더한다.
             match sample {
-                EncodeWarning::LayoutCacheDropped { .. }
+                EncodeWarning::UnclosedFieldBoundary { .. }
+                | EncodeWarning::LayoutCacheDropped { .. }
                 | EncodeWarning::NoteHeadSkipped { .. }
                 | EncodeWarning::TitleMarkSkipped { .. }
                 | EncodeWarning::NoteRestartIgnored { .. }
@@ -440,6 +544,14 @@ pub mod warning_samples {
                 reason: "sample".to_string(),
             },
             DecodeWarning::BeginNumRepaired { axes: vec!["page", "pic"] },
+            DecodeWarning::UnclosedFieldBoundary {
+                part: "Contents/section0.xml".into(),
+                reason: "unpaired source start".into(),
+            },
+            DecodeWarning::InvalidFieldBoundary {
+                part: "Contents/section0.xml".into(),
+                reason: "unpaired end".into(),
+            },
         ];
         for sample in &samples {
             // 와일드카드 금지 — 새 변형은 여기서 컴파일 오류가 나고,
@@ -448,7 +560,9 @@ pub mod warning_samples {
                 DecodeWarning::UnknownEnumValue { .. }
                 | DecodeWarning::LayoutCacheDropped { .. }
                 | DecodeWarning::ContentLost { .. }
-                | DecodeWarning::BeginNumRepaired { .. } => {}
+                | DecodeWarning::BeginNumRepaired { .. }
+                | DecodeWarning::InvalidFieldBoundary { .. }
+                | DecodeWarning::UnclosedFieldBoundary { .. } => {}
             }
         }
         samples
@@ -544,6 +658,16 @@ impl std::fmt::Display for ParagraphPath {
 /// println!("Sections: {}", result.document.sections().len());
 /// ```
 pub struct HwpxDecoder;
+
+/// Decoder-only context: callers cannot construct this type or derive it from a claim.
+#[derive(Debug)]
+pub(crate) struct SourceBasis {
+    package: std::sync::Arc<[u8]>,
+    origins: std::collections::HashMap<
+        hwpforge_core::node_path::CorePath,
+        hwpforge_core::source_xml::UnclosedOrigin,
+    >,
+}
 
 impl HwpxDecoder {
     /// Decodes an HWPX file from raw bytes.
@@ -650,6 +774,7 @@ impl HwpxDecoder {
         let image_store = pkg.read_all_bindata()?;
         let image_pixels = image_size::pixel_sizes_by_reference(&image_store);
 
+        let mut source_maps = Vec::with_capacity(section_count);
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
             let mut result = section::parse_section_with_images(
@@ -798,6 +923,7 @@ impl HwpxDecoder {
                 text_direction: result.text_direction,
             };
 
+            source_maps.push(result.source.finish(&section, i, &section_part));
             document.add_section(section);
         }
         for number in masterpage_xmls.keys().filter(|n| !named_masterpages.contains(*n)) {
@@ -814,8 +940,124 @@ impl HwpxDecoder {
             &mut warnings,
             pkg.section_paths(),
         );
+        let origins: Vec<_> = source_maps.iter().flat_map(|m| m.unclosed.iter().cloned()).collect();
+        let package: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes);
+        hwpforge_core::field_inventory::FieldInventory::recover_shared_source_ranges(
+            document.sections_mut(),
+            &origins,
+            package.clone(),
+        );
+        let source_basis = std::sync::Arc::new(SourceBasis {
+            package,
+            origins: origins.into_iter().map(|origin| (origin.path().clone(), origin)).collect(),
+        });
+        document.set_format_source(source_basis.clone());
+        let inventory =
+            hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections());
+        for diagnostic in inventory.warnings() {
+            if let hwpforge_core::ValidationError::InvalidFieldBoundary { section_index, .. } =
+                &diagnostic
+            {
+                warnings.push(DecodeWarning::UnclosedFieldBoundary {
+                    part: pkg.section_paths()[*section_index].clone(),
+                    reason: diagnostic.to_string(),
+                });
+            }
+        }
+        for diagnostic in inventory.diagnostics() {
+            if let hwpforge_core::ValidationError::InvalidFieldBoundary { section_index, .. } =
+                &diagnostic
+            {
+                warnings.push(DecodeWarning::InvalidFieldBoundary {
+                    part: pkg.section_paths()[*section_index].clone(),
+                    reason: diagnostic.to_string(),
+                });
+            }
+        }
 
-        Ok(HwpxDocument { document, style_store, image_store, warnings })
+        Ok(HwpxDocument {
+            document,
+            style_store,
+            image_store,
+            warnings,
+            source_maps,
+            source_basis: Some(source_basis),
+        })
+    }
+
+    /// Verify claims only against the separately supplied, decoded base package.
+    /// Its SourceMap locates claims; original package bytes are re-read on every call.
+    /// Submitted claim package bytes never select the verification base.
+    ///
+    /// # Errors
+    /// Rejects missing/stale claims and any mismatch with the base SourceMap.
+    pub fn verify_source_provenance(sections: &[Section], base: &HwpxDocument) -> HwpxResult<()> {
+        Self::verify_against_basis(sections, base.source_basis.as_deref())
+    }
+
+    /// Replace submitted claims and bind the caller's base independently of those claims.
+    ///
+    /// # Errors
+    /// Rejects claims that cannot be restored from this base.
+    pub fn restore_source_provenance(
+        document: &mut Document<Draft>,
+        base: &HwpxDocument,
+    ) -> HwpxResult<()> {
+        hwpforge_core::field_inventory::FieldInventory::restore_source_provenance(
+            document.sections_mut(),
+            base.document.sections(),
+        );
+        Self::verify_source_provenance(document.sections(), base)?;
+        if let Some(basis) = &base.source_basis {
+            document.set_format_source(basis.clone());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_document_source<S>(document: &Document<S>) -> HwpxResult<()> {
+        Self::verify_against_basis(
+            document.sections(),
+            document.format_source::<SourceBasis>().as_deref(),
+        )
+    }
+
+    fn verify_against_basis(sections: &[Section], basis: Option<&SourceBasis>) -> HwpxResult<()> {
+        use hwpforge_core::field_inventory::FieldInventory;
+        let mut originals = Vec::new();
+        for (current, start) in FieldInventory::source_claims(sections) {
+            hwpforge_core::source_xml::record_provenance_work(1);
+            let invalid = || crate::HwpxError::InvalidStructure {
+                detail: format!("unverified source field at {}: {}", current.relative(), start.id),
+            };
+            let claim = start.source_claim().ok_or_else(invalid)?;
+            if !start.unclosed || claim.path() != &current || claim.id() != start.id {
+                return Err(invalid());
+            }
+            let basis = basis.ok_or_else(invalid)?;
+            let source = basis.origins.get(claim.source_path()).ok_or_else(invalid)?;
+            if source.id() != claim.id()
+                || source.part() != claim.part()
+                || source.range() != claim.range()
+                || source.digest() != claim.digest()
+            {
+                return Err(invalid());
+            }
+            originals.push(source.clone());
+        }
+        // SourceMap is an address index, not authority. Re-read the independent
+        // package on every acceptance/output, sharing parses only within this call.
+        // 이것을 실패시키는 것: raw 검증 생략 또는 작업 간 파싱 캐시 유지.
+        if !originals.is_empty()
+            && !hwpforge_core::source_xml::UnclosedOrigin::verify_package_batch(
+                &originals,
+                &basis.expect("claims require an independent basis").package,
+            )
+        {
+            return Err(crate::HwpxError::InvalidStructure {
+                detail: "unverified original source field bytes".into(),
+            });
+        }
+        Ok(())
     }
 
     /// Decodes an HWPX file from a filesystem path.
@@ -1024,6 +1266,63 @@ fn extract_master_page_cnt(section_xml: &str) -> usize {
 mod tests {
     use super::*;
     use hwpforge_foundation::{HeadingType, NumberFormatType};
+
+    /// 이것을 실패시키는 것: 주소 인덱스만 신뢰하거나 원본 검증에 claim 패키지 사용.
+    #[test]
+    fn acceptance_and_output_reject_stale_index_against_actual_package() {
+        use hwpforge_core::source_xml::source_work;
+        use std::sync::Arc;
+        let mut package = crate::patch::RawPackage::read(&master_pages_doc(&[None, None])).unwrap();
+        for part in ["Contents/section0.xml", "Contents/section1.xml"] {
+            let xml = package.read_text_entry(part).unwrap();
+            let field = r#"<hp:run charPrIDRef="0"><hp:ctrl><hp:fieldBegin id="77" type="FORMULA" name="" editable="1" dirty="0" zorder="0" fieldid="1"/></hp:ctrl><hp:t>PROTECTED</hp:t></hp:run></hp:p>"#;
+            package.replace_text_entry(part, xml.replacen("</hp:p>", field, 1));
+        }
+        let bytes = package.write().unwrap();
+        let mut base = HwpxDecoder::decode(&bytes).unwrap();
+        let basis = base.source_basis.clone().unwrap();
+        assert_eq!(basis.origins.len(), 2);
+        // 이것을 실패시키는 것: 여러 파트를 하나로 취급하거나 작업 간 raw 캐시 유지.
+        let before = source_work();
+        for k in 1..=3 {
+            HwpxDecoder::verify_source_provenance(base.document.sections(), &base).unwrap();
+            assert_eq!(source_work().0 - before.0, k * 2);
+        }
+        for change in ["missing", "begin", "id", "pair"] {
+            let mut altered = crate::patch::RawPackage::read(&bytes).unwrap();
+            let part = "Contents/section1.xml";
+            let xml = altered.read_text_entry(part).unwrap();
+            let xml = match change {
+                "begin" => xml.replace("fieldBegin", "otherBegin"),
+                "id" => xml.replace(r#"id="77""#, r#"id="88""#),
+                "pair" => xml.replacen("</hp:p>", r#"<hp:run charPrIDRef="0"><hp:ctrl><hp:fieldEnd beginIDRef="77"/></hp:ctrl></hp:run></hp:p>"#, 1),
+                _ => xml,
+            };
+            altered.replace_text_entry(part, xml);
+            let package: Arc<[u8]> = if change == "missing" {
+                Arc::from([])
+            } else {
+                Arc::from(altered.write().unwrap())
+            };
+            let stale = Arc::new(SourceBasis { package, origins: basis.origins.clone() });
+            base.source_basis = Some(stale.clone());
+            let mut submitted = base.document.clone();
+            submitted.set_format_source(stale);
+            assert!(
+                HwpxDecoder::verify_source_provenance(submitted.sections(), &base).is_err(),
+                "{change}"
+            );
+            assert!(
+                crate::HwpxEncoder::encode(
+                    &submitted.validate().unwrap(),
+                    &base.style_store,
+                    &base.image_store
+                )
+                .is_err(),
+                "{change}"
+            );
+        }
+    }
 
     /// Two sections owning master pages "A" and "B", encoded.
     fn two_master_pages() -> Vec<u8> {
@@ -1923,11 +2222,14 @@ mod warning_accessor_tests {
     /// 이것을 실패시키는 것: `is_content_loss` 의 `ContentLost` 갈래를 `false` 로
     /// 바꾸는 것 — 입력 경계 편집기가 손실 입력을 통과시킨다.
     #[test]
-    fn only_content_lost_is_content_loss() {
+    fn semantic_recovery_warnings_block_editing() {
         for w in warning_samples::decode() {
             assert_eq!(
                 w.is_content_loss(),
-                matches!(w, DecodeWarning::ContentLost { .. }),
+                matches!(
+                    w,
+                    DecodeWarning::ContentLost { .. } | DecodeWarning::InvalidFieldBoundary { .. }
+                ),
                 "{w:?}"
             );
         }
@@ -1941,7 +2243,14 @@ mod warning_accessor_tests {
             warning_samples::decode().iter().map(DecodeWarning::code).collect();
         assert_eq!(
             codes.into_iter().collect::<Vec<_>>(),
-            ["BEGIN_NUM_REPAIRED", "CONTENT_LOST", "LAYOUT_CACHE_DROPPED", "UNKNOWN_ENUM_VALUE"]
+            [
+                "BEGIN_NUM_REPAIRED",
+                "CONTENT_LOST",
+                "INVALID_FIELD_BOUNDARY",
+                "LAYOUT_CACHE_DROPPED",
+                "UNCLOSED_FIELD_BOUNDARY",
+                "UNKNOWN_ENUM_VALUE"
+            ]
         );
     }
 

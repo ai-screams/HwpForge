@@ -883,10 +883,21 @@ fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
 /// 이것을 실패시키는 것: `from_json` 의 현재 시각 주입 삭제(epoch 가 나온다).
 #[test]
 fn a_memo_without_a_time_gets_the_current_time() {
-    let mut value: serde_json::Value = serde_json::from_str(&exported_text(
-        "../../../../tests/fixtures/user_samples/sample-memo-basic.hwpx",
-    ))
-    .unwrap();
+    use hwpforge::core::{Control, Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+    let mut doc = Document::new();
+    let content = vec![Paragraph::with_runs(
+        vec![Run::text("memo", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )];
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::control(Control::memo(content), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let mut value = serde_json::json!({"document": doc});
     let mut blanked = 0;
     blank_memo_times(&mut value, &mut blanked);
     assert!(blanked > 0, "the fixture has a memo");

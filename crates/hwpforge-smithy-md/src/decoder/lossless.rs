@@ -111,6 +111,8 @@ enum OpenNode {
     Group(Box<GroupNode>),
     Picture(Box<PictureNode>),
     Caption(Box<hwpforge_core::caption::Caption>),
+    FieldStart(CharShapeIndex, Box<hwpforge_core::control::FieldStart>),
+    FieldAnnotation(Vec<Paragraph>),
 }
 
 impl OpenNode {
@@ -129,6 +131,8 @@ impl OpenNode {
             Self::Group(_) => "group",
             Self::Picture(_) => "img",
             Self::Caption(_) => "caption",
+            Self::FieldStart(..) => "field-start",
+            Self::FieldAnnotation(_) => "field-annotation",
         }
     }
 }
@@ -235,6 +239,12 @@ fn parse_start_tag(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<OpenN
     validate_parent(tag, stack)?;
     check_depth(tag, stack)?;
     match tag {
+        "field-start" => parse_field_start(start),
+        "field-annotation" => {
+            Attrs::read(start, "field-annotation", &[])?;
+            Ok(OpenNode::FieldAnnotation(Vec::new()))
+        }
+
         "section" => Ok(OpenNode::Section(parse_section_node(start)?)),
         "p" => Ok(OpenNode::Paragraph(ParagraphNode {
             para_shape_id: parse_para_index_attr(start, "p", "data-para-shape")?,
@@ -295,6 +305,32 @@ fn parse_empty_tag(empty: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<(
     validate_parent(tag, stack)?;
     check_depth(tag, stack)?;
     match tag {
+        "field-start" => {
+            let node = parse_field_start(empty)?;
+            attach_closed_node(node, stack, &mut Vec::new())
+        }
+        "field-annotation" => {
+            Attrs::read(empty, "field-annotation", &[])?;
+            attach_closed_node(OpenNode::FieldAnnotation(Vec::new()), stack, &mut Vec::new())
+        }
+        "field-end" => {
+            let a = Attrs::read(empty, "field-end", g::FIELD_END)?;
+            let cs = field_char_shape(&a)?;
+            push_run_to_parent(
+                stack,
+                Run::control(
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::End {
+                            begin_id: a.required("data-begin-id")?.into(),
+                            field_id: a.required("data-field-id")?.into(),
+                        },
+                    },
+                    cs,
+                ),
+            )
+        }
+        "field-param" => parse_field_param(empty, stack),
+
         "img" => {
             let (char_shape_id, image) = parse_picture(empty, stack)?;
             attach_picture(PictureNode { char_shape_id, image }, stack)
@@ -356,8 +392,19 @@ fn validate_parent(tag: &str, stack: &[OpenNode]) -> MdResult<()> {
         "section" => parent.is_none(),
         "p" => matches!(
             parent,
-            Some("section" | "td" | "textbox" | "ellipse" | "polygon" | "footnote" | "caption")
+            Some(
+                "section"
+                    | "td"
+                    | "textbox"
+                    | "ellipse"
+                    | "polygon"
+                    | "footnote"
+                    | "caption"
+                    | "field-annotation"
+            )
         ),
+        "field-start" | "field-end" => parent == Some("p"),
+        "field-param" | "field-annotation" => parent == Some("field-start"),
         "table" => matches!(parent, Some("p")),
         "tr" => matches!(parent, Some("table")),
         "td" => matches!(parent, Some("tr")),
@@ -432,6 +479,27 @@ fn attach_closed_node(
     sections: &mut Vec<Section>,
 ) -> MdResult<()> {
     match node {
+        OpenNode::FieldStart(cs, start) => push_run_to_parent(
+            stack,
+            Run::control(
+                Control::FieldBoundary {
+                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                },
+                cs,
+            ),
+        ),
+        OpenNode::FieldAnnotation(paragraphs) => {
+            let Some(OpenNode::FieldStart(_, start)) = stack.last_mut() else {
+                return Err(MdError::LosslessParse {
+                    detail: "annotation requires field-start".into(),
+                });
+            };
+            if start.annotation.replace(paragraphs).is_some() {
+                return Err(MdError::LosslessParse { detail: "duplicate field annotation".into() });
+            }
+            Ok(())
+        }
+
         OpenNode::Section(section) => {
             let paragraphs = if section.paragraphs.is_empty() {
                 vec![Paragraph::with_runs(
@@ -1239,6 +1307,11 @@ fn push_run_to_parent(stack: &mut [OpenNode], run: Run) -> MdResult<()> {
 fn push_paragraph_to_parent(stack: &mut [OpenNode], paragraph: Paragraph) -> MdResult<()> {
     if let Some(parent) = stack.last_mut() {
         match parent {
+            OpenNode::FieldAnnotation(paragraphs) => {
+                paragraphs.push(paragraph);
+                Ok(())
+            }
+
             OpenNode::Section(section) => {
                 section.paragraphs.push(paragraph);
                 Ok(())
@@ -1766,6 +1839,49 @@ fn parse_optional_color_attr(
     attribute: &'static str,
 ) -> MdResult<Option<Color>> {
     attr_value(start, attribute)?.map(|v| g::parse_hex_color(element, attribute, &v)).transpose()
+}
+
+fn field_char_shape(a: &Attrs) -> MdResult<CharShapeIndex> {
+    let value = a.required(g::CHAR_SHAPE)?;
+    value.parse::<usize>().map(CharShapeIndex::new).map_err(|_| a.invalid(g::CHAR_SHAPE, value))
+}
+
+fn parse_field_start(start: &BytesStart<'_>) -> MdResult<OpenNode> {
+    let a = Attrs::read(start, "field-start", g::FIELD_START)?;
+    let mut s = hwpforge_core::control::FieldStart::default();
+    s.id = a.required("data-id")?.into();
+    s.kind = a.required("data-kind")?.into();
+    s.name = a.required("data-name")?.into();
+    s.editable = a.required("data-editable")?.into();
+    s.dirty = a.required("data-dirty")?.into();
+    s.z_order = a.required("data-z-order")?.into();
+    s.field_id = a.required("data-field-id")?.into();
+    s.meta_tag = a.required("data-meta-tag")?.into();
+    s.parameter_name = a.get("data-parameter-name").map(str::to_owned);
+    s.unclosed = match a.get("data-unclosed") {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(value) => return Err(a.invalid("data-unclosed", value)),
+    };
+    Ok(OpenNode::FieldStart(field_char_shape(&a)?, Box::new(s)))
+}
+
+fn parse_field_param(element: &BytesStart<'_>, stack: &mut [OpenNode]) -> MdResult<()> {
+    let a = Attrs::read(element, "field-param", g::FIELD_PARAM)?;
+    let param = g::field_parameter_from(
+        a.required("data-kind")?,
+        a.required("data-name")?.into(),
+        a.required("data-value")?.into(),
+        a.get("data-xml-space"),
+    )?;
+    let Some(OpenNode::FieldStart(_, start)) = stack.last_mut() else {
+        return Err(MdError::LosslessParse { detail: "parameter requires field-start".into() });
+    };
+    if start.annotation.is_some() {
+        return Err(MdError::LosslessParse { detail: "parameters must precede annotation".into() });
+    }
+    start.parameters.push(param);
+    Ok(())
 }
 
 #[cfg(test)]

@@ -455,7 +455,7 @@ pub(crate) const ROW_HEADER: &str = "data-is-header";
 pub(crate) const MAX_NESTING_DEPTH: usize = 32;
 
 /// The elements that count toward [`MAX_NESTING_DEPTH`].
-pub(crate) const CONTAINER_TAGS: [&str; 14] = [
+pub(crate) const CONTAINER_TAGS: [&str; 15] = [
     "table",
     "group",
     "img",
@@ -470,6 +470,7 @@ pub(crate) const CONTAINER_TAGS: [&str; 14] = [
     "connectline",
     "footnote",
     "endnote",
+    "field-start",
 ];
 
 /// Every attribute `<group>` may carry.
@@ -688,4 +689,62 @@ pub(crate) fn bool_str(v: bool) -> &'static str {
 /// The readable millimetre companion of a length (never read back).
 pub(crate) fn mm(v: hwpforge_foundation::HwpUnit) -> String {
     format!("{:.2}", v.to_mm())
+}
+
+/// Field markers are siblings of their visible body runs, never wrappers.
+pub(crate) const FIELD_START: &[&str] = &[
+    CHAR_SHAPE,
+    "data-id",
+    "data-kind",
+    "data-name",
+    "data-editable",
+    "data-dirty",
+    "data-z-order",
+    "data-field-id",
+    "data-meta-tag",
+    "data-parameter-name",
+    "data-unclosed",
+];
+pub(crate) const FIELD_END: &[&str] = &[CHAR_SHAPE, "data-begin-id", "data-field-id"];
+pub(crate) const FIELD_PARAM: &[&str] = &["data-kind", "data-name", "data-value", "data-xml-space"];
+
+pub(crate) fn field_parameter_kind(
+    p: &hwpforge_core::control::FieldParameter,
+) -> MdResult<&'static str> {
+    use hwpforge_core::control::FieldParameter;
+    Ok(match p {
+        FieldParameter::String { .. } => "String",
+        FieldParameter::Integer { .. } => "Integer",
+        FieldParameter::Boolean { .. } => "Boolean",
+        _ => return Err(unsupported("field parameter")),
+    })
+}
+
+/// Reads the same scalar-kind vocabulary the writer uses. Values stay strings;
+/// source spelling is meaningful even for numeric and boolean parameters.
+pub(crate) fn field_parameter_from(
+    kind: &str,
+    name: String,
+    value: String,
+    xml_space: Option<&str>,
+) -> MdResult<hwpforge_core::control::FieldParameter> {
+    use hwpforge_core::control::FieldParameter;
+    Ok(match (kind, xml_space) {
+        ("String", Some(space)) => FieldParameter::String { name, value, xml_space: space.into() },
+        ("Integer", None) => FieldParameter::Integer { name, value },
+        ("Boolean", None) => FieldParameter::Boolean { name, value },
+        ("String", None) => {
+            return Err(MdError::LosslessMissingAttribute {
+                element: "field-param",
+                attribute: "data-xml-space",
+            })
+        }
+        _ => {
+            return Err(MdError::LosslessInvalidAttribute {
+                element: "field-param",
+                attribute: "data-kind",
+                value: kind.into(),
+            })
+        }
+    })
 }

@@ -319,8 +319,11 @@ pub(crate) fn prepare(
                 .insert("layout_cache".into(), cache);
         }
     }
-    let draft: Document<Draft> = serde_json::from_value(edited)
+    let mut draft: Document<Draft> = serde_json::from_value(edited)
         .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
+    // Cache selection only changes layout_cache. Restore the source evidence
+    // omitted by JSON, then verify it against this operation's independent base.
+    crate::HwpxDecoder::restore_source_provenance(&mut draft, base)?;
     Ok((draft.validate()?, plan.warnings, output_xml))
 }
 

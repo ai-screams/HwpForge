@@ -18,7 +18,7 @@ use hwpforge_foundation::FieldType;
 
 use super::detect::BuiltinPattern;
 use super::plan::{plan, StampCandidate};
-use crate::fill::visit_section_fields;
+use hwpforge_core::field_inventory::FieldInventory;
 
 /// Caller decision for one candidate (design §3-3: the caller map is the
 /// only source of final field names — no auto-derived names, no suffixes).
@@ -229,16 +229,12 @@ pub fn apply(
         }
     }
 
-    // Existing field names (fill's visitor — the single definition of
-    // field-visit coverage).
-    let mut existing: Vec<String> = Vec::new();
-    for (idx, section) in document.sections_mut().iter_mut().enumerate() {
-        visit_section_fields(section, idx, &mut |slot| {
-            if let Control::Field { name: Some(name), .. } = &*slot.control {
-                existing.push(name.clone());
-            }
-        });
-    }
+    let existing: Vec<String> = FieldInventory::from_sections(document.sections())
+        .fields()
+        .iter()
+        .filter_map(|f| f.name().clone())
+        .collect();
+
     for name in &existing {
         if names.contains_key(name.as_str()) {
             return Err(StampError::NameCollision { name: name.clone() });

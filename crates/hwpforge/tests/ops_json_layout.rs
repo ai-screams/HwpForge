@@ -978,6 +978,35 @@ fn edit_package(base: &[u8], part: &str, edit: impl Fn(&str) -> String) -> Vec<u
     output.finish().unwrap().into_inner()
 }
 
+// The layout planner's JSON projection must retain independently verified
+// source claims when an unrelated paragraph changes.
+#[test]
+fn unclosed_field_provenance_survives_layout_preparation() {
+    let base = edit_package(&simple_base(), "Contents/section0.xml", |xml| {
+        xml.replace(
+            "</hs:sec>",
+            r#"<hp:p id="99" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:ctrl><hp:fieldBegin id="77" type="FORMULA" name="kept" editable="0" dirty="0" zorder="-1" fieldid="627469685" metaTag=""/></hp:ctrl><hp:t>kept body</hp:t></hp:run></hp:p></hs:sec>"#,
+        )
+    });
+    let mut value = export(&base);
+    let noop = roundtrip(&base, &value);
+    assert_eq!(noop.bytes, base);
+    assert!(noop.warnings.iter().any(|w| w.info().code.as_str() == "UNCLOSED_FIELD_BOUNDARY"));
+
+    value["document"]["sections"][0]["paragraphs"][2]["runs"][0]["content"]["Text"] =
+        json!("unrelated edit");
+    let output = roundtrip(&base, &value);
+    let decoded = HwpxDecoder::decode(&output.bytes).unwrap();
+    let fields =
+        hwpforge::core::field_inventory::FieldInventory::from_sections(decoded.document.sections());
+    assert_eq!(fields.fields().len(), 1);
+    assert_eq!(fields.fields()[0].current(), "kept body");
+    // An unresolved field reference conservatively closes the section's cache
+    // proof; retaining the field does not authorize reusing its layout inputs.
+    assert!(flags(&output.bytes).iter().all(|kept| !kept));
+    decoded.document.validate().unwrap();
+}
+
 // 이것을 실패시키는 것: 원본 대신 encode(decode(base))를 비교 기준으로 사용하기.
 #[test]
 fn original_font_line_height_survives_raw_and_regenerated_public_json_roundtrip() {

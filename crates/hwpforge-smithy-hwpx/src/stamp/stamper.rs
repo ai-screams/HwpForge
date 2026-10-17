@@ -389,8 +389,19 @@ impl HwpxStamper {
         // their error code.
         reject_input_content_loss(&d0.warnings)?;
 
+        for spec in specs {
+            d0.require_source_slot(spec.section, &spec.path)
+                .map_err(|e| StamperError::Codec(e.to_string()))?;
+        }
         // ── apply on the admitted decode ────────────────────────────
-        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
+        let HwpxDocument {
+            source_maps: _,
+            source_basis: _,
+            mut document,
+            style_store,
+            image_store,
+            warnings: decode_warnings,
+        } = d0;
         let mut encode_warnings = Vec::new();
         let package =
             crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
@@ -473,8 +484,22 @@ impl HwpxStamper {
         // their error code.
         reject_input_content_loss(&d0.warnings)?;
 
+        for spec in &request.text {
+            d0.require_source_slot(spec.section, &spec.path)
+                .map_err(|e| StamperError::Codec(e.to_string()))?;
+        }
+        for spec in &request.cells {
+            d0.require_source_table(spec.table).map_err(|e| StamperError::Codec(e.to_string()))?;
+        }
         // ── unified preflight, then mutate ──────────────────────────
-        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
+        let HwpxDocument {
+            source_maps: _,
+            source_basis: _,
+            mut document,
+            style_store,
+            image_store,
+            warnings: decode_warnings,
+        } = d0;
         let mut encode_warnings = Vec::new();
         let package =
             crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
@@ -497,6 +522,8 @@ impl HwpxStamper {
         let text_outcome = apply(&mut document, &text_specs)?;
         // Text-only reference for the reverse-delta gate (before cells).
         let text_only = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: document.clone(),
             style_store: style_store.clone(),
@@ -661,6 +688,8 @@ fn verify_and_reverse_cells(
     }
 
     let reverted = HwpxDocument {
+        source_maps: Vec::new(),
+        source_basis: None,
         warnings: Vec::new(),
         document: reverted,
         style_store: d2.style_store.clone(),
@@ -1361,6 +1390,8 @@ mod tests {
             PageSettings::default(),
         ));
         HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: doc,
             style_store: HwpxStyleStore::with_default_fonts("함초롬돋움"),
@@ -1387,6 +1418,8 @@ mod tests {
         let d0 = HwpxDecoder::decode(bytes).unwrap();
         let d1 = HwpxDecoder::decode(&encode_hwpx(&d0).unwrap()).unwrap();
         let d1 = HwpxDocument {
+            source_maps: Vec::new(),
+            source_basis: None,
             warnings: Vec::new(),
             document: d1.document,
             style_store: d0.style_store.clone(),

@@ -455,7 +455,18 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     // Parsed once: the typed document deserialises from the tree by
     // reference, and the same tree carries the addresses to verify.
     let value: serde_json::Value = serde_json::from_str(json)?;
-    let exported = ExportedDocument::deserialize(&value)?;
+    let mut exported = ExportedDocument::deserialize(&value)?;
+    let base = opts
+        .base
+        .as_ref()
+        .map(|bytes| {
+            hwpforge_smithy_hwpx::decoder::HwpxEditBase::read(bytes).map_err(OpsError::decode)
+        })
+        .transpose()?;
+    if let Some(base) = &base {
+        HwpxDecoder::restore_source_provenance(&mut exported.document, base.decoded())
+            .map_err(OpsError::decode)?;
+    }
 
     verify_document_addresses(&value, &exported.document)?;
 
@@ -502,9 +513,10 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     };
     let validated = exported.document.validate()?;
 
-    let image_store = match &opts.base {
-        Some(base) => HwpxDecoder::decode(base).map_err(OpsError::decode)?.image_store,
-        None => ImageStore::new(),
+    let empty_images = ImageStore::new();
+    let image_store = match &base {
+        Some(base) => &base.decoded().image_store,
+        None => &empty_images,
     };
 
     // W0: `from-json` writes documents the caller authors, so a memo the
@@ -516,12 +528,12 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         .map_or(0, |d| d.as_secs());
     let options = EncodeOptions::default().with_memo_create_time(now);
     // 이것을 실패시키는 것: base가 있어도 일반 캐시 없는 인코더로 보내기.
-    let outcome = match &opts.base {
+    let outcome = match &base {
         Some(base) => {
-            HwpxEncoder::encode_with_base(base, &validated, &style_store, &image_store, options)
+            HwpxEncoder::encode_with_edit_base(base, &validated, &style_store, image_store, options)
         }
         None => {
-            HwpxEncoder::encode_with_diagnostics(&validated, &style_store, &image_store, options)
+            HwpxEncoder::encode_with_diagnostics(&validated, &style_store, image_store, options)
         }
     }
     .map_err(OpsError::encode)?;

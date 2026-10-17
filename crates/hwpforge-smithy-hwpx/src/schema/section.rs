@@ -51,6 +51,10 @@ fn default_table_repeat_header() -> u32 {
 pub struct HxParagraph {
     #[serde(rename = "@hwpforgeOrigin", default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<usize>,
+    // Decoder source identity is independent of the encoder layout origin.
+    #[serde(rename = "@_hwpforge_origin", default, skip_serializing)]
+    pub source_origin: usize,
+
     #[serde(rename = "@id", default)]
     pub id: String,
     #[serde(rename = "@paraPrIDRef", default)]
@@ -95,6 +99,9 @@ pub struct HxParagraph {
 /// 직렬화 불요, Codex 리뷰 #2 채택).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct HxRun {
+    #[serde(rename = "@_hwpforge_origin", default, skip_serializing)]
+    pub origin: usize,
+
     #[serde(rename = "@charPrIDRef", default)]
     pub char_pr_id_ref: u32,
 
@@ -380,6 +387,8 @@ impl<'de> serde::Deserialize<'de> for HxRun {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct HxRunDe {
+            #[serde(rename = "@_hwpforge_origin", default)]
+            origin: usize,
             #[serde(rename = "@charPrIDRef", default)]
             char_pr_id_ref: u32,
             #[serde(rename = "$value", default)]
@@ -387,6 +396,7 @@ impl<'de> serde::Deserialize<'de> for HxRun {
         }
         let de = HxRunDe::deserialize(deserializer)?;
         let mut run = HxRun {
+            origin: de.origin,
             char_pr_id_ref: de.char_pr_id_ref,
             sec_pr: None,
             texts: Vec::new(),

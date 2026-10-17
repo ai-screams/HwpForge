@@ -92,7 +92,7 @@ pub(crate) fn next_id() -> u64 {
         loop {
             let id = alloc.next;
             alloc.next += 1;
-            if !alloc.reserved.contains(&id) {
+            if alloc.reserved.insert(id) {
                 return id;
             }
         }
@@ -101,21 +101,11 @@ pub(crate) fn next_id() -> u64 {
 
 /// 원문 범위의 id 를 예약해 새로 쓰는 접힌 필드와 충돌하지 않게 한다.
 pub(crate) fn reserve_field_ids<S>(document: &Document<S>) {
-    let mut ids = Vec::new();
-    for_each_top_paragraph(document, &mut |p| {
-        walk(p, &mut |q| {
-            for run in &q.runs {
-                if let Some(Control::FieldBoundary {
-                    boundary: hwpforge_core::control::FieldBoundary::Start(start),
-                }) = run.content.as_control()
-                {
-                    if let Ok(id) = start.id.parse::<u64>() {
-                        ids.push(id);
-                    }
-                }
-            }
-        })
-    });
+    let ids = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections())
+        .fields()
+        .iter()
+        .filter_map(|field| field.id().as_ref().and_then(|id| id.parse::<u64>().ok()))
+        .collect::<Vec<_>>();
     SCOPES.with(|s| {
         if let Some(alloc) = s.borrow_mut().last_mut() {
             alloc.reserved.extend(ids);
@@ -136,8 +126,15 @@ pub(crate) fn field_id(preferred: u64) -> u64 {
             return *id;
         }
         let mut id = preferred;
-        while alloc.reserved.contains(&id) {
-            id -= 1;
+        if alloc.reserved.contains(&id) {
+            loop {
+                crate::work::tick();
+                id = alloc.next;
+                alloc.next += 1;
+                if !alloc.reserved.contains(&id) {
+                    break;
+                }
+            }
         }
         alloc.reserved.insert(id);
         alloc.field_ids.insert(preferred, id);
@@ -348,7 +345,7 @@ mod tests {
     use hwpforge_core::{ObjectId, PageSettings};
     use hwpforge_foundation::{ApplyPageType, CharShapeIndex, HwpUnit, ParaShapeIndex};
 
-    use super::{next_id, IdScope, SCOPES};
+    use super::{field_id, next_id, IdScope, SCOPES};
     use crate::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
     use crate::HwpxEncoder;
     use std::collections::HashSet;
@@ -421,6 +418,32 @@ mod tests {
             }
         }
         n
+    }
+
+    /// 이것을 실패시키는 것: 매 충돌마다 preferred 에서 다시 탐색하기.
+    #[test]
+    fn dense_field_collisions_have_linear_work() {
+        let count = 1_024;
+        let _scope = IdScope::enter((1..=count).collect());
+        crate::work::WORK.with(|w| w.set(0));
+        let mut drawn = HashSet::new();
+        for preferred in 1..=count {
+            let id = field_id(preferred);
+            assert!(id > count);
+            assert!(drawn.insert(id));
+            assert_eq!(field_id(preferred), id);
+        }
+        assert!(crate::work::WORK.with(|w| w.get()) <= 2 * count as usize);
+        let next = next_id();
+        assert!(!drawn.contains(&next));
+    }
+
+    /// 이것을 실패시키는 것: 먼저 발급한 개체 ID 를 필드 할당기에 예약하지 않기.
+    #[test]
+    fn field_ids_do_not_reuse_drawn_object_ids() {
+        let _scope = IdScope::enter(HashSet::new());
+        let object = next_id();
+        assert_ne!(field_id(object), object);
     }
 
     /// W0: an object with Core id 1 in each place an object is written, next

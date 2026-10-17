@@ -770,15 +770,15 @@ pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32)
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
 /// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
-    matches!(content, RunContent::Control(c)
-    if matches!(
-        **c,
-        hwpforge_core::control::Control::NewNumber {
-            kind: hwpforge_core::control::NewNumberKind::Page,
-            ..
-        } | hwpforge_core::control::Control::PageHiding { .. }
-            | hwpforge_core::control::Control::FieldBoundary { .. }
-    ))
+    hwpforge_core::field_view::is_boundary(content)
+        || matches!(content, RunContent::Control(c)
+        if matches!(
+            **c,
+            hwpforge_core::control::Control::NewNumber {
+                kind: hwpforge_core::control::NewNumberKind::Page,
+                ..
+            } | hwpforge_core::control::Control::PageHiding { .. }
+        ))
 }
 
 /// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
@@ -1068,6 +1068,8 @@ fn replay_band_item(
         warnings.push(PdfWarning::VertAlignFallback { location: item_location.clone() });
     }
     for (para_idx, para) in hf.paragraphs.iter().enumerate() {
+        let expanded = hwpforge_core::field_view::expand_memos(para);
+        let para = expanded.as_ref();
         let location = format!("{item_location}/p{para_idx}");
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             if options.partial_cache == PartialCachePolicy::Reject {
@@ -1079,7 +1081,9 @@ fn replay_band_item(
         // W1b admission (§1g v5 변경 1): 밴드는 대응 consumer 가 없어
         // allowlist 가 **비어 있다** — 문단 전체에서 비텍스트 run 은 전부
         // W2(밴드 이미지 렌더) 전 InvalidCache.
-        if para.runs.iter().any(|r| r.content.plain_text().is_none()) {
+        if para.runs.iter().any(|r| {
+            r.content.plain_text().is_none() && !hwpforge_core::field_view::is_boundary(&r.content)
+        }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}: non-text run in band paragraph is not renderable \
@@ -1161,6 +1165,8 @@ fn replay_section(
     let mut pending_table_anchor: Option<(i32, i32, String)> = None;
 
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
+        let expanded = hwpforge_core::field_view::expand_memos(para);
+        let para = expanded.as_ref();
         let location = format!("s{section_idx}/p{para_idx}");
 
         // W2/W3 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다

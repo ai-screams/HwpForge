@@ -42,6 +42,10 @@ pub struct MemoMetadata {
     /// Empty for HwpForge-authored memos — encoders synthesise a minimum
     /// `MEMO/{shape}/{number}/` form in that case.
     pub command: String,
+    /// Preserve empty source metadata instead of generating ID, command or
+    /// creation time. Set by readers; newly authored memos keep the defaults.
+    #[serde(default)]
+    pub preserve_empty: bool,
 }
 
 impl Default for MemoMetadata {
@@ -53,15 +57,16 @@ impl Default for MemoMetadata {
             author: String::new(),
             create_datetime: String::new(),
             command: String::new(),
+            preserve_empty: false,
         }
     }
 }
 
 impl MemoMetadata {
     /// Returns the HWPX `ID` parameter, deriving `"memo{number}"` when the
-    /// explicit field is blank.
+    /// explicit field is blank and `preserve_empty` is false.
     pub fn hwpx_id(&self) -> String {
-        if self.id.is_empty() {
+        if self.id.is_empty() && !self.preserve_empty {
             format!("memo{}", self.number)
         } else {
             self.id.clone()

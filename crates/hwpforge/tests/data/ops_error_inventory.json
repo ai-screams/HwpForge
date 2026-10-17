@@ -731,6 +731,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "UnclosedFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "LayoutCacheDropped",
           "shape": "struct",
           "cfg": [],
@@ -794,6 +800,18 @@
       "non_exhaustive": true,
       "wrapped": true,
       "variants": [
+        {
+          "name": "UnclosedFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "InvalidFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
         {
           "name": "UnknownEnumValue",
           "shape": "struct",
@@ -892,6 +910,12 @@
       "wrapped": false,
       "not_wrapped_reason": "reached only through CoreError::Validation, which classifies the whole family as VALIDATION_FAILED",
       "variants": [
+        {
+          "name": "InvalidFieldBoundary",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
         {
           "name": "EmptyDocument",
           "shape": "unit",

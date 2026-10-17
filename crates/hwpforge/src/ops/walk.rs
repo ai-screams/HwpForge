@@ -277,6 +277,12 @@ pub(crate) enum ControlDescent<'a> {
 /// policy [`object_counts`] and `exchange::first_layout_cache_path` both
 /// build on. See [`ControlDescent`]'s own doc for what each arm means.
 pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return ControlDescent::Memo {
+            content,
+            anchor_runs: hwpforge_core::field_view::anchor_runs(control),
+        };
+    }
     match control {
         Control::TextBox { paragraphs, caption, .. }
         | Control::Ellipse { paragraphs, caption, .. }
@@ -291,7 +297,6 @@ pub(crate) fn control_descent(control: &Control) -> ControlDescent<'_> {
         Control::Footnote { paragraphs, .. } => ControlDescent::Footnote(paragraphs),
         Control::Endnote { paragraphs, .. } => ControlDescent::Endnote(paragraphs),
         Control::Group { children, .. } => ControlDescent::Group(children),
-        Control::Memo { content, anchor_runs, .. } => ControlDescent::Memo { content, anchor_runs },
         // `Control` is `#[non_exhaustive]`; every caller needs a wildcard
         // regardless of Core's own match coverage.
         _ => ControlDescent::None,
@@ -377,13 +382,19 @@ fn run_has_visible_text(run: &Run) -> bool {
 }
 
 fn control_has_visible_text(control: &Control) -> bool {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return content.iter().any(paragraph_has_visible_text)
+            || hwpforge_core::field_view::anchor_runs(control).iter().any(run_has_visible_text);
+    }
+    if let Some(text) = hwpforge_core::field_view::scalar_text(control) {
+        return !text.trim().is_empty();
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => paragraphs.iter().any(paragraph_has_visible_text),
-        Control::Memo { content, .. } => content.iter().any(paragraph_has_visible_text),
         Control::Hyperlink { text, .. } => !text.trim().is_empty(),
         _ => false,
     }
@@ -436,25 +447,29 @@ fn count_runs_non_empty_paragraphs_narrow(run: &Run) -> usize {
 }
 
 fn count_control_paragraphs_narrow(control: &Control) -> usize {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return count_paragraphs_narrow(content);
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => count_paragraphs_narrow(paragraphs),
-        Control::Memo { content, .. } => count_paragraphs_narrow(content),
         _ => 0,
     }
 }
 
 fn count_control_non_empty_paragraphs_narrow(control: &Control) -> usize {
+    if let Some(content) = hwpforge_core::field_view::annotation(control) {
+        return count_non_empty_paragraphs_narrow(content);
+    }
     match control {
         Control::TextBox { paragraphs, .. }
         | Control::Footnote { paragraphs, .. }
         | Control::Endnote { paragraphs, .. }
         | Control::Ellipse { paragraphs, .. }
         | Control::Polygon { paragraphs, .. } => count_non_empty_paragraphs_narrow(paragraphs),
-        Control::Memo { content, .. } => count_non_empty_paragraphs_narrow(content),
         _ => 0,
     }
 }

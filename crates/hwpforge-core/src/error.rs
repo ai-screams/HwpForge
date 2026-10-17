@@ -78,6 +78,16 @@ pub enum CoreError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ValidationError {
+    /// Invalid field boundaries in an independent text flow.
+    #[error("Invalid field boundary in section {section_index} at {path}: {reason}")]
+    InvalidFieldBoundary {
+        /// Section index.
+        section_index: usize,
+        /// Semantic run path.
+        path: String,
+        /// Pairing failure.
+        reason: String,
+    },
     /// The document contains zero sections.
     #[error("Empty document: at least 1 section required")]
     EmptyDocument,
@@ -474,6 +484,7 @@ impl ValidationError {
     /// Returns the numeric error code for this validation error.
     pub fn code(&self) -> CoreErrorCode {
         match self {
+            Self::InvalidFieldBoundary { .. } => CoreErrorCode::InvalidStructure,
             Self::EmptyDocument => CoreErrorCode::EmptyDocument,
             Self::EmptySection { .. } => CoreErrorCode::EmptySection,
             Self::EmptyParagraph { .. } => CoreErrorCode::EmptyParagraph,

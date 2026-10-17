@@ -2640,7 +2640,12 @@ fn normalize_group_child(
     }
     if ctx.group_frames && wire_aligned(Some(m), flipped) && usable {
         let input = FoldInput::new(m.to_transform(), org, origin);
-        if let Some(outcome) = fold_aligned_child(control.clone(), &input) {
+        // Keep decoded allocations (and their decoder source identities) intact.
+        // Geometry trials need only the shape shell, never its paragraph tree.
+        let contents = take_contents(&mut control);
+        let trial = control.clone();
+        put_contents(&mut control, contents);
+        if let Some(outcome) = fold_aligned_child(trial, &input) {
             let source: Vec<(f64, f64)> = [(0.0, 0.0), (org.0, 0.0), (org.0, org.1), (0.0, org.1)]
                 .into_iter()
                 .chain(
@@ -2651,7 +2656,10 @@ fn normalize_group_child(
                 .map(|p| m.apply(p))
                 .collect();
             let (kept, losses) = match outcome {
-                FoldOutcome::Kept { control, losses } => (Some(*control), losses),
+                FoldOutcome::Kept { control: mut kept, losses } => {
+                    put_contents(&mut kept, take_contents(&mut control));
+                    (Some(*kept), losses)
+                }
                 FoldOutcome::Dropped { losses } => (None, losses),
                 _ => (None, Vec::new()),
             };

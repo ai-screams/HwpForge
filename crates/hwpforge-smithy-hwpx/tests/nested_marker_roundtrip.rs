@@ -56,7 +56,13 @@ fn memo_body_text(doc: &Document<hwpforge_core::Validated>) -> String {
     for para in &doc.sections()[0].paragraphs {
         for run in &para.runs {
             if let RunContent::Control(ctrl) = &run.content {
-                if let Control::Memo { content, .. } = ctrl.as_ref() {
+                if let Some(content) = match ctrl.as_ref() {
+                    Control::Memo { content, .. } => Some(content),
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                    } if start.kind == "MEMO" => start.annotation.as_ref(),
+                    _ => None,
+                } {
                     return content
                         .iter()
                         .flat_map(|p| p.runs.iter())
@@ -78,7 +84,13 @@ fn encode_fixture_with_memo_body(body: RunContent) -> Vec<u8> {
     for para in &mut decoded.document.sections_mut()[0].paragraphs {
         for run in &mut para.runs {
             if let RunContent::Control(ctrl) = &mut run.content {
-                if let Control::Memo { content, .. } = ctrl.as_mut() {
+                if let Some(content) = match ctrl.as_mut() {
+                    Control::Memo { content, .. } => Some(content),
+                    Control::FieldBoundary {
+                        boundary: hwpforge_core::control::FieldBoundary::Start(start),
+                    } if start.kind == "MEMO" => start.annotation.as_mut(),
+                    _ => None,
+                } {
                     content[0].runs[0].content = body.clone();
                     replaced = true;
                 }

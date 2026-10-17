@@ -204,8 +204,10 @@ fn reversed_spine_xml_error_names_the_actual_part() {
 #[test]
 fn reversed_spine_content_loss_names_the_actual_part_and_core_index() {
     let mut pkg = RawPackage::read(&reversed(vec![para("old")])).unwrap();
+    // Open CLICK_HERE fields now retain their body. Use an unsupported kind
+    // to exercise actual content loss without weakening the part/path checks.
     let xml = pkg.read_text_entry(FIRST).unwrap().replace("<hp:t>old</hp:t>",
-        r#"<hp:ctrl><hp:fieldBegin id="1" type="CLICK_HERE" name="lost"/></hp:ctrl><hp:t>old</hp:t>"#);
+        r#"<hp:ctrl><hp:fieldBegin id="1" type="UNSUPPORTED" name="lost"/></hp:ctrl><hp:t>old</hp:t>"#);
     pkg.replace_text_entry(FIRST, xml);
     let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
     let warning = decoded
@@ -215,6 +217,33 @@ fn reversed_spine_content_loss_names_the_actual_part_and_core_index() {
         .unwrap();
     assert_eq!(warning.part(), Some(FIRST));
     assert!(warning.location().unwrap().contains("section[0]"));
+}
+
+#[test]
+fn reversed_spine_unclosed_field_retains_body_and_source_part() {
+    let mut pkg = RawPackage::read(&reversed(vec![para("old")])).unwrap();
+    let xml = pkg.read_text_entry(FIRST).unwrap().replace("<hp:t>old</hp:t>",
+        r#"<hp:ctrl><hp:fieldBegin id="1" type="CLICK_HERE" name="kept"/></hp:ctrl><hp:t>old</hp:t>"#);
+    pkg.replace_text_entry(FIRST, xml);
+    let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+    let warning = decoded
+        .warnings
+        .iter()
+        .find(|w| matches!(w, DecodeWarning::UnclosedFieldBoundary { .. }))
+        .unwrap();
+    assert_eq!(warning.part(), Some(FIRST));
+    assert!(!decoded.warnings.iter().any(DecodeWarning::is_content_loss));
+    assert_eq!(decoded.document.sections()[0].paragraphs[0].text_content(), "old");
+    let boundary = decoded
+        .source_map(0)
+        .unwrap()
+        .nodes()
+        .find(|n| n.kind() == hwpforge_core::node_path::NodeKind::FieldBoundary)
+        .unwrap();
+    assert_eq!(boundary.part(), FIRST);
+    assert_eq!(boundary.path().section(), 0);
+    HwpxDecoder::verify_document_source(&decoded.document).unwrap();
+    decoded.document.validate().unwrap();
 }
 
 fn table_base() -> Vec<u8> {

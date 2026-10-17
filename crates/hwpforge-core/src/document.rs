@@ -111,6 +111,11 @@ pub struct Document<S = Draft> {
     sections: Vec<Section>,
     metadata: Metadata,
     _state: PhantomData<S>,
+    format_source: Option<
+        std::sync::Arc<
+            dyn std::any::Any + Send + Sync + std::panic::RefUnwindSafe + std::panic::UnwindSafe,
+        >,
+    >,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +123,14 @@ pub struct Document<S = Draft> {
 // ---------------------------------------------------------------------------
 
 impl<S> Document<S> {
+    /// Immutable, non-serialized decoder context, independent of submitted nodes.
+    /// Only the owning codec can interpret its private context type.
+    #[doc(hidden)]
+    pub fn format_source<T: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<T>> {
+        let source: std::sync::Arc<dyn std::any::Any + Send + Sync> = self.format_source.clone()?;
+        source.downcast().ok()
+    }
+
     /// Visits every table in the document, in every section (see
     /// [`crate::section::Section::for_each_table`]).
     pub fn for_each_table<F: FnMut(&crate::table::Table)>(&self, mut f: F) {
@@ -161,6 +174,17 @@ impl<S> Document<S> {
 // ---------------------------------------------------------------------------
 
 impl Document<Draft> {
+    /// Bind an immutable decoder context independently of node provenance claims.
+    #[doc(hidden)]
+    pub fn set_format_source<
+        T: std::any::Any + Send + Sync + std::panic::RefUnwindSafe + std::panic::UnwindSafe,
+    >(
+        &mut self,
+        source: std::sync::Arc<T>,
+    ) {
+        self.format_source = Some(source);
+    }
+
     /// Creates a new empty draft document with default metadata.
     ///
     /// # Examples
@@ -172,7 +196,12 @@ impl Document<Draft> {
     /// assert!(doc.is_empty());
     /// ```
     pub fn new() -> Self {
-        Self { sections: Vec::new(), metadata: Metadata::default(), _state: PhantomData }
+        Self {
+            sections: Vec::new(),
+            metadata: Metadata::default(),
+            format_source: None,
+            _state: PhantomData,
+        }
     }
 
     /// Creates a new draft document with the given metadata.
@@ -187,7 +216,7 @@ impl Document<Draft> {
     /// assert_eq!(doc.metadata().title.as_deref(), Some("Test"));
     /// ```
     pub fn with_metadata(metadata: Metadata) -> Self {
-        Self { sections: Vec::new(), metadata, _state: PhantomData }
+        Self { sections: Vec::new(), metadata, format_source: None, _state: PhantomData }
     }
 
     /// 문서의 문단을 문서 순서(pre-order)로 방문한다.
@@ -403,7 +432,12 @@ impl Document<Draft> {
             });
         }
         validate_sections(&self.sections)?;
-        Ok(Document { sections: self.sections, metadata: self.metadata, _state: PhantomData })
+        Ok(Document {
+            sections: self.sections,
+            metadata: self.metadata,
+            format_source: self.format_source,
+            _state: PhantomData,
+        })
     }
 }
 
@@ -431,6 +465,7 @@ impl<S> Clone for Document<S> {
         Self {
             sections: self.sections.clone(),
             metadata: self.metadata.clone(),
+            format_source: self.format_source.clone(),
             _state: PhantomData,
         }
     }
@@ -473,7 +508,12 @@ impl<'de> Deserialize<'de> for Document<Draft> {
         }
 
         let data = DocumentData::deserialize(deserializer)?;
-        Ok(Document { sections: data.sections, metadata: data.metadata, _state: PhantomData })
+        Ok(Document {
+            sections: data.sections,
+            metadata: data.metadata,
+            format_source: None,
+            _state: PhantomData,
+        })
     }
 }
 

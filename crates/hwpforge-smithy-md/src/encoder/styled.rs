@@ -530,6 +530,7 @@ fn paragraph_text_styled(
     st: &mut State,
     ctx: Ctx,
 ) -> Md {
+    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
     let mut output = Md::new();
 
     // Group consecutive text runs by InlineFormat for proper wrapping.
@@ -1119,6 +1120,7 @@ fn extract_paragraph_text_html(
     st: &mut State,
     ctx: Ctx,
 ) -> Html {
+    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
     let mut output = Html::new();
     let mut current_format = InlineFormat::default();
     let mut current_text = String::new();
@@ -3344,7 +3346,7 @@ mod tests {
             ])]),
             &styles,
         );
-        assert_eq!(m3.markdown, "aa<!-- memo: m(주: f) -->");
+        assert_eq!(m3.markdown, "a<!-- memo: m(주: f) -->a");
     }
 
     /// A picture in a memo is link text only — no asset — also through a
@@ -3372,7 +3374,7 @@ mod tests {
                 ])]),
                 &styles,
             );
-            assert_eq!(out.markdown, "aa<!-- memo: m ![x](images/x.png) -->");
+            assert_eq!(out.markdown, "a<!-- memo: m ![x](images/x.png) -->a");
             assert!(out.images.is_empty());
         }
         let out = encode_styled(
@@ -3746,7 +3748,7 @@ mod tests {
             ]),
             &styles,
         );
-        assert_eq!(out.markdown, format!("x\n\na<!-- memo: {TOO_DEEP} -->"));
+        assert_eq!(out.markdown, format!("x\n\n<!-- memo: {TOO_DEEP} -->a"));
         assert_eq!(
             out.warnings,
             vec![super::super::MdWarning::ContainerTooDeep {

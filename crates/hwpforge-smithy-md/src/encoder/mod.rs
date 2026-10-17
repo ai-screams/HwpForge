@@ -369,6 +369,9 @@ pub(crate) fn nests_too_deep(document: &Document<Validated>) -> bool {
                 Control::FieldBoundary {
                     boundary: hwpforge_core::control::FieldBoundary::Start(start),
                 } => {
+                    if depth + 1 > g::MAX_NESTING_DEPTH {
+                        return true;
+                    }
                     if let Some(content) = &start.annotation {
                         stack.push((Item::Paras(content), depth + 1));
                     }

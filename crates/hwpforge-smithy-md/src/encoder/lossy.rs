@@ -329,6 +329,7 @@ fn paragraph_text_at<S: Sink>(
     destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
+    let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
     let mut pieces: Vec<Piece<S>> = Vec::new();
     let text = |pieces: &mut Vec<Piece<S>>, t: &str| match pieces.last_mut() {
         Some(Piece::Text(last)) => last.push_str(t),
@@ -406,13 +407,6 @@ fn paragraph_text_at<S: Sink>(
                         .join(" ");
                     text(&mut pieces, body.trim());
                 }
-                Control::Memo { anchor_runs, .. } => {
-                    for run in anchor_runs {
-                        if let Some(value) = run.content.plain_text() {
-                            text(&mut pieces, &value);
-                        }
-                    }
-                }
                 Control::Unknown { tag, .. } => {
                     let code = Md::code_span(&format!("[{tag}]"));
                     pieces.push(Piece::Markup(S::from_md(code)));
@@ -444,7 +438,11 @@ fn paragraph_text_at<S: Sink>(
                 Control::AutoNumber { num, format, .. } => {
                     text(&mut pieces, &super::auto_number_text(*num, format));
                 }
-                _ => {}
+                other => {
+                    if let Some(value) = hwpforge_core::field_view::scalar_text(other) {
+                        text(&mut pieces, value);
+                    }
+                }
             },
             Part::Table(table) => {
                 if written(&pieces) {

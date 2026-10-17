@@ -8,9 +8,6 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read as _, Write as _};
 use std::ops::Range;
 
-use crate::decoder::xml_from_str;
-use quick_xml::events::Event;
-use quick_xml::Reader;
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -26,15 +23,8 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 
 use crate::decoder::package::{PackageReader, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
 use crate::error::{HwpxError, HwpxResult};
-use crate::exchange::{
-    PreservedTextSlot, SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION,
-};
+use crate::exchange::{SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION};
 use crate::inline_text::encode_inline_text_xml;
-use crate::schema::section::{
-    HxCaption, HxCtrl, HxFieldBegin, HxFootNote, HxHeaderFooter, HxParagraph, HxPic, HxRun,
-    HxSection, HxSubList, HxTable, HxTableCell, HxTableRow,
-};
-use crate::schema::shapes::{HxConnectLine, HxCurve, HxEllipse, HxLine, HxPolygon, HxRect};
 use crate::{HwpxDecoder, HwpxStyleStore};
 
 /// Preserve-first patch engine for section-level edits.
@@ -64,7 +54,11 @@ impl HwpxPatcher {
         let raw_package = RawPackage::read(base_bytes)?;
         let section_path = raw_package.section_path(section_idx)?;
         let section_xml = raw_package.read_text_entry(&section_path)?;
-        build_section_preservation(&section_xml, &section_path, section)
+        let decoded = HwpxDecoder::decode(base_bytes)?;
+        let map = decoded.source_maps.get(section_idx).ok_or_else(|| {
+            HwpxError::InvalidStructure { detail: "missing decoder source map".into() }
+        })?;
+        preservation_from_map(&section_xml, &section_path, section, map, section_idx)
     }
 
     /// Patches a single section while preserving untouched package entries.
@@ -210,6 +204,20 @@ impl HwpxPatcher {
 
         let mut decoded = HwpxDecoder::decode(base_bytes)?;
         let decode_warnings = decoded.warnings.clone();
+        let mut replacement = replacement.clone();
+        let mut authored = decoded.document.sections().to_vec();
+        if let Some(section) = authored.get_mut(section_idx) {
+            *section = replacement;
+        }
+        hwpforge_core::field_inventory::FieldInventory::restore_source_provenance(
+            &mut authored,
+            decoded.document.sections(),
+        );
+        replacement = authored
+            .get(section_idx)
+            .cloned()
+            .ok_or_else(|| HwpxError::InvalidStructure { detail: "section out of range".into() })?;
+        let replacement = &replacement;
         let base_section =
             decoded.document.sections().get(section_idx).cloned().ok_or_else(|| {
                 HwpxError::InvalidStructure {
@@ -236,10 +244,29 @@ impl HwpxPatcher {
             });
         }
 
+        // 이것을 실패시키는 것: 경계형 자동 필드 본문을 일반 텍스트로 지우기.
+        let before_fields = hwpforge_core::field_inventory::FieldInventory::from_sections_at(
+            std::slice::from_ref(&base_section),
+            section_idx,
+        );
+        let after_fields = hwpforge_core::field_inventory::FieldInventory::from_sections_at(
+            std::slice::from_ref(replacement),
+            section_idx,
+        );
+        if before_fields.fields().len() != after_fields.fields().len()
+            || before_fields.fields().iter().zip(after_fields.fields()).any(|(a, b)| {
+                a.editability() != hwpforge_core::field_inventory::FieldEditability::Editable
+                    && a != b
+            })
+        {
+            return Err(HwpxError::InvalidStructure {
+                detail: "protected field value or range changed".into(),
+            });
+        }
         let mut base_redacted = base_section.clone();
         let mut replacement_redacted = replacement.clone();
-        redact_section_texts(&mut base_redacted);
-        redact_section_texts(&mut replacement_redacted);
+        redact_section_texts(&mut base_redacted, section_idx);
+        redact_section_texts(&mut replacement_redacted, section_idx);
         if base_redacted != replacement_redacted {
             return Err(HwpxError::InvalidStructure {
                 detail:
@@ -251,6 +278,7 @@ impl HwpxPatcher {
         // Validate the semantic result before touching raw bytes.
         let sections = decoded.document.sections_mut();
         sections[section_idx] = replacement.clone();
+        HwpxDecoder::verify_document_source(&decoded.document)?;
         let _: hwpforge_core::document::Document<Validated> = decoded.document.validate()?;
 
         let base_section_xml = raw_package.read_text_entry(&expected_section_path)?;
@@ -264,8 +292,15 @@ impl HwpxPatcher {
             });
         }
 
-        let rebuilt_preservation =
-            build_section_preservation(&base_section_xml, &expected_section_path, &base_section)?;
+        let rebuilt_preservation = preservation_from_map(
+            &base_section_xml,
+            &expected_section_path,
+            &base_section,
+            decoded.source_maps.get(section_idx).ok_or_else(|| HwpxError::InvalidStructure {
+                detail: "missing decoder source map".into(),
+            })?,
+            section_idx,
+        )?;
         if preservation != &rebuilt_preservation {
             return Err(HwpxError::InvalidStructure {
                 detail:
@@ -274,7 +309,7 @@ impl HwpxPatcher {
             });
         }
 
-        let replacement_slots = collect_semantic_text_slots(replacement);
+        let replacement_slots = collect_semantic_text_slots(replacement, section_idx);
         if replacement_slots.len() != rebuilt_preservation.text_slots.len() {
             return Err(HwpxError::InvalidStructure {
                 detail: format!(
@@ -348,7 +383,7 @@ impl HwpxPatcher {
         // `a_shortened_patch_drops_the_stale_line_start`).
         let mut replacements = Vec::with_capacity(edits.len());
         if !edits.is_empty() {
-            let flow = crate::cache_flow::ParagraphFlow::scan(&base_section_xml)?;
+            let flow = &decoded.source_maps[section_idx].cache_flow;
             let mut changed = Vec::with_capacity(edits.len());
             for (locator, text) in &edits {
                 let at = text_locator_start(locator);
@@ -357,7 +392,12 @@ impl HwpxPatcher {
                         "text slot at byte {at} of '{expected_section_path}' is outside every paragraph"
                     ),
                 })?);
-                replacements.push(text_locator_replacement(&base_section_xml, locator, text)?);
+                replacements.push(text_locator_replacement(
+                    &base_section_xml,
+                    locator,
+                    text,
+                    &decoded.source_maps[section_idx].text_elements,
+                )?);
             }
             replacements
                 .extend(flow.stale_caches(changed).into_iter().map(|range| (range, String::new())));
@@ -390,64 +430,6 @@ pub(crate) struct SemanticTextSlot {
     /// `Text` on apply; E6 stamping excludes them instead — splitting a
     /// tab-bearing run is lossy (Wave 1A).
     pub(crate) inline: bool,
-}
-
-#[derive(Debug, Default)]
-struct RawSectionSlots {
-    body: Vec<PreservedTextSlot>,
-    /// One entry per `<hp:header>`, in wire order.
-    header: Vec<Vec<PreservedTextSlot>>,
-    /// One entry per `<hp:footer>`, in wire order.
-    footer: Vec<Vec<PreservedTextSlot>>,
-}
-
-impl RawSectionSlots {
-    fn into_slots(self) -> Vec<PreservedTextSlot> {
-        let mut slots = self.body;
-        slots.extend(numbered_header_footer_slots(self.header, "header", "headers"));
-        slots.extend(numbered_header_footer_slots(self.footer, "footer", "footers"));
-        slots
-    }
-}
-
-/// Names header/footer slots the way the semantic side does
-/// (`collect_semantic_text_slots`): `header.…` when the section has one,
-/// `headers[i].…` when it has several.
-///
-/// 이것을 실패시키는 것: 여럿일 때도 `header.…` 로 두기
-/// (`preservation_slots_number_multiple_footers`).
-fn numbered_header_footer_slots(
-    groups: Vec<Vec<PreservedTextSlot>>,
-    single: &str,
-    plural: &str,
-) -> Vec<PreservedTextSlot> {
-    let several = groups.len() > 1;
-    let mut out = Vec::new();
-    for (i, group) in groups.into_iter().enumerate() {
-        for mut slot in group {
-            if several {
-                if let Some(rest) = slot.path.strip_prefix(single) {
-                    slot.path = format!("{plural}[{i}]{rest}");
-                }
-            }
-            out.push(slot);
-        }
-    }
-    out
-}
-
-struct RawSlotSink<'a> {
-    body_slots: &'a mut Vec<PreservedTextSlot>,
-    section_slots: &'a mut RawSectionSlots,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TextElementSpan {
-    element_start: usize,
-    element_end: usize,
-    content_start: Option<usize>,
-    content_end: Option<usize>,
-    has_inline_markup: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -574,1340 +556,171 @@ impl RawPackage {
     }
 }
 
-fn build_section_preservation(
-    section_xml: &str,
-    section_path: &str,
+fn preservation_from_map(
+    xml: &str,
+    part: &str,
     section: &Section,
+    map: &crate::decoder::source_map::SourceMap,
+    section_idx: usize,
 ) -> HwpxResult<SectionPreservation> {
-    // Parsed as the decoder parses it: a whitespace-only `<hp:t>` (the " "
-    // after a caption number) keeps its text instead of reading as empty, so
-    // the raw slots match the decoded runs. Element order is unchanged, so
-    // the spans below still come from the original XML.
-    // 이것을 실패시키는 것: 이 정규화를 지우기(F17 캡션의 " " 슬롯이 사라져
-    // 보존 슬롯 수 불일치 — `caption_text_after_its_number_is_patched`).
-    let normalized = crate::wire_xml::preserve_ws_only_text(section_xml).map_err(|error| {
-        HwpxError::XmlParse {
-            file: section_path.to_string(),
-            detail: crate::decoder::xml_error_detail(&error.into()),
-        }
-    })?;
-    let hx_section: HxSection = xml_from_str(&normalized).map_err(|error| HwpxError::XmlParse {
-        file: section_path.to_string(),
-        detail: crate::decoder::xml_error_detail(&error),
-    })?;
-
-    let raw_slots = collect_raw_text_slots(section_xml, &hx_section)?;
-    let semantic_slots = collect_semantic_text_slots(section);
-    if raw_slots.len() != semantic_slots.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "preservation slot count mismatch: raw={} semantic={}",
-                raw_slots.len(),
-                semantic_slots.len()
-            ),
-        });
-    }
-
-    let mut text_slots: Vec<PreservedTextSlot> = Vec::with_capacity(raw_slots.len());
-    for (index, (raw_slot, semantic_slot)) in raw_slots.into_iter().zip(semantic_slots).enumerate()
-    {
-        if raw_slot.path != semantic_slot.path {
+    let recorded: BTreeMap<_, _> = map.text_slots().iter().map(|s| (s.path.as_str(), s)).collect();
+    let mut slots = Vec::new();
+    for slot in collect_semantic_text_slots(section, section_idx) {
+        let original =
+            recorded.get(slot.path.as_str()).ok_or_else(|| HwpxError::InvalidStructure {
+                detail: format!(
+                    "internal decoder source-map defect: no original slot for {}",
+                    slot.path
+                ),
+            })?;
+        if original.original_text != slot.text {
             return Err(HwpxError::InvalidStructure {
                 detail: format!(
-                    "preservation slot path mismatch at index {index}: raw='{}' semantic='{}'",
-                    raw_slot.path, semantic_slot.path
+                    "internal decoder source-map defect: original differs at {}",
+                    slot.path
                 ),
             });
         }
-        if raw_slot.original_text != semantic_slot.text {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "preservation slot text mismatch at index {index} path '{}': raw='{}' semantic='{}'",
-                    raw_slot.path, raw_slot.original_text, semantic_slot.text
-                ),
-            });
-        }
-        text_slots.push(raw_slot);
+        slots.push((*original).clone());
     }
-
     Ok(SectionPreservation {
         preservation_version: SECTION_PRESERVATION_VERSION,
-        section_path: section_path.to_string(),
-        section_sha256: sha256_hex(section_xml.as_bytes()),
-        text_slots,
+        section_path: part.into(),
+        section_sha256: sha256_hex(xml.as_bytes()),
+        text_slots: slots,
     })
+}
+
+#[cfg(test)]
+fn build_section_preservation(
+    xml: &str,
+    part: &str,
+    section: &Section,
+) -> HwpxResult<SectionPreservation> {
+    let parsed = crate::decoder::section::parse_section_with_images(
+        xml,
+        0,
+        part,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+    )?;
+    let mut decoded =
+        Section::with_paragraphs(parsed.paragraphs, hwpforge_core::PageSettings::a4());
+    decoded.headers = parsed.headers;
+    decoded.footers = parsed.footers;
+    let map = parsed.source.finish(&decoded, 0, part);
+    preservation_from_map(xml, part, section, &map, 0)
 }
 
 // pub(crate): E6 stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
-// (세 번째 순회 복제 금지 — fill/patch 거울 규칙과 동일 계열).
-pub(crate) fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
-    let mut slots: Vec<SemanticTextSlot> = Vec::new();
-    collect_semantic_paragraph_slots(&section.paragraphs, "paragraphs", &mut slots);
-    // ADR-002: emit a slot per `<hp:header>` / `<hp:footer>` so multi-
-    // cardinality page features (ODD/EVEN/BOTH) are addressable. Path
-    // is indexed by position to keep stable identity across patches.
-    for (idx, header) in section.headers.iter().enumerate() {
-        let prefix = if section.headers.len() == 1 {
-            "header".to_string()
-        } else {
-            format!("headers[{idx}]")
-        };
-        collect_semantic_header_footer_slots(header, &prefix, &mut slots);
-    }
-    for (idx, footer) in section.footers.iter().enumerate() {
-        let prefix = if section.footers.len() == 1 {
-            "footer".to_string()
-        } else {
-            format!("footers[{idx}]")
-        };
-        collect_semantic_header_footer_slots(footer, &prefix, &mut slots);
-    }
-    slots
+// (컨테이너 순회와 필드 정책은 Core의 FieldInventory가 소유한다).
+pub(crate) fn collect_semantic_text_slots(
+    section: &Section,
+    section_idx: usize,
+) -> Vec<SemanticTextSlot> {
+    collect_text_slots(section, section_idx, true)
 }
 
-fn collect_semantic_header_footer_slots(
-    value: &HeaderFooter,
-    prefix: &str,
-    slots: &mut Vec<SemanticTextSlot>,
-) {
-    let paragraphs_prefix = format!("{prefix}.paragraphs");
-    collect_semantic_paragraph_slots(&value.paragraphs, &paragraphs_prefix, slots);
+// Stamp policy must operate on actual text slots, including folded Memo
+// anchors. Filtering them as patch targets first would hide policy regressions.
+pub(crate) fn collect_stamp_text_slots(
+    section: &Section,
+    section_idx: usize,
+) -> Vec<SemanticTextSlot> {
+    collect_text_slots(section, section_idx, false)
 }
 
-fn collect_semantic_caption_slots(
-    caption: &Caption,
-    prefix: &str,
-    slots: &mut Vec<SemanticTextSlot>,
-) {
-    let paragraphs_prefix = format!("{prefix}.caption.paragraphs");
-    collect_semantic_paragraph_slots(&caption.paragraphs, &paragraphs_prefix, slots);
-}
-
-fn collect_semantic_paragraph_slots(
-    paragraphs: &[Paragraph],
-    prefix: &str,
-    slots: &mut Vec<SemanticTextSlot>,
-) {
-    for (paragraph_idx, paragraph) in paragraphs.iter().enumerate() {
-        let paragraph_prefix = format!("{prefix}[{paragraph_idx}]");
-        for (run_idx, run) in paragraph.runs.iter().enumerate() {
-            let run_prefix = format!("{paragraph_prefix}.runs[{run_idx}]");
-            match &run.content {
-                RunContent::Text(text) => slots.push(SemanticTextSlot {
-                    path: format!("{run_prefix}.text"),
-                    text: text.clone(),
-                    inline: false,
-                }),
-                // `RunContent::InlineText` carries `<hp:tab>`
-                // attributes that the slot model cannot represent;
-                // expose the tab-equivalent plain string so the slot
-                // is still discoverable and editable. Editing through
-                // the slot interface downgrades the run to plain
-                // `Text(String)` on apply — see the
-                // `apply_*_slot` helpers and debug doc §3a-C16.
-                RunContent::InlineText(it) => slots.push(SemanticTextSlot {
-                    path: format!("{run_prefix}.text"),
-                    text: it.plain_text(),
-                    inline: true,
-                }),
-                RunContent::Table(table) => {
-                    collect_semantic_table_slots(table, &format!("{run_prefix}.table"), slots);
+fn collect_text_slots(
+    section: &Section,
+    section_idx: usize,
+    patchable_only: bool,
+) -> Vec<SemanticTextSlot> {
+    use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
+    fn text_runs(
+        runs: &[Run],
+        prefix: &str,
+        section: usize,
+        inventory: &FieldInventory<'_>,
+        patchable_only: bool,
+        slots: &mut Vec<SemanticTextSlot>,
+    ) {
+        for (ri, run) in runs.iter().enumerate() {
+            let path = format!("{prefix}.runs[{ri}]");
+            if let Some(text) = run.content.plain_text() {
+                let path = format!("{path}.text");
+                if !patchable_only || !inventory.protects(section, &path) {
+                    slots.push(SemanticTextSlot {
+                        path,
+                        text: text.into_owned(),
+                        inline: matches!(run.content, RunContent::InlineText(_)),
+                    });
                 }
-                RunContent::Image(image) => {
-                    collect_semantic_image_slots(image, &format!("{run_prefix}.image"), slots);
-                }
-                RunContent::Control(control) => {
-                    collect_semantic_control_slots(
-                        control,
-                        &format!("{run_prefix}.control"),
-                        slots,
-                    );
-                }
-                _ => {}
+            }
+            if let Some(Control::Memo { anchor_runs, .. }) = run.content.as_control() {
+                text_runs(
+                    anchor_runs,
+                    &format!("{path}.control.memo.anchor[0]"),
+                    section,
+                    inventory,
+                    patchable_only,
+                    slots,
+                );
             }
         }
     }
-}
-
-fn collect_semantic_table_slots(table: &Table, prefix: &str, slots: &mut Vec<SemanticTextSlot>) {
-    if let Some(caption) = &table.caption {
-        collect_semantic_caption_slots(caption, prefix, slots);
-    }
-    for (row_idx, row) in table.rows.iter().enumerate() {
-        collect_semantic_row_slots(row, &format!("{prefix}.rows[{row_idx}]"), slots);
-    }
-}
-
-fn collect_semantic_row_slots(row: &TableRow, prefix: &str, slots: &mut Vec<SemanticTextSlot>) {
-    for (cell_idx, cell) in row.cells.iter().enumerate() {
-        collect_semantic_cell_slots(cell, &format!("{prefix}.cells[{cell_idx}]"), slots);
-    }
-}
-
-fn collect_semantic_cell_slots(cell: &TableCell, prefix: &str, slots: &mut Vec<SemanticTextSlot>) {
-    let paragraphs_prefix = format!("{prefix}.paragraphs");
-    collect_semantic_paragraph_slots(&cell.paragraphs, &paragraphs_prefix, slots);
-}
-
-fn collect_semantic_image_slots(image: &Image, prefix: &str, slots: &mut Vec<SemanticTextSlot>) {
-    if let Some(caption) = &image.caption {
-        collect_semantic_caption_slots(caption, prefix, slots);
-    }
-}
-
-fn collect_semantic_control_slots(
-    control: &Control,
-    prefix: &str,
-    slots: &mut Vec<SemanticTextSlot>,
-) {
-    match control {
-        Control::TextBox { paragraphs, caption, .. } => {
-            let paragraphs_prefix = format!("{prefix}.textbox.paragraphs");
-            collect_semantic_paragraph_slots(paragraphs, &paragraphs_prefix, slots);
-            if let Some(caption) = caption {
-                collect_semantic_caption_slots(caption, &format!("{prefix}.textbox"), slots);
-            }
+    let sections = std::slice::from_ref(section);
+    let inventory = FieldInventory::from_sections_at(sections, section_idx);
+    let mut slots = Vec::new();
+    FieldInventory::visit_flows(sections, |_, paragraphs, prefix| {
+        // External master-page parts are not section patch slots.
+        if prefix.starts_with("master_pages[") {
+            return;
         }
-        Control::Footnote { paragraphs, .. } => {
-            let paragraphs_prefix = format!("{prefix}.footnote.paragraphs");
-            collect_semantic_paragraph_slots(paragraphs, &paragraphs_prefix, slots);
+        for (pi, paragraph) in paragraphs.iter().enumerate() {
+            text_runs(
+                &paragraph.runs,
+                &format!("{prefix}[{pi}]"),
+                section_idx,
+                &inventory,
+                patchable_only,
+                &mut slots,
+            );
         }
-        Control::Endnote { paragraphs, .. } => {
-            let paragraphs_prefix = format!("{prefix}.endnote.paragraphs");
-            collect_semantic_paragraph_slots(paragraphs, &paragraphs_prefix, slots);
-        }
-        Control::Ellipse { paragraphs, caption, .. } => {
-            let paragraphs_prefix = format!("{prefix}.ellipse.paragraphs");
-            collect_semantic_paragraph_slots(paragraphs, &paragraphs_prefix, slots);
-            if let Some(caption) = caption {
-                collect_semantic_caption_slots(caption, &format!("{prefix}.ellipse"), slots);
-            }
-        }
-        Control::Polygon { paragraphs, caption, .. } => {
-            let paragraphs_prefix = format!("{prefix}.polygon.paragraphs");
-            collect_semantic_paragraph_slots(paragraphs, &paragraphs_prefix, slots);
-            if let Some(caption) = caption {
-                collect_semantic_caption_slots(caption, &format!("{prefix}.polygon"), slots);
-            }
-        }
-        Control::Rect { caption: Some(caption), .. } => {
-            collect_semantic_caption_slots(caption, &format!("{prefix}.rect"), slots);
-        }
-        Control::Line { caption: Some(caption), .. } => {
-            collect_semantic_caption_slots(caption, &format!("{prefix}.line"), slots);
-        }
-        Control::Arc { caption: Some(caption), .. } => {
-            collect_semantic_caption_slots(caption, &format!("{prefix}.arc"), slots);
-        }
-        Control::Curve { caption: Some(caption), .. } => {
-            collect_semantic_caption_slots(caption, &format!("{prefix}.curve"), slots);
-        }
-        Control::ConnectLine { caption: Some(caption), .. } => {
-            collect_semantic_caption_slots(caption, &format!("{prefix}.connect_line"), slots);
-        }
-        // 누름틀(ClickHere) 본문은 사용자가 채우는 값 — 텍스트 슬롯으로
-        // 노출한다 (Epic 1). ClickHere 로만 게이트: SUMMERY/DATE 류의
-        // display_text 는 한컴이 재계산하는 캐시 값이라 슬롯이 없고, redact
-        // 도 지우지 않으므로 편집 시 structural change 로 거부된다 —
-        // 슬롯 없이 redact 만 지우면 변경이 무음 드롭되는 부패 경로가 생긴다.
-        Control::Field {
-            field_type: hwpforge_foundation::FieldType::ClickHere,
-            display_text,
-            ..
-        } => {
-            if !display_text.is_empty() {
-                slots.push(SemanticTextSlot {
-                    path: format!("{prefix}.field"),
-                    text: display_text.clone(),
-                    inline: false,
-                });
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_raw_text_slots(xml: &str, section: &HxSection) -> HwpxResult<Vec<PreservedTextSlot>> {
-    let root_span = find_root_span(xml, "hs:sec")?;
-    let mut slots = RawSectionSlots::default();
-    let mut body_slots: Vec<PreservedTextSlot> = Vec::new();
-    let mut sink = RawSlotSink { body_slots: &mut body_slots, section_slots: &mut slots };
-    collect_raw_paragraph_list_slots(
-        xml,
-        root_span,
-        &section.paragraphs,
-        "paragraphs",
-        &mut sink,
-        true,
-    )?;
-    slots.body = body_slots;
-    Ok(slots.into_slots())
-}
-
-fn collect_raw_paragraph_list_slots(
-    xml: &str,
-    parent_span: Range<usize>,
-    paragraphs: &[HxParagraph],
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    allow_section_header_footer: bool,
-) -> HwpxResult<()> {
-    let paragraph_spans = collect_direct_child_outer_spans(xml, parent_span, "hp:p")?;
-    if paragraph_spans.len() != paragraphs.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "paragraph count mismatch while building preservation metadata: raw={} semantic={}",
-                paragraph_spans.len(),
-                paragraphs.len()
-            ),
-        });
-    }
-
-    for (paragraph_idx, (paragraph, paragraph_span)) in
-        paragraphs.iter().zip(paragraph_spans.into_iter()).enumerate()
-    {
-        let paragraph_prefix = format!("{prefix}[{paragraph_idx}]");
-        collect_raw_paragraph_slots(
-            xml,
-            paragraph_span,
-            paragraph,
-            &paragraph_prefix,
-            sink,
-            allow_section_header_footer,
-        )?;
-    }
-
-    Ok(())
-}
-
-fn collect_raw_paragraph_slots(
-    xml: &str,
-    paragraph_span: Range<usize>,
-    paragraph: &HxParagraph,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    allow_section_header_footer: bool,
-) -> HwpxResult<()> {
-    let run_spans = collect_direct_child_outer_spans(xml, paragraph_span.clone(), "hp:run")?;
-    if run_spans.len() != paragraph.runs.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "run count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                run_spans.len(),
-                paragraph.runs.len()
-            ),
-        });
-    }
-
-    let mut semantic_run_idx: usize = 0;
-    for (run, run_span) in paragraph.runs.iter().zip(run_spans.iter()) {
-        semantic_run_idx = collect_raw_run_slots(
-            xml,
-            run_span.clone(),
-            run,
-            prefix,
-            semantic_run_idx,
-            sink,
-            allow_section_header_footer,
-        )?;
-    }
-
-    if semantic_run_idx == 0 {
-        let Some(first_run_span) = run_spans.first() else {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "empty paragraph normalization is unsupported without a raw <hp:run> anchor at {prefix}"
-                ),
-            });
-        };
-        sink.body_slots.push(PreservedTextSlot {
-            path: format!("{prefix}.runs[0].text"),
-            original_text: String::new(),
-            has_inline_markup: false,
-            locator: TextLocator::EmptyRun {
-                run_start: first_run_span.start,
-                run_end: first_run_span.end,
-            },
-        });
-    }
-
-    Ok(())
-}
-
-fn collect_raw_run_slots(
-    xml: &str,
-    run_span: Range<usize>,
-    run: &HxRun,
-    prefix: &str,
-    mut semantic_run_idx: usize,
-    sink: &mut RawSlotSink<'_>,
-    allow_section_header_footer: bool,
-) -> HwpxResult<usize> {
-    let text_locators = collect_direct_text_elements(xml, run_span.clone())?;
-    if text_locators.len() != run.texts.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "text element count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                text_locators.len(),
-                run.texts.len()
-            ),
-        });
-    }
-
-    // W1a: 디코더가 자식을 문서 순서(child_order 사이드카)로 평탄화하므로
-    // raw walker 도 같은 순서로 semantic_run_idx 를 전진시킨다 — 종전
-    // by-kind 재현(texts→tables→pictures→ctrls→shapes)은 인터리브 run 에서
-    // 경로 주소가 어긋난다. field 본문도 순서 기반: begin/end **사이**의
-    // 텍스트가 본문 (gotcha #30 모호성 게이트 철폐 — 디코더와 거울).
-    let kind_spans = |name: &str, expect: usize, label: &str| -> HwpxResult<Vec<Range<usize>>> {
-        let spans = collect_direct_child_outer_spans(xml, run_span.clone(), name)?;
-        if spans.len() != expect {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "{label} count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                    spans.len(),
-                    expect
-                ),
+    });
+    for field in inventory.fields().iter().filter(|f| {
+        (!patchable_only || f.editability() == FieldEditability::Editable)
+            && !f.current().is_empty()
+    }) {
+        for body in field.body().iter().filter(|b| b.path().ends_with(".control.field")) {
+            slots.push(SemanticTextSlot {
+                path: body.path().into(),
+                text: field.current(),
+                inline: false,
             });
         }
-        Ok(spans)
-    };
-    let table_spans = kind_spans("hp:tbl", run.tables.len(), "table")?;
-    let picture_spans = kind_spans("hp:pic", run.pictures.len(), "picture")?;
-    let ctrl_spans = kind_spans("hp:ctrl", run.ctrls.len(), "ctrl")?;
-    let rect_spans = kind_spans("hp:rect", run.rects.len(), "rect")?;
-    let line_spans = kind_spans("hp:line", run.lines.len(), "line")?;
-    let ellipse_spans = kind_spans("hp:ellipse", run.ellipses.len(), "ellipse")?;
-    let polygon_spans = kind_spans("hp:polygon", run.polygons.len(), "polygon")?;
-    let curve_spans = kind_spans("hp:curve", run.curves.len(), "curve")?;
-    let connect_line_spans = kind_spans("hp:connectLine", run.connect_lines.len(), "connectLine")?;
-
-    let order = if run.child_order.is_empty() {
-        crate::schema::section::legacy_child_order(run)
-    } else {
-        run.child_order.clone()
-    };
-
-    // 디코더와 같은 경계 판정이어야 이후 편집 슬롯의 run 번호가 맞는다.
-    // 이것을 실패시키는 것: 범위 시작·끝을 semantic_run_idx 에 세지 않기.
-    let carried_starts = crate::decoder::section::carried_field_starts(run, &order);
-    let mut pending_field_begin: Option<&HxFieldBegin> = None;
-    // begin/end 사이 본문 텍스트 추적: (locator 인덱스, 사이 텍스트 개수).
-    // 슬롯은 본문이 정확히 1개 `<hp:t>` 일 때만 만든다 (단일 요소 교체
-    // locator 모델의 한계 — 0/2+ 개는 편집 슬롯 없음, 디코더 display_text
-    // 는 이어붙여 carry).
-    let mut field_body_locator: Option<usize> = None;
-    let mut field_body_count = 0usize;
-    let mut field_body_text = String::new();
-
-    for &(kind, idx) in &order {
-        use crate::schema::section::HxRunChildKind as K;
-        match kind {
-            K::Text => {
-                if pending_field_begin.is_some() {
-                    field_body_locator = Some(idx);
-                    field_body_count += 1;
-                    field_body_text.push_str(&run.texts[idx].text());
+    }
+    // Source and semantic projections use addresses, not enumeration position.
+    slots.sort_by_cached_key(|s| {
+        let priority = if s.path.starts_with("paragraphs[") {
+            0
+        } else if s.path.starts_with("header") {
+            1
+        } else {
+            2
+        };
+        let mut path = String::new();
+        for part in s.path.split_inclusive('[') {
+            if let Some((number, rest)) = part.split_once(']') {
+                if let Ok(number) = number.parse::<usize>() {
+                    path.push_str(&format!("{number:020}]{rest}"));
                     continue;
                 }
-                let text_content = run.texts[idx].text();
-                if !text_content.is_empty() {
-                    sink.body_slots.push(PreservedTextSlot {
-                        path: format!("{prefix}.runs[{semantic_run_idx}].text"),
-                        original_text: text_content,
-                        has_inline_markup: text_locators[idx].has_inline_markup,
-                        locator: text_locator(&text_locators[idx]),
-                    });
-                    semantic_run_idx += 1;
-                }
             }
-            K::Table => {
-                let table_prefix = format!("{prefix}.runs[{semantic_run_idx}].table");
-                collect_raw_table_slots(
-                    xml,
-                    table_spans[idx].clone(),
-                    &run.tables[idx],
-                    &table_prefix,
-                    sink,
-                    allow_section_header_footer,
-                )?;
-                semantic_run_idx += 1;
-            }
-            K::Picture => {
-                if picture_has_semantic_run(&run.pictures[idx]) {
-                    let picture_prefix = format!("{prefix}.runs[{semantic_run_idx}].image");
-                    collect_raw_picture_slots(
-                        xml,
-                        picture_spans[idx].clone(),
-                        &run.pictures[idx],
-                        &picture_prefix,
-                        sink,
-                    )?;
-                    semantic_run_idx += 1;
-                }
-            }
-            K::Ctrl => {
-                semantic_run_idx = collect_raw_ctrl_child_slots(
-                    xml,
-                    ctrl_spans[idx].clone(),
-                    &run.ctrls[idx],
-                    carried_starts[idx],
-                    prefix,
-                    semantic_run_idx,
-                    sink,
-                    allow_section_header_footer,
-                    &mut pending_field_begin,
-                    &mut field_body_locator,
-                    &mut field_body_count,
-                    &mut field_body_text,
-                    &text_locators,
-                )?;
-            }
-            K::Rect => {
-                if run.rects[idx].draw_text.is_some() {
-                    let rect_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.textbox");
-                    collect_raw_rect_slots(
-                        xml,
-                        rect_spans[idx].clone(),
-                        &run.rects[idx],
-                        &rect_prefix,
-                        sink,
-                        allow_section_header_footer,
-                    )?;
-                    semantic_run_idx += 1;
-                }
-            }
-            K::Line => {
-                let line_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.line");
-                collect_raw_line_slots(
-                    xml,
-                    line_spans[idx].clone(),
-                    &run.lines[idx],
-                    &line_prefix,
-                    sink,
-                )?;
-                semantic_run_idx += 1;
-            }
-            K::Ellipse => {
-                let ellipse = &run.ellipses[idx];
-                let control_name = if ellipse.has_arc_pr == 1 { "arc" } else { "ellipse" };
-                let ellipse_prefix =
-                    format!("{prefix}.runs[{semantic_run_idx}].control.{control_name}");
-                collect_raw_ellipse_slots(
-                    xml,
-                    ellipse_spans[idx].clone(),
-                    ellipse,
-                    control_name,
-                    &ellipse_prefix,
-                    sink,
-                )?;
-                semantic_run_idx += 1;
-            }
-            K::Polygon => {
-                let polygon_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.polygon");
-                collect_raw_polygon_slots(
-                    xml,
-                    polygon_spans[idx].clone(),
-                    &run.polygons[idx],
-                    &polygon_prefix,
-                    sink,
-                )?;
-                semantic_run_idx += 1;
-            }
-            K::Curve => {
-                let curve_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.curve");
-                collect_raw_curve_slots(
-                    xml,
-                    curve_spans[idx].clone(),
-                    &run.curves[idx],
-                    &curve_prefix,
-                    sink,
-                )?;
-                semantic_run_idx += 1;
-            }
-            K::ConnectLine => {
-                let connect_line_prefix =
-                    format!("{prefix}.runs[{semantic_run_idx}].control.connect_line");
-                collect_raw_connect_line_slots(
-                    xml,
-                    connect_line_spans[idx].clone(),
-                    &run.connect_lines[idx],
-                    &connect_line_prefix,
-                    sink,
-                )?;
-                semantic_run_idx += 1;
-            }
-            // 디코더가 문서 순서 위치에서 run 을 방출하는 슬롯-없는 종류 —
-            // 인덱스만 전진 (equation/dutmal/compose + W1a 신규: container/
-            // textart — 종전 walker 는 이 둘을 아예 세지 않던 잠복 결함).
-            K::Equation | K::Dutmal | K::Compose | K::Container | K::TextArt => {
-                semantic_run_idx += 1;
-            }
-            // Switch(차트) 는 디코더가 문단 끝에 append — run 꼬리 집계 유지.
-            // secPr/titleMark/Other/StrayText 는 run 방출 없음.
-            K::Switch | K::SecPr | K::TitleMark | K::Other | K::Ole | K::StrayText => {}
+            path.push_str(part);
         }
-    }
-    // trailing self-closing fieldBegin (BOOKMARK span start) — 디코더 거울.
-    if pending_field_begin.take().is_some_and(|fb| fb.field_type == "BOOKMARK") {
-        semantic_run_idx += 1;
-    }
-    // Switch(차트): 디코더가 문단 끝에 append 하므로 종전대로 run 꼬리 집계.
-    semantic_run_idx += run
-        .switches
-        .iter()
-        .filter(|switch_case| {
-            switch_case.case.as_ref().and_then(|case| case.chart.as_ref()).is_some()
-        })
-        .count();
-
-    Ok(semantic_run_idx)
-}
-
-/// `<hp:ctrl>` 자식 하나의 raw 슬롯/인덱스 처리 (W1a — 디코더
-/// `convert_ctrl_child` 와 거울상. field 본문은 순서 기반: begin/end 사이
-/// 텍스트가 정확히 1개일 때만 편집 슬롯을 만든다).
-#[allow(clippy::too_many_arguments)]
-fn collect_raw_ctrl_child_slots<'a>(
-    xml: &str,
-    ctrl_span: Range<usize>,
-    ctrl: &'a HxCtrl,
-    carry_boundary: bool,
-    prefix: &str,
-    mut semantic_run_idx: usize,
-    sink: &mut RawSlotSink<'_>,
-    allow_section_header_footer: bool,
-    pending_field_begin: &mut Option<&'a HxFieldBegin>,
-    field_body_locator: &mut Option<usize>,
-    field_body_count: &mut usize,
-    field_body_text: &mut String,
-    text_locators: &[TextElementSpan],
-) -> HwpxResult<usize> {
-    {
-        if allow_section_header_footer {
-            if let Some(header) = &ctrl.header {
-                collect_raw_header_footer_slots(
-                    xml,
-                    ctrl_span.clone(),
-                    header,
-                    "header",
-                    &mut sink.section_slots.header,
-                )?;
-            }
-            if let Some(footer) = &ctrl.footer {
-                collect_raw_header_footer_slots(
-                    xml,
-                    ctrl_span.clone(),
-                    footer,
-                    "footer",
-                    &mut sink.section_slots.footer,
-                )?;
-            }
-        }
-        if let Some(footnote) = &ctrl.foot_note {
-            let footnote_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.footnote");
-            collect_raw_footnote_slots(xml, ctrl_span.clone(), footnote, &footnote_prefix, sink)?;
-            semantic_run_idx += 1;
-        }
-        if let Some(endnote) = &ctrl.end_note {
-            let endnote_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.endnote");
-            collect_raw_footnote_slots(xml, ctrl_span.clone(), endnote, &endnote_prefix, sink)?;
-            semantic_run_idx += 1;
-        }
-        if ctrl.bookmark.is_some() {
-            semantic_run_idx += 1;
-        }
-        if ctrl.indexmark.is_some() {
-            semantic_run_idx += 1;
-        }
-        if let Some(field_begin) = &ctrl.field_begin {
-            if carry_boundary {
-                *pending_field_begin = None;
-                semantic_run_idx += 1;
-            } else {
-                *pending_field_begin = Some(field_begin);
-            }
-            *field_body_locator = None;
-            *field_body_count = 0;
-            field_body_text.clear();
-        }
-        if ctrl.field_end.is_some() {
-            if let Some(field_begin) = pending_field_begin.take() {
-                // 누름틀(CLICK_HERE) 본문 = begin/end **사이** 텍스트 (W1a
-                // 문서 순서 — 종전 `<hp:t> 1개` 모호성 게이트 철폐, 디코더와
-                // 거울). 편집 슬롯은 단일 요소 교체 locator 모델이라 사이
-                // 텍스트가 정확히 1개일 때만 만든다 (0/2+ 는 슬롯 없음 —
-                // 디코더 display_text 는 이어붙여 carry).
-                if field_begin.field_type == "CLICK_HERE" && *field_body_count == 1 {
-                    let li = field_body_locator.expect("count==1 이면 locator 존재");
-                    if !field_body_text.is_empty() {
-                        sink.body_slots.push(PreservedTextSlot {
-                            path: format!("{prefix}.runs[{semantic_run_idx}].control.field"),
-                            original_text: field_body_text.clone(),
-                            has_inline_markup: text_locators[li].has_inline_markup,
-                            locator: text_locator(&text_locators[li]),
-                        });
-                    }
-                }
-                *field_body_locator = None;
-                *field_body_count = 0;
-                field_body_text.clear();
-                semantic_run_idx += 1;
-            } else {
-                semantic_run_idx += 1;
-            }
-        }
-        if let Some(auto_num) = &ctrl.auto_num {
-            // 디코더는 PAGE 와 TOTAL_PAGE 를 InlinePageNumber run 으로
-            // 복원한다 (decoder/section.rs) — 카운터가 PAGE 만 세면 이후
-            // 슬롯 인덱스가 밀린다 (W2 독립 설계리뷰에서 발견된 잠복 결함).
-            // §19.16 J (review r1): a caption number the decoder turns into
-            // a `Control::AutoNumber` run counts too — by the decoder's own
-            // acceptance, so a format it refuses (no run) does not advance.
-            // 이것을 실패시키는 것: 이 전진을 지우기(F17 캡션 번호 뒤 슬롯이 밀려
-            // 보존 편집 실패 — `caption_text_after_its_number_is_patched`).
-            let caption_number =
-                matches!(crate::decoder::section::auto_number_control(auto_num), Ok(Some(_)));
-            if auto_num.num_type == "PAGE" || auto_num.num_type == "TOTAL_PAGE" || caption_number {
-                semantic_run_idx += 1;
-            }
-        }
-        // W2: 디코더가 모든 `<hp:newNum>` 을 Control::NewNumber run 으로
-        // 복원하므로 (미지 numType 도 Unknown kind 로 carry) 무조건 전진.
-        if ctrl.new_num.is_some() {
-            semantic_run_idx += 1;
-        }
-        // W3: `<hp:pageHiding>` 도 Control::PageHiding run 으로 복원 — 전진.
-        if ctrl.page_hiding.is_some() {
-            semantic_run_idx += 1;
-        }
-    }
-    Ok(semantic_run_idx)
-}
-
-fn collect_raw_table_slots(
-    xml: &str,
-    table_span: Range<usize>,
-    table: &HxTable,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    lift_header_footer: bool,
-) -> HwpxResult<()> {
-    if let Some(caption) = &table.caption {
-        let caption_span =
-            single_optional_direct_outer_span(xml, table_span.clone(), "hp:caption")?.ok_or_else(
-                || HwpxError::InvalidStructure {
-                    detail: format!("table caption span missing for {prefix}"),
-                },
-            )?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-
-    let row_spans = collect_direct_child_outer_spans(xml, table_span, "hp:tr")?;
-    if row_spans.len() != table.rows.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "table row count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                row_spans.len(),
-                table.rows.len()
-            ),
-        });
-    }
-    for (row_idx, (row, row_span)) in table.rows.iter().zip(row_spans.into_iter()).enumerate() {
-        collect_raw_row_slots(
-            xml,
-            row_span,
-            row,
-            &format!("{prefix}.rows[{row_idx}]"),
-            sink,
-            lift_header_footer,
-        )?;
-    }
-    Ok(())
-}
-
-fn collect_raw_row_slots(
-    xml: &str,
-    row_span: Range<usize>,
-    row: &HxTableRow,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    lift_header_footer: bool,
-) -> HwpxResult<()> {
-    let cell_spans = collect_direct_child_outer_spans(xml, row_span, "hp:tc")?;
-    if cell_spans.len() != row.cells.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "table cell count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                cell_spans.len(),
-                row.cells.len()
-            ),
-        });
-    }
-    for (cell_idx, (cell, cell_span)) in row.cells.iter().zip(cell_spans.into_iter()).enumerate() {
-        collect_raw_cell_slots(
-            xml,
-            cell_span,
-            cell,
-            &format!("{prefix}.cells[{cell_idx}]"),
-            sink,
-            lift_header_footer,
-        )?;
-    }
-    Ok(())
-}
-
-fn collect_raw_cell_slots(
-    xml: &str,
-    cell_span: Range<usize>,
-    cell: &HxTableCell,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    lift_header_footer: bool,
-) -> HwpxResult<()> {
-    let Some(sub_list) = &cell.sub_list else {
-        return Ok(());
-    };
-    let sub_list_span = single_optional_direct_outer_span(xml, cell_span, "hp:subList")?
-        .ok_or_else(|| HwpxError::InvalidStructure {
-            detail: format!("cell subList span missing for {prefix}"),
-        })?;
-    // 디코더(`lift_header_footers`)가 표 칸 안 머리말/꼬리말을 구역 목록으로
-    // 올리므로 같은 자리에서 슬롯도 센다.
-    collect_raw_sublist_slots(
-        xml,
-        sub_list_span,
-        sub_list,
-        &format!("{prefix}.paragraphs"),
-        sink,
-        lift_header_footer,
-    )
-}
-
-fn collect_raw_picture_slots(
-    xml: &str,
-    picture_span: Range<usize>,
-    picture: &HxPic,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if let Some(caption) = &picture.caption {
-        let caption_span = single_optional_direct_outer_span(xml, picture_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("picture caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_rect_slots(
-    xml: &str,
-    rect_span: Range<usize>,
-    rect: &HxRect,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    lift_header_footer: bool,
-) -> HwpxResult<()> {
-    if let Some(draw_text) = &rect.draw_text {
-        let draw_text_span =
-            single_optional_direct_outer_span(xml, rect_span.clone(), "hp:drawText")?.ok_or_else(
-                || HwpxError::InvalidStructure {
-                    detail: format!("textbox drawText span missing for {prefix}"),
-                },
-            )?;
-        collect_raw_draw_text_slots(
-            xml,
-            draw_text_span,
-            draw_text,
-            prefix,
-            sink,
-            lift_header_footer,
-        )?;
-    }
-    if let Some(caption) = &rect.caption {
-        let caption_span = single_optional_direct_outer_span(xml, rect_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("textbox caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_line_slots(
-    xml: &str,
-    line_span: Range<usize>,
-    line: &HxLine,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if let Some(caption) = &line.caption {
-        let caption_span = single_optional_direct_outer_span(xml, line_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("line caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_ellipse_slots(
-    xml: &str,
-    ellipse_span: Range<usize>,
-    ellipse: &HxEllipse,
-    control_name: &str,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if control_name == "ellipse" {
-        if let Some(draw_text) = &ellipse.draw_text {
-            let draw_text_span =
-                single_optional_direct_outer_span(xml, ellipse_span.clone(), "hp:drawText")?
-                    .ok_or_else(|| HwpxError::InvalidStructure {
-                        detail: format!("ellipse drawText span missing for {prefix}"),
-                    })?;
-            collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink, false)?;
-        }
-    }
-    if let Some(caption) = &ellipse.caption {
-        let caption_span = single_optional_direct_outer_span(xml, ellipse_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("{control_name} caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_polygon_slots(
-    xml: &str,
-    polygon_span: Range<usize>,
-    polygon: &HxPolygon,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if let Some(draw_text) = &polygon.draw_text {
-        let draw_text_span =
-            single_optional_direct_outer_span(xml, polygon_span.clone(), "hp:drawText")?
-                .ok_or_else(|| HwpxError::InvalidStructure {
-                    detail: format!("polygon drawText span missing for {prefix}"),
-                })?;
-        collect_raw_draw_text_slots(xml, draw_text_span, draw_text, prefix, sink, false)?;
-    }
-    if let Some(caption) = &polygon.caption {
-        let caption_span = single_optional_direct_outer_span(xml, polygon_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("polygon caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_curve_slots(
-    xml: &str,
-    curve_span: Range<usize>,
-    curve: &HxCurve,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if let Some(caption) = &curve.caption {
-        let caption_span = single_optional_direct_outer_span(xml, curve_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("curve caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_connect_line_slots(
-    xml: &str,
-    connect_line_span: Range<usize>,
-    connect_line: &HxConnectLine,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    if let Some(caption) = &connect_line.caption {
-        let caption_span = single_optional_direct_outer_span(xml, connect_line_span, "hp:caption")?
-            .ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("connect line caption span missing for {prefix}"),
-            })?;
-        collect_raw_caption_slots(xml, caption_span, caption, prefix, sink)?;
-    }
-    Ok(())
-}
-
-fn collect_raw_draw_text_slots(
-    xml: &str,
-    draw_text_span: Range<usize>,
-    draw_text: &crate::schema::shapes::HxDrawText,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    lift_header_footer: bool,
-) -> HwpxResult<()> {
-    let sub_list_span = single_optional_direct_outer_span(xml, draw_text_span, "hp:subList")?
-        .ok_or_else(|| HwpxError::InvalidStructure {
-            detail: format!("drawText subList span missing for {prefix}"),
-        })?;
-    collect_raw_sublist_slots(
-        xml,
-        sub_list_span,
-        &draw_text.sub_list,
-        &format!("{prefix}.paragraphs"),
-        sink,
-        lift_header_footer,
-    )
-}
-
-fn collect_raw_header_footer_slots(
-    xml: &str,
-    ctrl_span: Range<usize>,
-    value: &HxHeaderFooter,
-    prefix: &str,
-    groups: &mut Vec<Vec<PreservedTextSlot>>,
-) -> HwpxResult<()> {
-    groups.push(Vec::new());
-    let slots = groups.last_mut().expect("just pushed");
-    let tag = if prefix == "header" { "hp:header" } else { "hp:footer" };
-    let header_footer_span =
-        single_optional_direct_outer_span(xml, ctrl_span, tag)?.ok_or_else(|| {
-            HwpxError::InvalidStructure {
-                detail: format!("{prefix} span missing while building preservation metadata"),
-            }
-        })?;
-    let Some(sub_list) = &value.sub_list else {
-        return Ok(());
-    };
-    let sub_list_span = single_optional_direct_outer_span(xml, header_footer_span, "hp:subList")?
-        .ok_or_else(|| HwpxError::InvalidStructure {
-        detail: format!("{prefix} subList span missing while building preservation metadata"),
-    })?;
-    let mut section_sink = RawSectionSlots::default();
-    let mut sink = RawSlotSink { body_slots: slots, section_slots: &mut section_sink };
-    collect_raw_sublist_slots(
-        xml,
-        sub_list_span,
-        sub_list,
-        &format!("{prefix}.paragraphs"),
-        &mut sink,
-        false,
-    )
-}
-
-fn collect_raw_footnote_slots(
-    xml: &str,
-    ctrl_span: Range<usize>,
-    note: &HxFootNote,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    let tag = if prefix.ends_with(".footnote") { "hp:footNote" } else { "hp:endNote" };
-    let note_span = single_optional_direct_outer_span(xml, ctrl_span, tag)?.ok_or_else(|| {
-        HwpxError::InvalidStructure { detail: format!("note span missing for {prefix}") }
-    })?;
-    let sub_list_span = single_optional_direct_outer_span(xml, note_span, "hp:subList")?
-        .ok_or_else(|| HwpxError::InvalidStructure {
-            detail: format!("note subList span missing for {prefix}"),
-        })?;
-    // The decoder drops the number head the encoder injects
-    // ([`injected_head_range`](crate::decoder::section::injected_head_range)):
-    // its " " spacer is no run of Core's, so it is no slot either — the
-    // spacer's text is blanked for the walk (its element stays, so the run
-    // spans still line up).
-    // 이것을 실패시키는 것: 이 비우기를 지우기(각주가 있는 문서의 보존 슬롯 수
-    // 불일치 — `every_container_fill_visits_maps_to_its_own_paragraph`).
-    let mut sub_list = note.sub_list.clone();
-    if crate::decoder::section::injected_head_range(&sub_list).is_some() {
-        for text in &mut sub_list.paragraphs[0].runs[1].texts {
-            *text = crate::schema::section::HxText::new(String::new());
-        }
-    }
-    collect_raw_sublist_slots(
-        xml,
-        sub_list_span,
-        &sub_list,
-        &format!("{prefix}.paragraphs"),
-        sink,
-        false,
-    )
-}
-
-fn collect_raw_caption_slots(
-    xml: &str,
-    caption_span: Range<usize>,
-    caption: &HxCaption,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-) -> HwpxResult<()> {
-    let sub_list_span = single_optional_direct_outer_span(xml, caption_span, "hp:subList")?
-        .ok_or_else(|| HwpxError::InvalidStructure {
-            detail: format!("caption subList span missing for {prefix}"),
-        })?;
-    collect_raw_sublist_slots(
-        xml,
-        sub_list_span,
-        &caption.sub_list,
-        &format!("{prefix}.caption.paragraphs"),
-        sink,
-        false,
-    )
-}
-
-fn collect_raw_sublist_slots(
-    xml: &str,
-    sub_list_span: Range<usize>,
-    sub_list: &HxSubList,
-    prefix: &str,
-    sink: &mut RawSlotSink<'_>,
-    allow_section_header_footer: bool,
-) -> HwpxResult<()> {
-    collect_raw_paragraph_list_slots(
-        xml,
-        sub_list_span,
-        &sub_list.paragraphs,
-        prefix,
-        sink,
-        allow_section_header_footer,
-    )
-}
-
-fn picture_has_semantic_run(picture: &HxPic) -> bool {
-    matches!(picture.img.as_ref(), Some(img) if !img.binary_item_id_ref.is_empty())
-}
-
-pub(crate) fn find_root_span(xml: &str, tag: &str) -> HwpxResult<Range<usize>> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
-    let mut buf: Vec<u8> = Vec::new();
-    let mut root_start: Option<usize> = None;
-    let mut depth: usize = 0;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(event)) if event.name().as_ref() == tag => {
-                let end = buffer_position(&reader)?;
-                let start = event_start(end, event.len(), false)?;
-                if root_start.is_none() {
-                    root_start = Some(start);
-                }
-                depth += 1;
-            }
-            Ok(Event::Empty(event)) if event.name().as_ref() == tag => {
-                let end = buffer_position(&reader)?;
-                let start = event_start(end, event.len(), true)?;
-                if depth == 0 {
-                    return Ok(start..end);
-                }
-            }
-            Ok(Event::Start(_)) => depth += 1,
-            Ok(Event::End(event)) if event.name().as_ref() == tag => {
-                let end = buffer_position(&reader)?;
-                if depth == 1 {
-                    let start = root_start.ok_or_else(|| HwpxError::XmlParse {
-                        file: "section.xml".into(),
-                        detail: "root element closed before start was recorded".into(),
-                    })?;
-                    return Ok(start..end);
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => {
-                return Err(HwpxError::XmlParse {
-                    file: "section.xml".into(),
-                    detail: error.to_string(),
-                });
-            }
-        }
-        buf.clear();
-    }
-
-    Err(HwpxError::InvalidStructure { detail: format!("root element '{tag}' not found") })
-}
-
-pub(crate) fn collect_direct_child_outer_spans(
-    xml: &str,
-    parent_span: Range<usize>,
-    tag: &str,
-) -> HwpxResult<Vec<Range<usize>>> {
-    let fragment = &xml[parent_span.clone()];
-    let mut reader = Reader::from_str(fragment);
-    reader.config_mut().trim_text(false);
-
-    let mut buf: Vec<u8> = Vec::new();
-    let mut results: Vec<Range<usize>> = Vec::new();
-    let mut open_indices: Vec<usize> = Vec::new();
-    let mut depth: usize = 0;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(event)) => {
-                if depth == 1 && event.name().as_ref() == tag {
-                    let end = buffer_position(&reader)?;
-                    let start = parent_span.start + event_start(end, event.len(), false)?;
-                    results.push(start..0);
-                    open_indices.push(results.len() - 1);
-                }
-                depth += 1;
-            }
-            Ok(Event::Empty(event)) => {
-                if depth == 1 && event.name().as_ref() == tag {
-                    let end = parent_span.start + buffer_position(&reader)?;
-                    let start = parent_span.start
-                        + event_start(end - parent_span.start, event.len(), true)?;
-                    results.push(start..end);
-                }
-            }
-            Ok(Event::End(event)) => {
-                if depth == 2 && event.name().as_ref() == tag {
-                    let end = parent_span.start + buffer_position(&reader)?;
-                    let index = open_indices.pop().ok_or_else(|| HwpxError::XmlParse {
-                        file: "section.xml".into(),
-                        detail: "closing tag without matching direct-child start".into(),
-                    })?;
-                    results[index].end = end;
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => {
-                return Err(HwpxError::XmlParse {
-                    file: "section.xml".into(),
-                    detail: error.to_string(),
-                });
-            }
-        }
-        buf.clear();
-    }
-
-    Ok(results)
-}
-
-fn single_optional_direct_outer_span(
-    xml: &str,
-    parent_span: Range<usize>,
-    tag: &str,
-) -> HwpxResult<Option<Range<usize>>> {
-    let spans = collect_direct_child_outer_spans(xml, parent_span, tag)?;
-    match spans.len() {
-        0 => Ok(None),
-        1 => Ok(spans.into_iter().next()),
-        count => Err(HwpxError::InvalidStructure {
-            detail: format!("expected at most one direct '{tag}' child but found {count}"),
-        }),
-    }
-}
-
-fn collect_direct_text_elements(
-    xml: &str,
-    parent_span: Range<usize>,
-) -> HwpxResult<Vec<TextElementSpan>> {
-    let fragment = &xml[parent_span.clone()];
-    let mut reader = Reader::from_str(fragment);
-    reader.config_mut().trim_text(false);
-
-    let mut buf: Vec<u8> = Vec::new();
-    let mut results: Vec<TextElementSpan> = Vec::new();
-    let mut open_indices: Vec<usize> = Vec::new();
-    let mut depth: usize = 0;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(event)) => {
-                if depth == 1 && event.name().as_ref() == "hp:t" {
-                    let end_local = buffer_position(&reader)?;
-                    let start_local = event_start(end_local, event.len(), false)?;
-                    results.push(TextElementSpan {
-                        element_start: parent_span.start + start_local,
-                        element_end: 0,
-                        content_start: Some(parent_span.start + end_local),
-                        content_end: Some(0),
-                        has_inline_markup: false,
-                    });
-                    open_indices.push(results.len() - 1);
-                }
-                if event.name().as_ref() != "hp:t" {
-                    if let Some(index) = open_indices.last().copied() {
-                        results[index].has_inline_markup = true;
-                    }
-                }
-                depth += 1;
-            }
-            Ok(Event::Empty(event)) => {
-                if depth == 1 && event.name().as_ref() == "hp:t" {
-                    let end_local = buffer_position(&reader)?;
-                    let start_local = event_start(end_local, event.len(), true)?;
-                    results.push(TextElementSpan {
-                        element_start: parent_span.start + start_local,
-                        element_end: parent_span.start + end_local,
-                        content_start: None,
-                        content_end: None,
-                        has_inline_markup: false,
-                    });
-                } else if let Some(index) = open_indices.last().copied() {
-                    results[index].has_inline_markup = true;
-                }
-            }
-            Ok(Event::End(event)) => {
-                if depth == 2 && event.name().as_ref() == "hp:t" {
-                    let end_local = buffer_position(&reader)?;
-                    let close_start_local = end_tag_start(end_local, event.len())?;
-                    let index = open_indices.pop().ok_or_else(|| HwpxError::XmlParse {
-                        file: "section.xml".into(),
-                        detail: "closing </hp:t> without matching start".into(),
-                    })?;
-                    results[index].element_end = parent_span.start + end_local;
-                    results[index].content_end = Some(parent_span.start + close_start_local);
-                }
-                depth = depth.saturating_sub(1);
-            }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => {
-                return Err(HwpxError::XmlParse {
-                    file: "section.xml".into(),
-                    detail: error.to_string(),
-                });
-            }
-        }
-        buf.clear();
-    }
-
-    Ok(results)
-}
-
-fn text_locator(span: &TextElementSpan) -> TextLocator {
-    TextLocator::TextElement {
-        element_start: span.element_start,
-        element_end: span.element_end,
-        content_start: span.content_start,
-        content_end: span.content_end,
-    }
-}
-
-pub(crate) fn event_start(end: usize, raw_len: usize, is_empty: bool) -> HwpxResult<usize> {
-    let extra = if is_empty { 3 } else { 2 };
-    end.checked_sub(raw_len + extra).ok_or_else(|| HwpxError::XmlParse {
-        file: "section.xml".into(),
-        detail: "invalid XML event span".into(),
-    })
-}
-
-fn end_tag_start(end: usize, raw_len: usize) -> HwpxResult<usize> {
-    end.checked_sub(raw_len + 3).ok_or_else(|| HwpxError::XmlParse {
-        file: "section.xml".into(),
-        detail: "invalid XML end-tag span".into(),
-    })
-}
-
-pub(crate) fn buffer_position(reader: &Reader<&[u8]>) -> HwpxResult<usize> {
-    usize::try_from(reader.buffer_position())
-        .map_err(|_| HwpxError::Zip("buffer position overflow".into()))
+        (priority, path)
+    });
+    slots
 }
 
 /// Byte offset where the span a [`TextLocator`] replaces begins.
@@ -1920,7 +733,9 @@ fn text_locator_start(locator: &TextLocator) -> usize {
 
 #[cfg(test)]
 fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxResult<String> {
-    let (range, replacement) = text_locator_replacement(xml, locator, new_text)?;
+    let (_, source) = hwpforge_core::source_xml::XmlSource::read(xml).unwrap();
+    let elements = source.elements().iter().map(|e| (e.outer().start, e.clone())).collect();
+    let (range, replacement) = text_locator_replacement(xml, locator, new_text, &elements)?;
     let mut patched = xml.to_string();
     patched.replace_range(range, &replacement);
     Ok(patched)
@@ -1931,19 +746,35 @@ fn text_locator_replacement(
     xml: &str,
     locator: &TextLocator,
     new_text: &str,
+    elements: &BTreeMap<usize, hwpforge_core::source_xml::XmlElement>,
 ) -> HwpxResult<(Range<usize>, String)> {
+    let element = elements.get(&text_locator_start(locator)).ok_or_else(|| {
+        HwpxError::InvalidStructure { detail: "missing decoder text element".into() }
+    })?;
+    let name = element.qualified_name();
+    let prefix = name.split_once(':').map_or(String::new(), |(prefix, _)| format!("{prefix}:"));
+    let encoded = encode_text_inner(new_text)?
+        .replace("<hp:", &format!("<{prefix}"))
+        .replace("</hp:", &format!("</{prefix}"));
     match locator {
-        TextLocator::TextElement { element_start, element_end, content_start, content_end } => {
-            if let (Some(start), Some(end)) = (*content_start, *content_end) {
-                Ok((start..end, encode_text_inner(new_text)?))
-            } else {
-                let original = &xml[*element_start..*element_end];
-                Ok((*element_start..*element_end, patch_text_element_xml(original, new_text)?))
-            }
+        TextLocator::TextElement { content_start: Some(start), content_end: Some(end), .. } => {
+            Ok((*start..*end, encoded))
         }
-        TextLocator::EmptyRun { run_start, run_end } => {
-            let original = &xml[*run_start..*run_end];
-            Ok((*run_start..*run_end, patch_text_run_xml(original, new_text)?))
+        TextLocator::TextElement { .. } | TextLocator::EmptyRun { .. } => {
+            let encoded = if matches!(locator, TextLocator::EmptyRun { .. }) {
+                format!("<{prefix}t>{encoded}</{prefix}t>")
+            } else {
+                encoded
+            };
+            if let Some(inner) = element.inner() {
+                // Empty Core run, whose exact insertion point was recorded by
+                // the decoder. Never search for tags in the original run.
+                Ok((inner.end..inner.end, encoded))
+            } else {
+                let outer = element.outer();
+                let opening = &xml[outer.start..outer.end - 2];
+                Ok((outer, format!("{opening}>{encoded}</{name}>")))
+            }
         }
     }
 }
@@ -1970,89 +801,6 @@ fn encode_text_inner(text: &str) -> HwpxResult<String> {
     Ok(encoded)
 }
 
-fn patch_text_element_xml(element_xml: &str, new_text: &str) -> HwpxResult<String> {
-    let encoded = encode_text_inner(new_text)?;
-
-    if let Some(prefix) = element_xml.strip_suffix("/>") {
-        if new_text.is_empty() {
-            return Ok(element_xml.to_string());
-        }
-        return Ok(format!("{prefix}>{encoded}</hp:t>"));
-    }
-
-    let open_end = element_xml.find('>').ok_or_else(|| HwpxError::XmlParse {
-        file: "section.xml".into(),
-        detail: "unterminated <hp:t> while patching text element".into(),
-    })?;
-    let close_start = element_xml.rfind("</hp:t>").ok_or_else(|| HwpxError::XmlParse {
-        file: "section.xml".into(),
-        detail: "missing </hp:t> while patching text element".into(),
-    })?;
-
-    let mut patched = String::with_capacity(element_xml.len() + encoded.len());
-    patched.push_str(&element_xml[..open_end + 1]);
-    patched.push_str(&encoded);
-    patched.push_str(&element_xml[close_start..]);
-    Ok(patched)
-}
-
-fn patch_text_run_xml(run_xml: &str, new_text: &str) -> HwpxResult<String> {
-    let encoded = encode_text_inner(new_text)?;
-
-    if let Some(text_start_rel) = run_xml.find("<hp:t") {
-        let text_start = text_start_rel;
-        let open_end_rel = run_xml[text_start..].find('>').ok_or_else(|| HwpxError::XmlParse {
-            file: "section.xml".into(),
-            detail: "unterminated <hp:t> tag while patching run".into(),
-        })?;
-        let open_end = text_start + open_end_rel;
-
-        if run_xml.as_bytes().get(open_end.saturating_sub(1)) == Some(&b'/') {
-            if new_text.is_empty() {
-                return Ok(run_xml.to_string());
-            }
-            let open_tag = &run_xml[text_start..open_end - 1];
-            let replacement = format!("{open_tag}>{encoded}</hp:t>");
-            let mut patched = String::with_capacity(run_xml.len() + encoded.len() + 8);
-            patched.push_str(&run_xml[..text_start]);
-            patched.push_str(&replacement);
-            patched.push_str(&run_xml[open_end + 1..]);
-            return Ok(patched);
-        }
-
-        let close_rel =
-            run_xml[open_end + 1..].find("</hp:t>").ok_or_else(|| HwpxError::XmlParse {
-                file: "section.xml".into(),
-                detail: "missing </hp:t> while patching run".into(),
-            })?;
-        let close = open_end + 1 + close_rel;
-        let mut patched = String::with_capacity(run_xml.len() + encoded.len());
-        patched.push_str(&run_xml[..open_end + 1]);
-        patched.push_str(&encoded);
-        patched.push_str(&run_xml[close..]);
-        return Ok(patched);
-    }
-
-    if let Some(prefix) = run_xml.strip_suffix("/>") {
-        if new_text.is_empty() {
-            return Ok(run_xml.to_string());
-        }
-        return Ok(format!("{prefix}><hp:t>{encoded}</hp:t></hp:run>"));
-    }
-
-    let end_run = run_xml.rfind("</hp:run>").ok_or_else(|| HwpxError::XmlParse {
-        file: "section.xml".into(),
-        detail: "missing </hp:run> while patching run".into(),
-    })?;
-    let mut patched = String::with_capacity(run_xml.len() + encoded.len() + 16);
-    patched.push_str(&run_xml[..end_run]);
-    patched.push_str("<hp:t>");
-    patched.push_str(&encoded);
-    patched.push_str("</hp:t>");
-    patched.push_str(&run_xml[end_run..]);
-    Ok(patched)
-}
-
 // pub(crate): E6 stamp manifest 가 source/output 해시에 재사용.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -2065,7 +813,11 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     output
 }
 
-fn redact_section_texts(section: &mut Section) {
+fn redact_section_texts(section: &mut Section, section_idx: usize) {
+    hwpforge_core::field_inventory::FieldInventory::clear_editable_values(
+        std::slice::from_mut(section),
+        section_idx,
+    );
     redact_paragraphs(&mut section.paragraphs);
     // Redact every header/footer in the Vec (ADR-002 multi-cardinality).
     for header in section.headers.iter_mut() {
@@ -2164,11 +916,6 @@ fn redact_control(control: &mut Control) {
         // ClickHere 본문은 편집 가능한 텍스트 슬롯이므로 redact 대상.
         // 다른 Field 타입(SUMMERY/DATE 류)은 지우지 않는다 — 슬롯이 없어
         // 변경이 무음 드롭되는 대신 structural change 로 거부되게 한다.
-        Control::Field {
-            field_type: hwpforge_foundation::FieldType::ClickHere,
-            display_text,
-            ..
-        } => display_text.clear(),
         _ => {}
     }
 }
@@ -2435,15 +1182,59 @@ mod tests {
         }
     }
 
+    /// 이것을 실패시키는 것: 빈 요소·run의 원본 태그 재검색 또는 hp 접두사 강제.
+    #[test]
+    fn patch_uses_recorded_empty_element_positions_and_namespaces() {
+        for (xml, locator, expected) in [
+            (
+                "<para:t/>",
+                TextLocator::TextElement {
+                    element_start: 0,
+                    element_end: 9,
+                    content_start: None,
+                    content_end: None,
+                },
+                "<para:t>hp:value<para:tab/>next</para:t>",
+            ),
+            (
+                "<para:run/>",
+                TextLocator::EmptyRun { run_start: 0, run_end: 11 },
+                "<para:run><para:t>hp:value<para:tab/>next</para:t></para:run>",
+            ),
+            (
+                "<para:run></para:run>",
+                TextLocator::EmptyRun { run_start: 0, run_end: 21 },
+                "<para:run><para:t>hp:value<para:tab/>next</para:t></para:run>",
+            ),
+        ] {
+            assert_eq!(apply_text_locator(xml, &locator, "hp:value\tnext").unwrap(), expected);
+        }
+    }
+
     #[test]
     fn patch_text_element_expands_self_closing_tag() {
-        let patched = patch_text_element_xml(r#"<hp:t/>"#, "filled").unwrap();
+        let patched = apply_text_locator(
+            r#"<hp:t/>"#,
+            &TextLocator::TextElement {
+                element_start: 0,
+                element_end: 7,
+                content_start: None,
+                content_end: None,
+            },
+            "filled",
+        )
+        .unwrap();
         assert_eq!(patched, "<hp:t>filled</hp:t>");
     }
 
     #[test]
     fn patch_text_run_inserts_text_into_empty_run() {
-        let patched = patch_text_run_xml(r#"<hp:run charPrIDRef="0"/>"#, "value").unwrap();
+        let patched = apply_text_locator(
+            r#"<hp:run charPrIDRef="0"/>"#,
+            &TextLocator::EmptyRun { run_start: 0, run_end: 23 },
+            "value",
+        )
+        .unwrap();
         assert_eq!(patched, r#"<hp:run charPrIDRef="0"><hp:t>value</hp:t></hp:run>"#);
     }
 

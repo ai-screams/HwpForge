@@ -157,6 +157,7 @@ enum Carrier {
     DutmalSub,
     CrossRef,
     Field,
+    FieldBoundary,
     Unknown,
     TextBox,
     Footnote,
@@ -180,6 +181,7 @@ const CARRIERS: &[Carrier] = &[
     Carrier::DutmalSub,
     Carrier::CrossRef,
     Carrier::Field,
+    Carrier::FieldBoundary,
     Carrier::Unknown,
     Carrier::TextBox,
     Carrier::Footnote,
@@ -231,6 +233,28 @@ fn carry(carrier: Carrier, attack: &str) -> Vec<Vec<Run>> {
                 *display_text = attack.to_string();
             }
             vec![vec![ctrl(c)]]
+        }
+        Carrier::FieldBoundary => {
+            use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart};
+            let mut s = FieldStart::default();
+            s.id = attack.into();
+            s.kind = "FORMULA".into();
+            s.name = attack.into();
+            s.parameters.push(FieldParameter::String {
+                name: attack.into(),
+                value: attack.into(),
+                xml_space: attack.into(),
+            });
+            vec![vec![
+                ctrl(Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(s)) }),
+                text(attack),
+                ctrl(Control::FieldBoundary {
+                    boundary: FieldBoundary::End {
+                        begin_id: attack.into(),
+                        field_id: attack.into(),
+                    },
+                }),
+            ]]
         }
         Carrier::Field => vec![vec![ctrl(Control::Field {
             field_type: FieldType::ClickHere,
@@ -584,6 +608,7 @@ fn text_must_return(container: Container, carrier: Carrier, attack: &str) -> boo
                 | Carrier::DutmalSub
                 | Carrier::CrossRef
                 | Carrier::Field
+                | Carrier::FieldBoundary
                 | Carrier::Unknown
                 | Carrier::TextBox
                 | Carrier::Footnote

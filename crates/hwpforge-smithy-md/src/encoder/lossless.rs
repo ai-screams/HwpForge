@@ -45,7 +45,8 @@ pub(crate) fn encode_lossless(document: &Document<Validated>) -> MdResult<String
     let mut output = render_frontmatter(&frontmatter)?;
     output.push('\n');
 
-    for (section_index, section) in document.sections().iter().enumerate() {
+    let expanded = hwpforge_core::field_view::expand_sections(document.sections());
+    for (section_index, section) in expanded.iter().enumerate() {
         output.push_str(&format!(
             "<section data-index=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-margin-left-unit=\"{}\" data-margin-right-unit=\"{}\" data-margin-top-unit=\"{}\" data-margin-bottom-unit=\"{}\" data-header-margin-unit=\"{}\" data-footer-margin-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\" data-margin-left-mm=\"{:.2}\" data-margin-right-mm=\"{:.2}\" data-margin-top-mm=\"{:.2}\" data-margin-bottom-mm=\"{:.2}\" data-header-margin-mm=\"{:.2}\" data-footer-margin-mm=\"{:.2}\">\n",
             section_index,
@@ -202,6 +203,9 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                 Control::Group { .. } => {
                     out.push_str(&encode_group(control, Some(run.char_shape_id.get()))?);
                 }
+                Control::FieldBoundary { boundary } => {
+                    out.push_str(&encode_field_boundary(boundary, run.char_shape_id.get())?);
+                }
                 _ => {
                     return Err(MdError::UnsupportedStructure {
                         detail: "unsupported Control variant for lossless encoder".to_string(),
@@ -221,6 +225,82 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
 
     out.push_str("</p>");
     Ok(out)
+}
+
+fn encode_field_boundary(
+    boundary: &hwpforge_core::control::FieldBoundary,
+    cs: usize,
+) -> MdResult<String> {
+    use super::markup::lossless_element;
+    use hwpforge_core::control::{FieldBoundary, FieldParameter};
+    let cs = cs.to_string();
+    match boundary {
+        FieldBoundary::End { begin_id, field_id } => Ok(lossless_element(
+            "field-end",
+            &[(g::CHAR_SHAPE, &cs), ("data-begin-id", begin_id), ("data-field-id", field_id)],
+            true,
+        )?
+        .to_string()),
+        FieldBoundary::Start(s) => {
+            let mut attrs = vec![
+                (g::CHAR_SHAPE, cs.as_str()),
+                ("data-id", s.id.as_str()),
+                ("data-kind", s.kind.as_str()),
+                ("data-name", s.name.as_str()),
+                ("data-editable", s.editable.as_str()),
+                ("data-dirty", s.dirty.as_str()),
+                ("data-z-order", s.z_order.as_str()),
+                ("data-field-id", s.field_id.as_str()),
+                ("data-meta-tag", s.meta_tag.as_str()),
+            ];
+            if s.unclosed {
+                attrs.push(("data-unclosed", "true"));
+            }
+            if let Some(name) = &s.parameter_name {
+                attrs.push(("data-parameter-name", name));
+            }
+            let empty = s.parameters.is_empty() && s.annotation.is_none();
+            let mut out = lossless_element("field-start", &attrs, empty)?.to_string();
+            if empty {
+                return Ok(out);
+            }
+            for p in &s.parameters {
+                let kind = g::field_parameter_kind(p)?;
+                let (name, value, space) = match p {
+                    FieldParameter::String { name, value, xml_space } => {
+                        (name, value, Some(xml_space))
+                    }
+                    FieldParameter::Integer { name, value }
+                    | FieldParameter::Boolean { name, value } => (name, value, None),
+                    _ => {
+                        return Err(MdError::UnsupportedStructure {
+                            detail: "unknown field parameter".into(),
+                        })
+                    }
+                };
+                let mut attrs = vec![
+                    ("data-kind", kind),
+                    ("data-name", name.as_str()),
+                    ("data-value", value.as_str()),
+                ];
+                if let Some(space) = space {
+                    attrs.push(("data-xml-space", space));
+                }
+                out.push_str(&lossless_element("field-param", &attrs, true)?);
+            }
+            if let Some(paragraphs) = &s.annotation {
+                admit_exact(paragraphs)?;
+                out.push_str("<field-annotation>");
+                for p in paragraphs {
+                    out.push_str(&encode_paragraph(p)?);
+                }
+                out.push_str("</field-annotation>");
+            }
+            out.push_str("</field-start>");
+            Ok(out)
+        }
+        _ => Err(MdError::UnsupportedStructure { detail: "unknown field boundary".into() }),
+    }
 }
 
 fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
@@ -376,6 +456,7 @@ fn holds_object(paragraphs: &[Paragraph]) -> bool {
                 | Control::ConnectLine { .. }
                 | Control::TextBox { .. } => true,
                 Control::Memo { anchor_runs, .. } => anchor_runs.iter().any(is_object),
+                Control::FieldBoundary { .. } => true,
                 _ => false,
             },
             _ => false,
@@ -1985,6 +2066,30 @@ mod tests {
 
         let out = encode_lossless(&doc).unwrap();
         assert!(out.contains("data-background="));
+    }
+
+    /// 이것을 실패시키는 것: 범위 경계를 버리고 lossless 성공을 반환하기.
+    #[test]
+    fn lossless_field_boundaries_are_written() {
+        use hwpforge_core::control::{FieldBoundary, FieldStart};
+        let mut start = FieldStart::default();
+        start.id = "7".into();
+        start.kind = "FORMULA".into();
+        let cs = CharShapeIndex::new(0);
+        let doc = frame_doc(vec![
+            Run::control(
+                Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                cs,
+            ),
+            Run::text("3", cs),
+            Run::control(
+                Control::FieldBoundary {
+                    boundary: FieldBoundary::End { begin_id: "7".into(), field_id: String::new() },
+                },
+                cs,
+            ),
+        ]);
+        assert!(encode_lossless(&doc).unwrap().contains("<field-start"));
     }
 
     #[test]

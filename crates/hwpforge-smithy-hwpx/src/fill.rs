@@ -16,18 +16,14 @@
 //! - **미채움/모호 필드 거부**: `display_text` 가 빈 필드는 patch 텍스트
 //!   슬롯이 없어(슬롯 거울 불변식) 채울 수 없다 —
 //!   [`FillError::UnfillableField`]. 병합-run(한컴 재저장) 필드가 여기
-//!   해당한다.
+//!   해당한다. 다중 문단·중첩·구조화 범위와 미지원 흐름도 목록에
+//!   남기되 같은 오류로 명시적으로 거부한다.
 
 use std::collections::BTreeMap;
-use std::ops::Range;
 
-use hwpforge_core::control::Control;
-use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::run::RunContent;
+use hwpforge_core::field_inventory::{FieldEditability, FieldInventory};
 use hwpforge_core::section::Section;
-use hwpforge_foundation::FieldType;
 
-use crate::decoder::{ParagraphPath, PathSeg};
 use crate::error::{HwpxError, HwpxResult};
 use crate::{HwpxDecoder, HwpxPatcher};
 
@@ -44,9 +40,8 @@ pub struct FieldInfo {
     pub current: String,
     /// 필드가 속한 섹션 인덱스.
     pub section: usize,
-    /// `fill` 로 채울 수 있는지. `false` = 본문이 비어 patch 슬롯이 없는
-    /// 상태(병합-run 모호 필드 또는 빈 본문) — 한컴에서 재저장하거나
-    /// `from-json --base` 재생성 경로가 필요하다.
+    /// 현재 값 편집 계약으로 채울 수 있는지. 빈 값·다중 문단·중첩·
+    /// 구조화 본문·불완전 경계·미지원 흐름은 목록에 남기되 거부한다.
     pub fillable: bool,
 }
 
@@ -93,7 +88,7 @@ pub enum FillError {
         /// 발견된 개수.
         count: usize,
     },
-    /// 본문이 비어 patch 슬롯이 없는 필드 (병합-run 모호 또는 빈 본문).
+    /// 본문이나 범위가 현재 값 편집 계약으로 안전하게 치환되지 않는 필드.
     UnfillableField {
         /// 필드 이름.
         name: String,
@@ -119,7 +114,7 @@ impl std::fmt::Display for FillError {
             Self::UnfillableField { name, section } => {
                 write!(
                     f,
-                    "field '{name}' in section {section} has no patchable body (병합-run 모호 필드 또는 빈 본문 — 한컴 재저장 또는 from-json --base 필요)"
+                    "field '{name}' in section {section} has no safely patchable body (빈 본문·구조화 범위·불완전 경계 또는 미지원 흐름)"
                 )
             }
             Self::Workflow(error) => write!(f, "fill workflow error: {error}"),
@@ -138,525 +133,6 @@ impl From<HwpxError> for FillError {
 /// 이름 기반 누름틀 채우기 상위 API.
 #[derive(Debug, Clone, Copy)]
 pub struct HwpxFiller;
-
-/// 순회 중 발견한 필드의 가변 참조와 위치.
-// pub(crate): E6 stamp preflight 가 기존 필드 이름 충돌 검사에 같은
-// 순회를 재사용한다 (필드 방문 커버리지의 단일 정의 유지).
-pub(crate) struct FieldSlot<'a> {
-    pub(crate) section: usize,
-    /// 필드가 든 문단의 구역 안 구조 경로 — 디코더 [`PathSeg`] 규약
-    /// (`BodyParagraph` → 컨테이너 segment → `NestedParagraph` …), run 번호는
-    /// 넣지 않는다. fill 이 wire 위치와 맞출 때 쓰는 키다.
-    pub(crate) path: &'a [PathSeg],
-    pub(crate) control: &'a mut Control,
-}
-
-/// 인벤토리(디코드한 Core)가 본 누름틀 하나의 위치.
-///
-/// `path` 는 [`FieldSlot::path`], `name` 은 디코더가 준 이름(빈 이름 = `None`).
-/// 같은 `path` 안의 순번은 두 쪽 모두 문단열 하나 안의 문서 순서라 같다 —
-/// 순번은 [`ordinals`] 가 목록 순서에서 계산한다.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FieldLocator {
-    path: Vec<PathSeg>,
-    name: Option<String>,
-}
-
-/// section XML 에서 찾은 누름틀 하나: 위치와 그것을 감싸는 가장 안쪽 문단
-/// 번호([`WireScan`] 안).
-#[derive(Debug)]
-struct WireField {
-    locator: FieldLocator,
-    paragraph: usize,
-}
-
-/// [`scan_click_here_fields`] 의 결과: 필드들과, 문단마다 직접 자식 캐시
-/// 구간·놓인 목록, 목록마다 그것을 품은 문단. 크기는 입력에 선형이다 —
-/// 무효화할 캐시는 바꿀 필드를 고른 뒤 [`WireScan::stale_caches`] 가 한 번에
-/// 모은다(W2 리뷰 MEDIUM: 필드마다 꼬리를 미리 모으면 필드 수의 제곱).
-#[derive(Debug)]
-struct WireScan {
-    fields: Vec<WireField>,
-    caches: Vec<Vec<Range<usize>>>,
-    para_list: Vec<usize>,
-    list_host: Vec<Option<usize>>,
-    /// 무효화 수집이 걸은 사슬 단계와 살펴본 문단 수(선형성 시험용).
-    #[cfg(test)]
-    visits: std::cell::Cell<usize>,
-}
-
-impl WireScan {
-    /// 값이 바뀐 필드 문단들이 낡게 만드는 캐시 — 정의는 patch 와 같은
-    /// [`crate::cache_flow::stale_caches`] 하나다.
-    fn stale_caches(&self, paragraphs: impl IntoIterator<Item = usize>) -> Vec<Range<usize>> {
-        crate::cache_flow::stale_caches(
-            &self.caches,
-            &self.para_list,
-            &self.list_host,
-            paragraphs,
-            &mut || {
-                #[cfg(test)]
-                self.visits.set(self.visits.get() + 1);
-            },
-        )
-    }
-}
-
-/// 같은 `path` 안에서 각 항목의 순번 (0부터, 목록 순서). 경로마다 센 수를
-/// 색인에 두어 항목 수에 선형이다(브랜치 리뷰 B-H2: 앞 항목을 매번 다시 세면
-/// N²).
-/// 이것을 실패시키는 것: 앞 항목 다시 세기(`locating_stays_linear` 의 작업량).
-fn ordinals(paths: &[&[PathSeg]]) -> Vec<usize> {
-    let mut seen: std::collections::HashMap<&[PathSeg], usize> =
-        std::collections::HashMap::with_capacity(paths.len());
-    paths
-        .iter()
-        .map(|path| {
-            crate::work::tick();
-            let count = seen.entry(path).or_insert(0);
-            *count += 1;
-            *count - 1
-        })
-        .collect()
-}
-
-/// 값이 바뀐 필드들이 낡게 만드는 `<hp:linesegarray>` 를 제거한다 — 둘러싼
-/// `<hp:p>` 와 같은 흐름의 뒤 문단, host 사슬의 꼬리([`scan_click_here_fields`]). 캐시 요소는 디코더처럼 접두어 없는 이름(`linesegarray`)으로
-/// 판정한다.
-///
-/// `inventory` 는 구역별로 디코드 Core 의 모든 ClickHere 위치(이름 없는 것
-/// 포함, [`visit_section_fields`] 순서), `changed` 는 값이 바뀐 필드의
-/// `(구역, inventory 안 번호)` 다. 구역마다 section XML 의 누름틀 위치를
-/// [`scan_click_here_fields`] 로 읽어 [`locate_changed_paragraph_caches`] 로 맞춘다.
-fn strip_linesegarray_for_changed_fields(
-    bytes: &[u8],
-    inventory: &BTreeMap<usize, Vec<FieldLocator>>,
-    changed: &[(usize, usize)],
-) -> HwpxResult<Vec<u8>> {
-    if changed.is_empty() {
-        return Ok(bytes.to_vec());
-    }
-    let mut pkg = crate::patch::RawPackage::read(bytes)?;
-    let mut sections: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    for (section_idx, field_idx) in changed {
-        sections.entry(*section_idx).or_default().push(*field_idx);
-    }
-    for (section_idx, field_indices) in sections {
-        let path = pkg.section_path(section_idx)?;
-        let expected = inventory.get(&section_idx).map(Vec::as_slice).unwrap_or_default();
-        let xml = pkg.read_text_entry(&path)?;
-        let removals =
-            locate_changed_paragraph_caches(&xml, section_idx, expected, &field_indices)?;
-        // 구간은 문단마다 한 번만 모이고([`WireScan::stale_caches`]) 한 번에
-        // 써진다 — 구간마다 뒤를 당기면 문단 수의 제곱 바이트 이동(B-H2).
-        // 캐시 없는 문단은 removals 에 아무 것도 더하지 않는다 = no-op.
-        let xml = crate::cache_flow::splice(
-            &xml,
-            removals.into_iter().map(|range| (range, String::new())).collect(),
-        )?;
-        pkg.replace_text_entry(&path, xml);
-    }
-    pkg.write()
-}
-
-/// 인벤토리의 `field_indices` 번 필드를 감싸는 문단의 캐시 구간을 돌려준다.
-///
-/// section XML 의 누름틀 위치 집합이 인벤토리 위치 집합과 **같은지** 먼저
-/// 검사한다 — (경로, 같은 경로 안 순번, 이름)이 하나라도 어긋나면 디코더가
-/// 본 필드와 wire 의 필드를 짝지을 근거가 없으므로 오류다(낡은 캐시를 남기거나
-/// 엉뚱한 문단의 캐시를 지우는 대신 fail-closed).
-///
-/// # Errors
-///
-/// 위치 집합이 다르면 [`HwpxError::InvalidStructure`], XML 을 읽지 못하면
-/// [`HwpxError::XmlParse`].
-fn locate_changed_paragraph_caches(
-    xml: &str,
-    section_idx: usize,
-    expected: &[FieldLocator],
-    field_indices: &[usize],
-) -> HwpxResult<Vec<Range<usize>>> {
-    let scan = scan_click_here_fields(xml)?;
-    let wire = &scan.fields;
-    let expected_paths: Vec<&[PathSeg]> = expected.iter().map(|f| f.path.as_slice()).collect();
-    let wire_paths: Vec<&[PathSeg]> = wire.iter().map(|f| f.locator.path.as_slice()).collect();
-    let expected_ordinals = ordinals(&expected_paths);
-    let wire_ordinals = ordinals(&wire_paths);
-
-    let mismatch =
-        |what: &str, locator: &FieldLocator, ordinal: usize| HwpxError::InvalidStructure {
-            detail: format!(
-                "section {section_idx}: ClickHere field {:?} at {} #{ordinal} {what} \
-             (decoded {} field(s), section XML {}); cannot locate the filled paragraph",
-                locator.name,
-                ParagraphPath(locator.path.clone()),
-                expected.len(),
-                wire.len(),
-            ),
-        };
-
-    // 짝: 인벤토리 i ↔ wire j (경로·순번이 같고 이름이 같음). (경로, 순번) 색인
-    // 한 번으로 찾는다 — wire 를 항목마다 훑으면 N²(B-H2).
-    let mut wire_at: std::collections::HashMap<(&[PathSeg], usize), usize> =
-        std::collections::HashMap::with_capacity(wire.len());
-    for (j, path) in wire_paths.iter().enumerate() {
-        crate::work::tick();
-        wire_at.entry((*path, wire_ordinals[j])).or_insert(j);
-    }
-    let mut partner: Vec<usize> = Vec::with_capacity(expected.len());
-    let mut paired = vec![false; wire.len()];
-    for (i, field) in expected.iter().enumerate() {
-        crate::work::tick();
-        match wire_at.get(&(field.path.as_slice(), expected_ordinals[i])).copied() {
-            Some(j) if wire[j].locator.name == field.name => {
-                partner.push(j);
-                paired[j] = true;
-            }
-            Some(j) => {
-                return Err(mismatch(
-                    &format!("is named {:?} in the section XML", wire[j].locator.name),
-                    field,
-                    expected_ordinals[i],
-                ))
-            }
-            None => {
-                return Err(mismatch(
-                    "is missing from the section XML",
-                    field,
-                    expected_ordinals[i],
-                ))
-            }
-        }
-    }
-    if wire.len() != expected.len() {
-        let extra = paired.iter().position(|p| !p).unwrap_or_default();
-        return Err(mismatch(
-            "is in the section XML but not in the decoded document",
-            &wire[extra].locator,
-            wire_ordinals[extra],
-        ));
-    }
-
-    let paragraphs = field_indices
-        .iter()
-        .map(|&i| {
-            partner.get(i).map(|&j| wire[j].paragraph).ok_or_else(|| HwpxError::InvalidStructure {
-                detail: format!("section {section_idx}: filled field index {i} out of range"),
-            })
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
-    Ok(scan.stale_caches(paragraphs))
-}
-
-/// [`scan_click_here_fields`] 의 요소 스택 한 칸.
-enum Frame {
-    /// 문단을 직접 자식으로 갖는 자리(구역 루트·범위 안 `subList`).
-    ParagraphList {
-        nested: bool,
-        next: usize,
-        /// 목록 번호(`lists` 의 자리).
-        list: usize,
-    },
-    /// `hp:p` — `index` 는 문단 구간 목록 번호.
-    Paragraph {
-        index: usize,
-    },
-    /// 문단의 직접 자식 `linesegarray` — `paragraph` 의 캐시 구간으로 기록한다.
-    Cache {
-        paragraph: usize,
-        start: usize,
-    },
-    /// `hp:run` — 디코더처럼 run 안에서만 `fieldBegin`/`fieldEnd` 를 짝짓는다.
-    Run {
-        pending: Option<PendingBegin>,
-    },
-    /// `hp:ctrl` — 닫힐 때 디코더 순서(begin 다음 end)로 run 에 반영한다.
-    Ctrl {
-        begin: Option<PendingBegin>,
-        end: bool,
-    },
-    Table {
-        next_row: usize,
-    },
-    TableRow {
-        row: usize,
-        next_cell: usize,
-    },
-    /// 그림: `hp:img@binaryItemIDRef` 가 없으면 디코더가 그림째(캡션 포함)
-    /// 버리므로, 닫힐 때 `mark` 뒤에 쌓인 필드를 되돌린다.
-    Picture {
-        mark: usize,
-        has_image: bool,
-    },
-    /// 도형: `draw_text` = 내부 문단을 Core 가 담는지(사각형·다각형·호가
-    /// 아닌 타원).
-    Shape {
-        draw_text: bool,
-    },
-    /// `subList` 하나를 담는 컨테이너(셀·캡션·`drawText`·각주·미주).
-    SubListOwner,
-    /// 인벤토리 범위 밖(묶음·머리말·꼬리말·메모·`switch`·미지 요소 등).
-    Skip,
-}
-
-/// run 안에서 짝을 기다리는 `fieldBegin`.
-struct PendingBegin {
-    click_here: bool,
-    name: Option<String>,
-    paragraph: usize,
-}
-
-/// section XML 에서 인벤토리 범위 안의 `CLICK_HERE` 누름틀을 문서 순서로
-/// 모은다.
-///
-/// 범위는 [`visit_section_fields`] 가 방문하는 컨테이너와 같다. 요소는
-/// 디코더(serde)처럼 접두어 없는 이름으로 맞춘다:
-///
-/// | wire (부모 → 자식 → `subList` → `p`) | segment | `visit_*` 갈래 |
-/// | -- | -- | -- |
-/// | 구역 루트 → `p` | `BodyParagraph(i)` | `visit_section_fields` |
-/// | `tbl` → `tr` → `tc` | `TableCell { row, cell }` | `RunContent::Table` 셀 |
-/// | `tbl` → `caption` | `Caption` | `RunContent::Table` 캡션 |
-/// | `pic`(`img@binaryItemIDRef` 있음) → `caption` | `Caption` | `RunContent::Image` |
-/// | `rect`·`polygon`·`ellipse`(`hasArcPr≠1`) → `drawText` | `TextBox` | `TextBox`·`Polygon`·`Ellipse` 내부 |
-/// | `rect`·`ellipse`·`polygon`·`line`·`curve`·`connectLine` → `caption` | `Caption` | 도형 캡션 |
-/// | `ctrl` → `footNote` / `endNote` | `Footnote` / `Endnote` | `Footnote` / `Endnote` |
-/// | `subList` → `p` | `NestedParagraph(i)` | `visit_nested` |
-///
-/// 표에 없는 자리(`hp:container` 묶음, 머리말·꼬리말, 메모 본문,
-/// `hp:switch`, 호 내부 등)의 필드는 Core 인벤토리에 없으므로 후보에서 뺀다.
-///
-/// 짝짓기는 디코더(`convert_run`)와 같다: 같은 `hp:run` 안에서 `fieldBegin`
-/// 다음 `fieldEnd` 가 와야 필드가 되고, 짝이 오기 전 새 `fieldBegin` 은 앞의
-/// 것을 대체한다. 이름은 디코더처럼 XML 1.0 속성값 정규화 결과(문자 참조
-/// `&#9;` 는 탭, 날 탭은 공백)이고 빈 이름은 `None` 이다.
-fn scan_click_here_fields(xml: &str) -> HwpxResult<WireScan> {
-    use crate::patch::{buffer_position, event_start};
-    use quick_xml::events::{BytesStart, Event};
-    use quick_xml::{Reader, XmlVersion};
-
-    let xml_error = |detail: String| HwpxError::XmlParse { file: "section.xml".into(), detail };
-    let attr_value = |start: &BytesStart<'_>, key: &str| -> HwpxResult<Option<String>> {
-        for attr in start.attributes() {
-            let attr = attr.map_err(|e| xml_error(e.to_string()))?;
-            if attr.key.as_ref() == key {
-                let value = attr
-                    .normalized_value(XmlVersion::Explicit1_0)
-                    .map_err(|e| xml_error(e.to_string()))?;
-                return Ok(Some(value.into_owned()));
-            }
-        }
-        Ok(None)
-    };
-
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
-    let mut buf: Vec<u8> = Vec::new();
-    let mut stack: Vec<(Frame, bool)> = Vec::new();
-    let mut path: Vec<PathSeg> = Vec::new();
-    // 문단 번호 → 그 문단의 직접 자식 캐시 구간들.
-    let mut paragraphs: Vec<Vec<Range<usize>>> = Vec::new();
-    // 문단 번호 → 그 문단이 놓인 목록 번호, 목록 번호 → 그 목록을 품은 문단.
-    let mut para_list: Vec<usize> = Vec::new();
-    let mut list_host: Vec<Option<usize>> = Vec::new();
-    let mut found: Vec<(FieldLocator, usize)> = Vec::new();
-
-    loop {
-        let event = reader.read_event_into(&mut buf).map_err(|e| xml_error(e.to_string()))?;
-        let (start, is_empty) = match &event {
-            Event::Start(start) => (start, false),
-            Event::Empty(start) => (start, true),
-            Event::End(_) => {
-                let end = buffer_position(&reader)?;
-                close_frame(&mut stack, &mut path, &mut paragraphs, &mut found, end);
-                buf.clear();
-                continue;
-            }
-            Event::Eof => break,
-            _ => {
-                buf.clear();
-                continue;
-            }
-        };
-        let end = buffer_position(&reader)?;
-        let begin = event_start(end, start.len(), is_empty)?;
-        let local = start.local_name();
-        let local = local.as_ref();
-        let innermost_paragraph = stack.iter().rev().find_map(|(frame, _)| match frame {
-            Frame::Paragraph { index } => Some(*index),
-            _ => None,
-        });
-
-        let mut seg: Option<PathSeg> = None;
-        let frame = match stack.last_mut().map(|(frame, _)| frame) {
-            None => {
-                list_host.push(None);
-                Frame::ParagraphList { nested: false, next: 0, list: list_host.len() - 1 }
-            }
-            Some(Frame::ParagraphList { nested, next, list }) if local == "p" => {
-                seg = Some(if *nested {
-                    PathSeg::NestedParagraph(*next)
-                } else {
-                    PathSeg::BodyParagraph(*next)
-                });
-                *next += 1;
-                paragraphs.push(Vec::new());
-                para_list.push(*list);
-                Frame::Paragraph { index: paragraphs.len() - 1 }
-            }
-            Some(Frame::Paragraph { .. }) if local == "run" => Frame::Run { pending: None },
-            Some(Frame::Paragraph { index }) if local == "linesegarray" => {
-                Frame::Cache { paragraph: *index, start: begin }
-            }
-            Some(Frame::Run { .. }) => match local {
-                "ctrl" => Frame::Ctrl { begin: None, end: false },
-                "tbl" => Frame::Table { next_row: 0 },
-                "pic" => Frame::Picture { mark: found.len(), has_image: false },
-                "rect" | "polygon" => Frame::Shape { draw_text: true },
-                // `hasArcPr="1"` 타원은 호(Control::Arc) — 내부 문단이 없다.
-                "ellipse" => Frame::Shape {
-                    draw_text: attr_value(start, "hasArcPr")?
-                        .and_then(|v| v.parse::<u32>().ok())
-                        .unwrap_or(0)
-                        != 1,
-                },
-                "line" | "curve" | "connectLine" => Frame::Shape { draw_text: false },
-                _ => Frame::Skip,
-            },
-            Some(Frame::Ctrl { begin: pending, end: has_end }) => match local {
-                "fieldBegin" => {
-                    let paragraph = innermost_paragraph
-                        .ok_or_else(|| xml_error("fieldBegin outside a paragraph".into()))?;
-                    *pending = Some(PendingBegin {
-                        click_here: attr_value(start, "type")?.as_deref() == Some("CLICK_HERE"),
-                        name: attr_value(start, "name")?.filter(|name| !name.is_empty()),
-                        paragraph,
-                    });
-                    Frame::Skip
-                }
-                "fieldEnd" => {
-                    *has_end = true;
-                    Frame::Skip
-                }
-                "footNote" => {
-                    seg = Some(PathSeg::Footnote);
-                    Frame::SubListOwner
-                }
-                "endNote" => {
-                    seg = Some(PathSeg::Endnote);
-                    Frame::SubListOwner
-                }
-                _ => Frame::Skip,
-            },
-            Some(Frame::Table { next_row }) => match local {
-                "tr" => {
-                    *next_row += 1;
-                    Frame::TableRow { row: *next_row - 1, next_cell: 0 }
-                }
-                "caption" => {
-                    seg = Some(PathSeg::Caption);
-                    Frame::SubListOwner
-                }
-                _ => Frame::Skip,
-            },
-            Some(Frame::TableRow { row, next_cell }) if local == "tc" => {
-                seg = Some(PathSeg::TableCell { row: *row, cell: *next_cell });
-                *next_cell += 1;
-                Frame::SubListOwner
-            }
-            Some(Frame::Picture { has_image, .. }) => match local {
-                "img" => {
-                    if attr_value(start, "binaryItemIDRef")?.is_some_and(|v| !v.is_empty()) {
-                        *has_image = true;
-                    }
-                    Frame::Skip
-                }
-                "caption" => {
-                    seg = Some(PathSeg::Caption);
-                    Frame::SubListOwner
-                }
-                _ => Frame::Skip,
-            },
-            Some(Frame::Shape { draw_text }) => match local {
-                "drawText" if *draw_text => {
-                    seg = Some(PathSeg::TextBox);
-                    Frame::SubListOwner
-                }
-                "caption" => {
-                    seg = Some(PathSeg::Caption);
-                    Frame::SubListOwner
-                }
-                _ => Frame::Skip,
-            },
-            Some(Frame::SubListOwner) if local == "subList" => {
-                list_host.push(innermost_paragraph);
-                Frame::ParagraphList { nested: true, next: 0, list: list_host.len() - 1 }
-            }
-            Some(_) => Frame::Skip,
-        };
-        if let Some(seg) = seg {
-            path.push(seg);
-        }
-        stack.push((frame, seg.is_some()));
-        if is_empty {
-            close_frame(&mut stack, &mut path, &mut paragraphs, &mut found, end);
-        }
-        buf.clear();
-    }
-
-    Ok(WireScan {
-        fields: found
-            .into_iter()
-            .map(|(locator, paragraph)| WireField { locator, paragraph })
-            .collect(),
-        caches: paragraphs,
-        para_list,
-        list_host,
-        #[cfg(test)]
-        visits: std::cell::Cell::new(0),
-    })
-}
-
-/// [`scan_click_here_fields`] 에서 요소 하나가 닫힐 때의 처리.
-fn close_frame(
-    stack: &mut Vec<(Frame, bool)>,
-    path: &mut Vec<PathSeg>,
-    paragraphs: &mut [Vec<Range<usize>>],
-    found: &mut Vec<(FieldLocator, usize)>,
-    end: usize,
-) {
-    let Some((frame, pushed)) = stack.pop() else {
-        return;
-    };
-    if pushed {
-        path.pop();
-    }
-    match frame {
-        // 디코더(serde)처럼 접두어 없는 이름으로 판정한다 — `p:linesegarray` 도
-        // 같은 캐시다.
-        Frame::Cache { paragraph, start } => paragraphs[paragraph].push(start..end),
-        Frame::Ctrl { begin, end: has_end } => {
-            let Some((Frame::Run { pending }, _)) = stack.last_mut() else {
-                return;
-            };
-            if begin.is_some() {
-                *pending = begin;
-            }
-            if has_end {
-                if let Some(field) = pending.take() {
-                    if field.click_here {
-                        found.push((
-                            FieldLocator { path: path.clone(), name: field.name },
-                            field.paragraph,
-                        ));
-                    }
-                }
-            }
-        }
-        Frame::Picture { mark, has_image: false } => found.truncate(mark),
-        _ => {}
-    }
-}
 
 impl HwpxFiller {
     /// 문서의 모든 누름틀을 문서 순서로 나열한다 (발견가능성 표면).
@@ -680,29 +156,23 @@ impl HwpxFiller {
     pub fn list_fields_with_diagnostics(
         base: &[u8],
     ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<FieldInfo>>> {
-        let mut decoded = HwpxDecoder::decode(base)?;
+        let decoded = HwpxDecoder::decode(base)?;
         let warnings = decoded.warnings.clone();
-        let mut fields = Vec::new();
-        for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
-            visit_section_fields(section, section_idx, &mut |slot| {
-                if let Control::Field {
-                    field_type: FieldType::ClickHere,
-                    hint_text,
-                    name,
-                    display_text,
-                    ..
-                } = &*slot.control
-                {
-                    fields.push(FieldInfo {
-                        name: name.clone(),
-                        hint: hint_text.clone(),
-                        current: display_text.clone(),
-                        section: slot.section,
-                        fillable: name.is_some() && !display_text.is_empty(),
-                    });
-                }
-            });
-        }
+        let inventory = FieldInventory::from_sections(decoded.document.sections());
+        let fields = inventory
+            .fields()
+            .iter()
+            .filter(|f| f.kind() == "CLICK_HERE")
+            .map(|f| FieldInfo {
+                name: f.name().clone(),
+                hint: f.hint().clone(),
+                current: f.current(),
+                section: f.section(),
+                fillable: f.name().is_some()
+                    && f.editability() == FieldEditability::Editable
+                    && !f.current().is_empty(),
+            })
+            .collect();
         Ok(crate::diagnostics::WithDecodeWarnings::new(fields, warnings))
     }
 
@@ -801,112 +271,86 @@ impl HwpxFiller {
         let mut decoded = HwpxDecoder::decode(base)?;
         let decode_warnings = decoded.warnings.clone();
 
-        // ── preflight 2: 이름 해석 (개수·채움가능성) ──
-        let mut inventory: Vec<(String, usize, String)> = Vec::new(); // (name, section, display)
-        for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
-            visit_section_fields(section, section_idx, &mut |slot| {
-                if let Control::Field {
-                    field_type: FieldType::ClickHere,
-                    name: Some(name),
-                    display_text,
-                    ..
-                } = &*slot.control
-                {
-                    inventory.push((name.clone(), slot.section, display_text.clone()));
-                }
-            });
+        let original_sections: Vec<Section> = decoded.document.sections().to_vec();
+        let inventory = FieldInventory::from_sections(&original_sections);
+        if let Some(error) = inventory.diagnostics().first() {
+            return Err(HwpxError::InvalidStructure { detail: error.to_string() }.into());
         }
-
+        let fields: Vec<_> =
+            inventory.fields().iter().filter(|f| f.kind() == "CLICK_HERE").collect();
         for name in values.keys() {
-            let matches: Vec<&(String, usize, String)> =
-                inventory.iter().filter(|(n, _, _)| n == name).collect();
-            match matches.len() {
-                0 => {
-                    let mut available: Vec<String> = Vec::new();
-                    for (n, _, _) in &inventory {
-                        if !available.contains(n) {
-                            available.push(n.clone());
-                        }
-                    }
-                    return Err(FillError::UnknownField { name: name.clone(), available });
+            let matches: Vec<_> =
+                fields.iter().filter(|f| f.name().as_ref() == Some(name)).collect();
+            match matches.as_slice() {
+                [] => {
+                    return Err(FillError::UnknownField {
+                        name: name.clone(),
+                        available: {
+                            let mut seen = std::collections::HashSet::new();
+                            fields
+                                .iter()
+                                .filter_map(|f| f.name().as_ref())
+                                .filter(|name| seen.insert(name.as_str()))
+                                .cloned()
+                                .collect()
+                        },
+                    })
                 }
-                1 => {
-                    let (_, section, display) = matches[0];
-                    if display.is_empty() {
-                        return Err(FillError::UnfillableField {
-                            name: name.clone(),
-                            section: *section,
-                        });
-                    }
+                [field]
+                    if field.editability() != FieldEditability::Editable
+                        || field.current().is_empty() =>
+                {
+                    return Err(FillError::UnfillableField {
+                        name: name.clone(),
+                        section: field.section(),
+                    })
                 }
-                count => return Err(FillError::DuplicateFieldName { name: name.clone(), count }),
+                [_] => {}
+                _ => {
+                    return Err(FillError::DuplicateFieldName {
+                        name: name.clone(),
+                        count: matches.len(),
+                    })
+                }
             }
         }
-
-        // 값마다 입구에서 한 번 정리한다 — 이 값 하나가 쓰기·비교·보고에 쓰인다.
-        // 현재 값과 원문 그대로 같은 요청은 정리하지 않는다: 원본이 이미 담고
-        // 있는 문자를 같은 값으로 다시 요청한 것은 변경이 아니다(no-op 계약).
         let mut encode_warnings = Vec::new();
         let package = crate::patch::RawPackage::read(base)?;
-        let mut cleaned: BTreeMap<&str, String> = BTreeMap::new();
-        for (name, value) in values {
-            let Some((_, section, current)) = inventory.iter().find(|(n, _, _)| n == name) else {
+        let mut filled = Vec::new();
+        let mut touched = std::collections::BTreeSet::new();
+        let mut pending = Vec::new();
+        for field in fields {
+            let Some(name) = &field.name() else {
                 continue;
             };
-            let value = if value == current {
-                value.clone()
-            } else {
-                crate::wire_xml::sanitize_edit_text(
-                    value,
-                    &package.section_path(*section)?,
-                    &format!("field '{name}'"),
-                    &mut encode_warnings,
-                )
+            let Some(value) = values.get(name) else {
+                continue;
             };
-            cleaned.insert(name.as_str(), value);
+            let previous = field.current();
+            if value == &previous {
+                continue;
+            }
+            let value = crate::wire_xml::sanitize_edit_text(
+                value,
+                &package.section_path(field.section())?,
+                &format!("field '{name}'"),
+                &mut encode_warnings,
+            );
+            if value == previous {
+                continue;
+            }
+            pending.push((field, value));
+            touched.insert(field.section());
+            filled.push(FilledField { name: name.clone(), section: field.section(), previous });
         }
 
-        // ── 적용: 대상 필드 mutate + 섹션별 preserve-first patch 체이닝 ──
-        let original_sections: Vec<Section> = decoded.document.sections().to_vec();
-        let mut filled: Vec<FilledField> = Vec::new();
-        let mut touched: Vec<usize> = Vec::new();
-        // 구역별 모든 ClickHere 위치 (이름 없는 것 포함 — wire 와 순번을 맞추는
-        // 데 필요하다) + 값이 바뀐 필드의 (구역, 그 목록 안 번호).
-        let mut locators: BTreeMap<usize, Vec<FieldLocator>> = BTreeMap::new();
-        let mut changed_fields: Vec<(usize, usize)> = Vec::new();
-        for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
-            visit_section_fields(section, section_idx, &mut |slot| {
-                let path = slot.path.to_vec();
-                if let Control::Field {
-                    field_type: FieldType::ClickHere, name, display_text, ..
-                } = &mut *slot.control
-                {
-                    let section_locators = locators.entry(slot.section).or_default();
-                    section_locators.push(FieldLocator { path, name: name.clone() });
-                    let field_idx = section_locators.len() - 1;
-                    let Some(name) = name else {
-                        return;
-                    };
-                    if let Some(value) = cleaned.get(name.as_str()) {
-                        if value == display_text {
-                            // 동일 값 = 완전 no-op — mutate/FilledField/
-                            // touched/캐시 무효화 전부 생략 (§1g v5 변경 5).
-                            return;
-                        }
-                        filled.push(FilledField {
-                            name: name.clone(),
-                            section: slot.section,
-                            previous: std::mem::replace(display_text, value.clone()),
-                        });
-                        changed_fields.push((slot.section, field_idx));
-                        if !touched.contains(&slot.section) {
-                            touched.push(slot.section);
-                        }
-                    }
-                }
-            });
+        let edits: Vec<_> = pending.iter().map(|(f, value)| (*f, value.as_str())).collect();
+        if !FieldInventory::replace_values(decoded.document.sections_mut(), &edits) {
+            return Err(HwpxError::InvalidStructure {
+                detail: "field inventory changed during fill preflight".into(),
+            }
+            .into());
         }
-
         let mut bytes = base.to_vec();
         for section_idx in touched {
             // preservation 은 원본 섹션 상태로 export 해야 sha/슬롯이 맞는다.
@@ -926,130 +370,13 @@ impl HwpxFiller {
             )?;
         }
 
-        // W1b (§1g v5 변경 5): 값이 바뀐 필드의 둘러싼 문단에서
-        // linesegarray 를 제거한다 — 동일 UTF-16 길이라도 글자 폭이 다르면
-        // 줄바꿈/기하가 stale 이므로 "길이 변경 시"가 아니라 **값 변경 시
-        // 무조건**이다. 문단당 정확히 1회 제거 (이후 재조판은 한글 몫).
-        bytes = strip_linesegarray_for_changed_fields(&bytes, &locators, &changed_fields)?;
-
+        // The patcher invalidates caches from the actual changed text locators.
+        // 이것을 실패시키는 것: 별도 wire 필드 개수로 캐시를 다시 해석하기.
         Ok(crate::diagnostics::WithCodecWarnings::new(
             FillOutcome { bytes, filled },
             decode_warnings,
             encode_warnings,
         ))
-    }
-}
-
-/// 섹션 안의 모든 [`Control`] 을 patch 텍스트-슬롯 순회와 동일한 커버리지로
-/// 방문한다 (`collect_semantic_control_slots` / `redact_control` 의 거울 —
-/// 여기 없는 컨테이너(예: `Group`)의 필드는 슬롯도 없으므로 fill 대상이
-/// 아니어야 일관된다).
-///
-/// 각 필드에는 디코더가 경고 경로에 쓰는 것과 같은 segment 로 만든 문단
-/// 경로를 함께 넘긴다([`FieldSlot::path`]).
-pub(crate) fn visit_section_fields(
-    section: &mut Section,
-    section_idx: usize,
-    f: &mut impl FnMut(&mut FieldSlot<'_>),
-) {
-    let mut path = Vec::new();
-    visit_paragraphs(&mut section.paragraphs, false, section_idx, &mut path, f);
-}
-
-fn visit_paragraphs(
-    paragraphs: &mut [Paragraph],
-    nested: bool,
-    section_idx: usize,
-    path: &mut Vec<PathSeg>,
-    f: &mut impl FnMut(&mut FieldSlot<'_>),
-) {
-    for (index, paragraph) in paragraphs.iter_mut().enumerate() {
-        path.push(if nested {
-            PathSeg::NestedParagraph(index)
-        } else {
-            PathSeg::BodyParagraph(index)
-        });
-        for run in &mut paragraph.runs {
-            match &mut run.content {
-                RunContent::Control(control) => visit_control(control, section_idx, path, f),
-                RunContent::Table(table) => {
-                    if let Some(caption) = table.caption.as_mut() {
-                        visit_nested(
-                            &mut caption.paragraphs,
-                            PathSeg::Caption,
-                            section_idx,
-                            path,
-                            f,
-                        );
-                    }
-                    for (row_index, row) in table.rows.iter_mut().enumerate() {
-                        for (cell_index, cell) in row.cells.iter_mut().enumerate() {
-                            let seg = PathSeg::TableCell { row: row_index, cell: cell_index };
-                            visit_nested(&mut cell.paragraphs, seg, section_idx, path, f);
-                        }
-                    }
-                }
-                RunContent::Image(image) => {
-                    if let Some(caption) = image.caption.as_mut() {
-                        visit_nested(
-                            &mut caption.paragraphs,
-                            PathSeg::Caption,
-                            section_idx,
-                            path,
-                            f,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        path.pop();
-    }
-}
-
-/// 컨테이너 segment `seg` 아래의 문단열을 방문한다.
-fn visit_nested(
-    paragraphs: &mut [Paragraph],
-    seg: PathSeg,
-    section_idx: usize,
-    path: &mut Vec<PathSeg>,
-    f: &mut impl FnMut(&mut FieldSlot<'_>),
-) {
-    path.push(seg);
-    visit_paragraphs(paragraphs, true, section_idx, path, f);
-    path.pop();
-}
-
-fn visit_control(
-    control: &mut Control,
-    section_idx: usize,
-    path: &mut Vec<PathSeg>,
-    f: &mut impl FnMut(&mut FieldSlot<'_>),
-) {
-    f(&mut FieldSlot { section: section_idx, path: path.as_slice(), control });
-    match control {
-        Control::TextBox { paragraphs, caption, .. }
-        | Control::Ellipse { paragraphs, caption, .. }
-        | Control::Polygon { paragraphs, caption, .. } => {
-            visit_nested(paragraphs, PathSeg::TextBox, section_idx, path, f);
-            if let Some(caption) = caption.as_mut() {
-                visit_nested(&mut caption.paragraphs, PathSeg::Caption, section_idx, path, f);
-            }
-        }
-        Control::Footnote { paragraphs, .. } => {
-            visit_nested(paragraphs, PathSeg::Footnote, section_idx, path, f);
-        }
-        Control::Endnote { paragraphs, .. } => {
-            visit_nested(paragraphs, PathSeg::Endnote, section_idx, path, f);
-        }
-        Control::Rect { caption: Some(caption), .. }
-        | Control::Line { caption: Some(caption), .. }
-        | Control::Arc { caption: Some(caption), .. }
-        | Control::Curve { caption: Some(caption), .. }
-        | Control::ConnectLine { caption: Some(caption), .. } => {
-            visit_nested(&mut caption.paragraphs, PathSeg::Caption, section_idx, path, f);
-        }
-        _ => {}
     }
 }
 
@@ -1069,6 +396,8 @@ mod tests {
     use hwpforge_core::run::Run;
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_core::PageSettings;
+    use hwpforge_core::{Control, Paragraph, RunContent};
+    use hwpforge_foundation::FieldType;
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 
     /// 한컴 저장 누름틀 하나(`user_email`, 캐시 `vertpos="0"`)가 있는 문서.
@@ -1297,61 +626,6 @@ mod tests {
         }
     }
 
-    /// Branch review B-H2: locating the filled paragraphs and writing the
-    /// removals stays linear in the field count — the per-path ordinals, the
-    /// pairing with the section XML and the one-pass splice — not only the
-    /// cache collection.
-    /// 이것을 실패시키는 것: 순번을 앞 항목 다시 세기로, 짝짓기를 wire 전체 훑기로
-    /// (작업량 N²) · 구간마다 따로 지우기(splice 를 구간마다 부름).
-    #[test]
-    fn locating_stays_linear() {
-        const N: usize = 2000;
-        let paragraphs: Vec<Paragraph> =
-            (0..N).map(|i| para(vec![field(&format!("f{i}"), "값")])).collect();
-        let doc = encode(paragraphs, &ImageStore::default());
-        let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
-        let locators: Vec<FieldLocator> = (0..N)
-            .map(|i| FieldLocator {
-                path: vec![PathSeg::BodyParagraph(i)],
-                name: Some(format!("f{i}")),
-            })
-            .collect();
-        let inventory = BTreeMap::from([(0, locators)]);
-        let changed: Vec<(usize, usize)> = (0..N).map(|i| (0, i)).collect();
-        crate::work::WORK.with(|w| w.set(0));
-        let out =
-            strip_linesegarray_for_changed_fields(&bytes, &inventory, &changed).expect("strip");
-        let work = crate::work::WORK.with(std::cell::Cell::get);
-        assert!(caches(&section_xml(&out)).is_empty());
-        assert!(work <= 10 * N, "{work} work units for {N} fields");
-    }
-
-    /// W2 review MEDIUM: the scan keeps one cache list per paragraph (not a
-    /// flow tail per field), and filling the last of N fields collects one
-    /// range — the first collects N.
-    /// 이것을 실패시키는 것: 필드마다 꼬리를 미리 모으기(스캔 구간 수가 N²/2).
-    #[test]
-    fn scan_and_collection_stay_linear() {
-        const N: usize = 2000;
-        let paragraphs: Vec<Paragraph> =
-            (0..N).map(|i| para(vec![field(&format!("f{i}"), "값")])).collect();
-        let doc = encode(paragraphs, &ImageStore::default());
-        let xml = add_caches(&section_xml(&doc));
-        let scan = scan_click_here_fields(&xml).expect("scan");
-        assert_eq!(scan.fields.len(), N);
-        assert_eq!(scan.caches.iter().map(Vec::len).sum::<usize>(), N);
-        assert_eq!(scan.stale_caches([scan.fields[N - 1].paragraph]).len(), 1);
-        assert_eq!(scan.stale_caches([scan.fields[0].paragraph]).len(), N);
-        let all: Vec<usize> = scan.fields.iter().map(|f| f.paragraph).collect();
-        // S22 r1: the collection itself stays linear, not only its result —
-        // one walk up each paragraph's host chain and one pass over the
-        // caches. 이것을 실패시키는 것: 바뀐 문단마다 캐시 전체를 다시 훑기
-        // (같은 결과, 살펴본 수 N²).
-        scan.visits.set(0);
-        assert_eq!(scan.stale_caches(all).len(), N);
-        assert!(scan.visits.get() <= 3 * N, "{} visits for {N} fields", scan.visits.get());
-    }
-
     /// W2 review: per container, filling the middle of three paragraphs
     /// drops exactly that paragraph, the one after it, the host paragraph
     /// and the body paragraph after the host — every other cache stays.
@@ -1414,11 +688,8 @@ mod tests {
     }
 
     #[test]
-    fn same_named_field_inside_a_group_is_out_of_scope() {
-        // 묶음 안 글상자 문단 = 9000, 묶음이 든 문단 = 9001, 본문 필드 문단 = 9002.
-        // fill 인벤토리는 묶음 내부를 보지 않으므로 이름 `dup` 은 하나다.
-        // 이것을 실패시키는 것: `hp:container` 를 범위 밖으로 두지 않기(예: run
-        // 처럼 자식 도형을 따라 들어감) → wire 후보가 둘이 되어 위치 불일치 오류.
+    fn same_named_field_inside_a_group_is_visible_and_ambiguous() {
+        // 이것을 실패시키는 것: 편집 미지원 흐름의 필드를 이름 해석에서 숨기기.
         let inner = Control::text_box(vec![para(vec![field("dup", "안")])], size(4000), size(2000));
         let group = Control::Group {
             frame: hwpforge_core::ObjectFrame::new(),
@@ -1434,9 +705,20 @@ mod tests {
         );
         let bytes = with_section_xml(&doc, add_caches(&section_xml(&doc)));
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
-        assert_eq!(listed.len(), 1, "premise: the group interior is not in the inventory");
-        let xml = fill_xml(&bytes, &[("dup", "값")]).expect("fill");
-        assert_eq!(caches(&xml), vec![0, 1]);
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|f| !f.fillable));
+        // 이것을 실패시키는 것: 같은 이름을 available 목록에 중복 보고하기.
+        let Err(FillError::UnknownField { available, .. }) =
+            fill_xml(&bytes, &[("missing", "value")])
+        else {
+            panic!("unknown field");
+        };
+        assert_eq!(available, ["dup"]);
+
+        assert!(matches!(
+            fill_xml(&bytes, &[("dup", "값")]),
+            Err(FillError::DuplicateFieldName { .. })
+        ));
     }
 
     #[test]
@@ -1481,12 +763,9 @@ mod tests {
     }
 
     #[test]
-    fn click_here_without_an_end_in_its_run_is_out_of_scope() {
-        // 한컴 코퍼스의 누름틀은 대개 `fieldEnd` 가 다른 run(다른 문단)에 있고
-        // 디코더는 그런 필드를 Core 로 올리지 않는다. 채울 필드 뒤 문단(캐시
-        // 777)에 그런 같은 이름의 `fieldBegin` 을 둔다.
-        // 이것을 실패시키는 것: run 안 짝짓기 없이 `fieldBegin` 마다 필드로
-        // 세기 → wire 후보가 둘이 되어 위치 불일치 오류.
+    fn unclosed_click_here_remains_listed_but_cannot_be_filled() {
+        // The earlier closed field stays editable. A later source start with
+        // the same name is listed as protected, so name-based fill is refused.
         let bytes = named_with(|xml| {
             let open = xml.find("<hp:fieldBegin").unwrap();
             let close =
@@ -1503,13 +782,10 @@ mod tests {
             xml.replace("</hs:sec>", &format!("{new_para}</hs:sec>"))
         });
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
-        assert_eq!(listed.len(), 1, "premise: the decoder drops the unpaired begin");
-        let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
-        // W2: 777 문단은 채운 문단 뒤 같은 흐름이라 이제 캐시를 잃는다(전에는
-        // 남겼던 것이 틀렸다). 이 시험의 이빨(짝 없는 begin 을 필드로 세면 위치
-        // 불일치 오류)은 위 `fill_xml(...).expect` 가 진다.
-        assert!(!xml.contains("vertpos=\"777\""), "the flow tail goes");
-        assert!(!xml.contains("vertpos=\"0\""), "filled paragraph cache must go");
+        assert_eq!(listed.len(), 2, "recovery ranges stay discoverable");
+        assert!(listed[0].fillable);
+        assert!(!listed[1].fillable);
+        assert!(fill_xml(&bytes, &[("user_email", "x@y.z")]).is_err());
     }
 
     #[test]
@@ -1526,9 +802,8 @@ mod tests {
             format!("{}{ghost}{}", &xml[..open], &xml[open..])
         });
         let listed = HwpxFiller::list_fields(&bytes).expect("list");
-        assert_eq!(listed.len(), 1, "premise: the decoder pairs the second begin");
-        let xml = fill_xml(&bytes, &[("user_email", "x@y.z")]).expect("fill");
-        assert!(!xml.contains("<hp:linesegarray"));
+        assert_eq!(listed.len(), 2);
+        assert!(fill_xml(&bytes, &[("user_email", "x@y.z")]).is_err());
     }
 
     #[test]
@@ -1734,42 +1009,5 @@ mod tests {
         // W2: 다음 문단(9001)은 흐름 꼬리라 함께 간다(전에는 남겼다). 순번 시험의
         // 이빨은 위치 불일치 오류(`expect`)가 진다.
         assert_eq!(caches(&xml), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn wire_and_inventory_mismatch_is_rejected() {
-        // 이것을 실패시키는 것: (경로, 순번, 이름) 집합 동일성 검사를 빼고
-        // 이름만으로 고르기 → 아래 세 입력이 Ok 가 된다.
-        let xml = section_xml(NAMED);
-        let at = |name: &str| FieldLocator {
-            path: vec![PathSeg::BodyParagraph(0)],
-            name: Some(name.to_string()),
-        };
-        assert!(locate_changed_paragraph_caches(&xml, 0, &[at("user_email")], &[0]).is_ok());
-        let renamed = locate_changed_paragraph_caches(&xml, 0, &[at("other")], &[0]);
-        assert!(matches!(renamed, Err(HwpxError::InvalidStructure { .. })), "{renamed:?}");
-        let missing = locate_changed_paragraph_caches(&xml, 0, &[at("user_email"), at("x")], &[0]);
-        assert!(matches!(missing, Err(HwpxError::InvalidStructure { .. })), "{missing:?}");
-        let extra = locate_changed_paragraph_caches(&xml, 0, &[], &[]);
-        assert!(matches!(extra, Err(HwpxError::InvalidStructure { .. })), "{extra:?}");
-        let moved = FieldLocator { path: vec![PathSeg::BodyParagraph(1)], ..at("user_email") };
-        let moved = locate_changed_paragraph_caches(&xml, 0, &[moved], &[0]);
-        assert!(matches!(moved, Err(HwpxError::InvalidStructure { .. })), "{moved:?}");
-    }
-
-    #[test]
-    fn strip_reports_a_mismatch_instead_of_skipping_the_cache() {
-        // 이것을 실패시키는 것: 위치 불일치를 무시하고 그 구역을 건너뛰기(옛
-        // `None` = no-op 동작) → Ok 가 되어 낡은 캐시가 남은 채 출고된다.
-        let mut inventory = BTreeMap::new();
-        inventory.insert(
-            0,
-            vec![FieldLocator {
-                path: vec![PathSeg::BodyParagraph(0)],
-                name: Some("other".to_string()),
-            }],
-        );
-        let result = strip_linesegarray_for_changed_fields(NAMED, &inventory, &[(0, 0)]);
-        assert!(matches!(result, Err(HwpxError::InvalidStructure { .. })), "{result:?}");
     }
 }

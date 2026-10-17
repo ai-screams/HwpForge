@@ -966,9 +966,7 @@ fn build_paragraph(
                     // 자가검증 (독립 리뷰 hardening — 디코더·HWP5 choke 와
                     // 3중 대칭): ledger 의 Core 총길이 == 문단 가시 텍스트.
                     // 누락된 zero-core span(미계측 방출 사이트)을 방어한다.
-                    let expected_core: u32 = para
-                        .runs
-                        .iter()
+                    let expected_core: u32 = hwpforge_core::field_view::display_runs(&para.runs)
                         .filter_map(|r| r.content.plain_text())
                         .map(|t| t.encode_utf16().count() as u32)
                         .sum();
@@ -1079,6 +1077,7 @@ fn build_paragraph(
 
     Ok(HxParagraph {
         origin: super::origins::record(&sink.path),
+        source_origin: 0,
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
         style_id_ref: para.style_id.map_or(0, |s| s.get() as u32),
@@ -1135,6 +1134,7 @@ fn build_runs(
                 sec_pr_injected = true;
                 ledger.sec_pr();
                 result.push(HxRun {
+                    origin: 0,
                     char_pr_id_ref: 0,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
@@ -1870,6 +1870,7 @@ fn build_runs(
         }
 
         result.push(HxRun {
+            origin: 0,
             char_pr_id_ref,
             sec_pr,
             texts,
@@ -1901,6 +1902,7 @@ fn build_runs(
     if result.is_empty() {
         if let Some(first) = runs.first() {
             result.push(HxRun {
+                origin: 0,
                 char_pr_id_ref: first.char_shape_id.get() as u32,
                 sec_pr: None,
                 texts: Vec::new(),
@@ -1932,6 +1934,7 @@ fn build_runs(
             result.insert(
                 0,
                 HxRun {
+                    origin: 0,
                     char_pr_id_ref: 0,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
@@ -2156,6 +2159,7 @@ fn report_note_head(outcome: NoteHeadInjection, kind: &str, sink: &mut EncodeSin
 /// autoNum 컨트롤만 담는 선행 run.
 fn note_head_run(char_pr_id_ref: u32, ctrl: HxCtrl) -> HxRun {
     HxRun {
+        origin: 0,
         char_pr_id_ref,
         sec_pr: None,
         texts: Vec::new(),
