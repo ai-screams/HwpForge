@@ -63,7 +63,7 @@ mod fill;
 pub mod grid_addr;
 mod inline_text;
 mod layout_carry;
-mod layout_edit;
+pub mod layout_edit;
 mod list_bridge;
 mod patch;
 pub mod presets;
@@ -122,3 +122,6 @@ pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxFontType, HwpxFontTypeInfo, HwpxParaShape, HwpxStyle,
     HwpxStyleStore, HwpxSubstFont,
 };
+
+#[cfg(test)]
+mod reading_order_edits;

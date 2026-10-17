@@ -392,7 +392,9 @@ impl HwpxStamper {
         // ── apply on the admitted decode ────────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
         let mut encode_warnings = Vec::new();
-        let specs = clean_text_hints(specs, &mut encode_warnings);
+        let package =
+            crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let specs = clean_text_hints(&package, specs, &mut encode_warnings);
         let outcome = apply(&mut document, &specs)?;
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
@@ -474,8 +476,11 @@ impl HwpxStamper {
         // ── unified preflight, then mutate ──────────────────────────
         let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
         let mut encode_warnings = Vec::new();
-        let text_specs = clean_text_hints(&request.text, &mut encode_warnings);
-        let cell_specs = clean_cell_hints(&document, &request.cells, &mut encode_warnings);
+        let package =
+            crate::patch::RawPackage::read(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let text_specs = clean_text_hints(&package, &request.text, &mut encode_warnings);
+        let cell_specs =
+            clean_cell_hints(&package, &document, &request.cells, &mut encode_warnings);
         let reserved: HashSet<String> = request
             .text
             .iter()
@@ -540,8 +545,10 @@ impl HwpxStamper {
 /// 1.0 cannot represent, one warning per cleaned hint (`field 'NAME' hint`).
 /// The hint is the caller's text; the name is an identifier the output
 /// manifest re-reads, so a name holding such a character is left to fail
-/// there rather than be silently renamed.
+/// there rather than be silently renamed. Invalid indices use an empty diagnostic
+/// part; preflight rejects them before those warnings can reach the caller.
 fn clean_text_hints(
+    package: &crate::patch::RawPackage,
     specs: &[StampSpec],
     warnings: &mut Vec<crate::EncodeWarning>,
 ) -> Vec<StampSpec> {
@@ -552,7 +559,7 @@ fn clean_text_hints(
             if let StampAction::Field { name, hint: Some(hint) } = &mut spec.action {
                 *hint = crate::wire_xml::sanitize_edit_text(
                     hint,
-                    &crate::patch::section_path(spec.section),
+                    &package.section_path(spec.section).unwrap_or_default(),
                     &format!("field '{name}' hint"),
                     warnings,
                 );
@@ -566,6 +573,7 @@ fn clean_text_hints(
 /// the targeted table (an ordinal preflight will reject falls back to
 /// section 0 — its warning never reaches the caller).
 fn clean_cell_hints(
+    package: &crate::patch::RawPackage,
     document: &hwpforge_core::Document<hwpforge_core::Draft>,
     specs: &[CellStampSpec],
     warnings: &mut Vec<crate::EncodeWarning>,
@@ -582,7 +590,7 @@ fn clean_cell_hints(
                 let section = sections.get(spec.table).copied().unwrap_or(0);
                 *hint = crate::wire_xml::sanitize_edit_text(
                     hint,
-                    &crate::patch::section_path(section),
+                    &package.section_path(section).unwrap_or_default(),
                     &format!("field '{name}' hint"),
                     warnings,
                 );

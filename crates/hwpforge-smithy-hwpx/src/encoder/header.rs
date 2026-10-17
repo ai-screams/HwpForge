@@ -272,19 +272,25 @@ fn build_numberings_xml(store: &HwpxStyleStore) -> String {
         for lvl in &ndef.levels {
             let num_format = number_format_to_hwpx(lvl.num_format);
             let checkable = u32::from(lvl.checkable);
+            let defaults = crate::style_store::fidelity::HeadMetrics::generated(1);
+            let metrics = store
+                .header_fidelity
+                .numbering
+                .get(&ndef.id)
+                .and_then(|levels| levels.get(&lvl.level))
+                .unwrap_or(&defaults);
+            xml.push_str(&format!(
+                r#"<hh:paraHead start="{}" level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{num_format}" charPrIDRef="{}" checkable="{checkable}""#,
+                lvl.start, lvl.level, escape_xml(&metrics.align), metrics.use_inst_width,
+                metrics.auto_indent, metrics.width_adjust, escape_xml(&metrics.text_offset_type),
+                metrics.text_offset, metrics.char_pr_id_ref,
+            ));
             if lvl.text.is_empty() {
-                // Self-closing for levels with empty text (levels 9 and 10)
-                xml.push_str(&format!(
-                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}"/>"#,
-                    lvl.start, lvl.level,
-                ));
+                xml.push_str("/>");
             } else {
-                xml.push_str(&format!(
-                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}">{}</hh:paraHead>"#,
-                    lvl.start,
-                    lvl.level,
-                    escape_xml(&lvl.text),
-                ));
+                xml.push('>');
+                xml.push_str(&escape_xml(&lvl.text));
+                xml.push_str("</hh:paraHead>");
             }
         }
         xml.push_str("</hh:numbering>");
@@ -299,7 +305,23 @@ fn build_bullets_xml(store: &HwpxStyleStore) -> String {
         return String::new();
     }
 
-    let items: Vec<HxBullet> = store.iter_bullets().map(bullet_def_to_hwpx).collect();
+    let items: Vec<HxBullet> = store
+        .iter_bullets()
+        .map(|def| {
+            let mut bullet = bullet_def_to_hwpx(def);
+            for head in &mut bullet.para_heads {
+                if let Some(metrics) = store
+                    .header_fidelity
+                    .bullet
+                    .get(&def.id)
+                    .and_then(|levels| levels.get(&head.level))
+                {
+                    metrics.apply(head);
+                }
+            }
+            bullet
+        })
+        .collect();
     let count = items.len() as u32;
     let mut xml = format!(r#"<hh:bullets itemCnt="{count}">"#);
     for bullet in &items {
@@ -336,11 +358,11 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
         return format!(
             r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}"/>"#,
             para_head.level,
-            para_head.align,
+            escape_xml(&para_head.align),
             para_head.use_inst_width,
             para_head.auto_indent,
             para_head.width_adjust,
-            para_head.text_offset_type,
+            escape_xml(&para_head.text_offset_type),
             para_head.text_offset,
             para_head.num_format,
             para_head.char_pr_id_ref,
@@ -351,11 +373,11 @@ fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
     let mut xml = format!(
         r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}">"#,
         para_head.level,
-        para_head.align,
+        escape_xml(&para_head.align),
         para_head.use_inst_width,
         para_head.auto_indent,
         para_head.width_adjust,
-        para_head.text_offset_type,
+        escape_xml(&para_head.text_offset_type),
         para_head.text_offset,
         para_head.num_format,
         para_head.char_pr_id_ref,
@@ -733,7 +755,12 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
     let items: Vec<HxParaPr> = store
         .iter_para_shapes()
         .enumerate()
-        .map(|(idx, ps)| build_para_pr(idx as u32, ps))
+        .map(|(idx, ps)| {
+            let mut para = build_para_pr(idx as u32, ps);
+            para.font_line_height =
+                store.header_fidelity.font_line_height.get(&idx).copied().unwrap_or(0);
+            para
+        })
         .collect();
     let item_cnt = items.len() as u32;
     HxParaProperties { item_cnt, items }
@@ -2115,5 +2142,83 @@ mod tests {
             assert_eq!(kind, "char_shape_per_language");
             assert!(reason.contains(&format!("per-language {expect} values")), "{reason}");
         }
+    }
+}
+
+#[cfg(test)]
+mod fidelity_tests {
+    use super::*;
+
+    // 이것을 실패시키는 것: 원본 metrics 문자열을 XML 속성에 이스케이프 없이 삽입하기.
+    #[test]
+    fn bullet_metric_strings_are_escaped_in_empty_and_text_heads() {
+        for text in ["", "head"] {
+            let xml = format!(
+                r#"<hh:paraHead xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" level="0" align="R&amp;&quot;" textOffsetType="H&amp;&quot;">{text}</hh:paraHead>"#
+            );
+            let head: HxBulletParaHead = crate::decoder::xml_from_str(&xml).unwrap();
+            let encoded = build_bullet_para_head_xml(&head);
+            assert!(encoded.contains(r#"align="R&amp;&quot;""#));
+            assert!(encoded.contains(r#"textOffsetType="H&amp;&quot;""#));
+            let restored: HxBulletParaHead = crate::decoder::xml_from_str(&encoded).unwrap();
+            assert_eq!(head, restored);
+        }
+    }
+
+    // 이것을 실패시키는 것: capture/JSON 저장/일반 인코더 적용 중 하나를 빼서
+    // fontLineHeight 또는 번호·글머리표의 useInstWidth/나머지 metrics를 상수로 쓰기.
+    #[test]
+    fn header_fidelity_survives_json_and_regeneration_without_a_base() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_numbering(NumberingDef::default_outline());
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 3,
+            bullet_char: "*".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        });
+        let original = encode_header(&store, 1, None)
+            .unwrap()
+            .replace("fontLineHeight=\"0\"", "fontLineHeight=\"1\"")
+            .replace("useInstWidth=\"1\"", "useInstWidth=\"NO\"")
+            .replace("useInstWidth=\"0\"", "useInstWidth=\"1\"")
+            .replace("useInstWidth=\"NO\"", "useInstWidth=\"0\"")
+            .replace("autoIndent=\"1\"", "autoIndent=\"0\"")
+            .replace("align=\"LEFT\"", "align=\"RIGHT\"")
+            .replace("widthAdjust=\"0\"", "widthAdjust=\"17\"")
+            .replace("textOffsetType=\"PERCENT\"", "textOffsetType=\"HWPUNIT\"")
+            .replace("textOffset=\"50\"", "textOffset=\"123\"")
+            .replace("charPrIDRef=\"4294967295\"", "charPrIDRef=\"0\"");
+        let parsed = crate::decoder::header::parse_header(&original).unwrap().style_store;
+        let json = serde_json::to_string(&parsed).unwrap();
+        let decoded: HwpxStyleStore = serde_json::from_str(&json).unwrap();
+        let output = encode_header(&decoded, 1, None).unwrap();
+        for attr in [
+            "fontLineHeight=\"1\"",
+            "useInstWidth=\"0\"",
+            "useInstWidth=\"1\"",
+            "autoIndent=\"0\"",
+            "align=\"RIGHT\"",
+            "widthAdjust=\"17\"",
+            "textOffsetType=\"HWPUNIT\"",
+            "textOffset=\"123\"",
+            "charPrIDRef=\"0\"",
+        ] {
+            assert_eq!(output.matches(attr).count(), original.matches(attr).count(), "{attr}");
+            assert!(original.contains(attr));
+        }
+        // A JSON edit to the private wire metrics is an actual output edit,
+        // never cache provenance; the package fingerprint sees its new value.
+        let altered = json.replace("\"use_inst_width\":0", "\"use_inst_width\":1");
+        let altered: HwpxStyleStore = serde_json::from_str(&altered).unwrap();
+        assert_ne!(output, encode_header(&altered, 1, None).unwrap());
     }
 }

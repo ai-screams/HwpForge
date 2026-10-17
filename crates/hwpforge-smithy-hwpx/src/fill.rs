@@ -242,7 +242,7 @@ fn strip_linesegarray_for_changed_fields(
         sections.entry(*section_idx).or_default().push(*field_idx);
     }
     for (section_idx, field_indices) in sections {
-        let path = crate::patch::section_path(section_idx);
+        let path = pkg.section_path(section_idx)?;
         let expected = inventory.get(&section_idx).map(Vec::as_slice).unwrap_or_default();
         let xml = pkg.read_text_entry(&path)?;
         let removals =
@@ -847,6 +847,7 @@ impl HwpxFiller {
         // 현재 값과 원문 그대로 같은 요청은 정리하지 않는다: 원본이 이미 담고
         // 있는 문자를 같은 값으로 다시 요청한 것은 변경이 아니다(no-op 계약).
         let mut encode_warnings = Vec::new();
+        let package = crate::patch::RawPackage::read(base)?;
         let mut cleaned: BTreeMap<&str, String> = BTreeMap::new();
         for (name, value) in values {
             let Some((_, section, current)) = inventory.iter().find(|(n, _, _)| n == name) else {
@@ -857,7 +858,7 @@ impl HwpxFiller {
             } else {
                 crate::wire_xml::sanitize_edit_text(
                     value,
-                    &crate::patch::section_path(*section),
+                    &package.section_path(*section)?,
                     &format!("field '{name}'"),
                     &mut encode_warnings,
                 )

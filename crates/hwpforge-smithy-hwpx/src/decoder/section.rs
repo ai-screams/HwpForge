@@ -134,7 +134,7 @@ pub struct SectionParseResult {
 
 /// Parses a section XML string into paragraphs and optional page settings.
 ///
-/// `section_index` is used only for error messages (e.g. `"Contents/section0.xml"`).
+/// `section_index` identifies Core paths; the test-only part is fixed.
 /// `chart_xmls` maps chart file paths (e.g. `"Chart/chart1.xml"`) to their OOXML content.
 ///
 /// Test entry point: the package decoder calls [`parse_section_with_images`].
@@ -144,7 +144,13 @@ pub fn parse_section(
     section_index: usize,
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
-    parse_section_with_images(xml, section_index, chart_xmls, &HashMap::new())
+    parse_section_with_images(
+        xml,
+        section_index,
+        "Contents/section0.xml",
+        chart_xmls,
+        &HashMap::new(),
+    )
 }
 
 /// [`parse_section`] with the pixel sizes of the package's images, keyed by
@@ -154,21 +160,21 @@ pub fn parse_section(
 pub(crate) fn parse_section_with_images(
     xml: &str,
     section_index: usize,
+    part: &str,
     chart_xmls: &HashMap<String, String>,
     image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<SectionParseResult> {
-    let file_hint = format!("Contents/section{section_index}.xml");
     let xml = crate::wire_xml::preserve_ws_only_text(xml).map_err(|e| HwpxError::XmlParse {
-        file: file_hint.clone(),
+        file: part.into(),
         detail: xml_error_detail(&e.into()),
     })?;
     let section: HxSection = xml_from_str(&xml)
-        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: xml_error_detail(&e) })?;
+        .map_err(|e| HwpxError::XmlParse { file: part.into(), detail: xml_error_detail(&e) })?;
 
     let mut page_settings = None;
     let mut headers = Vec::new();
     let mut footers = Vec::new();
-    let mut ctx = DecodeCtx::new(section_index);
+    let mut ctx = DecodeCtx::for_section(section_index, part);
     ctx.image_pixels = image_pixels.clone();
     let mut page_number = None;
     let mut column_settings = None;
@@ -342,11 +348,16 @@ pub(crate) struct GroupCalls {
 }
 
 impl DecodeCtx {
+    #[cfg(test)]
     pub(crate) fn new(section_index: usize) -> Self {
+        Self::for_section(section_index, "Contents/section0.xml")
+    }
+
+    pub(crate) fn for_section(section_index: usize, part: &str) -> Self {
         Self {
             warnings: Vec::new(),
             path: vec![super::PathSeg::Section(section_index)],
-            part: format!("Contents/section{section_index}.xml"),
+            part: part.into(),
             group_child_depth: 0,
             group_child_path_lens: Vec::new(),
             image_pixels: HashMap::new(),
@@ -4146,7 +4157,9 @@ mod tests {
         // The logo is 94 x 33 pixels: its `imgClip` (no `imgDim`) is the
         // whole image.
         let pixels = HashMap::from([("image2".to_string(), (94, 33))]);
-        let result = parse_section_with_images(xml, 0, &HashMap::new(), &pixels).unwrap();
+        let result =
+            parse_section_with_images(xml, 0, "Contents/section0.xml", &HashMap::new(), &pixels)
+                .unwrap();
         let RunContent::Image(img) = &result.paragraphs[0].runs[0].content else {
             panic!("expected Image: {:?}", result.paragraphs[0].runs)
         };

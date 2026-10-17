@@ -1,9 +1,91 @@
-//! Core comparison and trusted-cache preparation for a package-backed encode.
+//! Original-package layout proofs and reusable cache invalidation.
 //!
-//! Paragraph ids are not identities (native files reuse them). Lists are
-//! paired by structural position; a length change admits only the identical
-//! prefix. No suffix is guessed or matched by text. The shared flow rule then
-//! invalidates the changed list's tail and host chain.
+//! # Three boundaries
+//!
+//! 1. [`PackageAnalysis::read`] reads original package XML and resolves definition,
+//!    binary and chart dependencies. The original is never decoded/re-encoded to
+//!    manufacture a baseline. [`PackageAnalysis::read_emitted`] consumes actual
+//!    encoder bytes plus [`crate::HwpxEncoder::encode_with_origins`]'s origin map.
+//! 2. [`ParagraphCorrespondence`] pairs original paragraphs with emitted Core
+//!    origins. The JSON adapter uses typed Core lists: equal lengths pair by
+//!    position, changed lengths admit only the identical prefix. Paragraph ids
+//!    and text are never identities. Origins are recorded at paragraph emission,
+//!    reordered by final XML assembly, and stripped of private markers before ZIP
+//!    packaging. Synthetic/ambiguous origins have no trusted correspondence.
+//! 3. [`plan_invalidation`] combines package differences with a [`ChangeSet`],
+//!    returning per-paragraph and per-section **reasons**. Flow tails, host chains,
+//!    floating objects, keep/widow links, numbering/page dependencies, unknown
+//!    controls and unresolved references all use this one policy. JSON only
+//!    selects trusted base caches and applies the result. Typed Core/style checks
+//!    are supplemental rejection evidence, never sufficient for preservation.
+//!
+//! # Original-byte emission
+//!
+//! `encode_with_base` first compares the complete typed Core (excluding supplied
+//! caches), style store and image bytes with a fresh decode of the base. If all
+//! are unchanged, it returns the **entire original ZIP byte for byte**. This is
+//! a separate emission strategy, not a bypass attaching caches to regenerated
+//! XML. It preserves `sz`, `zOrder`, offsets, matrices, shape comments, unknown
+//! definitions and decoder-unrepresented content together with their caches.
+//! No ledger translation is needed because no wire token moves. Original invalid
+//! caches are not certified or repaired by this identity operation. Decoder
+//! content-loss diagnostics still describe the Core projection, not output loss.
+//! Any semantic edit falls through to the fingerprint/ledger proof below;
+//! identical sections alone are insufficient because dependencies cross sections.
+//! `memo_create_time` supplies a default only when a memo is actually written.
+//!
+//! # Canonical form
+//!
+//! * Names use namespace URI plus local name. Declarations/prefix spelling,
+//!   attribute order, comments, XML declaration and empty-tag spelling disappear.
+//!   Unbound prefixes and DTDs fail the analysis rather than weaken the proof.
+//! * Attributes are sorted by expanded name. Character/entity/CDATA spellings
+//!   become decoded XML 1.0 text. Structural whitespace-only text is ignored;
+//!   text-bearing `t`, `stringParam`, `script`, `meta`, `title`, mixed content and
+//!   inherited `xml:space="preserve"` keep exact spaces and child-boundary positions.
+//! * Child order and nonempty structure remain significant. No guessed default
+//!   values, numeric coercions, font substitutions or compatibility equivalences
+//!   are admitted. `linesegarray` is evidence being validated, never an input.
+//! * Definition ids are replaced by resolved, typed targets (font ids also have
+//!   a language scope). Reference attribute names/order and rooted cycle edges
+//!   remain significant. SCC traversal ordinals and component boundaries replace
+//!   raw ids; duplicate/missing definitions and cycles over 256 members fail closed.
+//!   Unreferenced paragraph/object ids do not affect layout; other nonresolved
+//!   link attributes retain their values, so unfamiliar links remain conservative.
+//!   Local fieldBegin ids/beginIDRef pairs use definition-order ordinals; changed
+//!   targets remain different, missing/duplicate begins are unresolved. Other
+//!   field attributes (including fieldid's type-specific magic values) stay exact.
+//! * Header properties outside `refList` are global layout inputs, including
+//!   compatibility. `head@secCnt` is derived package structure, already represented
+//!   by section graphs. Referenced definitions contribute their entire XML.
+//! * `content.hpf` metadata is a document input.
+//!   `fieldBegin`, page fields and `$`-bearing `stringParam` read these inputs;
+//!   a changed input invalidates their conservative dependent flows. BinData
+//!   references resolve through manifest ids to target bytes; chart paths resolve
+//!   to canonical target XML. Missing targets never prove equality.
+//!   Package input classification and its evidence table live together in
+//!   `layout_edit/inputs.rs`: packaging provenance and known caret coordinates
+//!   are excluded; print settings and unknown package parts are global inputs.
+//! * Decode/encode `ContentLost` seeds section or document invalidation. Unknown
+//!   loss scope is document-wide. This deliberately includes non-layout losses
+//!   until a narrower, proven classification exists.
+//!
+//! # Adding an editor
+//!
+//! Read the original package once, encode with origins if re-emitting, and analyze
+//! those emitted bytes. Supply proven paragraph pairs (or `identity` for a
+//! structure-preserving editor) and add explicit edits/losses to `ChangeSet`.
+//! Call `plan_invalidation`; apply every nonempty paragraph reason set to the
+//! original cache store. Never implement another floating/keep/numbering policy.
+//! Paths are the existing value-only `ParagraphPath(Vec<PathSeg>)` (section,
+//! paragraph and nested indices); an adapter can map these to the shared fbody
+//! path without changing graph policy. Unbounded/ambiguous containers close the
+//! affected section. Consumers must still validate carried text positions with
+//! the encoder's wire ledger; this module proves layout inputs, not cache syntax.
+//!
+//! Diagnostic facts name changed XML attributes/elements; each affected paragraph
+//! receives each cause once, including propagated causes. Fingerprints retain
+//! ordering even when the diagnostic fact sets have no more specific difference.
 
 use hwpforge_core::{Document, Draft, Validated};
 use serde_json::Value;
@@ -16,16 +98,20 @@ fn tree<T: serde::Serialize>(value: &T) -> HwpxResult<Value> {
 }
 
 fn paragraph(value: &Value) -> bool {
-    value.get("runs").is_some() && value.get("para_shape_id").is_some()
+    value.get("runs").is_some_and(Value::is_array)
+        && value.get("para_shape_id").is_some_and(Value::is_u64)
 }
 
 /// Comparison uses the typed Core serialization, never the caller's JSON.
-/// Removing all cache fields also covers image captions and future containers
-/// that the general Core paragraph walker does not currently visit.
+/// Only typed paragraph objects lose their cache field. Metadata.extras values
+/// are strings, even when users name them runs, para_shape_id or layout_cache.
 fn clean(value: &mut Value) {
+    let is_paragraph = paragraph(value);
     match value {
         Value::Object(fields) => {
-            fields.remove("layout_cache");
+            if is_paragraph {
+                fields.remove("layout_cache");
+            }
             for child in fields.values_mut() {
                 clean(child);
             }
@@ -45,7 +131,7 @@ fn shell(value: &Value) -> Value {
         Value::Object(fields) => Value::Object(
             fields
                 .iter()
-                .filter(|(k, _)| k.as_str() != "layout_cache")
+                .filter(|(k, _)| !paragraph(value) || k.as_str() != "layout_cache")
                 .map(|(k, v)| (k.clone(), shell(v)))
                 .collect(),
         ),
@@ -53,292 +139,64 @@ fn shell(value: &Value) -> Value {
     }
 }
 
-struct Styles {
-    base: Value,
-    edited: Value,
-}
+// Legacy provenance checks are rejection-only. Emitted fingerprints are
+// mandatory even when this supplemental check admits a Core reference.
+mod styles;
+use styles::Styles;
+mod wire;
+use wire::PackageAnalysis as Wire;
+mod planner;
+pub use planner::{plan_invalidation, ChangeSet, InvalidationPlan, ParagraphCorrespondence};
+pub use wire::{DependencyKey, PackageAnalysis};
 
-impl Styles {
-    fn item<'a>(store: &'a Value, kind: &str, id: u64) -> &'a Value {
-        if matches!(kind, "border_fills" | "tabs" | "numberings" | "bullets") {
-            return store[kind]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|v| v["id"].as_u64() == Some(id))
-                .unwrap_or(&Value::Null);
-        }
-        usize::try_from(id).ok().and_then(|i| store.get(kind)?.get(i)).unwrap_or(&Value::Null)
-    }
+mod correspondence;
+use correspondence::CoreCorrespondence;
 
-    /// Resolve the language-local ids, including the encoder's first-group
-    /// fallback when a language group is absent.
-    fn fonts<'a>(store: &'a Value, shape: &Value) -> Vec<Option<&'a Value>> {
-        let fonts = store["fonts"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-        ["hangul", "latin", "hanja", "japanese", "other", "symbol", "user"]
-            .iter()
-            .map(|lang| {
-                let upper = lang.to_ascii_uppercase();
-                let group = if fonts.iter().any(|f| f["lang"].as_str() == Some(&upper)) {
-                    upper.as_str()
-                } else {
-                    fonts.first().and_then(|f| f["lang"].as_str()).unwrap_or("")
-                };
-                fonts.iter().find(|f| {
-                    f["lang"].as_str() == Some(group) && f["id"] == shape["font_ref"][*lang]
+fn supplied_without_base(original: &Value, edited: &Value) -> bool {
+    match edited {
+        Value::Object(fields) => {
+            (paragraph(edited)
+                && fields.get("layout_cache").is_some_and(|v| !v.is_null())
+                && original.get("layout_cache").is_none_or(Value::is_null))
+                || fields.iter().any(|(k, v)| {
+                    (!paragraph(edited) || k != "layout_cache")
+                        && supplied_without_base(&original[k], v)
                 })
-            })
-            .collect()
-    }
-
-    fn same(&self, kind: &str, id: u64) -> bool {
-        let a = Self::item(&self.base, kind, id);
-        let b = Self::item(&self.edited, kind, id);
-        if a != b {
-            return false;
         }
-        match kind {
-            "char_shapes" => {
-                Self::fonts(&self.base, a) == Self::fonts(&self.edited, b)
-                    && self.same("border_fills", a["border_fill_id"].as_u64().unwrap_or(2))
-            }
-            "para_shapes" => {
-                self.same("tabs", a["tab_pr_id_ref"].as_u64().unwrap_or(0))
-                    && a["border_fill_id"].as_u64().is_none_or(|i| self.same("border_fills", i))
-                    && match a["heading_type"].as_str() {
-                        Some("Bullet") => {
-                            self.same("bullets", a["heading_id_ref"].as_u64().unwrap_or(0))
-                        }
-                        Some("Outline") => self
-                            .same("numberings", a["heading_id_ref"].as_u64().unwrap_or(0).max(1)),
-                        Some("Number") => {
-                            self.same("numberings", a["heading_id_ref"].as_u64().unwrap_or(0))
-                        }
-                        _ => true,
-                    }
-            }
-            "styles" => {
-                self.same("char_shapes", a["char_pr_id_ref"].as_u64().unwrap_or(0))
-                    && self.same("para_shapes", a["para_pr_id_ref"].as_u64().unwrap_or(0))
-            }
-            _ => true,
-        }
-    }
-
-    fn references_unchanged(&self, value: &Value) -> bool {
-        match value {
-            Value::Object(fields) => {
-                fields.iter().all(|(key, value)| {
-                    let kind = match key.as_str() {
-                        "char_shape_id" | "end_char_shape" => Some("char_shapes"),
-                        "para_shape_id" => Some("para_shapes"),
-                        "style_id" => Some("styles"),
-                        "border_fill_id" => Some("border_fills"),
-                        _ => None,
-                    };
-                    kind.zip(value.as_u64()).is_none_or(|(kind, id)| self.same(kind, id))
-                        && self.references_unchanged(value)
-                }) && (!paragraph(value)
-                    || self.same("styles", value["style_id"].as_u64().unwrap_or(0)))
-            }
-            Value::Array(items) => items.iter().all(|v| self.references_unchanged(v)),
-            _ => true,
-        }
+        Value::Array(items) => items
+            .iter()
+            .enumerate()
+            .any(|(i, v)| supplied_without_base(original.get(i).unwrap_or(&Value::Null), v)),
+        _ => false,
     }
 }
 
-struct Candidate {
-    pointer: String,
-    path: ParagraphPath,
-    cache: Option<Value>,
-    supplied_cache: bool,
-    unmatched: bool,
-}
-
-#[derive(Default)]
-struct Plan {
-    candidates: Vec<Candidate>,
-    para_list: Vec<usize>,
-    list_host: Vec<Option<usize>>,
-    changed: Vec<usize>,
-    warnings: Vec<EncodeWarning>,
-    masterpage_offset: usize,
-}
-
-impl Plan {
-    #[allow(clippy::too_many_arguments)]
-    fn walk(
-        &mut self,
-        base: Option<&Value>,
-        edited: &Value,
-        trusted: &Value,
-        supplied: &Value,
-        pointer: &str,
-        path: &[PathSeg],
-        host: Option<usize>,
-        context_changed: bool,
-        styles: &Styles,
-    ) {
-        match edited {
-            Value::Array(items)
-                if items.first().is_some_and(paragraph)
-                    || base
-                        .and_then(Value::as_array)
-                        .and_then(|v| v.first())
-                        .is_some_and(paragraph) =>
-            {
-                let old = base.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
-                let list = self.list_host.len();
-                self.list_host.push(host);
-                let structural = old.len() != items.len();
-                // 이것을 실패시키는 것: 길이가 다른 목록을 위치만으로 끝까지 대응시키기.
-                let prefix = if structural {
-                    old.iter().zip(items).take_while(|(a, b)| a == b).count()
-                } else {
-                    items.len()
-                };
-                if structural {
-                    if let Some(host) = host {
-                        self.changed.push(host);
-                    }
-                    self.warnings.push(EncodeWarning::LayoutCacheDropped {
-                        path: ParagraphPath(path.to_vec()),
-                        reason: format!("paragraph structure changed at {pointer}; only the identical prefix has base correspondence"),
-                    });
-                }
-                for (i, p) in items.iter().enumerate() {
-                    let mut pp = path.to_vec();
-                    pp.push(if matches!(path.last(), Some(PathSeg::Section(_))) {
-                        PathSeg::BodyParagraph(i)
-                    } else {
-                        PathSeg::NestedParagraph(i)
-                    });
-                    let at = self.candidates.len();
-                    let matched = i < prefix && old.get(i).is_some();
-                    let own = shell(p);
-                    // Nested text seeds its own paragraph; the shared host
-                    // chain, not an enclosing-value comparison, moves hosts.
-                    let changed = context_changed
-                        || !matched
-                        || old.get(i).is_none_or(|b| shell(b) != own)
-                        || !styles.references_unchanged(&own);
-                    if changed {
-                        self.changed.push(at);
-                    }
-                    self.para_list.push(list);
-                    self.candidates.push(Candidate {
-                        pointer: format!("{pointer}/{i}"),
-                        path: ParagraphPath(pp.clone()),
-                        cache: matched
-                            .then(|| trusted.get(i).and_then(|v| v.get("layout_cache")).cloned())
-                            .flatten(),
-                        supplied_cache: supplied
-                            .get(i)
-                            .and_then(|v| v.get("layout_cache"))
-                            .is_some(),
-                        unmatched: !matched,
-                    });
-                    self.walk(
-                        old.get(i).filter(|_| matched),
-                        p,
-                        &trusted[i],
-                        &supplied[i],
-                        &format!("{pointer}/{i}"),
-                        &pp,
-                        Some(at),
-                        context_changed || !matched,
-                        styles,
-                    );
-                }
-            }
-            Value::Array(items) => {
-                for (i, item) in items.iter().enumerate() {
-                    let mut pp = path.to_vec();
-                    let key = pointer.rsplit('/').next().unwrap_or("");
-                    match key {
-                        "headers" => pp.push(PathSeg::Header(i)),
-                        "footers" => pp.push(PathSeg::Footer(i)),
-                        "master_pages" => pp.push(PathSeg::MasterPage(self.masterpage_offset + i)),
-                        "cells" => {
-                            let row = pointer
-                                .split('/')
-                                .rev()
-                                .nth(1)
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            pp.push(PathSeg::TableCell { row, cell: i });
-                        }
-                        _ => {}
-                    }
-                    self.walk(
-                        base.and_then(|v| v.get(i)),
-                        item,
-                        &trusted[i],
-                        &supplied[i],
-                        &format!("{pointer}/{i}"),
-                        &pp,
-                        host,
-                        context_changed,
-                        styles,
-                    );
-                }
-            }
-            Value::Object(fields) => {
-                // Container shells capture cell widths, object geometry and
-                // page-level list settings without treating a child's text
-                // as an edit to every sibling list.
-                let geometry = |v: &Value| {
-                    let mut result = shell(v);
-                    if v.get("page_settings").is_some() {
-                        if let Some(fields) = result.as_object_mut() {
-                            for key in ["headers", "footers", "master_pages"] {
-                                fields.remove(key);
-                            }
-                        }
-                    }
-                    result
-                };
-                let owns_flow = fields.contains_key("paragraphs")
-                    || fields.contains_key("rows")
-                    || fields.contains_key("children")
-                    || fields.get("caption").is_some_and(|v| !v.is_null())
-                    || fields
-                        .values()
-                        .any(|v| v.as_array().and_then(|a| a.first()).is_some_and(paragraph));
-                let context = geometry(edited);
-                let geometry_changed = !paragraph(edited)
-                    && owns_flow
-                    && (context != base.map(geometry).unwrap_or(Value::Null)
-                        || !styles.references_unchanged(&context));
-                for (key, item) in fields {
-                    let mut pp = path.to_vec();
-                    match key.as_str() {
-                        "caption" => pp.push(PathSeg::Caption),
-                        "Footnote" => pp.push(PathSeg::Footnote),
-                        "Endnote" => pp.push(PathSeg::Endnote),
-                        "Memo" => pp.push(PathSeg::Memo),
-                        "TextBox" | "Ellipse" | "Polygon" => pp.push(PathSeg::TextBox),
-                        _ => {}
-                    }
-                    let independent =
-                        matches!(key.as_str(), "headers" | "footers" | "master_pages");
-                    let old = base.and_then(|v| v.get(key));
-                    self.walk(
-                        old,
-                        item,
-                        &trusted[key],
-                        &supplied[key],
-                        &format!("{pointer}/{key}"),
-                        &pp,
-                        if independent { None } else { host },
-                        context_changed || geometry_changed,
-                        styles,
-                    );
-                }
-            }
-            _ => {}
-        }
+/// A different proof from emitted-XML equality: the encoder emits the *entire*
+/// original package. Equality of the typed edit surface authorizes that choice;
+/// it never authorizes attaching original caches to regenerated XML. Compare
+/// metadata and every nested container as well as definitions and target bytes.
+/// Unknown/decode-lost content remains in the original ZIP, so it is not lost
+/// by this write. Deliberately do not generalize this to individual sections:
+/// counters, floating objects, fields and unknown controls can cross boundaries.
+pub(crate) fn unchanged(
+    base: &HwpxDocument,
+    document: &Document<Validated>,
+    styles: &HwpxStyleStore,
+    images: &hwpforge_core::image::ImageStore,
+) -> HwpxResult<bool> {
+    if &base.style_store != styles || &base.image_store != images {
+        return Ok(false);
     }
+    let mut original = tree(&base.document)?;
+    let mut edited = tree(document)?;
+    // The ordinary path supplies the existing diagnostic for a cache forged
+    // where the base had none. It will still never copy that supplied cache.
+    if supplied_without_base(&original, &edited) {
+        return Ok(false);
+    }
+    clean(&mut original);
+    clean(&mut edited);
+    Ok(original == edited)
 }
 
 /// Returns a Core copy whose only paragraph caches came from the base and
@@ -346,18 +204,32 @@ impl Plan {
 /// ignored even if they look plausible; deleting a JSON cache does not revoke
 /// an unchanged base cache either.
 pub(crate) fn prepare(
+    base_bytes: &[u8],
     base: &HwpxDocument,
     document: &Document<Validated>,
     style_store: &HwpxStyleStore,
-) -> HwpxResult<(Document<Validated>, Vec<EncodeWarning>)> {
+    images: &hwpforge_core::image::ImageStore,
+    options: crate::EncodeOptions,
+) -> HwpxResult<(Document<Validated>, Vec<EncodeWarning>, crate::EncodeOutcome)> {
     let trusted = tree(&base.document)?;
     let supplied = tree(document)?;
     let mut original = trusted.clone();
     let mut edited = supplied.clone();
     clean(&mut original);
     clean(&mut edited);
-    let styles = Styles { base: tree(&base.style_store)?, edited: tree(style_store)? };
-    let mut plan = Plan::default();
+    // The cache was computed against these original bytes, not encode(decode(base)).
+    let (output_xml, origins) = crate::HwpxEncoder::encode_with_origins(
+        document,
+        style_store,
+        images,
+        options.with_emit_layout_cache(false),
+    )?;
+    let base_wire = Wire::read(base_bytes)?;
+    let edited_wire = Wire::read_emitted(&output_xml.bytes, &origins)?;
+    let base_styles = tree(&base.style_store)?;
+    let edited_styles = tree(style_store)?;
+    let styles = Styles::new(&base_styles, &edited_styles);
+    let mut plan = CoreCorrespondence::default();
     let old = original["sections"].as_array().expect("Core sections");
     let sections = edited["sections"].as_array().expect("Core sections");
     if old.len() != sections.len() {
@@ -372,6 +244,27 @@ pub(crate) fn prepare(
     } else {
         old.iter().zip(sections).take_while(|(a, b)| a == b).count()
     };
+    let mut changes = ChangeSet::default();
+    for warning in &base.warnings {
+        if let crate::DecodeWarning::ContentLost { path, kind, .. } = warning {
+            let reason = format!("ContentLost:{kind}");
+            if let Some(PathSeg::Section(s)) = path.0.first() {
+                changes.sections.entry(*s).or_default().insert(reason);
+            } else {
+                changes.document.insert(reason);
+            }
+        }
+    }
+    for warning in &output_xml.warnings {
+        if let EncodeWarning::ContentLost { path, kind, .. } = warning {
+            let reason = format!("ContentLost:{kind}");
+            if let Some(PathSeg::Section(s)) = path.0.first() {
+                changes.sections.entry(*s).or_default().insert(reason);
+            } else {
+                changes.document.insert(reason);
+            }
+        }
+    }
     for (s, section) in sections.iter().enumerate() {
         plan.walk(
             old.get(s).filter(|_| s < prefix),
@@ -386,26 +279,34 @@ pub(crate) fn prepare(
         );
         plan.masterpage_offset += section["master_pages"].as_array().map_or(0, Vec::len);
     }
-    // 이것을 실패시키는 것: 공용 무효화 대신 편집 문단만 지우기 또는 host 사슬 끊기.
-    let stale = crate::cache_flow::stale_paragraphs(
-        &plan.para_list,
-        &plan.list_host,
-        plan.changed,
-        &mut || {},
-    );
-    for (candidate, stale) in plan.candidates.into_iter().zip(stale) {
+    for &i in &plan.changed {
+        changes
+            .paragraph(plan.candidates[i].path.clone(), "Core edit/provenance or XML dependency");
+    }
+    let correspondence = ParagraphCorrespondence {
+        pairs: plan
+            .candidates
+            .iter()
+            .map(|p| ((!p.unmatched).then(|| p.path.clone()), p.path.clone()))
+            .collect(),
+        para_list: plan.para_list,
+        list_host: plan.list_host,
+    };
+    let invalidation = plan_invalidation(&base_wire, &edited_wire, &correspondence, &changes);
+    for (candidate, reasons) in plan.candidates.into_iter().zip(invalidation.paragraphs) {
+        let stale = !reasons.is_empty();
         if stale || candidate.cache.is_none() {
             if candidate.cache.is_some() || candidate.supplied_cache {
                 plan.warnings.push(EncodeWarning::LayoutCacheDropped {
                     path: candidate.path,
-                    reason: if candidate.unmatched {
-                        "no base paragraph correspondence"
-                    } else if stale {
-                        "intentionally invalidated by a Core edit or its flow/host chain"
+                    reason: if stale {
+                        format!(
+                            "intentionally invalidated: {}",
+                            reasons.into_iter().collect::<Vec<_>>().join("; ")
+                        )
                     } else {
-                        "no trusted base cache; supplied layout_cache is not trusted"
-                    }
-                    .into(),
+                        "no trusted base cache; supplied layout_cache is not trusted".into()
+                    },
                 });
             }
         } else if let Some(cache) = candidate.cache {
@@ -420,5 +321,31 @@ pub(crate) fn prepare(
     }
     let draft: Document<Draft> = serde_json::from_value(edited)
         .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
-    Ok((draft.validate()?, plan.warnings))
+    Ok((draft.validate()?, plan.warnings, output_xml))
+}
+
+#[cfg(test)]
+mod cache_boundary_tests {
+    use super::*;
+    use serde_json::json;
+
+    // 이것을 실패시키는 것: shell/clean/supplied_without_base 중 어느 하나라도
+    // 문단 판정 없이 layout_cache 이름을 특별 취급하거나 문자열 extras를 문단으로 오인하기.
+    #[test]
+    fn only_typed_paragraph_cache_is_special() {
+        let metadata = json!({"layout_cache":"old", "runs":"user", "para_shape_id":"user"});
+        assert_eq!(shell(&metadata), metadata);
+        let mut copy = metadata.clone();
+        clean(&mut copy);
+        assert_eq!(copy, metadata);
+        assert!(!supplied_without_base(&Value::Null, &metadata));
+        let paragraph = json!({"runs":[], "para_shape_id":0, "layout_cache":{"lines":[]}});
+        assert!(supplied_without_base(&Value::Null, &paragraph));
+        let mut cleaned = paragraph.clone();
+        clean(&mut cleaned);
+        assert!(cleaned.get("layout_cache").is_none());
+        assert!(shell(&paragraph).get("layout_cache").is_none());
+        // Recursive containers must still detect forged nested paragraph caches.
+        assert!(supplied_without_base(&Value::Null, &json!({"children":[paragraph]})));
+    }
 }

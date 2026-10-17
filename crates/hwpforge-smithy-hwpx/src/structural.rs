@@ -21,7 +21,7 @@ use hwpforge_core::run::Run;
 use serde_json::Value;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
-use crate::patch::{collect_direct_child_outer_spans, find_root_span, section_path, RawPackage};
+use crate::patch::{collect_direct_child_outer_spans, find_root_span, RawPackage};
 use crate::stamp::{admission_compare, check_zip_carry, delta_compare, encode_hwpx, StamperError};
 
 /// Addresses a **top-level body-flow** paragraph for structural editing.
@@ -384,7 +384,9 @@ impl HwpxStructuralEditor {
             by_section.entry(t.section).or_default().push(t.index);
         }
         for (section_idx, mut indices) in by_section {
-            let path = section_path(section_idx);
+            let path = package
+                .section_path(section_idx)
+                .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
             let xml = package
                 .read_text_entry(&path)
                 .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
@@ -619,7 +621,11 @@ impl HwpxStructuralEditor {
         };
         // Each text is cleaned once here; the cleaned text is what is encoded,
         // spliced and expected by the self-verify below.
-        let path = section_path(anchor.section);
+        let mut package =
+            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let path = package
+            .section_path(anchor.section)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let mut encode_warnings = Vec::new();
         let texts: Vec<String> = texts
             .iter()
@@ -682,8 +688,11 @@ impl HwpxStructuralEditor {
         .map_err(map_admission)?;
         let encoded_pkg =
             RawPackage::read(&encoded).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let encoded_path = encoded_pkg
+            .section_path(anchor.section)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let encoded_xml = encoded_pkg
-            .read_text_entry(&path)
+            .read_text_entry(&encoded_path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let encoded_spans = paragraph_spans(&encoded_xml)?;
         // The encoded doc has `texts.len()` more paragraphs than the base;
@@ -705,8 +714,6 @@ impl HwpxStructuralEditor {
             .collect();
 
         // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
-        let mut package =
-            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let xml = package
             .read_text_entry(&path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;

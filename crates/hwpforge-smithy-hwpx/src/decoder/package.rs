@@ -32,12 +32,6 @@ const MIMETYPE_PATH: &str = "mimetype";
 /// Path to the header XML inside the ZIP.
 const HEADER_PATH: &str = "Contents/header.xml";
 
-/// Prefix for section XML files inside the ZIP.
-const SECTION_PREFIX: &str = "Contents/section";
-
-/// Suffix for section XML files inside the ZIP.
-const SECTION_SUFFIX: &str = ".xml";
-
 // ── PackageReader ────────────────────────────────────────────────
 
 /// Reader for HWPX ZIP archives.
@@ -47,7 +41,7 @@ const SECTION_SUFFIX: &str = ".xml";
 /// to prevent ZIP bomb attacks.
 pub struct PackageReader<'a> {
     archive: ZipArchive<Cursor<&'a [u8]>>,
-    section_count: usize,
+    pub(crate) order: super::package_order::PackageOrder,
     /// Cumulative bytes decompressed so far.
     total_read: u64,
 }
@@ -84,16 +78,23 @@ impl<'a> PackageReader<'a> {
             });
         }
 
-        // Count section files
-        let section_count = archive
-            .file_names()
-            .filter(|name| name.starts_with(SECTION_PREFIX) && name.ends_with(SECTION_SUFFIX))
-            .count();
-
-        let mut reader = Self { archive, section_count, total_read: 0 };
-
-        // Validate mimetype
+        let paths: Vec<String> = archive.file_names().map(str::to_owned).collect();
+        let mut reader = Self { archive, order: Default::default(), total_read: 0 };
         reader.validate_mimetype()?;
+        let mut optional = |path: &str| {
+            if paths.iter().any(|p| p == path) {
+                reader.read_entry(path).map(Some)
+            } else {
+                Ok(None)
+            }
+        };
+        let content = optional(super::package_order::CONTENT)?;
+        let container = optional(super::package_order::CONTAINER)?;
+        reader.order = super::package_order::PackageOrder::resolve(
+            &paths,
+            content.as_deref(),
+            container.as_deref(),
+        );
 
         Ok(reader)
     }
@@ -115,17 +116,25 @@ impl<'a> PackageReader<'a> {
         self.read_entry(HEADER_PATH)
     }
 
-    /// Returns the raw XML content of `Contents/section{index}.xml`.
-    ///
-    /// Sections are zero-indexed: section 0, section 1, etc.
+    /// Returns a section in manifest-resolved spine reading order.
     pub fn read_section_xml(&mut self, index: usize) -> HwpxResult<String> {
-        let path = format!("{}{}{}", SECTION_PREFIX, index, SECTION_SUFFIX);
+        let path = self
+            .section_paths()
+            .get(index)
+            .cloned()
+            .ok_or_else(|| HwpxError::MissingFile { path: format!("spine section {index}") })?;
         self.read_entry(&path)
     }
 
-    /// Returns the number of section files found in the archive.
+    /// Archive paths of sections in document reading order. Unsupported package
+    /// structures use file-number fallback with decoder ContentLost warnings.
+    pub fn section_paths(&self) -> &[String] {
+        &self.order.sections
+    }
+
+    /// Returns the number of sections in document reading order.
     pub fn section_count(&self) -> usize {
-        self.section_count
+        self.section_paths().len()
     }
 
     /// Returns metadata for every entry in the archive.
@@ -327,7 +336,7 @@ impl std::fmt::Debug for PackageReader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PackageReader")
             .field("entries", &self.archive.len())
-            .field("sections", &self.section_count)
+            .field("sections", &self.section_count())
             .field("total_read", &self.total_read)
             .finish()
     }

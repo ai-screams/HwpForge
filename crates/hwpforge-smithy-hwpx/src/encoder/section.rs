@@ -1078,6 +1078,7 @@ fn build_paragraph(
     }
 
     Ok(HxParagraph {
+        origin: super::origins::record(&sink.path),
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
         style_id_ref: para.style_id.map_or(0, |s| s.get() as u32),

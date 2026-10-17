@@ -639,11 +639,15 @@ impl HwpxCellEditor {
             })
             .unzip();
         let outcome = apply_set_cells(&mut document, &specs)?;
+        let package = crate::patch::RawPackage::read(base)
+            .map_err(|e| CellEditError::Codec(e.to_string()))?;
         let mut encode_warnings: Vec<EncodeWarning> = Vec::new();
         for (cell, count) in outcome.cells.iter().zip(removed) {
             if count > 0 {
                 encode_warnings.push(EncodeWarning::XmlForbiddenCharsRemoved {
-                    part: crate::patch::section_path(table_sections[cell.table]),
+                    part: package
+                        .section_path(table_sections[cell.table])
+                        .map_err(|e| CellEditError::Codec(e.to_string()))?,
                     location: format!(
                         "table {} cell ({}, {})",
                         cell.table, cell.anchor.row, cell.anchor.col

@@ -62,7 +62,7 @@ impl HwpxPatcher {
         section: &Section,
     ) -> HwpxResult<SectionPreservation> {
         let raw_package = RawPackage::read(base_bytes)?;
-        let section_path = section_path(section_idx);
+        let section_path = raw_package.section_path(section_idx)?;
         let section_xml = raw_package.read_text_entry(&section_path)?;
         build_section_preservation(&section_xml, &section_path, section)
     }
@@ -188,7 +188,8 @@ impl HwpxPatcher {
                     .into(),
         })?;
 
-        let expected_section_path = section_path(section_idx);
+        let mut raw_package = RawPackage::read(base_bytes)?;
+        let expected_section_path = raw_package.section_path(section_idx)?;
         if preservation.section_path != expected_section_path {
             return Err(HwpxError::InvalidStructure {
                 detail: format!(
@@ -252,7 +253,6 @@ impl HwpxPatcher {
         sections[section_idx] = replacement.clone();
         let _: hwpforge_core::document::Document<Validated> = decoded.document.validate()?;
 
-        let mut raw_package = RawPackage::read(base_bytes)?;
         let base_section_xml = raw_package.read_text_entry(&expected_section_path)?;
         let base_hash = sha256_hex(base_section_xml.as_bytes());
         if preservation.section_sha256 != base_hash {
@@ -452,6 +452,7 @@ struct TextElementSpan {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawPackage {
+    pub(crate) order: crate::decoder::package_order::PackageOrder,
     entries: Vec<RawPackageEntry>,
     index_by_path: BTreeMap<String, usize>,
 }
@@ -464,9 +465,22 @@ struct RawPackageEntry {
 }
 
 impl RawPackage {
+    /// Resolve a Core section index using the decoder's package reading order.
+    /// 이것을 실패시키는 것: section index를 파일 번호로 사용하거나 범위 밖을 폴백하기.
+    pub(crate) fn section_path(&self, section_idx: usize) -> HwpxResult<String> {
+        self.order.sections.get(section_idx).cloned().ok_or_else(|| HwpxError::InvalidStructure {
+            detail: format!(
+                "section {section_idx} out of range (package has {} sections)",
+                self.order.sections.len()
+            ),
+        })
+    }
+
     pub(crate) fn read(bytes: &[u8]) -> HwpxResult<Self> {
-        let _ = PackageReader::new(bytes)?;
-        Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)
+        let reader = PackageReader::new(bytes)?;
+        let mut package = Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE)?;
+        package.order = reader.order;
+        Ok(package)
     }
 
     /// Reads every entry, bounding decompression per entry and in total.
@@ -512,11 +526,18 @@ impl RawPackage {
             entries.push(RawPackageEntry { path, bytes: data, compression: file.compression() });
         }
 
-        Ok(Self { entries, index_by_path })
+        Ok(Self { entries, index_by_path, order: Default::default() })
     }
 
     pub(crate) fn entry_paths(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|e| e.path.as_str())
+    }
+
+    pub(crate) fn read_entry(&self, path: &str) -> HwpxResult<&[u8]> {
+        self.index_by_path
+            .get(path)
+            .map(|&i| self.entries[i].bytes.as_slice())
+            .ok_or_else(|| HwpxError::MissingFile { path: path.into() })
     }
 
     pub(crate) fn read_text_entry(&self, path: &str) -> HwpxResult<String> {
@@ -2020,10 +2041,6 @@ fn patch_text_run_xml(run_xml: &str, new_text: &str) -> HwpxResult<String> {
     Ok(patched)
 }
 
-pub(crate) fn section_path(section_idx: usize) -> String {
-    format!("Contents/section{section_idx}.xml")
-}
-
 // pub(crate): E6 stamp manifest 가 source/output 해시에 재사용.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -2314,7 +2331,7 @@ mod tests {
         styles.push_para_shape(HwpxParaShape::default());
         let bytes = HwpxEncoder::encode(&document.validate().unwrap(), &styles, &ImageStore::new())
             .unwrap();
-        let section_entry = section_path(0);
+        let section_entry = RawPackage::read(&bytes).unwrap().section_path(0).unwrap();
 
         // ── a paragraph with no runs: the decoder fills one in ──────
         let mut pkg = RawPackage::read(&bytes).unwrap();

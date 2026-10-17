@@ -12,6 +12,8 @@
 pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod header_tabs;
+mod origins;
+pub use origins::EmittedOrigins;
 mod object_ids;
 pub(crate) mod package;
 mod references;
@@ -1200,12 +1202,16 @@ impl HwpxEncoder {
     /// for unchanged paragraphs outside an edit's flow tail and host chain.
     ///
     /// `base` is the original HWPX package. Paragraph content, referenced
-    /// styles and container/page settings are compared in Core. Lists with
+    /// styles and container/page settings are compared in emitted XML. Lists with
     /// changed lengths retain only their identical prefix; paragraph ids are
     /// not used as identities. Caches supplied in `document` are ignored:
     /// only decoded base caches may pass through the encoder's token ledger.
     /// `options.emit_layout_cache` is overridden by this selective policy.
     /// Images come from `image_store`, as in [`Self::encode_with_diagnostics`].
+    /// When the complete typed document (except caches), styles and images are
+    /// unchanged, returns the original package byte for byte. Original values
+    /// absent from Core are then retained along with the caches; cache validity
+    /// is not re-certified. Regenerated output always uses the layout proof.
     ///
     /// The outcome distinguishes intentional edit invalidation from missing
     /// base correspondence and ledger failures on otherwise unchanged caches.
@@ -1241,8 +1247,42 @@ impl HwpxEncoder {
         options: EncodeOptions,
     ) -> HwpxResult<EncodeOutcome> {
         let decoded = crate::HwpxDecoder::decode(base)?;
-        let (prepared, mut warnings) =
-            crate::layout_edit::prepare(&decoded, document, style_store)?;
+        if crate::layout_edit::unchanged(&decoded, document, style_store, image_store)? {
+            // 이것을 실패시키는 것: Core만 비교하고 스타일/이미지/메타데이터를
+            // 무시하거나 이 분기에서 새로 인코딩한 XML에 원본 캐시를 붙이기.
+            // No token positions or layout inputs move: even unsupported XML
+            // and its dependencies remain byte-identical. Caller caches are
+            // never read. memo_create_time only supplies times to newly written
+            // memos; this branch writes no memo (or any other package entry).
+            // Validate ZIP limits also for entries the Core decoder ignores.
+            crate::patch::RawPackage::read(base)?;
+            let warnings = decoded
+                .warnings
+                .into_iter()
+                .filter_map(|warning| match warning {
+                    crate::DecodeWarning::ContentLost { part, path, kind, reason } => {
+                        Some(EncodeWarning::ContentLost {
+                            part,
+                            path,
+                            kind,
+                            reason: format!(
+                                "base decode: {reason}; original package bytes retained"
+                            ),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            return Ok(EncodeOutcome { bytes: base.to_vec(), warnings });
+        }
+        let (prepared, mut warnings, output) = crate::layout_edit::prepare(
+            base,
+            &decoded,
+            document,
+            style_store,
+            image_store,
+            options,
+        )?;
         warnings.extend(decoded.warnings.into_iter().filter_map(|warning| match warning {
             crate::DecodeWarning::LayoutCacheDropped { path, reason } => {
                 Some(EncodeWarning::LayoutCacheDropped {
@@ -1262,12 +1302,6 @@ impl HwpxEncoder {
             }
             _ => None,
         }));
-        let output = Self::encode_with_diagnostics(
-            &prepared,
-            style_store,
-            image_store,
-            options.with_emit_layout_cache(false),
-        )?;
         let source = crate::layout_carry::cache_source_with_options(
             &prepared,
             style_store,
@@ -1359,6 +1393,20 @@ impl HwpxEncoder {
             .map(|(outcome, _)| outcome)
     }
 
+    /// Encode actual output bytes and record the Core origin of each emitted
+    /// paragraph. Use these origins with `layout_edit::PackageAnalysis` and
+    /// `ParagraphCorrespondence`; synthetic paragraphs have no trusted origin.
+    pub fn encode_with_origins(
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<(EncodeOutcome, EmittedOrigins)> {
+        let scope = origins::Scope::enter();
+        let outcome = Self::encode_with_diagnostics(document, style_store, image_store, options)?;
+        Ok((outcome, scope.finish()))
+    }
+
     /// [`Self::encode_with_diagnostics`], plus, for
     /// [`EncodeOptions::mark_dropped_caches`], the warning of each marked
     /// cache by section index and marker ordinal.
@@ -1374,6 +1422,8 @@ impl HwpxEncoder {
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
         let core_ids = object_ids::core_object_ids(document);
         let _ids = object_ids::IdScope::enter(core_ids.iter().map(|&(_, id)| id).collect());
+        // Core already follows the decoder's manifest-resolved spine order.
+        // Number output parts from that order; never reconstruct original filenames.
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
@@ -1415,7 +1465,7 @@ impl HwpxEncoder {
             sections.first().and_then(|s| s.begin_num.as_ref()),
         );
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section_with_note_counters(
+            let mut result = encode_section_with_note_counters(
                 section,
                 i,
                 chart_offset,
@@ -1424,6 +1474,10 @@ impl HwpxEncoder {
                 options,
                 &mut note_counters,
             )?;
+            origins::finish_part(&format!("Contents/section{i}.xml"), &mut result.xml)?;
+            for (part, xml) in &mut result.master_pages {
+                origins::finish_part(part, xml)?;
+            }
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();
             embedded_ole_offset += result.embedded_oles.len();

@@ -11,6 +11,7 @@ pub(crate) mod header;
 pub(crate) mod image_size;
 pub(crate) mod metadata;
 pub(crate) mod package;
+pub(crate) mod package_order;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
@@ -637,6 +638,12 @@ impl HwpxDecoder {
         let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
+        warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
+            part: "Contents/content.hpf / META-INF/container.xml".into(),
+            path: ParagraphPath(Vec::new()),
+            kind: "package_reading_order".into(),
+            reason: reason.clone(),
+        }));
 
         // BinData is read before the sections: a picture without an
         // `<hp:imgDim>` is judged whole against its image's own size.
@@ -645,8 +652,13 @@ impl HwpxDecoder {
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let mut result =
-                section::parse_section_with_images(&section_xml, i, &chart_xmls, &image_pixels)?;
+            let mut result = section::parse_section_with_images(
+                &section_xml,
+                i,
+                &pkg.section_paths()[i],
+                &chart_xmls,
+                &image_pixels,
+            )?;
             warnings.append(&mut result.warnings);
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
@@ -659,7 +671,7 @@ impl HwpxDecoder {
             // content; `masterPageCnt` only checks the count.
             // 이것을 실패시키는 것: 파일 순서로 배정(`swapped_master_page_references_follow_the_ids`),
             // 미해결 참조 무시(`an_unresolved_master_page_reference_is_lost_content`).
-            let section_part = format!("Contents/section{i}.xml");
+            let section_part = pkg.section_paths()[i].clone();
             let lost = |reason: String| DecodeWarning::ContentLost {
                 part: section_part.clone(),
                 path: ParagraphPath(vec![PathSeg::Section(i)]),
@@ -796,7 +808,12 @@ impl HwpxDecoder {
                 reason: "no section references this master page".into(),
             });
         }
-        drop_cell_zones_with_unknown_border_fill(&mut document, &style_store, &mut warnings);
+        drop_cell_zones_with_unknown_border_fill(
+            &mut document,
+            &style_store,
+            &mut warnings,
+            pkg.section_paths(),
+        );
 
         Ok(HwpxDocument { document, style_store, image_store, warnings })
     }
@@ -820,6 +837,7 @@ fn drop_cell_zones_with_unknown_border_fill(
     document: &mut Document<hwpforge_core::document::Draft>,
     style_store: &HwpxStyleStore,
     warnings: &mut Vec<DecodeWarning>,
+    section_parts: &[String],
 ) {
     for (i, section) in document.sections_mut().iter_mut().enumerate() {
         section.for_each_table_mut(|table| {
@@ -827,7 +845,7 @@ fn drop_cell_zones_with_unknown_border_fill(
                 let known = style_store.border_fill(zone.border_fill_id).is_ok();
                 if !known {
                     warnings.push(DecodeWarning::ContentLost {
-                        part: format!("Contents/section{i}.xml"),
+                        part: section_parts[i].clone(),
                         path: ParagraphPath::default(),
                         kind: "cellzone".to_string(),
                         reason: format!(
@@ -1044,7 +1062,7 @@ mod tests {
         let mut pkg = crate::patch::RawPackage::read(bytes).unwrap();
         let mut part = 0;
         for (i, id) in ids.iter().enumerate() {
-            let path = format!("Contents/section{i}.xml");
+            let path = pkg.section_path(i).unwrap();
             let xml = pkg.read_text_entry(&path).unwrap();
             let own = format!(r#"<hp:masterPage idRef="masterpage{part}"/>"#);
             let new = format!(r#"<hp:masterPage idRef="{id}"/>"#);
@@ -1488,7 +1506,12 @@ mod tests {
             PageSettings::a4(),
         ));
         let mut warnings = Vec::new();
-        drop_cell_zones_with_unknown_border_fill(&mut document, &store, &mut warnings);
+        drop_cell_zones_with_unknown_border_fill(
+            &mut document,
+            &store,
+            &mut warnings,
+            &["Contents/section0.xml".into()],
+        );
         let RunContent::Table(outer) = &document.sections()[0].paragraphs[0].runs[0].content else {
             panic!()
         };

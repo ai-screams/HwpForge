@@ -9,6 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
+#[path = "header_fidelity.rs"]
+pub(crate) mod fidelity;
+
 use crate::color::{parse_hex_color_or_black, parse_hex_color_raw};
 use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
 use hwpforge_blueprint::registry::StyleRegistry;
@@ -1146,6 +1149,8 @@ pub struct HwpxStyleStore {
     numberings: Vec<NumberingDef>,
     bullets: Vec<BulletDef>,
     tabs: Vec<TabDef>,
+    #[serde(default, skip_serializing_if = "fidelity::HeaderFidelity::is_empty")]
+    pub(crate) header_fidelity: fidelity::HeaderFidelity,
 }
 
 #[derive(Debug)]

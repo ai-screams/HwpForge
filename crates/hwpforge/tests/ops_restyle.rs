@@ -291,7 +291,7 @@ fn a_clean_fixture_still_reports_no_warnings() {
 /// joining it.
 #[test]
 fn every_returned_warning_is_non_semantic() {
-    let out = restyle(&fixture("sample1.hwpx"), &RestyleOptions::default().with_preset("modern"))
+    let out = restyle(&warning_fixture(), &RestyleOptions::default().with_preset("modern"))
         .expect("restyle");
 
     let codes: Vec<String> = out.warnings.iter().map(|w| w.info().code).collect();

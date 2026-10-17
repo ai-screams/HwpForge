@@ -60,6 +60,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     let mut warnings = Vec::new();
     if let Some(ref_list) = &head.ref_list {
         populate_store_from_ref_list(&mut store, ref_list);
+        store.header_fidelity.capture(ref_list);
         warnings = per_language_scalar_losses(ref_list);
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
