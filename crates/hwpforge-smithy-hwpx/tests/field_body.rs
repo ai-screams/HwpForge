@@ -55,12 +55,12 @@ fn package(body: &str) -> Vec<u8> {
         let mut entry = source.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == "Contents/section0.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
             let xml = String::from_utf8(bytes).unwrap();
             bytes = xml.replace("</hs:sec>", &format!("{body}</hs:sec>")).into_bytes();
         }
         out.start_file(
-            entry.name(),
+            entry.name().expect("ZIP entry name").to_string(),
             zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
         )
         .unwrap();
@@ -1094,10 +1094,14 @@ fn source_evidence_keeps_section_indices_in_preserving_editors() {
         let mut entry = zip.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == "Contents/section1.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section1.xml" {
             bytes = xml.as_bytes().to_vec();
         }
-        out.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        out.start_file(
+            entry.name().expect("ZIP entry name").to_string(),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         out.write_all(&bytes).unwrap();
     }
     let bytes = out.finish().unwrap().into_inner();
@@ -1269,11 +1273,11 @@ fn rewrite_section(bytes: &[u8], rewrite: impl Fn(&str) -> String) -> Vec<u8> {
         let mut entry = source.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == "Contents/section0.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
             bytes = rewrite(std::str::from_utf8(&bytes).unwrap()).into_bytes();
         }
         out.start_file(
-            entry.name(),
+            entry.name().expect("ZIP entry name").to_string(),
             zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
         )
         .unwrap();

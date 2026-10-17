@@ -291,14 +291,19 @@ fn unclosed_source_state_roundtrips_without_fabricating_an_end() {
         let mut entry = zip.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == "Contents/section0.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
             let mut xml = String::from_utf8(bytes).unwrap();
             let start = xml.find("<hp:fieldEnd").unwrap();
             let end = start + xml[start..].find("/>").unwrap() + 2;
             xml.replace_range(start..end, "");
             bytes = xml.into_bytes();
         }
-        output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        output
+            .start_file(
+                entry.name().expect("ZIP entry name").to_string(),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
         output.write_all(&bytes).unwrap();
     }
     let source_doc =

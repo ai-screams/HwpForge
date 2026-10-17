@@ -64,7 +64,7 @@ fn package(body: &str, with_b: bool) -> Vec<u8> {
         let mut entry = zip.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == "Contents/section0.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
             let mut xml = String::from_utf8(bytes).unwrap();
             // Give the seed paragraph the same native cache as the generated rows.
             let cache = para("");
@@ -87,7 +87,7 @@ fn package(body: &str, with_b: bool) -> Vec<u8> {
             bytes = xml.replace("</hs:sec>", &format!("{b}{normal}{body}</hs:sec>")).into_bytes();
         }
         out.start_file(
-            entry.name(),
+            entry.name().expect("ZIP entry name").to_string(),
             zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
         )
         .unwrap();

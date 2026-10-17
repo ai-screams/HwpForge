@@ -582,7 +582,7 @@ fn unclosed_source_field_warns_without_blocking_pdf_reading() {
         let mut entry = zip.by_index(i).unwrap();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).unwrap();
-        if entry.name() == "Contents/section0.xml" {
+        if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
             let mut xml = String::from_utf8(data).unwrap();
             let at = xml.rfind("</hp:run>").unwrap();
             xml.insert_str(
@@ -591,7 +591,11 @@ fn unclosed_source_field_warns_without_blocking_pdf_reading() {
             );
             data = xml.into_bytes();
         }
-        out.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        out.start_file(
+            entry.name().expect("ZIP entry name").to_string(),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         out.write_all(&data).unwrap();
     }
     let bytes = out.finish().unwrap().into_inner();
