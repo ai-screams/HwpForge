@@ -848,7 +848,7 @@ pub(super) fn build_field_boundary_xml(
             }
             format!(
                 r#"<hp:fieldBegin id="{}" type="{}" name="{}" editable="{}" dirty="{}" zorder="{}" fieldid="{}" metaTag="{}">{parameters}{annotation_xml}</hp:fieldBegin>"#,
-                escape_field_value(&start.id),
+                escape_field_value(&super::super::object_ids::boundary_id(&start.id)),
                 escape_field_value(&start.kind),
                 escape_field_value(&start.name),
                 escape_field_value(&start.editable),
@@ -860,7 +860,7 @@ pub(super) fn build_field_boundary_xml(
         }
         FieldBoundary::End { begin_id, field_id } => format!(
             r#"<hp:fieldEnd beginIDRef="{}" fieldid="{}"/>"#,
-            escape_field_value(begin_id),
+            escape_field_value(&super::super::object_ids::boundary_id(begin_id)),
             escape_field_value(field_id),
         ),
         _ => return None,

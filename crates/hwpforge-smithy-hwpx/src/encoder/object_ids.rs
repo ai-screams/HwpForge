@@ -12,9 +12,11 @@
 //! maps to. Two objects sharing one Core id are kept as they are (which one
 //! a cross reference means is not ours to decide) and reported as
 //! [`super::EncodeWarning::ObjectIdConflict`].
+//! Field boundaries colliding with those ids are relocated together with
+//! their end references during the document's field reservation pass.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use hwpforge_core::control::{Control, GroupChild};
 use hwpforge_core::document::Document;
@@ -27,6 +29,9 @@ struct IdAllocator {
     next: u64,
     reserved: HashSet<u64>,
     field_ids: BTreeMap<u64, u64>,
+    /// Boundary ids displaced by preserved Core object ids. Kept separate
+    /// from folded fields, whose preferred numeric keys may be identical.
+    boundary_ids: BTreeMap<u64, u64>,
     /// The Core ids the encoder actually wrote, with the kind of object, in
     /// document order — what the duplicate-id diagnostic counts. A parent
     /// reserves its slot ([`reserve`]) before its children are encoded, so a
@@ -52,6 +57,7 @@ impl IdScope {
                 next: 1,
                 reserved,
                 field_ids: BTreeMap::new(),
+                boundary_ids: BTreeMap::new(),
                 written: Vec::new(),
             });
         });
@@ -84,6 +90,7 @@ pub(crate) fn next_id() -> u64 {
                 next: 1,
                 reserved: HashSet::new(),
                 field_ids: BTreeMap::new(),
+                boundary_ids: BTreeMap::new(),
                 written: Vec::new(),
             });
         }
@@ -99,18 +106,45 @@ pub(crate) fn next_id() -> u64 {
     })
 }
 
-/// 원문 범위의 id 를 예약해 새로 쓰는 접힌 필드와 충돌하지 않게 한다.
+/// Reserve all boundaries before drawing ids; relocate only those that
+/// collide with preserved Core objects, using this same document scope.
+/// 이것을 실패시키는 것: 전체 경계 예약 전에 재배정하거나 별도 할당기 사용.
 pub(crate) fn reserve_field_ids<S>(document: &Document<S>) {
     let ids = hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections())
         .fields()
         .iter()
         .filter_map(|field| field.id().as_ref().and_then(|id| id.parse::<u64>().ok()))
-        .collect::<Vec<_>>();
-    SCOPES.with(|s| {
+        .collect::<BTreeSet<_>>();
+    let conflicts = SCOPES.with(|s| {
         if let Some(alloc) = s.borrow_mut().last_mut() {
+            let conflicts =
+                ids.iter().filter(|id| alloc.reserved.contains(id)).copied().collect::<Vec<_>>();
             alloc.reserved.extend(ids);
+            conflicts
+        } else {
+            Vec::new()
         }
     });
+    for id in conflicts {
+        let replacement = next_id();
+        SCOPES.with(|s| {
+            if let Some(alloc) = s.borrow_mut().last_mut() {
+                alloc.boundary_ids.insert(id, replacement);
+            }
+        });
+    }
+}
+
+/// Apply the reservation pass's mapping to both boundary ends. Unchanged
+/// ids retain their original spelling, including nonnumeric imported ids.
+pub(crate) fn boundary_id(original: &str) -> String {
+    SCOPES.with(|s| {
+        original
+            .parse::<u64>()
+            .ok()
+            .and_then(|id| s.borrow().last()?.boundary_ids.get(&id).copied())
+            .map_or_else(|| original.to_owned(), |id| id.to_string())
+    })
 }
 
 /// 기존 필드 id 를 우선하되 예약된 범위 id 와 충돌하면 빈 id 로 옮긴다.

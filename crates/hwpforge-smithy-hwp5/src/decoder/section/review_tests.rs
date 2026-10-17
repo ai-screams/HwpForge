@@ -1833,3 +1833,287 @@ fn r5_sample_130_contact_records_preserve_filled_clickhere() {
         }
     }
 }
+
+fn ck_encode(doc: hwpforge_core::Document<hwpforge_core::Draft>) -> Vec<u8> {
+    ck_encode_with_images(doc, &hwpforge_core::ImageStore::new())
+}
+
+fn ck_encode_with_images(
+    doc: hwpforge_core::Document<hwpforge_core::Draft>,
+    images: &hwpforge_core::ImageStore,
+) -> Vec<u8> {
+    use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    for _ in 0..72 {
+        styles.push_char_shape(HwpxCharShape::default());
+    }
+    styles.push_para_shape(HwpxParaShape::default());
+    hwpforge_smithy_hwpx::HwpxEncoder::encode(
+        &doc.validate().unwrap(), &styles, images,
+    ).unwrap()
+}
+
+fn ck_mixed_wire() -> Vec<u8> {
+    let mut text = para_text_data("앞");
+    text.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+    text.extend(para_text_data("가😀나끝"));
+    text.extend(r4_marker(4, 0));
+    text.extend(para_text_data("뒤"));
+    let shapes: Vec<u8> = [(0u32, 9u32), (9, 1), (12, 2), (13, 1), (22, 9)]
+        .into_iter().flat_map(|(p, s)| p.to_le_bytes().into_iter().chain(s.to_le_bytes())).collect();
+    let mut controls = make_record(TagId::ParaCharShape, 1, &shapes);
+    controls.extend(make_record(TagId::CtrlHeader, 1, &r1_clickhere()));
+    r4_para(&text, &controls, true)
+}
+
+fn ck_body_shapes(runs: &[hwpforge_core::Run]) -> Vec<(usize, String)> {
+    use hwpforge_core::control::{Control, FieldBoundary};
+    let mut inside = false;
+    let mut body = Vec::new();
+    for run in runs {
+        match run.content.as_control() {
+            Some(Control::FieldBoundary { boundary: FieldBoundary::Start(_) }) => {
+                assert!(!inside);
+                inside = true;
+            }
+            Some(Control::FieldBoundary { boundary: FieldBoundary::End { .. } }) => {
+                assert!(inside);
+                inside = false;
+            }
+            _ if inside => body.push((run.char_shape_id.get(), run.content.plain_text().unwrap().into_owned())),
+            _ => {}
+        }
+    }
+    assert!(!inside);
+    body
+}
+
+/// 이것을 실패시키는 것: 경계 id를 그대로 출력 / 끝 참조 재배정 누락 /
+/// 전체 문서의 개체·경계 예약 전에 새 id 발급 / 재배정 표를 인코드 간 공유.
+#[test]
+fn ck_mixed_clickhere_ids_avoid_preserved_picture_id() {
+    use hwpforge_core::image::{Image, ImageFormat};
+    use hwpforge_core::{ImageStore, ObjectId, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::{HwpxDecoder, PackageReader};
+
+    let mut wire = ck_mixed_wire();
+    wire.extend(ck_mixed_wire());
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (mut doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    let mut picture = Image::new("picture.png", HwpUnit::new(1000).unwrap(),
+        HwpUnit::new(1000).unwrap(), ImageFormat::Png);
+    // Core preserves the HWP5 picture's instance_id in inst_id.
+    picture.inst_id = Some(ObjectId::new(1));
+    doc.add_section(Section::with_paragraphs(vec![Paragraph::with_runs(
+        vec![Run::image(picture, CharShapeIndex::new(0))], ParaShapeIndex::new(0),
+    )], PageSettings::a4()));
+    let mut images = ImageStore::new();
+    images.insert("picture.png", vec![89, 1]);
+
+    for picture_first in [false, true] {
+        if picture_first { doc.sections_mut().swap(0, 1); }
+        let bytes = ck_encode_with_images(doc.clone(), &images);
+        assert_eq!(bytes, ck_encode_with_images(doc.clone(), &images));
+        let mut package = PackageReader::new(&bytes).unwrap();
+        let field_section = usize::from(picture_first);
+        let fields = package.read_section_xml(field_section).unwrap();
+        let picture = package.read_section_xml(1 - field_section).unwrap();
+        assert!(picture.contains("<hp:pic id=\"1\""), "{picture}");
+        let starts: Vec<_> = fields.split("<hp:fieldBegin ").skip(1)
+            .map(|head| r3_refs(head.split('>').next().unwrap(), "id")[0].clone()).collect();
+        let ends = r3_refs(&fields, "beginIDRef");
+        assert_eq!(starts, ends);
+        assert_eq!(starts, ["3", "2"]); // 2 was reserved before relocating 1.
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        for (before, after) in doc.sections()[field_section].paragraphs.iter()
+            .zip(&decoded.document.sections()[field_section].paragraphs) {
+            assert_eq!(ck_body_shapes(&before.runs), ck_body_shapes(&after.runs));
+        }
+    }
+}
+
+/// 원본 레코드의 byte offset에서 기대값을 추출한다. 투영/왕복 결과를 oracle로 쓰지 않는다.
+/// 이것을 실패시키는 것: editable을 0으로 / 이름·Command·Direction 변경 /
+/// 본문 run의 서식·텍스트·순서 변경 (같은 잘못을 인코더/디코더가 운반해도 실패).
+#[test]
+fn ck_sample_156_metadata_and_body_match_hwp5_records() {
+    use hwpforge_core::control::{Control, FieldBoundary, FieldParameter};
+    let wire = include_bytes!("../../../../../tests/fixtures/nested_controls/clickhere-mixed-156.bin");
+    let records = Record::parse_stream(&mut Cursor::new(wire)).unwrap();
+    let data = |tag| records.iter().find(|r| TagId::from(r.header.tag_id) == tag).unwrap().data.as_slice();
+    let units = |bytes: &[u8]| bytes.chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]])).collect::<Vec<_>>();
+    let header = data(TagId::CtrlHeader);
+    assert_eq!(&header[..4], &CTRL_ID_CLICK_HERE.to_le_bytes());
+    let properties = u32::from_le_bytes(header[4..8].try_into().unwrap());
+    assert_eq!(properties, 0x8001);
+    let command_len = u16::from_le_bytes(header[9..11].try_into().unwrap()) as usize;
+    let command = String::from_utf16(&units(&header[11..11 + command_len * 2])).unwrap();
+    // This fixture's length-delimited Direction occupies 26 UTF-16 units.
+    let direction_tail = command.split_once(":Direction:wstring:26:").unwrap().1;
+    let direction = String::from_utf16(&direction_tail.encode_utf16().take(26).collect::<Vec<_>>()).unwrap();
+    let name_data = data(TagId::CtrlData);
+    let name_len = u16::from_le_bytes(name_data[10..12].try_into().unwrap()) as usize;
+    let name = String::from_utf16(&units(&name_data[12..12 + name_len * 2])).unwrap();
+    assert_eq!(name, "본문");
+
+    let text = units(data(TagId::ParaText));
+    assert_eq!(text[0], 3); // 8-unit field-begin marker
+    assert_eq!(text[259], 0x15); // following page-number control, outside the body
+    let spans: Vec<_> = data(TagId::ParaCharShape).chunks_exact(8).map(|b| (
+        u32::from_le_bytes(b[..4].try_into().unwrap()) as usize,
+        u32::from_le_bytes(b[4..].try_into().unwrap()) as usize,
+    )).collect();
+    let expected: Vec<_> = spans.windows(2).map(|pair| (
+        pair[0].1, String::from_utf16(&text[pair[0].0.max(8)..pair[1].0]).unwrap(),
+    )).collect();
+
+    let parsed = parse_body_text(wire, &version()).unwrap();
+    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    let runs = &doc.sections()[0].paragraphs[0].runs;
+    let start = runs.iter().find_map(|run| match run.content.as_control() {
+        Some(Control::FieldBoundary { boundary: FieldBoundary::Start(start) }) => Some(start),
+        _ => None,
+    }).unwrap();
+    assert_eq!(start.name, name);
+    // HWP5 field properties bit 0: editable in read-only mode.
+    assert_eq!(start.editable, (properties & 1).to_string());
+    assert_eq!(start.parameters, vec![
+        FieldParameter::Integer { name: "Prop".into(), value: header[8].to_string() },
+        FieldParameter::String { name: "Command".into(), value: command, xml_space: "preserve".into() },
+        FieldParameter::String { name: "Direction".into(), value: direction, xml_space: String::new() },
+    ]);
+    assert_eq!(ck_body_shapes(runs), expected);
+}
+
+/// 이것을 실패시키는 것: 본문을 첫 서식으로 평탄화 / 필드 밖 방출 / 중복 방출 /
+/// UTF-16 경계 오산 / 범위 본문을 Folded ledger로 계산 / 필드 id를 문단마다 재사용.
+#[test]
+fn ck_mixed_clickhere_matches_hwpx_ranges_and_fill_policy() {
+    use hwpforge_core::control::{Control, FieldBoundary, FieldParameter};
+    use hwpforge_core::field_inventory::FieldInventory;
+    use hwpforge_smithy_hwpx::{FillError, HwpxDecoder, HwpxFiller};
+    let mut wire = ck_mixed_wire();
+    wire.extend(ck_mixed_wire());
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (mut doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    assert!(!warnings.iter().any(|w| matches!(w, Hwp5Warning::LayoutCacheDropped { .. })), "{warnings:?}");
+    let expected = vec![(1, "가😀".into()), (2, "나".into()), (1, "끝".into())];
+    let mut ids = Vec::new();
+    for (i, p) in doc.sections_mut()[0].paragraphs.iter_mut().enumerate() {
+        assert_eq!(ck_body_shapes(&p.runs), expected);
+        assert_eq!(p.runs.first().unwrap().content.plain_text().unwrap(), "앞");
+        assert_eq!(p.runs.last().unwrap().content.plain_text().unwrap(), "뒤");
+        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } =
+            p.runs[1].content.as_control().unwrap() else { panic!("start") };
+        assert_eq!(start.kind, "CLICK_HERE");
+        assert!(start.parameters.iter().any(|p| matches!(p,
+            FieldParameter::String { name, value, .. } if name == "Direction" && value == "힌")));
+        assert!(start.parameters.iter().any(|p| matches!(p,
+            FieldParameter::String { name, value, .. } if name == "Command" && value.contains("HelpState"))));
+        ids.push(start.id.clone());
+        // Name only the synthetic fields so the existing public fill path can address them.
+        let hwpforge_core::RunContent::Control(c) = &mut p.runs[1].content else { unreachable!() };
+        let Control::FieldBoundary { boundary: FieldBoundary::Start(start) } = c.as_mut() else { unreachable!() };
+        start.name = format!("mixed{i}");
+    }
+    assert_ne!(ids[0], ids[1]);
+    let inventory = FieldInventory::from_sections(doc.sections());
+    assert_eq!(inventory.fields().len(), 2);
+    assert!(inventory.fields().iter().all(|f| f.current() == "가😀나끝"));
+    let json = serde_json::to_string(&doc).unwrap();
+    let restored = serde_json::from_str(&json).unwrap();
+    assert_eq!(doc, restored);
+    let bytes = ck_encode(restored);
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    for (before, after) in doc.sections()[0].paragraphs.iter().zip(&decoded.document.sections()[0].paragraphs) {
+        // HWPX decoder produces the identical boundary metadata and styled body runs.
+        assert_eq!(before.runs, after.runs);
+    }
+    let fields = HwpxFiller::list_fields(&bytes).unwrap();
+    assert_eq!(fields.len(), 2);
+    assert!(fields.iter().all(|f| !f.fillable && f.current == "가😀나끝"));
+    // Existing fill policy admits exactly one body run. Preserve that policy;
+    // projecting a range must not silently turn a multi-style value into one run.
+    assert!(matches!(
+        HwpxFiller::fill(&bytes, &[("mixed0".into(), "새값😀".into())].into()),
+        Err(FillError::UnfillableField { .. })
+    ));
+}
+
+/// 원본 표본 156, Section0 레코드 94..100 (1-based), 문단 전체를 그대로 보존.
+/// 이것을 실패시키는 것: 251자를 71(251)로 평탄화하거나 본문을 필드 밖/두 번 방출.
+#[test]
+fn ck_sample_156_preserves_six_body_shape_spans() {
+    use hwpforge_core::field_inventory::FieldInventory;
+    use hwpforge_smithy_hwpx::{FillError, HwpxDecoder, HwpxFiller, PackageReader};
+    let wire = include_bytes!("../../../../../tests/fixtures/nested_controls/clickhere-mixed-156.bin");
+    let mut parsed = parse_body_text(wire, &version()).unwrap();
+    // The fixture references the source document's paragraph style 52; this
+    // focused package has only one paragraph style. Character shapes stay intact.
+    parsed.paragraphs[0].para_shape_id = 0;
+    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    let body = ck_body_shapes(&doc.sections()[0].paragraphs[0].runs);
+    assert_eq!(body.iter().map(|(s,t)| (*s,t.chars().count())).collect::<Vec<_>>(),
+        [(71,2),(52,38),(49,1),(50,46),(53,41),(49,123)]);
+    let text: String = body.iter().map(|(_,t)| t.as_str()).collect();
+    assert_eq!(text.chars().count(), 251);
+    let bytes = ck_encode(doc);
+    let decoded = HwpxDecoder::decode(&bytes).unwrap();
+    assert_eq!(ck_body_shapes(&decoded.document.sections()[0].paragraphs[0].runs), body);
+    let fields = FieldInventory::from_sections(decoded.document.sections());
+    assert_eq!(fields.fields().len(), 1);
+    assert_eq!(fields.fields()[0].current(), text);
+    let xml = PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
+    assert_eq!(xml.matches("type=\"CLICK_HERE\"").count(), 1);
+    assert_eq!(xml.matches("<hp:fieldEnd ").count(), 1);
+    // Every non-space piece occurs exactly once in the emitted field body.
+    for (_, piece) in body.iter().filter(|(_,t)| t.trim().chars().count() > 1) {
+        assert_eq!(xml.matches(piece.as_str()).count(), 1);
+    }
+    let fields = HwpxFiller::list_fields(&bytes).unwrap();
+    assert!(!fields[0].fillable);
+    let name = fields[0].name.clone().unwrap();
+    assert!(matches!(
+        HwpxFiller::fill(&bytes, &[(name, "검증한 새 본문".into())].into()),
+        Err(FillError::UnfillableField { .. })
+    ));
+}
+
+/// 이것을 실패시키는 것: 빈/단일 서식도 범위로 바꾸기, 앞/뒤 서식을 본문 서식으로 오인.
+#[test]
+fn ck_single_shape_keeps_legacy_core_and_bytes() {
+    use hwpforge_core::{Control, Run};
+    for body in ["", "가😀나끝"] {
+        let mut text = para_text_data("앞");
+        text.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+        text.extend(para_text_data(body));
+        text.extend(r4_marker(4, 0));
+        text.extend(para_text_data("뒤"));
+        let end = 9 + body.encode_utf16().count() as u32;
+        let shapes: Vec<u8> = [(0u32,9u32),(9,1),(end+8,9)].into_iter()
+            .flat_map(|(p,s)| p.to_le_bytes().into_iter().chain(s.to_le_bytes())).collect();
+        let mut controls = make_record(TagId::ParaCharShape, 1, &shapes);
+        controls.extend(make_record(TagId::CtrlHeader, 1, &r1_clickhere()));
+        let parsed = parse_body_text(&r4_para(&text, &controls, false), &version()).unwrap();
+        let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
+        let expected = Run::control(Control::Field {
+            field_type: hwpforge_foundation::FieldType::ClickHere,
+            hint_text: Some("힌".into()), help_text: None, name: None, display_text: body.into(),
+        }, hwpforge_foundation::CharShapeIndex::new(if body.is_empty() { 9 } else { 1 }));
+        assert_eq!(doc.sections()[0].paragraphs[0].runs[1], expected);
+        let mut legacy = doc.clone();
+        legacy.sections_mut()[0].paragraphs[0].runs[1] = expected;
+        assert_eq!(ck_encode(doc.clone()), ck_encode(legacy));
+        let mut named = doc;
+        let hwpforge_core::RunContent::Control(c) = &mut named.sections_mut()[0].paragraphs[0].runs[1].content else { unreachable!() };
+        let Control::Field { name, .. } = c.as_mut() else { unreachable!() };
+        *name = Some("single".into());
+        let bytes = ck_encode(named);
+        let filled = hwpforge_smithy_hwpx::HwpxFiller::fill(
+            &bytes, &[("single".into(), "새값".into())].into(),
+        ).unwrap();
+        assert_eq!(hwpforge_smithy_hwpx::HwpxFiller::list_fields(&filled.bytes).unwrap()[0].current, "새값");
+    }
+}

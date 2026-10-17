@@ -21,7 +21,7 @@ thread_local! {
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
-use hwpforge_core::control::RefTarget;
+use hwpforge_core::control::{FieldBoundary, FieldParameter, FieldStart, RefTarget};
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{Image, ImageCrop, ImageFormat, ImageStore};
 use hwpforge_core::layout::WireTokenKind;
@@ -173,8 +173,10 @@ enum ActiveField {
     /// single `Control::Field { field_type: ClickHere, hint_text,
     /// help_text, name, display_text }` Run emitted at `FieldEnd`. The
     /// actual span is collected at closure; only an empty body uses the hint.
+    /// Mixed character shapes use FieldBoundary with ordinary body runs instead.
     ClickHere {
         start_utf16: u32,
+        command: String,
         hint_text: Option<String>,
         help_text: Option<String>,
         name: Option<String>,
@@ -488,6 +490,8 @@ struct ProjectionImageState<'a> {
     generated_cells: u64,
     /// Top-level groups projected so far — numbers group warnings.
     group_seq: usize,
+    /// Unique range field ids across all sections and nested flows of this document.
+    field_seq: usize,
     /// Pixel size of each image asset read so far (by storage name), a
     /// header that does not parse included — read once per asset, however
     /// many pictures use it (branch review r2 H3: a JPEG header scan per
@@ -520,6 +524,7 @@ impl<'a> ProjectionImageState<'a> {
             budget_error: None,
             generated_cells: 0,
             group_seq: 0,
+            field_seq: 0,
             pixel_sizes: std::cell::RefCell::default(),
         }
     }
@@ -2832,6 +2837,7 @@ fn start_active_field(
                 // trailing 0x57 sub-record at the decoder boundary).
                 ActiveField::ClickHere {
                     start_utf16,
+                    command: clickhere.command,
                     hint_text: clickhere.hint_text,
                     help_text: clickhere.help_text,
                     name: clickhere.name,
@@ -2996,9 +3002,52 @@ fn finish_active_field(
             runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
             FieldEmissionOutcome::Folded
         }
-        ActiveField::ClickHere { start_utf16, hint_text, help_text, name } => {
+        ActiveField::ClickHere { start_utf16, command, hint_text, help_text, name } => {
             let char_shape_id = shape_starting_at(hwp_para, start_utf16);
-            let display_text = project_field_text(field_text, start_utf16, end_utf16)
+            let body_runs = project_field_text(field_text, start_utf16, end_utf16);
+            // FieldTextIndex coalesces adjacent text with the same shape. Match
+            // the HWPX decoder's cross-run field representation without folding
+            // the body into a string (which discards its character shapes).
+            if body_runs.windows(2).any(|pair| pair[0].char_shape_id != pair[1].char_shape_id) {
+                projection_images.field_seq += 1;
+                let mut start = FieldStart::default();
+                // Pairing key only: the HWPX document scope relocates this id
+                // if it collides with a preserved object (including later hosts).
+                start.id = projection_images.field_seq.to_string();
+                start.kind = "CLICK_HERE".into();
+                start.name = name.unwrap_or_default();
+                start.editable = "1".into();
+                start.dirty = "0".into();
+                start.z_order = "-1".into();
+                start.field_id = CTRL_ID_CLICK_HERE.to_string();
+                start.parameter_name = Some(String::new());
+                start.parameters = vec![
+                    FieldParameter::Integer { name: "Prop".into(), value: "9".into() },
+                    FieldParameter::String {
+                        name: "Command".into(),
+                        value: command,
+                        xml_space: "preserve".into(),
+                    },
+                    FieldParameter::String {
+                        name: "Direction".into(),
+                        value: hint_text.unwrap_or_default(),
+                        xml_space: String::new(),
+                    },
+                ];
+                let end = FieldBoundary::End {
+                    begin_id: start.id.clone(),
+                    field_id: start.field_id.clone(),
+                };
+                let end_shape = body_runs.last().map_or(char_shape_id, |run| run.char_shape_id);
+                runs.push(Run::control(
+                    Control::FieldBoundary { boundary: FieldBoundary::Start(Box::new(start)) },
+                    char_shape_id,
+                ));
+                runs.extend(body_runs);
+                runs.push(Run::control(Control::FieldBoundary { boundary: end }, end_shape));
+                return FieldEmissionOutcome::ReEmitted;
+            }
+            let display_text = body_runs
                 .into_iter()
                 .filter_map(|run| match run.content {
                     RunContent::Text(text) => Some(text),
@@ -8981,6 +9030,7 @@ mod shape_style_tests {
                 },
                 ActiveField::ClickHere {
                     start_utf16: 1,
+                    command: String::new(),
                     hint_text: Some("abc".into()),
                     help_text: None,
                     name: None,

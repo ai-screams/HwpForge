@@ -2126,6 +2126,8 @@ pub(crate) struct Hwp5ClickHereControl {
     /// Owning control identifier, always `0x2563_6C6B` (`"%clk"` BE-ascii).
     #[allow(dead_code)]
     pub ctrl_id: u32,
+    /// Original command for a range field; retain the authored hint/help encoding.
+    pub command: String,
     /// Hint text shown as visible placeholder (`<hp:stringParam name="Direction">`).
     /// `None` when the wire encoded an empty hint (Hancom collapses
     /// `Some("")` and `None` to the same wire form).
@@ -2249,7 +2251,14 @@ impl Hwp5ClickHereControl {
         // recommended warning-not-error on mismatch which the decoder
         // does at the dispatch layer.
 
-        Ok(Self { ctrl_id, hint_text, help_text, name: None, field_unique_id })
+        Ok(Self {
+            ctrl_id,
+            command: String::from_utf16_lossy(&command_units_vec),
+            hint_text,
+            help_text,
+            name: None,
+            field_unique_id,
+        })
     }
 
     /// Decodes a `0x57 lvl=2` sub-record's `data` into the field
