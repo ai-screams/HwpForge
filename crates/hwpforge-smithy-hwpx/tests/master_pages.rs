@@ -42,7 +42,7 @@ fn with_part(bytes: &[u8], name: &str, xml: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..src.len() {
         let mut entry = src.by_index(i).unwrap();
-        let entry_name = entry.name().to_string();
+        let entry_name = entry.name().expect("ZIP entry name").to_string();
         let options =
             zip::write::SimpleFileOptions::default().compression_method(entry.compression());
         out.start_file(&entry_name, options).unwrap();

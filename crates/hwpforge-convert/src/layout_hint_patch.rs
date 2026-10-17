@@ -98,7 +98,18 @@ impl RawPackage {
             let file = archive.by_index(index).map_err(|e| LayoutPatchError::Package {
                 detail: format!("read hwpx entry #{index}: {e}"),
             })?;
-            let path = file.name().to_string();
+            let path = file
+                .name()
+                .map_err(|e| LayoutPatchError::Package {
+                    detail: format!("read hwpx entry #{index} name: {e}"),
+                })?
+                .to_string();
+            // 이것을 실패시키는 것: CP437/UTF-8 별칭을 마지막 엔트리로 덮어쓰기.
+            if index_by_path.contains_key(&path) {
+                return Err(LayoutPatchError::Package {
+                    detail: format!("duplicate decoded ZIP entry name '{path}'"),
+                });
+            }
             let compression = file.compression();
             // `file.size()` comes from the ZIP central directory and can be
             // spoofed, so cap the capacity hint and bound the reader itself
@@ -558,7 +569,12 @@ mod tests {
         let mut archive = zip::ZipArchive::new(Cursor::new(out)).unwrap();
         for i in 0..archive.len() {
             let entry = archive.by_index(i).unwrap();
-            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
+            assert_eq!(
+                entry.last_modified(),
+                Some(zip::DateTime::default()),
+                "{}",
+                entry.name().expect("ZIP entry name")
+            );
         }
     }
 
@@ -569,6 +585,32 @@ mod tests {
             .expect("normal small package must parse");
         assert_eq!(pkg.entries.len(), 2);
         assert_eq!(pkg.read_text_entry("Contents/section0.xml").unwrap(), "<sec/>");
+    }
+
+    /// 이것을 실패시키는 것: 디코딩 이름 중복 검사 제거 또는 raw 이름만 비교하기.
+    #[test]
+    fn zip9_layout_rejects_ambiguous_decoded_names() {
+        let mut bytes = make_zip(&[("BinData/cafX.png", b"first"), ("BinData/cafYZ.png", b"last")]);
+        let offsets: Vec<_> = {
+            let mut archive = ZipArchive::new(Cursor::new(&bytes)).expect("archive");
+            (0..archive.len())
+                .map(|index| {
+                    let entry = archive.by_index(index).expect("entry");
+                    (entry.header_start() as usize, entry.central_header_start() as usize)
+                })
+                .collect()
+        };
+        for (name, (local, central)) in
+            [b"BinData/caf\x82.png".as_slice(), "BinData/café.png".as_bytes()]
+                .into_iter()
+                .zip(offsets)
+        {
+            bytes[local + 30..local + 30 + name.len()].copy_from_slice(name);
+            bytes[central + 46..central + 46 + name.len()].copy_from_slice(name);
+        }
+        let err = RawPackage::read(&bytes).expect_err("ambiguous name");
+        assert!(matches!(err, LayoutPatchError::Package { detail }
+            if detail == "duplicate decoded ZIP entry name 'BinData/café.png'"));
     }
 
     /// A header anchored to paragraph 0 comes before the body table in the

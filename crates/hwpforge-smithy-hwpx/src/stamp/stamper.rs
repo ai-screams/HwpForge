@@ -1246,9 +1246,11 @@ fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, StamperError> {
     for i in 0..archive.len() {
         let entry =
             archive.by_index(i).map_err(|e| StamperError::Codec(format!("zip entry {i}: {e}")))?;
+        let name =
+            entry.name().map_err(|e| StamperError::Codec(format!("zip entry {i} name: {e}")))?;
         // Directory placeholders are packaging detail, not content.
-        if !entry.name().ends_with('/') {
-            names.push(entry.name().to_string());
+        if !name.ends_with('/') {
+            names.push(name.into_owned());
         }
     }
     Ok(names)

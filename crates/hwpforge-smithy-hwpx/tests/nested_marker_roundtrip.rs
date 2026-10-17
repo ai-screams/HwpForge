@@ -159,7 +159,7 @@ fn hancom_memo_tab_roundtrips_with_attributes() {
         let mut zout = zip::ZipWriter::new(std::io::Cursor::new(&mut patched));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).expect("entry");
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
             let mut data = Vec::new();
             f.read_to_end(&mut data).expect("read entry");

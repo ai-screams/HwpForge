@@ -172,7 +172,7 @@ fn source_marks_and_namespace_aliases_round_trip_with_cache_and_rich_tabs() {
                 let mut entry = input.by_index(i).unwrap();
                 let mut body = Vec::new();
                 entry.read_to_end(&mut body).unwrap();
-                if entry.name() == "Contents/section0.xml" {
+                if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
                     body = String::from_utf8(body)
                         .unwrap()
                         .replace("<hp:t>  <hp:fwSpace/>", "<hp:t>&#xE000; <hp:fwSpace/>")
@@ -180,7 +180,12 @@ fn source_marks_and_namespace_aliases_round_trip_with_cache_and_rich_tabs() {
                         .replace("xmlns:hp=", "xmlns:q=")
                         .into_bytes();
                 }
-                output.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+                output
+                    .start_file(
+                        entry.name().expect("ZIP entry name"),
+                        zip::write::SimpleFileOptions::default(),
+                    )
+                    .unwrap();
                 output.write_all(&body).unwrap();
             }
             let bytes = output.finish().unwrap().into_inner();

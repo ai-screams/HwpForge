@@ -397,7 +397,7 @@ mod tests {
         let mut all = String::new();
         for i in 0..zip.len() {
             let mut entry = zip.by_index(i).unwrap();
-            if entry.name().ends_with(".xml") {
+            if entry.name().expect("ZIP entry name").ends_with(".xml") {
                 entry.read_to_string(&mut all).unwrap();
             }
         }
@@ -783,7 +783,12 @@ mod tests {
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         for i in 0..zip.len() {
             let entry = zip.by_index(i).unwrap();
-            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
+            assert_eq!(
+                entry.last_modified(),
+                Some(zip::DateTime::default()),
+                "{}",
+                entry.name().expect("ZIP entry name")
+            );
         }
     }
 

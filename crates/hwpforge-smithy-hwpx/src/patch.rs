@@ -482,7 +482,7 @@ impl RawPackage {
 
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
-            let path = file.name().to_string();
+            let path = file.name().map_err(|e| HwpxError::Zip(e.to_string()))?.into_owned();
             let mut data: Vec<u8> = Vec::new();
             (&mut file)
                 .take(max_entry + 1)
@@ -979,7 +979,12 @@ mod tests {
         let mut archive = ZipArchive::new(Cursor::new(out)).unwrap();
         for i in 0..archive.len() {
             let entry = archive.by_index(i).unwrap();
-            assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", entry.name());
+            assert_eq!(
+                entry.last_modified(),
+                Some(zip::DateTime::default()),
+                "{}",
+                entry.name().expect("ZIP entry name")
+            );
         }
     }
 
@@ -999,6 +1004,15 @@ mod tests {
             assert_eq!(entry.bytes.len(), 8);
             assert!(entry.bytes.capacity() < 4096, "capacity {}", entry.bytes.capacity());
         }
+    }
+
+    /// 이것을 실패시키는 것: 실제 해제량보다 작은 ZIP 헤더를 신뢰하여 읽기 오류를 무시하기.
+    #[test]
+    fn zip9_read_capped_rejects_understated_size() {
+        let mut bytes = zeros_zip(&[("a.bin", 1024)]);
+        forge_declared_size(&mut bytes, 1);
+        let err = RawPackage::read_capped(&bytes, 2048, 4096).expect_err("forged size");
+        assert!(matches!(err, HwpxError::Zip(detail) if detail.contains("read 'a.bin'")));
     }
 
     // 이것을 실패시키는 것: `file.take(max_entry + 1)` 제거 (해제량이 cap+1 이 아니라 cap*10 으로 보고됨)

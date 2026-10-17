@@ -964,12 +964,12 @@ fn edit_package(base: &[u8], part: &str, edit: impl Fn(&str) -> String) -> Vec<u
         let mut entry = input.by_index(i).unwrap();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).unwrap();
-        if entry.name() == part {
+        if entry.name().expect("ZIP entry name") == part {
             bytes = edit(std::str::from_utf8(&bytes).unwrap()).into_bytes();
         }
         output
             .start_file(
-                entry.name(),
+                entry.name().expect("ZIP entry name"),
                 zip::write::SimpleFileOptions::default().compression_method(entry.compression()),
             )
             .unwrap();

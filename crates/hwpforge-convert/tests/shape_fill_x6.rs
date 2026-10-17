@@ -72,8 +72,9 @@ fn x6_fills_match_hancom() {
         xml[at..at + xml[at..].find('"').unwrap()].to_string()
     };
     let mut zip = zip::ZipArchive::new(Cursor::new(&hwpx)).expect("zip");
-    let packaged: Vec<String> =
-        (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().into()).collect();
+    let packaged: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().expect("ZIP entry name").into())
+        .collect();
     assert!(
         packaged.iter().any(|n| n.starts_with(&format!("BinData/{reference}."))),
         "{reference} not in {packaged:?}"

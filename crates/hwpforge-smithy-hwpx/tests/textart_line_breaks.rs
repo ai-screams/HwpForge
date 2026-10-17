@@ -96,7 +96,7 @@ fn fixture_with_first_text(wire: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zin.len() {
         let mut entry = zin.by_index(i).expect("entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("ZIP entry name").to_string();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).expect("read entry");
         if name == "Contents/section0.xml" {

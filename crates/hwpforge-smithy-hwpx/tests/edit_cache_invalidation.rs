@@ -32,7 +32,7 @@ fn with_section_xml(bytes: &[u8], xml: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).unwrap();
-        let name = entry.name().to_string();
+        let name = entry.name().expect("ZIP entry name").to_string();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).unwrap();
         if name == "Contents/section0.xml" {

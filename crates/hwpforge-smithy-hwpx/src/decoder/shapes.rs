@@ -5821,7 +5821,7 @@ mod group_tests {
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
             if name == "Contents/section0.xml" {
@@ -6093,7 +6093,7 @@ mod group_tests {
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
             let opts = zip::write::SimpleFileOptions::default().compression_method(f.compression());
@@ -6556,7 +6556,7 @@ mod group_tests {
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
             if name == "Contents/section0.xml" {
@@ -6777,7 +6777,7 @@ mod group_tests {
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zin.len() {
             let mut f = zin.by_index(i).unwrap();
-            let name = f.name().to_string();
+            let name = f.name().expect("ZIP entry name").to_string();
             let mut data = Vec::new();
             f.read_to_end(&mut data).unwrap();
             if name == "Contents/section0.xml" {

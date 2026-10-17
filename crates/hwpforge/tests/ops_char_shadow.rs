@@ -58,7 +58,7 @@ fn with_unknown_shadow_type(bytes: &[u8]) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).expect("entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("ZIP entry name").to_string();
         let options =
             zip::write::SimpleFileOptions::default().compression_method(entry.compression());
         let mut data = Vec::new();

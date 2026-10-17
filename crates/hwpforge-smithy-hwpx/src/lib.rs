@@ -65,6 +65,7 @@ mod inline_text;
 mod layout_carry;
 pub mod layout_edit;
 mod list_bridge;
+mod package_path;
 mod patch;
 pub mod presets;
 mod read;

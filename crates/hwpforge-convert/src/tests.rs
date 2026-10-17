@@ -3443,7 +3443,8 @@ fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
     let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
         .expect("converted hwpx should open as zip");
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> =
+        archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
     assert!(
         names.iter().any(|n| n == "Chart/chart1.xml"),
         "expected Chart/chart1.xml in zip, got {names:?}"

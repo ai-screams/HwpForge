@@ -153,7 +153,7 @@ fn hwpx_changed_entries(base: &Path, patched: &Path) -> Vec<String> {
     for index in 0..base_zip.len() {
         let name = {
             let file = base_zip.by_index(index).expect("base entry by index");
-            file.name().to_string()
+            file.name().expect("ZIP entry name").to_string()
         };
         let mut base_file = base_zip.by_name(&name).expect("base entry exists");
         let mut patched_file = patched_zip.by_name(&name).expect("patched entry exists");
@@ -402,7 +402,9 @@ fn assert_valid_hwpx(path: &Path) {
     let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
     for index in 0..archive.len() {
         let mut file = archive.by_index(index).expect("zip entry by index");
-        if !(file.name().ends_with(".xml") || file.name().ends_with(".hpf")) {
+        if !(file.name().expect("ZIP entry name").ends_with(".xml")
+            || file.name().expect("ZIP entry name").ends_with(".hpf"))
+        {
             continue;
         }
 
@@ -411,7 +413,7 @@ fn assert_valid_hwpx(path: &Path) {
         assert!(
             !content.contains(&0),
             "xml entry {} contains NUL byte in {}",
-            file.name(),
+            file.name().expect("ZIP entry name"),
             path.display()
         );
     }
@@ -1021,7 +1023,7 @@ fn crafted_pic_with_no_binary_ref_is_a_raw_scan_vs_decode_divergence() {
     let tampered_xml = section_xml.replace(r#"binaryItemIDRef="host""#, r#"binaryItemIDRef="""#);
 
     let names: Vec<String> = (0..archive.len())
-        .map(|i| archive.by_index(i).expect("entry").name().to_string())
+        .map(|i| archive.by_index(i).expect("entry").name().expect("ZIP entry name").to_string())
         .collect();
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (index, name) in names.iter().enumerate() {
@@ -2263,8 +2265,9 @@ fn census_hwp5_companion_with_malformed_section_xml_fails_instead_of_truncating(
     let broken_xml = section_xml.replacen("<hp:t>", "<hp:t>x</hp:T><hp:t>", 1);
     assert_ne!(broken_xml, section_xml, "fixture must contain an <hp:t> to corrupt");
 
-    let names: Vec<String> =
-        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).collect();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().expect("ZIP entry name").to_string())
+        .collect();
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (index, name) in names.iter().enumerate() {
         if name == "Contents/section0.xml" {
@@ -6433,7 +6436,7 @@ fn size_lock_round_trips_through_json() {
         let mut writer = zip::ZipWriter::new(std::fs::File::create(&locked).unwrap());
         for i in 0..archive.len() {
             let mut file = archive.by_index(i).unwrap();
-            let name = file.name().to_string();
+            let name = file.name().expect("ZIP entry name").to_string();
             if name == "Contents/section0.xml" {
                 let mut xml = String::new();
                 file.read_to_string(&mut xml).unwrap();

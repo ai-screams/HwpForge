@@ -236,7 +236,7 @@ impl Package {
                 let mut entry = archive.by_index(i).expect("entry");
                 let mut data = Vec::new();
                 entry.read_to_end(&mut data).expect("read");
-                (entry.name().to_string(), data)
+                (entry.name().expect("ZIP entry name").to_string(), data)
             })
             .collect();
         Self { entries }

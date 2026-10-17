@@ -159,14 +159,6 @@ pub(crate) fn normalize_hyperlink_url(url: &str) -> Option<String> {
     }
 }
 
-/// Sanitizes a filename for safe use as a ZIP archive entry.
-///
-/// Strips leading slashes and rejects `..` path components to prevent
-/// path traversal attacks (CWE-22) when the ZIP is extracted.
-pub(crate) fn sanitize_zip_entry_name(name: &str) -> String {
-    name.split('/').filter(|c| !c.is_empty() && *c != "..").collect::<Vec<_>>().join("/")
-}
-
 #[cfg(test)]
 mod sanitize_xml_text_tests {
     use super::sanitize_xml_text;
@@ -396,41 +388,6 @@ mod normalize_hyperlink_url_tests {
     fn ftp_scheme_rejected() {
         // ftp is an explicit scheme outside the safe allowlist.
         assert_eq!(normalize_hyperlink_url("ftp://example.com"), None);
-    }
-}
-
-#[cfg(test)]
-mod sanitize_zip_tests {
-    use super::sanitize_zip_entry_name;
-
-    #[test]
-    fn normal_path_unchanged() {
-        assert_eq!(sanitize_zip_entry_name("BinData/logo.png"), "BinData/logo.png");
-    }
-
-    #[test]
-    fn strips_dotdot() {
-        assert_eq!(sanitize_zip_entry_name("../../../etc/passwd"), "etc/passwd");
-    }
-
-    #[test]
-    fn strips_leading_slash() {
-        assert_eq!(sanitize_zip_entry_name("/absolute/path.png"), "absolute/path.png");
-    }
-
-    #[test]
-    fn strips_empty_components() {
-        assert_eq!(sanitize_zip_entry_name("a//b///c"), "a/b/c");
-    }
-
-    #[test]
-    fn dotdot_in_middle() {
-        assert_eq!(sanitize_zip_entry_name("a/../b/file.txt"), "a/b/file.txt");
-    }
-
-    #[test]
-    fn single_filename() {
-        assert_eq!(sanitize_zip_entry_name("file.png"), "file.png");
     }
 }
 
@@ -1613,10 +1570,10 @@ impl HwpxEncoder {
         // without it. Each written item is compared with the entry of the
         // manifest item it was rendered from (one `<opf:item>` per item, in
         // order) — not with the set of all entries, where another asset may
-        // own the cleaned name (`a\u{0}.png` beside `/a.png`). Non-binary
+        // own that name (`a\u{0}.png` beside `a.png`). Non-binary
         // items drop out: `unresolved_references` looks only at `BinData/`.
         // Embedded-chart OLE ids are the encoder's own `ole{n}`, which the
-        // entry-name cleaning leaves alone, so `image_entry_name` of the
+        // part-name validation accepts, so `image_entry_name` of the
         // `{id}.ole` path is `ole_entry_name(id)`.
         let resolvable: Vec<(String, String)> = manifest
             .iter()
@@ -1962,7 +1919,7 @@ mod tests {
 
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(first)).unwrap();
         let zip_order: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .map(|i| zip.by_index(i).unwrap().name().expect("ZIP entry name").to_string())
             .filter(|n| n.starts_with("BinData/"))
             .collect();
         let want: Vec<String> = expected.iter().map(|k| format!("BinData/{k}")).collect();

@@ -366,12 +366,12 @@ fn guess_image_media_type(path: &str) -> &'static str {
 
 /// The ZIP entry an image stored under `path` is written to.
 pub(crate) fn image_entry_name(path: &str) -> String {
-    format!("BinData/{}", super::sanitize_zip_entry_name(path))
+    format!("BinData/{path}")
 }
 
 /// The ZIP entry an embedded-chart OLE blob `ole_id` is written to.
 pub(crate) fn ole_entry_name(ole_id: &str) -> String {
-    format!("BinData/{}.ole", super::sanitize_zip_entry_name(ole_id))
+    format!("BinData/{ole_id}.ole")
 }
 
 // ── PackageWriter ────────────────────────────────────────────────
@@ -443,6 +443,35 @@ impl PackageWriter {
         master_pages: &[(String, String)],
         embedded_oles: &[(String, Vec<u8>)],
     ) -> HwpxResult<(Vec<u8>, Vec<EncodeWarning>)> {
+        // All caller-provided parts use the same canonical-name check as the
+        // decoder, before constructing a ZIP or silently merging any keys.
+        let mut names = std::collections::BTreeSet::from([
+            "mimetype".to_string(),
+            "version.xml".to_string(),
+            "META-INF/container.xml".to_string(),
+            "META-INF/manifest.xml".to_string(),
+            "Contents/content.hpf".to_string(),
+            "settings.xml".to_string(),
+            "Contents/header.xml".to_string(),
+        ]);
+        let dynamic_names = (0..section_xmls.len())
+            .map(|i| format!("Contents/section{i}.xml"))
+            .chain(images.iter().map(|(path, _)| image_entry_name(path)))
+            .chain(master_pages.iter().chain(charts).map(|(path, _)| path.clone()))
+            .chain(embedded_oles.iter().map(|(id, _)| ole_entry_name(id)));
+        for name in dynamic_names {
+            let key = crate::package_path::normalize_part_name(&name)?;
+            // 이것을 실패시키는 것: 정규화된 출력 키 충돌을 ZIP writer까지 넘기기.
+            if !names.insert(key.to_string()) {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!("duplicate package part name '{key}'"),
+                });
+            }
+        }
+        // Validate relative asset keys too, before prefixing hides a drive path.
+        for key in images.iter().chain(embedded_oles).map(|(key, _)| key) {
+            crate::package_path::normalize_part_name(key)?;
+        }
         let mut warnings = Vec::new();
         let buf: Vec<u8> = Vec::new();
         let cursor = Cursor::new(buf);
@@ -548,6 +577,38 @@ fn scan_part<'a>(part: &str, xml: &'a str, warnings: &mut Vec<EncodeWarning>) ->
 mod tests {
     use super::*;
     use std::io::Read;
+
+    /// 이것을 실패시키는 것: writer의 공통 경로 검사 삭제/옛 성분 삭제 정규화 복원.
+    #[test]
+    fn zip9_fix1_writer_rejects_noncanonical_parts() {
+        for name in ["a/../b", "a/./b", "a//b", "a\\b", "/a", "C:/a", ""] {
+            let images = vec![(name.to_string(), vec![])];
+            let result =
+                PackageWriter::write_hwpx_with_content_hpf("", "", &[], &images, &[], &[], &[]);
+            assert!(matches!(result, Err(HwpxError::InvalidStructure { .. })), "{name}");
+            let parts = vec![(name.to_string(), String::new())];
+            let result =
+                PackageWriter::write_hwpx_with_content_hpf("", "", &[], &[], &parts, &[], &[]);
+            assert!(matches!(result, Err(HwpxError::InvalidStructure { .. })), "{name}");
+        }
+    }
+
+    /// 이것을 실패시키는 것: 출력 정규 키 충돌 검사 삭제(이미지/OLE, 고정/동적 파트).
+    #[test]
+    fn zip9_fix1_writer_rejects_duplicate_part_keys() {
+        let images = vec![("asset.ole".to_string(), vec![1])];
+        let oles = vec![("asset".to_string(), vec![2])];
+        let result =
+            PackageWriter::write_hwpx_with_content_hpf("", "", &[], &images, &[], &[], &oles);
+        assert!(matches!(result, Err(HwpxError::InvalidStructure { detail })
+            if detail == "duplicate package part name 'BinData/asset.ole'"));
+        let charts = vec![("mimetype".to_string(), String::new())];
+        let result =
+            PackageWriter::write_hwpx_with_content_hpf("", "", &[], &[], &charts, &[], &[]);
+        assert!(matches!(result, Err(HwpxError::InvalidStructure { detail })
+            if detail == "duplicate package part name 'mimetype'"));
+    }
+
     use zip::ZipArchive;
 
     /// Minimal header XML for testing.
@@ -587,7 +648,7 @@ mod tests {
 
         // First entry by index must be "mimetype"
         let entry = archive.by_index(0).unwrap();
-        assert_eq!(entry.name(), "mimetype");
+        assert_eq!(entry.name().expect("ZIP entry name"), "mimetype");
         assert_eq!(
             entry.compression(),
             CompressionMethod::Stored,
@@ -603,7 +664,8 @@ mod tests {
         let bytes = write_minimal(&sections);
         let archive = open_zip(&bytes);
 
-        let names: Vec<&str> = archive.file_names().collect();
+        let names: Vec<String> =
+            archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
         let required = [
             "mimetype",
             "version.xml",
@@ -615,7 +677,10 @@ mod tests {
             "Contents/section0.xml",
         ];
         for path in &required {
-            assert!(names.contains(path), "missing required entry: {path}");
+            assert!(
+                names.iter().any(|name| name.as_str() == *path),
+                "missing required entry: {path}"
+            );
         }
     }
 
@@ -723,7 +788,10 @@ mod tests {
         assert!(result.is_ok());
         let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
-        assert!(archive.file_names().any(|n| n == "Contents/header.xml"));
+        assert!(archive
+            .file_names()
+            .map(|name| name.expect("ZIP entry name").into_owned())
+            .any(|n| n == "Contents/header.xml"));
     }
 
     // ── Test 6: multi-section creates multiple entries ───────────
@@ -788,7 +856,8 @@ mod tests {
         assert!(result.is_ok());
         let (bytes, _) = result.unwrap();
         let archive = open_zip(&bytes);
-        let names: Vec<&str> = archive.file_names().collect();
+        let names: Vec<String> =
+            archive.file_names().map(|name| name.expect("ZIP entry name").into_owned()).collect();
         // No section entries
         assert!(!names.iter().any(|n| n.starts_with("Contents/section")));
     }
@@ -813,6 +882,7 @@ mod tests {
 
         let section_entries = archive
             .file_names()
+            .map(|name| name.expect("ZIP entry name").into_owned())
             .filter(|n| n.starts_with("Contents/section") && n.ends_with(".xml"))
             .count();
         assert_eq!(section_entries, 100);

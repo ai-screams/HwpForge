@@ -78,7 +78,7 @@ fn xml_parts(bytes: &[u8]) -> Vec<(String, String)> {
     let mut parts = Vec::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).expect("entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("ZIP entry name").to_string();
         if name.ends_with(".xml") || name.ends_with(".hpf") {
             let mut text = String::new();
             entry.read_to_string(&mut text).expect("utf-8 part");
@@ -494,7 +494,7 @@ fn splice_part(bytes: &[u8], name: &str, from: &str, to: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zin.len() {
         let mut entry = zin.by_index(i).expect("entry");
-        let entry_name = entry.name().to_string();
+        let entry_name = entry.name().expect("ZIP entry name").to_string();
         let method = entry.compression();
         let mut data = Vec::new();
         entry.read_to_end(&mut data).expect("read");

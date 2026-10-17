@@ -11,6 +11,7 @@ pub(crate) mod header;
 pub(crate) mod image_size;
 pub(crate) mod metadata;
 pub(crate) mod package;
+mod package_directory;
 pub(crate) mod package_order;
 pub(crate) mod section;
 pub(crate) mod shapes;
@@ -1747,7 +1748,7 @@ mod tests {
         let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).unwrap();
-            let name = entry.name().to_string();
+            let name = entry.name().expect("ZIP entry name").to_string();
             let mut data = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
             if name == "Contents/header.xml" {

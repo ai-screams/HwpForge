@@ -31,8 +31,8 @@ fn sections(hwpx: &[u8]) -> Vec<String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(hwpx)).expect("zip");
     let mut names: Vec<String> = zip
         .file_names()
+        .map(|name| name.expect("ZIP entry name").into_owned())
         .filter(|n| n.starts_with("Contents/section") && n.ends_with(".xml"))
-        .map(str::to_string)
         .collect();
     names.sort_by_key(|n| {
         n.trim_start_matches("Contents/section").trim_end_matches(".xml").parse::<u32>().unwrap()
