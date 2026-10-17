@@ -146,3 +146,6 @@ pub mod source_xml;
 
 /// Shared field presentation for output consumers.
 pub mod field_view;
+
+#[doc(hidden)]
+pub mod zip_package;

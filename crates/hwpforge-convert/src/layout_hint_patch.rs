@@ -8,14 +8,25 @@
 //! rewriting lives here.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{Cursor, Read as _, Write};
+use std::io::{Cursor, Write};
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 use crate::error::{LayoutPatchError, LayoutPatchResult};
+use hwpforge_core::zip_package::{
+    open_package, PackageLimits, MAX_ENTRIES, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE,
+};
+
+fn package_error(error: hwpforge_core::CoreError) -> LayoutPatchError {
+    let detail = match error {
+        hwpforge_core::CoreError::InvalidStructure { reason, .. } => reason,
+        other => other.to_string(),
+    };
+    LayoutPatchError::Package { detail }
+}
 use hwpforge_smithy_hwp5::layout_hint_patch::{
     ParagraphLayoutHint, SectionLayoutHints, TableLayoutHint,
 };
@@ -51,19 +62,6 @@ pub(crate) fn patch_hwpx_layout_hints(
     package.write()
 }
 
-/// Maximum decompressed size of a single ZIP entry (50 MiB).
-///
-/// Mirrors `smithy-hwpx::decoder::package::MAX_ENTRY_SIZE` so the secondary
-/// reader used by the HWP5→HWPX layout-hint patcher enforces the same ZIP-bomb
-/// defenses as the primary HWPX decoder.
-const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
-
-/// Maximum total decompressed size across all entries (500 MiB).
-const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
-
-/// Maximum number of entries in the archive.
-const MAX_ENTRIES: usize = 10_000;
-
 impl RawPackage {
     fn read(bytes: &[u8]) -> LayoutPatchResult<Self> {
         Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, MAX_ENTRIES)
@@ -77,67 +75,22 @@ impl RawPackage {
         max_total: u64,
         max_entries: usize,
     ) -> LayoutPatchResult<Self> {
-        let cursor = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| LayoutPatchError::Package { detail: format!("open hwpx package: {e}") })?;
-
-        if archive.len() > max_entries {
-            return Err(LayoutPatchError::Package {
-                detail: format!(
-                    "hwpx package has {} entries, exceeds limit of {max_entries}",
-                    archive.len()
-                ),
-            });
-        }
-
-        let mut entries = Vec::with_capacity(archive.len());
+        let mut archive = open_package(
+            bytes,
+            PackageLimits { entry: max_entry, total: max_total, entries: max_entries },
+        )
+        .map_err(package_error)?;
+        let mut entries = Vec::with_capacity(archive.entries().len());
         let mut index_by_path = BTreeMap::new();
-        let mut total: u64 = 0;
-
-        for index in 0..archive.len() {
-            let file = archive.by_index(index).map_err(|e| LayoutPatchError::Package {
-                detail: format!("read hwpx entry #{index}: {e}"),
-            })?;
-            let path = file
-                .name()
-                .map_err(|e| LayoutPatchError::Package {
-                    detail: format!("read hwpx entry #{index} name: {e}"),
-                })?
-                .to_string();
-            // 이것을 실패시키는 것: CP437/UTF-8 별칭을 마지막 엔트리로 덮어쓰기.
-            if index_by_path.contains_key(&path) {
-                return Err(LayoutPatchError::Package {
-                    detail: format!("duplicate decoded ZIP entry name '{path}'"),
-                });
-            }
-            let compression = file.compression();
-            // `file.size()` comes from the ZIP central directory and can be
-            // spoofed, so cap the capacity hint and bound the reader itself
-            // with `take(max_entry + 1)` to detect over-cap entries without
-            // pre-allocating an attacker-controlled buffer.
-            let hint = file.size().min(max_entry) as usize;
-            let mut bytes = Vec::with_capacity(hint);
-            file.take(max_entry + 1).read_to_end(&mut bytes).map_err(|e| {
-                LayoutPatchError::Package { detail: format!("read '{path}' bytes: {e}") }
-            })?;
-            if bytes.len() as u64 > max_entry {
-                return Err(LayoutPatchError::Package {
-                    detail: format!(
-                        "hwpx entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
-                        bytes.len()
-                    ),
-                });
-            }
-            total = total.saturating_add(bytes.len() as u64);
-            if total > max_total {
-                return Err(LayoutPatchError::Package {
-                    detail: format!(
-                        "hwpx package total decompressed data ({total} bytes) exceeds limit of {max_total}"
-                    ),
-                });
-            }
-            index_by_path.insert(path.clone(), entries.len());
-            entries.push(RawPackageEntry { path, bytes, compression });
+        for index in 0..archive.entries().len() {
+            let entry = archive.entries()[index].clone();
+            let bytes = archive.read(index).map_err(package_error)?;
+            index_by_path.insert(entry.path.clone(), entries.len());
+            entries.push(RawPackageEntry {
+                path: entry.path,
+                bytes,
+                compression: entry.compression,
+            });
         }
 
         Ok(Self { entries, index_by_path })
@@ -473,6 +426,7 @@ mod tests {
     use super::*;
     use hwpforge_smithy_hwp5::schema::section::Hwp5ParaLineSeg;
     use std::collections::VecDeque;
+    use zip::ZipArchive;
 
     fn rewrite_empty_element(xml: &str, target: &str, value: &str) -> String {
         let mut reader = Reader::from_str(xml);
@@ -538,6 +492,15 @@ mod tests {
         // Cap of 3 entries < 5 actual → reject before reading payloads.
         let err = RawPackage::read_capped(&zip, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, 3).unwrap_err();
         assert!(err.to_string().contains("exceeds limit of 3"), "got: {err}");
+    }
+
+    /// 이것을 실패시키는 것: layout-hint 읽기가 공용 ZIP 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_layout_rejects_parent_part() {
+        let bytes = make_zip(&[("Contents/../unused.xml", b"x")]);
+        assert!(matches!(patch_hwpx_layout_hints(&bytes, &[]),
+            Err(LayoutPatchError::Package { detail })
+            if detail == "invalid package part name 'Contents/../unused.xml'"));
     }
 
     #[test]

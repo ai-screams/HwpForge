@@ -147,18 +147,20 @@ impl UnclosedOrigin {
     }
 
     fn package_matches(origins: &[Self], package: &[u8]) -> Vec<bool> {
-        let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(package)) else {
+        let Ok(mut archive) = crate::zip_package::open_package(package, Default::default()) else {
             return vec![false; origins.len()];
         };
+        let indices: HashMap<_, _> = archive
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (entry.path.clone(), index))
+            .collect();
         let mut parts = HashMap::new();
         for origin in origins {
             parts.entry(origin.part.as_str()).or_insert_with(|| {
-                let mut entry = archive.by_name(&origin.part).ok()?;
-                if entry.size() > 50 * 1024 * 1024 {
-                    return None;
-                }
-                let mut xml = String::new();
-                std::io::Read::read_to_string(&mut entry, &mut xml).ok()?;
+                let index = *indices.get(&origin.part)?;
+                let xml = String::from_utf8(archive.read(index).ok()?).ok()?;
                 let (_, source) = XmlSource::read(&xml).ok()?;
                 let starts: HashSet<_> = source
                     .unclosed
@@ -379,6 +381,25 @@ mod verification_tests {
         zip.start_file("Contents/section0.xml", zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(xml.as_bytes()).unwrap();
         Arc::from(zip.finish().unwrap().into_inner())
+    }
+
+    /// 이것을 실패시키는 것: 원본 증거 경로에서 공용 ZIP 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_source_verification_rejects_parent_part() {
+        let xml = "<sec><p><run><fieldBegin id=\"open\"/></run></p></sec>";
+        let (_, source) = XmlSource::read(xml).unwrap();
+        let origin = source
+            .unclosed_origin(4, CorePath::new(0, "paragraphs[0].runs[0]"), "Contents/section0.xml")
+            .unwrap();
+        assert!(UnclosedOrigin::verify_package_batch(std::slice::from_ref(&origin), &package(xml)));
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [("Contents/section0.xml", xml), ("Contents/../unused.xml", "x")] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        assert!(!UnclosedOrigin::verify_package_batch(std::slice::from_ref(&origin), &bytes));
+        assert!(origin.with_package(Arc::from(bytes)).is_none());
     }
 
     /// 이것을 실패시키는 것: 원본 ZIP·파트·SHA-256·fieldBegin 범위·ID·짝 없음 중 검사 생략.

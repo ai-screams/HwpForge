@@ -17,7 +17,8 @@ use std::io::{Read, Seek, SeekFrom};
 use zip::read::{ArchiveOffset, Config};
 use zip::ZipArchive;
 
-use crate::error::{HwpxError, HwpxResult};
+use super::{invalid_structure, zip_error};
+use crate::error::{CoreError, CoreResult};
 
 // zip 9.0.4: sizeof(Zip32CentralDirectoryEnd) + sizeof(Magic) + 65536.
 // Its private struct has four u16s, two u32s and a Box<[u8]> (no padding).
@@ -35,21 +36,18 @@ pub(super) struct Directory {
 }
 
 impl Directory {
-    pub(super) fn open<R: Read + Seek + Clone>(&self, mut reader: R) -> HwpxResult<ZipArchive<R>> {
+    pub(super) fn open<R: Read + Seek + Clone>(&self, mut reader: R) -> CoreResult<ZipArchive<R>> {
         // 이것을 실패시키는 것: Detect로 되돌려 겹치는 ZIP64 후보를 다시 복사하기.
-        let file_len = reader.seek(SeekFrom::End(0)).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        let file_len = reader.seek(SeekFrom::End(0)).map_err(|e| zip_error(e.to_string()))?;
         let config = Config { archive_offset: ArchiveOffset::Known(self.base as u64) };
         let archive =
-            ZipArchive::with_config(config, reader).map_err(|e| HwpxError::Zip(e.to_string()))?;
+            ZipArchive::with_config(config, reader).map_err(|e| zip_error(e.to_string()))?;
         // zip 9.0.4 read_central_header finishes at the last physical record's
         // end. Cloning shares metadata (Arc), and only clones the reader here.
         // zip does not retain/use the declared CD size, so compare the consumed
         // span, not a reconstructed size from decoded names/extras.
-        let consumed_end = archive
-            .clone()
-            .into_inner()
-            .stream_position()
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        let consumed_end =
+            archive.clone().into_inner().stream_position().map_err(|e| zip_error(e.to_string()))?;
         self.verify(&archive, consumed_end, file_len)?;
         Ok(archive)
     }
@@ -59,7 +57,7 @@ impl Directory {
         archive: &ZipArchive<R>,
         consumed_end: u64,
         file_len: u64,
-    ) -> HwpxResult<()> {
+    ) -> CoreResult<()> {
         // 이것을 실패시키는 것: 시작/크기/base/EOCD 위치 중 하나의 대조를 삭제하기.
         if file_len.checked_sub(22 + archive.comment().len() as u64) != Some(self.eocd as u64)
             || archive.central_directory_start() != self.start as u64
@@ -68,47 +66,45 @@ impl Directory {
                 && consumed_end.checked_sub(archive.central_directory_start())
                     != Some(self.size as u64))
         {
-            return Err(HwpxError::Zip("central directory interpretation mismatch".into()));
+            return Err(zip_error("central directory interpretation mismatch"));
         }
         // 이것을 실패시키는 것: Unicode extra 적용 후 병합된 개수를 허용하기.
         if archive.len() != self.count {
-            return Err(HwpxError::InvalidStructure {
-                detail: "duplicate effective ZIP entry name".into(),
-            });
+            return Err(invalid_structure("duplicate effective ZIP entry name"));
         }
         Ok(())
     }
 }
 
-fn invalid() -> HwpxError {
-    HwpxError::Zip("invalid ZIP central directory framing".into())
+fn invalid() -> CoreError {
+    zip_error("invalid ZIP central directory framing")
 }
 
-fn field<const N: usize>(bytes: &[u8], offset: usize) -> HwpxResult<[u8; N]> {
+fn field<const N: usize>(bytes: &[u8], offset: usize) -> CoreResult<[u8; N]> {
     bytes
         .get(offset..offset.checked_add(N).ok_or_else(invalid)?)
         .ok_or_else(invalid)?
         .try_into()
         .map_err(|_| invalid())
 }
-fn u16_at(bytes: &[u8], offset: usize) -> HwpxResult<u16> {
+fn u16_at(bytes: &[u8], offset: usize) -> CoreResult<u16> {
     Ok(u16::from_le_bytes(field(bytes, offset)?))
 }
-fn u32_at(bytes: &[u8], offset: usize) -> HwpxResult<u32> {
+fn u32_at(bytes: &[u8], offset: usize) -> CoreResult<u32> {
     Ok(u32::from_le_bytes(field(bytes, offset)?))
 }
-fn u64_at(bytes: &[u8], offset: usize) -> HwpxResult<u64> {
+fn u64_at(bytes: &[u8], offset: usize) -> CoreResult<u64> {
     Ok(u64::from_le_bytes(field(bytes, offset)?))
 }
-fn size(value: u64) -> HwpxResult<usize> {
+fn size(value: u64) -> CoreResult<usize> {
     usize::try_from(value).map_err(|_| invalid())
 }
-fn check_count(count: u64, limit: usize) -> HwpxResult<()> {
+fn check_count(count: u64, limit: usize) -> CoreResult<()> {
     // 이것을 실패시키는 것: 병합 후 len()만 검사하거나 >를 >=로 바꾸기.
     if count > limit as u64 {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!("archive has {count} entries, exceeds limit of {limit}"),
-        });
+        return Err(invalid_structure(format!(
+            "archive has {count} entries, exceeds limit of {limit}"
+        )));
     }
     Ok(())
 }
@@ -127,25 +123,25 @@ impl Work {
         p: usize,
         magic: &[u8; 4],
         budget: usize,
-    ) -> HwpxResult<bool> {
+    ) -> CoreResult<bool> {
         self.scanned_bytes = self.scanned_bytes.checked_add(4).ok_or_else(invalid)?;
         // 이것을 실패시키는 것: 스캔 바이트 예산을 제거하거나 반복 스캔을 추가하기.
         if self.scanned_bytes > budget {
-            return Err(HwpxError::Zip("ZIP end-record scan budget exceeded".into()));
+            return Err(zip_error("ZIP end-record scan budget exceeded"));
         }
         Ok(bytes.get(p..p + 4) == Some(magic.as_slice()))
     }
-    fn candidate(&mut self) -> HwpxResult<()> {
+    fn candidate(&mut self) -> CoreResult<()> {
         self.candidates += 1;
         // 이것을 실패시키는 것: 후보 상한 삭제 또는 경계 >를 >=로 바꾸기.
         if self.candidates > MAX_END_CANDIDATES {
-            return Err(HwpxError::Zip("too many ZIP end-record candidates".into()));
+            return Err(zip_error("too many ZIP end-record candidates"));
         }
         Ok(())
     }
 }
 
-pub(super) fn preflight(bytes: &[u8], limit: usize) -> HwpxResult<Directory> {
+pub(super) fn preflight(bytes: &[u8], limit: usize) -> CoreResult<Directory> {
     preflight_with_work(bytes, limit, &mut Work::default())
 }
 
@@ -153,7 +149,7 @@ pub(super) fn preflight_with_work(
     bytes: &[u8],
     limit: usize,
     work: &mut Work,
-) -> HwpxResult<Directory> {
+) -> CoreResult<Directory> {
     let budget = bytes.len().saturating_add(EOCD_WINDOW).saturating_mul(4);
     // Same window/order/comment inequality as zip 9.0.4. Do not prefer a
     // terminal outer EOCD over a parseable EOCD in its comment (r2 M1).
@@ -170,7 +166,7 @@ pub(super) fn preflight_with_work(
         }
         // 이것을 실패시키는 것: 두 EOCD 중 터미널 후보를 우선해 다른 base를 허용하기.
         if selected.replace(p).is_some() {
-            return Err(HwpxError::Zip("ambiguous ZIP end records".into()));
+            return Err(zip_error("ambiguous ZIP end records"));
         }
     }
     let eocd = selected.ok_or_else(invalid)?;
@@ -305,9 +301,7 @@ pub(super) fn preflight_with_work(
     for name in &names {
         // 이것을 실패시키는 것: Unicode extra 적용 후 이름만 검사하기.
         if !raw_names.insert(*name) {
-            return Err(HwpxError::InvalidStructure {
-                detail: "duplicate original ZIP entry name".into(),
-            });
+            return Err(invalid_structure("duplicate original ZIP entry name"));
         }
     }
     Ok(Directory { start, size: directory_size, count: names.len(), base, eocd })
@@ -315,8 +309,11 @@ pub(super) fn preflight_with_work(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{open_package, PackageLimits};
     use super::*;
-    use crate::decoder::package::PackageReader;
+    fn open(bytes: &[u8]) -> CoreResult<super::super::Package<'_>> {
+        open_package(bytes, PackageLimits::default())
+    }
     use std::cell::Cell;
     use std::io::{self, Cursor};
     use std::rc::Rc;
@@ -397,15 +394,15 @@ mod tests {
                 directory
                     .open(Counted { cursor: Cursor::new(&bytes), read: read.clone() })
                     .unwrap();
-                assert!(PackageReader::new(&bytes).is_ok());
+                assert!(open(&bytes).is_ok());
                 // Fixed ZIP metadata I/O independent of the number/size of the
                 // rejected ZIP64 candidates. Detect mutation exceeds this.
                 assert!(read.get() < 8_192, "n={n} read={}", read.get());
             } else {
                 assert!(
-                    matches!(result, Err(HwpxError::Zip(ref s)) if s == "too many ZIP end-record candidates")
+                    matches!(result, Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "too many ZIP end-record candidates")
                 );
-                assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::Zip(_))));
+                assert!(matches!(open(&bytes), Err(CoreError::InvalidStructure { .. })));
                 assert_eq!(read.get(), 0);
             }
             assert!(work.candidates <= MAX_END_CANDIDATES + 1);
@@ -465,7 +462,8 @@ mod tests {
         assert_eq!(start, 23_630);
         let mut bytes = [FIXTURE[..start].to_vec(), FIXTURE.to_vec()].concat();
         bytes[start..start + 4].copy_from_slice(b"BAD!");
-        assert!(PackageReader::new(&bytes).is_err());
+        // Opening is lazy; the damaged first local header fails on content access.
+        assert!(open(&bytes).unwrap().read(0).is_err());
         let outer = start + end;
         bytes[outer + 20..outer + 22].copy_from_slice(&23u16.to_le_bytes());
         let mut fake = FIXTURE[end..].to_vec();
@@ -477,13 +475,13 @@ mod tests {
         assert_eq!(zip.offset(), 0);
         assert_eq!(zip.len(), 11);
         assert!(
-            matches!(PackageReader::new(&bytes), Err(HwpxError::Zip(ref s)) if s == "ambiguous ZIP end records")
+            matches!(open(&bytes), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
         );
         // Even if the embedded footer ends at EOF, two parseable EOCDs are ambiguous.
         *bytes.get_mut(outer + 20).unwrap() = 22;
         bytes.pop();
         assert!(
-            matches!(preflight(&bytes, LIMIT), Err(HwpxError::Zip(ref s)) if s == "ambiguous ZIP end records")
+            matches!(preflight(&bytes, LIMIT), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
         );
     }
 
@@ -503,7 +501,10 @@ mod tests {
                 bytes[end + field..end + field + 4].copy_from_slice(&value.to_le_bytes());
             }
             assert!(ZipArchive::new(Cursor::new(&bytes)).is_ok());
-            assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::Zip(_))), "field {field}");
+            assert!(
+                matches!(open(&bytes), Err(CoreError::InvalidStructure { .. })),
+                "field {field}"
+            );
         }
     }
 
@@ -526,7 +527,7 @@ mod tests {
             let archive = directory.open(Cursor::new(&bytes)).unwrap();
             assert_eq!(archive.raw_zip64_extensible_data_sector(), Some(b"ext-data".as_slice()));
             assert_eq!(archive.offset(), 6);
-            assert!(crate::HwpxDecoder::decode(&bytes).is_ok());
+            assert!(open(&bytes).is_ok());
         }
     }
 
@@ -557,7 +558,7 @@ mod tests {
         let end = bytes.len() - 22;
         let old = FIXTURE.len() - 22;
         bytes[end + 8..end + 20].copy_from_slice(&FIXTURE[old + 8..old + 20]);
-        assert!(matches!(preflight(&bytes, LIMIT), Err(HwpxError::Zip(_))));
+        assert!(matches!(preflight(&bytes, LIMIT), Err(CoreError::InvalidStructure { .. })));
     }
 
     /// 이것을 실패시키는 것: 후보 선택 후 terminal 검사 삭제, 또는 ZIP64 역방향 선택.
@@ -587,14 +588,14 @@ mod tests {
         edge[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
         edge.extend(vec![b'x'; u16::MAX as usize]);
         assert!(
-            matches!(preflight(&edge, LIMIT), Err(HwpxError::Zip(ref s)) if s == "ambiguous ZIP end records")
+            matches!(preflight(&edge, LIMIT), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
         );
         for original in [FIXTURE.to_vec(), zip64()] {
             let mut bytes = original.clone();
             let end = bytes.len() - 22;
             bytes[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
             bytes.extend(vec![b'x'; u16::MAX as usize]);
-            assert!(PackageReader::new(&bytes).is_ok());
+            assert!(open(&bytes).is_ok());
             for n in [63, 64] {
                 let mut bytes = original.clone();
                 bytes[end + 20..end + 22].copy_from_slice(&((n * 22) as u16).to_le_bytes());
@@ -606,7 +607,7 @@ mod tests {
                 }
                 // ZIP64 contributes one additional candidate after the tail scan.
                 let expected = n == 63 && original.len() == FIXTURE.len();
-                assert_eq!(PackageReader::new(&bytes).is_ok(), expected);
+                assert_eq!(open(&bytes).is_ok(), expected);
             }
         }
     }
@@ -630,7 +631,7 @@ mod tests {
             }
             let directory = preflight(&bytes, LIMIT).unwrap();
             assert_eq!(directory.base, 450 * 56, "{reason}");
-            assert!(PackageReader::new(&bytes).is_ok(), "{reason}");
+            assert!(open(&bytes).is_ok(), "{reason}");
         }
     }
 }

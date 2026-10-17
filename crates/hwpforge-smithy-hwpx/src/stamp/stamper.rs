@@ -8,7 +8,6 @@
 //! names and provenance are never used as a safety proxy.
 
 use std::collections::HashSet;
-use std::io::Cursor;
 
 use serde::Serialize;
 
@@ -1240,20 +1239,15 @@ pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), Stamper
 }
 
 fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, StamperError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())
         .map_err(|e| StamperError::Codec(format!("zip: {e}")))?;
-    let mut names = Vec::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let entry =
-            archive.by_index(i).map_err(|e| StamperError::Codec(format!("zip entry {i}: {e}")))?;
-        let name =
-            entry.name().map_err(|e| StamperError::Codec(format!("zip entry {i} name: {e}")))?;
-        // Directory placeholders are packaging detail, not content.
-        if !name.ends_with('/') {
-            names.push(name.into_owned());
-        }
-    }
-    Ok(names)
+    // Directory placeholders are packaging detail, not content.
+    Ok(archive
+        .entries()
+        .iter()
+        .filter(|entry| !entry.path.ends_with('/'))
+        .map(|entry| entry.path.clone())
+        .collect())
 }
 
 fn build_manifest(
@@ -1373,6 +1367,18 @@ fn build_manifest_v2(
 
 #[cfg(test)]
 mod tests {
+    /// 이것을 실패시키는 것: stamp의 ZIP 목록 읽기가 공용 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_stamp_rejects_parent_part() {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("Contents/../unused.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"x").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        assert!(matches!(super::zip_entry_names(&bytes), Err(super::StamperError::Codec(detail))
+            if detail.contains("invalid package part name 'Contents/../unused.xml'")));
+    }
+
     use hwpforge_core::image::ImageStore;
     use hwpforge_core::page::PageSettings;
     use hwpforge_core::run::Run;

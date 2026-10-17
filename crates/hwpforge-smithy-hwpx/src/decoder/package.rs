@@ -3,22 +3,13 @@
 //! [`PackageReader`] wraps a `ZipArchive` and provides safe access
 //! to the files inside an HWPX document archive.
 
-use std::io::{Cursor, Read};
-
-use zip::ZipArchive;
+use crate::package_path::package_error;
+use hwpforge_core::zip_package::{open_package, Package, PackageLimits};
 
 use crate::error::{HwpxError, HwpxResult};
 
-// ── Safety limits ────────────────────────────────────────────────
-
-/// Maximum decompressed size of a single entry (50 MB).
-pub(crate) const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
-
-/// Maximum total decompressed size across all entries (500 MB).
-pub(crate) const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
-
-/// Maximum number of entries in the archive.
-const MAX_ENTRIES: usize = 10_000;
+#[cfg(test)]
+use hwpforge_core::zip_package::{MAX_ENTRIES, MAX_ENTRY_SIZE};
 
 // ── HWPX constants ───────────────────────────────────────────────
 
@@ -40,14 +31,12 @@ const HEADER_PATH: &str = "Contents/header.xml";
 /// within the archive. Enforces safety limits on decompressed data
 /// to prevent ZIP bomb attacks.
 pub struct PackageReader<'a> {
-    archive: ZipArchive<Cursor<&'a [u8]>>,
+    archive: Package<'a>,
     /// Decoded names in archive order. zip 9's `by_name` only matches raw
     /// UTF-8 bytes, so CP437 entries must be read through their index.
     paths: Vec<String>,
     index_by_path: std::collections::BTreeMap<String, usize>,
     pub(crate) order: super::package_order::PackageOrder,
-    /// Cumulative bytes decompressed so far.
-    total_read: u64,
 }
 
 /// Metadata about a single ZIP entry inside an HWPX package.
@@ -69,43 +58,16 @@ impl<'a> PackageReader<'a> {
     /// - The entry count is within safety limits
     /// - A `mimetype` file exists with an accepted value
     pub fn new(bytes: &'a [u8]) -> HwpxResult<Self> {
-        let directory = super::package_directory::preflight(bytes, MAX_ENTRIES)?;
-        let cursor = Cursor::new(bytes);
-        let archive = directory.open(cursor)?;
-
+        let archive = open_package(bytes, PackageLimits::default()).map_err(package_error)?;
         let mut paths = Vec::new();
         let mut index_by_path = std::collections::BTreeMap::new();
-        let mut keys = std::collections::BTreeSet::new();
-        let metadata = archive.metadata();
-        for (index, name) in archive.file_names().enumerate() {
-            let path = name.map_err(|e| HwpxError::Zip(e.to_string()))?.into_owned();
-            // Empty directory records are ZIP metadata, not package parts.
-            // Hancom fixtures contain these. Only the final directory marker
-            // is removed; every actual component still uses the shared policy.
-            let directory = path.strip_suffix('/');
-            let key = crate::package_path::normalize_part_name(directory.unwrap_or(&path))?;
-            // 이것을 실패시키는 것: 디코딩/정규 키가 같은 파일·디렉터리를 병합하기.
-            if !keys.insert(key.to_string()) {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!("duplicate decoded ZIP entry name '{key}'"),
-                });
+        for (index, entry) in archive.entries().iter().enumerate() {
+            if !entry.path.ends_with('/') {
+                index_by_path.insert(entry.path.clone(), index);
+                paths.push(entry.path.clone());
             }
-            if directory.is_some() {
-                let entry = metadata.entry(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
-                // 이것을 실패시키는 것: 후행 /만 붙여 데이터 파트의 검사를 우회하기.
-                if entry.size() != 0 {
-                    return Err(HwpxError::InvalidStructure {
-                        detail: format!("nonempty ZIP directory entry '{path}'"),
-                    });
-                }
-                continue;
-            }
-            // Keep physical archive indices even when directory records were skipped.
-            index_by_path.insert(path.clone(), index);
-            paths.push(path);
         }
-        let mut reader =
-            Self { archive, paths, index_by_path, order: Default::default(), total_read: 0 };
+        let mut reader = Self { archive, paths, index_by_path, order: Default::default() };
         reader.validate_mimetype()?;
         let mut optional = |path: &str| {
             if reader.index_by_path.contains_key(path) {
@@ -168,16 +130,16 @@ impl<'a> PackageReader<'a> {
     /// Entries are returned in ZIP order so callers can compare package
     /// structure directly against a fixture.
     pub fn list_entries(&mut self) -> HwpxResult<Vec<PackageEntryInfo>> {
-        let mut entries = Vec::with_capacity(self.archive.len());
-        for index in 0..self.archive.len() {
-            let file = self.archive.by_index(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
-            entries.push(PackageEntryInfo {
-                path: file.name().map_err(|e| HwpxError::Zip(e.to_string()))?.into_owned(),
-                size: file.size(),
-                compressed_size: file.compressed_size(),
-            });
-        }
-        Ok(entries)
+        Ok(self
+            .archive
+            .entries()
+            .iter()
+            .map(|entry| PackageEntryInfo {
+                path: entry.path.clone(),
+                size: entry.size,
+                compressed_size: entry.compressed_size,
+            })
+            .collect())
     }
 
     /// Reads an arbitrary archive entry as UTF-8 text.
@@ -265,87 +227,13 @@ impl<'a> PackageReader<'a> {
     /// Similar to [`read_entry`] but returns `Vec<u8>` instead of `String`.
     pub(crate) fn read_binary_entry(&mut self, path: &str) -> HwpxResult<Vec<u8>> {
         let index = self.entry_index(path)?;
-        let file = self
-            .archive
-            .by_index(index)
-            .map_err(|_| HwpxError::MissingFile { path: path.to_string() })?;
-
-        let hint = file.size().min(MAX_ENTRY_SIZE) as usize;
-        let mut limited = file.take(MAX_ENTRY_SIZE + 1);
-
-        let mut buf = Vec::with_capacity(hint);
-        std::io::Read::read_to_end(&mut limited, &mut buf)
-            .map_err(|e| HwpxError::Zip(format!("read '{}': {}", path, e)))?;
-
-        if buf.len() as u64 > MAX_ENTRY_SIZE {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "entry '{}' decompressed to {} bytes, exceeds limit of {}",
-                    path,
-                    buf.len(),
-                    MAX_ENTRY_SIZE,
-                ),
-            });
-        }
-
-        self.total_read += buf.len() as u64;
-        if self.total_read > MAX_TOTAL_SIZE {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "total decompressed data ({} bytes) exceeds limit of {}",
-                    self.total_read, MAX_TOTAL_SIZE,
-                ),
-            });
-        }
-
-        Ok(buf)
+        self.archive.read(index).map_err(package_error)
     }
 
-    /// Reads a single entry from the archive as a UTF-8 string.
-    ///
-    /// Uses `Read::take()` to enforce the per-entry size limit regardless
-    /// of what the ZIP central directory reports (defense against ZIP bombs).
+    /// Reads a single entry as UTF-8 using the same byte budget as binary reads.
     fn read_entry(&mut self, path: &str) -> HwpxResult<String> {
-        let index = self.entry_index(path)?;
-        let file = self
-            .archive
-            .by_index(index)
-            .map_err(|_| HwpxError::MissingFile { path: path.to_string() })?;
-
-        // Use take() to enforce actual decompressed size limit.
-        // file.size() comes from the ZIP header and can be spoofed,
-        // so we cap the reader itself to MAX_ENTRY_SIZE + 1 bytes.
-        let hint = file.size().min(MAX_ENTRY_SIZE) as usize;
-        let mut limited = file.take(MAX_ENTRY_SIZE + 1);
-
-        let mut buf = String::with_capacity(hint);
-        limited
-            .read_to_string(&mut buf)
-            .map_err(|e| HwpxError::Zip(format!("read '{}': {}", path, e)))?;
-
-        if buf.len() as u64 > MAX_ENTRY_SIZE {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "entry '{}' decompressed to {} bytes, exceeds limit of {}",
-                    path,
-                    buf.len(),
-                    MAX_ENTRY_SIZE,
-                ),
-            });
-        }
-
-        // Enforce cumulative budget
-        self.total_read += buf.len() as u64;
-        if self.total_read > MAX_TOTAL_SIZE {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "total decompressed data ({} bytes) exceeds limit of {}",
-                    self.total_read, MAX_TOTAL_SIZE,
-                ),
-            });
-        }
-
-        Ok(buf)
+        String::from_utf8(self.read_binary_entry(path)?)
+            .map_err(|e| HwpxError::Zip(format!("read '{path}': {e}")))
     }
 
     fn entry_index(&self, path: &str) -> HwpxResult<usize> {
@@ -359,9 +247,8 @@ impl<'a> PackageReader<'a> {
 impl std::fmt::Debug for PackageReader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PackageReader")
-            .field("entries", &self.archive.len())
+            .field("entries", &self.archive.entries().len())
             .field("sections", &self.section_count())
-            .field("total_read", &self.total_read)
             .finish()
     }
 }
@@ -369,8 +256,9 @@ impl std::fmt::Debug for PackageReader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Cursor, Write};
     use zip::write::SimpleFileOptions;
+    use zip::ZipArchive;
     use zip::ZipWriter;
 
     /// Helper: creates a minimal valid HWPX ZIP in memory.
@@ -403,6 +291,19 @@ mod tests {
         r#"<?xml version="1.0" encoding="UTF-8"?><head version="1.4" secCnt="1"></head>"#;
 
     const MINIMAL_SECTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><sec></sec>"#;
+
+    /// 이것을 실패시키는 것: 디코더 입구에서 공용 ZIP 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_decoder_rejects_parent_part() {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in [("mimetype", "application/hwp+zip"), ("Contents/../unused.xml", "x")] {
+            zip.start_file(name, SimpleFileOptions::default()).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::InvalidStructure { detail })
+            if detail == "invalid package part name 'Contents/../unused.xml'"));
+    }
 
     // ── Construction ─────────────────────────────────────────────
 
@@ -841,7 +742,6 @@ mod tests {
         let record = bytes[start..].to_vec();
         bytes.extend(record);
         bytes.extend(eocd);
-        assert!(super::super::package_directory::preflight(&bytes, MAX_ENTRIES).is_err());
         assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::Zip(detail))
             if detail == "invalid ZIP central directory framing"));
     }
@@ -865,12 +765,10 @@ mod tests {
         ] {
             let mut bad = bytes.clone();
             bad[at] = value;
-            assert!(super::super::package_directory::preflight(&bad, MAX_ENTRIES).is_err());
             assert!(matches!(PackageReader::new(&bad), Err(HwpxError::Zip(_))), "offset {at}");
         }
         let mut bad = bytes.clone();
         bad[end + 8..end + 12].copy_from_slice(&[1, 0, 1, 0]);
-        assert!(super::super::package_directory::preflight(&bad, MAX_ENTRIES).is_err());
         assert!(matches!(PackageReader::new(&bad), Err(HwpxError::Zip(_))));
         let zip64 = with_zip64_footer(bytes);
         for at in [
@@ -886,7 +784,6 @@ mod tests {
         ] {
             let mut bad = zip64.clone();
             bad[at] = 0xff;
-            assert!(super::super::package_directory::preflight(&bad, MAX_ENTRIES).is_err());
             assert!(
                 matches!(PackageReader::new(&bad), Err(HwpxError::Zip(_))),
                 "ZIP64 offset {at}"
@@ -944,20 +841,20 @@ mod tests {
         let bytes = make_hwpx_zip("application/hwp+zip", "ab", &[]);
         for binary in [false, true] {
             let mut reader = PackageReader::new(&bytes).expect("package");
-            reader.total_read = MAX_TOTAL_SIZE - 2;
+            reader.archive =
+                open_package(&bytes, PackageLimits { total: 2, ..Default::default() }).unwrap();
             if binary {
                 assert_eq!(reader.read_binary_entry(HEADER_PATH).expect("exact cap"), b"ab");
             } else {
                 assert_eq!(reader.read_header_xml().expect("exact cap"), "ab");
             }
-            assert_eq!(reader.total_read, MAX_TOTAL_SIZE);
             let err = if binary {
                 reader.read_binary_entry(HEADER_PATH).expect_err("total")
             } else {
                 reader.read_header_xml().expect_err("total")
             };
             assert!(matches!(err, HwpxError::InvalidStructure { detail }
-                if detail == format!("total decompressed data ({} bytes) exceeds limit of {MAX_TOTAL_SIZE}", MAX_TOTAL_SIZE + 2)));
+                if detail == "total decompressed data (3 bytes) exceeds limit of 2"));
         }
     }
 }

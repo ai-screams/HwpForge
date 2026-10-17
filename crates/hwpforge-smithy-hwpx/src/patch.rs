@@ -5,12 +5,12 @@
 //! when the semantic change is text-only and a stable preservation plan exists.
 
 use std::collections::BTreeMap;
-use std::io::{Cursor, Read as _, Write as _};
+use std::io::{Cursor, Write as _};
 use std::ops::Range;
 
 use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipArchive, ZipWriter};
+use zip::{CompressionMethod, ZipWriter};
 
 use hwpforge_core::caption::Caption;
 use hwpforge_core::control::Control;
@@ -21,11 +21,13 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 
-use crate::decoder::package::{PackageReader, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
+use crate::decoder::package::PackageReader;
 use crate::error::{HwpxError, HwpxResult};
 use crate::exchange::{SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION};
 use crate::inline_text::encode_inline_text_xml;
+use crate::package_path::package_error;
 use crate::{HwpxDecoder, HwpxStyleStore};
+use hwpforge_core::zip_package::{open_package, PackageLimits, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE};
 
 /// Preserve-first patch engine for section-level edits.
 ///
@@ -474,38 +476,22 @@ impl RawPackage {
     /// the reader is limited with `take(max_entry + 1)` so a bomb stops one
     /// byte past the limit.
     fn read_capped(bytes: &[u8], max_entry: u64, max_total: u64) -> HwpxResult<Self> {
-        let cursor = Cursor::new(bytes);
-        let mut archive = ZipArchive::new(cursor).map_err(|e| HwpxError::Zip(e.to_string()))?;
-        let mut entries: Vec<RawPackageEntry> = Vec::with_capacity(archive.len());
-        let mut index_by_path: BTreeMap<String, usize> = BTreeMap::new();
-        let mut total_read: u64 = 0;
-
-        for index in 0..archive.len() {
-            let mut file = archive.by_index(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
-            let path = file.name().map_err(|e| HwpxError::Zip(e.to_string()))?.into_owned();
-            let mut data: Vec<u8> = Vec::new();
-            (&mut file)
-                .take(max_entry + 1)
-                .read_to_end(&mut data)
-                .map_err(|e| HwpxError::Zip(format!("read '{path}': {e}")))?;
-            if data.len() as u64 > max_entry {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!(
-                        "entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
-                        data.len(),
-                    ),
-                });
-            }
-            total_read += data.len() as u64;
-            if total_read > max_total {
-                return Err(HwpxError::InvalidStructure {
-                    detail: format!(
-                        "total decompressed data ({total_read} bytes) exceeds limit of {max_total}",
-                    ),
-                });
-            }
-            index_by_path.insert(path.clone(), entries.len());
-            entries.push(RawPackageEntry { path, bytes: data, compression: file.compression() });
+        let mut archive = open_package(
+            bytes,
+            PackageLimits { entry: max_entry, total: max_total, ..Default::default() },
+        )
+        .map_err(package_error)?;
+        let mut entries = Vec::with_capacity(archive.entries().len());
+        let mut index_by_path = BTreeMap::new();
+        for index in 0..archive.entries().len() {
+            let entry = archive.entries()[index].clone();
+            let data = archive.read(index).map_err(package_error)?;
+            index_by_path.insert(entry.path.clone(), entries.len());
+            entries.push(RawPackageEntry {
+                path: entry.path,
+                bytes: data,
+                compression: entry.compression,
+            });
         }
 
         Ok(Self { entries, index_by_path, order: Default::default() })
@@ -925,6 +911,7 @@ mod tests {
     use super::*;
     use crate::decoder::section::parse_section;
     use std::collections::HashMap;
+    use zip::ZipArchive;
 
     // 이것을 실패시키는 것: 보존 슬롯 전처리 생략(원문 표식 손실), 또는
     // 전처리의 네임스페이스 오류 무시.
@@ -953,6 +940,16 @@ mod tests {
             zip.write_all(&vec![0u8; *size]).unwrap();
         }
         zip.finish().unwrap().into_inner()
+    }
+
+    /// 이것을 실패시키는 것: patch의 두 번째 ZIP 읽기가 공용 이름 검사를 우회하기.
+    #[test]
+    fn zip9_fix3_patch_rejects_parent_part() {
+        let bytes = zeros_zip(&[("Contents/../unused.xml", 1)]);
+        // Call the raw reread directly: the preceding decoder must not mask a bypass.
+        assert!(matches!(RawPackage::read_capped(&bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE),
+            Err(HwpxError::InvalidStructure { detail })
+            if detail == "invalid package part name 'Contents/../unused.xml'"));
     }
 
     /// Rewrites the declared uncompressed size in every central-directory
@@ -1044,7 +1041,7 @@ mod tests {
 
         match err {
             HwpxError::InvalidStructure { detail } => {
-                assert_eq!(detail, "total decompressed data (1200 bytes) exceeds limit of 1000")
+                assert_eq!(detail, "total decompressed data (1001 bytes) exceeds limit of 1000")
             }
             other => panic!("expected InvalidStructure, got {other:?}"),
         }

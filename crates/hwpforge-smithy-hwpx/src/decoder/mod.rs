@@ -11,7 +11,6 @@ pub(crate) mod header;
 pub(crate) mod image_size;
 pub(crate) mod metadata;
 pub(crate) mod package;
-mod package_directory;
 pub(crate) mod package_order;
 pub(crate) mod section;
 pub(crate) mod shapes;
