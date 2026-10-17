@@ -509,6 +509,26 @@ pub struct PageNumber {
 }
 
 impl PageNumber {
+    /// Derives the legacy section summary from positioned controls. The run
+    /// remains the authoritative value and location when encoding.
+    pub fn first_in(paragraphs: &[Paragraph]) -> Option<Self> {
+        let mut first = None;
+        for p in paragraphs {
+            p.for_each_paragraph(|q| {
+                for run in &q.runs {
+                    if let crate::run::RunContent::Control(c) = &run.content {
+                        if let crate::control::Control::PageNumber { number } = c.as_ref() {
+                            if first.is_none() {
+                                first = Some(number.clone());
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        first
+    }
+
     /// Creates a new page number with no decoration.
     pub fn new(position: PageNumberPosition, number_format: NumberFormatType) -> Self {
         Self { position, number_format, decoration: String::new() }
@@ -619,7 +639,10 @@ pub struct Section {
     /// See `headers` for the cardinality rationale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footers: Vec<HeaderFooter>,
-    /// Optional page number settings for this section.
+    /// Legacy section-wide page number settings. Decoders derive this summary
+    /// from the first positioned `Control::PageNumber`; positioned controls
+    /// carry the authoritative values and locations. With no positioned
+    /// controls, the encoder emits this setting at the section start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number: Option<PageNumber>,
     /// Multi-column layout. `None` = single column (default).
@@ -650,6 +673,11 @@ pub struct Section {
 }
 
 impl Section {
+    /// Whether the legacy page-number setting needs a default anchor.
+    pub fn needs_page_number_injection(&self) -> bool {
+        self.page_number.is_some() && PageNumber::first_in(&self.paragraphs).is_none()
+    }
+
     /// 이 섹션의 문단을 문서 순서로 방문한다 — 본문 → 머리말 → 꼬리말 →
     /// 바탕쪽, 각 문단은 자신을 먼저 방문한 뒤 run 안으로 내려간다.
     ///

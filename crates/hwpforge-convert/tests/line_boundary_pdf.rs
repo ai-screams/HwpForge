@@ -14,10 +14,9 @@
 //!   `secd · cold · pgnp · tbl`, keeping both lines' cached positions. The
 //!   encoder writes `secPr · colPr · pageNum` ahead of the table in that
 //!   order, so the second line is placed after them.
-//! - **unrestorable** leaves the first paragraph alone and puts `pgnp` ahead
-//!   of the table in the host. A page-number position outside a section's
-//!   first paragraph is consumed, not written, so the boundary names a token
-//!   the output does not have and the paragraph's cache is dropped.
+//! - A later page-number host now preserves its token and cache too.
+//! - A malformed page-hiding control supplies the negative boundary case:
+//!   its marker cannot be emitted, so its cache must be dropped.
 
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Write};
@@ -265,20 +264,38 @@ fn restorable() -> (Vec<u8>, Vec<[i64; 9]>) {
     (write_streams(&streams), source)
 }
 
-/// The first paragraph as is; the host becomes `pgnp · tbl` with line 1 at
-/// the table (wire 8).
-fn unrestorable() -> Vec<u8> {
+/// Keep the first paragraph. The valid host is `가 · pgnp · 나 · tbl`,
+/// with line 1 just after pgnp (wire 9). Text on both sides distinguishes
+/// the original marker from a control drained later at the table/end.
+/// The malformed host remains `pghd · tbl` (wire 8).
+fn later_control_host(preserve_page_number: bool) -> Vec<u8> {
     let Fullsz { mut streams, records, host, after } = fullsz();
     let seg = &records[host + 3];
     let mut lines = line_at(seg, 0);
-    lines.extend(line_at(seg, 8));
+    lines.extend(line_at(seg, if preserve_page_number { 9 } else { 8 }));
     let mut out: Vec<Record> = records[..host].to_vec();
+    let marker = if preserve_page_number { PGNP } else { (0x15, *b"pghd") };
+    let header = if preserve_page_number {
+        pgnp_record(records[host + 4].level)
+    } else {
+        Record { tag: TAG_CTRL_HEADER, level: records[host + 4].level, data: b"dhgp".to_vec() }
+    };
+    let mut text = para_text(&[marker, TBL]);
+    if preserve_page_number {
+        text.splice(16..16, ('나' as u16).to_le_bytes());
+        text.splice(0..0, ('가' as u16).to_le_bytes());
+    }
     out.extend([
-        para_header(&records[host], 17, 1 << 11 | 1 << 21, 2),
-        Record { data: para_text(&[PGNP, TBL]), ..records[host + 1].clone() },
+        para_header(
+            &records[host],
+            if preserve_page_number { 19 } else { 17 },
+            1 << 11 | 1 << 21,
+            2,
+        ),
+        Record { data: text, ..records[host + 1].clone() },
         records[host + 2].clone(),
         Record { data: lines, ..seg.clone() },
-        pgnp_record(records[host + 4].level),
+        header,
     ]);
     out.extend(records[host + 4..after].iter().cloned());
     out.extend(records[after..].iter().cloned());
@@ -456,7 +473,7 @@ fn a_restorable_table_host_keeps_its_lines_on_both_pdf_paths() {
     assert_eq!(refusals[0], refusals[1], "both paths refuse the same way");
 }
 
-/// G5 (2): the boundary names a page-number token the output does not have,
+/// G5 (2): the boundary names a malformed page-hiding token the output cannot emit,
 /// so the host's cache is dropped with one warning, and both PDF paths refuse
 /// the same paragraph for its missing cache.
 ///
@@ -464,13 +481,13 @@ fn a_restorable_table_host_keeps_its_lines_on_both_pdf_paths() {
 /// (경고 0 이 되고 두 경로가 렌더를 시도).
 #[test]
 fn an_unrestorable_table_host_is_dropped_and_refused_at_the_same_place() {
-    let hwp = unrestorable();
+    let hwp = later_control_host(false);
     let (hwpx, warnings) =
         hwp5_to_hwpx_bytes_with_diagnostics(&hwp, ConvertOptions::default()).expect("convert");
     let drops = cache_drops(&warnings);
     assert_eq!(drops.len(), 1, "{warnings:?}");
     assert!(drops[0].contains("BodyParagraph(1)]"), "{drops:?}");
-    assert!(drops[0].contains("skip [PageNumber]"), "{drops:?}");
+    assert!(drops[0].contains("skip [PageHiding]"), "{drops:?}");
 
     let locations: Vec<Option<String>> = [&hwp[..], &hwpx[..]]
         .iter()
@@ -482,4 +499,21 @@ fn an_unrestorable_table_host_is_dropped_and_refused_at_the_same_place() {
         .collect();
     assert_eq!(locations[0], locations[1]);
     assert_eq!(locations[0].as_deref(), Some("s0/p1"));
+}
+
+/// 이것을 실패시키는 것: 뒤 문단 쪽번호를 구역 처음으로 옮겨 캐시 경계를 잃기.
+#[test]
+fn later_page_number_host_keeps_its_exact_boundary() {
+    let hwp = later_control_host(true);
+    let (hwpx, warnings) =
+        hwp5_to_hwpx_bytes_with_diagnostics(&hwp, ConvertOptions::default()).unwrap();
+    assert!(cache_drops(&warnings).is_empty(), "{warnings:?}");
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&hwpx).unwrap();
+    let paragraph = &decoded.document.sections()[0].paragraphs[1];
+    let cache = paragraph.layout_cache.as_ref().unwrap();
+    assert_eq!(cache.lines.len(), 2);
+    assert!(matches!(&paragraph.runs[0].content, hwpforge_core::RunContent::Text(t) if t == "가"));
+    assert!(matches!(&paragraph.runs[1].content, hwpforge_core::RunContent::Control(c)
+        if matches!(c.as_ref(), hwpforge_core::Control::PageNumber { .. })));
+    assert!(matches!(&paragraph.runs[2].content, hwpforge_core::RunContent::Text(t) if t == "나"));
 }

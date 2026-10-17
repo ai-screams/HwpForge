@@ -157,8 +157,9 @@ pub(crate) fn decode_intermediate(bytes: &[u8]) -> Hwp5Result<DecodedHwp5Interme
 
     let mut sections: Vec<SectionResult> = Vec::with_capacity(pkg.sections_data().len());
     for section_data in pkg.sections_data() {
-        let result = section::parse_body_text(section_data, &pkg.file_header().version)?;
-        warnings.extend(result.warnings.iter().cloned());
+        let mut result = section::parse_body_text(section_data, &pkg.file_header().version)?;
+        // Transfer ownership: projection must not report these events again.
+        warnings.append(&mut result.warnings);
         sections.push(result);
     }
 

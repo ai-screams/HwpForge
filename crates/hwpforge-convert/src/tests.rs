@@ -2120,6 +2120,7 @@ fn hwp5_to_hwpx_user_sample_tab_preserves_inline_tab_text_and_custom_tab_def() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// 이것을 실패시키는 것: 셀의 cold 구역 설정 손실 경고 제거/중복 또는 탭 본문 손실.
 #[test]
 fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
     let source = fixture_path("user_samples/tabs/sample-table-tab.hwp");
@@ -2130,10 +2131,17 @@ fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
     let out = unique_temp_path("user-sample-table-tab.hwpx");
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("user sample table tab conversion should succeed");
-    // Phase 2: inline tab carry restored full parity here too.
+    // The fixture has its own cold record at level 3 in the table cell.
+    // Inline tabs survive; the unsupported independent column scope is reported.
     assert!(
-        warnings.is_empty(),
-        "controlled table-tab fixture should convert without warnings, saw {warnings:?}"
+        matches!(
+            warnings.as_slice(),
+            [ConvertWarning::Hwp5(Hwp5Warning::DroppedControl {
+                control: "nested_section_settings",
+                reason,
+            })] if reason.contains("no independent Core section scope")
+        ),
+        "table-tab fixture should report exactly its nested column scope loss: {warnings:?}"
     );
 
     assert_valid_hwpx(&out);
@@ -4508,4 +4516,175 @@ fn border_fill_image_without_its_asset_is_left_out_of_the_conversion() {
         )),
         "{warnings:?}"
     );
+}
+
+fn r5_record(tag: u32, level: u32, data: &[u8]) -> Vec<u8> {
+    let mut bytes = (tag | (level << 10) | ((data.len() as u32) << 20)).to_le_bytes().to_vec();
+    bytes.extend(data);
+    bytes
+}
+
+fn r5_paragraph(level: u32, text: &str) -> Vec<u8> {
+    let mut b = r5_record(0x42, level, &[0; 22]);
+    b.extend(r5_record(
+        0x43,
+        level + 1,
+        &text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>(),
+    ));
+    b
+}
+
+fn r5_table(level: u32, height: u32, cells: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    let mut ctrl = vec![0; 24];
+    ctrl[..4].copy_from_slice(&0x7462_6c20u32.to_le_bytes());
+    ctrl[16..20].copy_from_slice(&9000u32.to_le_bytes());
+    ctrl[20..24].copy_from_slice(&height.to_le_bytes());
+    let mut b = r5_record(0x47, level, &ctrl);
+    let mut table = vec![0; 20];
+    table[4..6].copy_from_slice(&1u16.to_le_bytes());
+    table[6..8].copy_from_slice(&(cells.len() as u16).to_le_bytes());
+    b.extend(r5_record(0x4d, level + 1, &table));
+    for (column, paragraphs) in cells {
+        let mut cell = vec![0; 34];
+        cell[..4].copy_from_slice(&1u32.to_le_bytes());
+        cell[8..10].copy_from_slice(&column.to_le_bytes());
+        cell[12..14].copy_from_slice(&1u16.to_le_bytes());
+        cell[14..16].copy_from_slice(&1u16.to_le_bytes());
+        cell[16..20].copy_from_slice(&9000u32.to_le_bytes());
+        // Deliberately distinct from ctrl height, so a discarded hint cannot
+        // accidentally look as if it was applied to the right object.
+        cell[20..24].copy_from_slice(&3000u32.to_le_bytes());
+        b.extend(r5_record(0x48, level + 1, &cell));
+        b.extend(paragraphs);
+    }
+    b
+}
+
+fn r5_hwp(section: &[u8]) -> Vec<u8> {
+    use std::io::{Cursor, Read, Write};
+    let original =
+        std::fs::read(fixture_path("user_samples/sample-field-hyperlink-basic.hwp")).unwrap();
+    let mut file = cfb::CompoundFile::open(Cursor::new(original)).unwrap();
+    let mut header = Vec::new();
+    file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+    let section = if header[36] & 1 != 0 {
+        let mut compressor =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        compressor.write_all(section).unwrap();
+        compressor.finish().unwrap()
+    } else {
+        section.to_vec()
+    };
+    file.create_stream("/BodyText/Section0").unwrap().write_all(&section).unwrap();
+    file.into_inner().into_inner()
+}
+
+/// 이것을 실패시키는 것: 원시 셀 순서 검사를 제거하거나 불확실한 구역 힌트를 계속 반환.
+#[test]
+fn r5_reordered_nested_tables_discard_hints_in_final_conversion() {
+    for reversed in [false, true] {
+        let mut a = r5_paragraph(2, "cell-A");
+        a.extend(r5_table(3, 1111, &[(0, r5_paragraph(4, "inner-A"))]));
+        let mut b = r5_paragraph(2, "cell-B");
+        b.extend(r5_table(3, 2222, &[(0, r5_paragraph(4, "inner-B"))]));
+        let cells = if reversed { vec![(1, a), (0, b)] } else { vec![(0, b), (1, a)] };
+        let mut section = r5_paragraph(0, "body");
+        section.extend(r5_table(1, 9999, &cells));
+        for header in [false, true] {
+            let section = if header {
+                let mut wrapped = r5_paragraph(0, "header-anchor");
+                wrapped.extend(r5_record(0x47, 1, &0x6865_6164u32.to_le_bytes()));
+                wrapped.extend(r5_record(0x48, 2, &1u32.to_le_bytes()));
+                for record in hwpforge_smithy_hwp5::schema::record::Record::parse_stream(
+                    &mut std::io::Cursor::new(&section),
+                )
+                .unwrap()
+                {
+                    wrapped.extend(r5_record(
+                        u32::from(record.header.tag_id),
+                        u32::from(record.header.level) + 2,
+                        &record.data,
+                    ));
+                }
+                wrapped
+            } else {
+                section.clone()
+            };
+            for carry in [false, true] {
+                let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+                    &r5_hwp(&section),
+                    crate::ConvertOptions::default().with_carry_layout_cache(carry),
+                )
+                .unwrap();
+                let xml = PackageReader::new(&hwpx).unwrap().read_section_xml(0).unwrap();
+                assert!(xml.find("inner-B").unwrap() < xml.find("inner-A").unwrap());
+                let discarded: Vec<_> = warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback {
+                            subject: "layout_hints.discarded",
+                            reason,
+                        }) => Some(reason),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(discarded.len(), usize::from(reversed), "{warnings:?}");
+                if reversed {
+                    assert!(discarded[0].contains("raw table cell order"));
+                    assert!(!xml.contains("height=\"1111\""));
+                    assert!(!xml.contains("height=\"2222\""));
+                } else {
+                    assert!(xml.contains("height=\"1111\""));
+                    assert!(xml.contains("height=\"2222\""));
+                }
+            }
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: scope 수집기가 건너뛴 중첩 머리말/꼬리말을 신뢰하거나 경고 삭제.
+#[test]
+fn r5_nested_header_footer_discard_hints_in_final_conversion() {
+    // The exact textbox → header/footer counterexample, through final patching.
+    for id in [0x6865_6164u32, 0x666f_6f74] {
+        let mut section = r5_paragraph(0, "body");
+        section.extend(r5_record(0x45, 1, &[0; 36]));
+        let mut ctrl = vec![0; 24];
+        ctrl[..4].copy_from_slice(&0x6773_6f20u32.to_le_bytes());
+        ctrl[16..20].copy_from_slice(&9000u32.to_le_bytes());
+        ctrl[20..24].copy_from_slice(&3000u32.to_le_bytes());
+        section.extend(r5_record(0x47, 1, &ctrl));
+        let mut shape = b"cer$cer$".to_vec();
+        shape.extend([0; 10]);
+        shape.extend(1u16.to_le_bytes());
+        shape.extend(9000u32.to_le_bytes());
+        shape.extend(3000u32.to_le_bytes());
+        shape.extend([0; 22]);
+        shape.extend(1u16.to_le_bytes());
+        for _ in 0..3 {
+            for value in [1.0f64, 0.0, 0.0, 0.0, 1.0, 0.0] {
+                shape.extend(value.to_le_bytes());
+            }
+        }
+        shape.extend([0; 17]);
+        section.extend(r5_record(0x4c, 2, &shape));
+        section.extend(r5_record(0x4f, 3, &[0; 33]));
+        section.extend(r5_record(0x48, 3, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        section.extend(r5_paragraph(3, "textbox"));
+        section.extend(r5_record(0x47, 4, &id.to_le_bytes()));
+        section.extend(r5_record(0x48, 5, &1u32.to_le_bytes()));
+        section.extend(r5_paragraph(5, "nested-head-foot"));
+        for carry in [false, true] {
+            let (hwpx, warnings) = crate::hwp5_to_hwpx_bytes_with_diagnostics(
+                &r5_hwp(&section),
+                crate::ConvertOptions::default().with_carry_layout_cache(carry),
+            )
+            .unwrap();
+            let xml = PackageReader::new(&hwpx).unwrap().read_section_xml(0).unwrap();
+            assert!(xml.contains("nested-head-foot"));
+            assert!(warnings.iter().any(|w| matches!(w,
+                ConvertWarning::Hwp5(Hwp5Warning::ProjectionFallback { subject: "layout_hints.discarded", reason })
+                if reason.contains("nested header/footer") && reason.contains("skipped"))), "{warnings:?}");
+        }
+    }
 }

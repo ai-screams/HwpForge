@@ -179,7 +179,7 @@ pub(crate) fn parse_section_with_images(
     let mut ctx = DecodeCtx::for_section(section_index, part);
     ctx.source = source;
     ctx.image_pixels = image_pixels.clone();
-    let mut page_number = None;
+
     let mut column_settings = None;
     let mut visibility = None;
     let mut line_number_shape = None;
@@ -246,11 +246,6 @@ pub(crate) fn parse_section_with_images(
                             column_settings = Some(cs);
                         }
                     }
-                    if page_number.is_none() {
-                        if let Some(pn) = convert_ctrl_page_number(ctrl, &mut ctx.warnings) {
-                            page_number = Some(pn);
-                        }
-                    }
                 }
 
                 // Chart runs (from <hp:switch><hp:case><hp:chart>)
@@ -279,6 +274,7 @@ pub(crate) fn parse_section_with_images(
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
+    let page_number = PageNumber::first_in(&paragraphs);
     Ok(SectionParseResult {
         paragraphs,
         page_settings,
@@ -1374,6 +1370,9 @@ fn convert_ctrl_child<'a>(
             if present && !lifted {
                 ctx.content_lost(kind, format!("{kind} in a place a {kind} is not carried from"));
             }
+        }
+        if let Some(number) = convert_ctrl_page_number(ctrl, &mut ctx.warnings) {
+            runs.push(Run::control(Control::PageNumber { number }, char_shape_id));
         }
         if let Some(run) = decode_footnote(ctrl, char_shape_id, depth, ctx)? {
             runs.push(run);

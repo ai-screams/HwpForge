@@ -330,6 +330,10 @@ pub struct Hwp5SectionCensus {
     pub tag_counts: Vec<Hwp5TagCount>,
     /// `CtrlHeader` IDs seen in the section.
     pub ctrl_ids: Vec<Hwp5CtrlIdCount>,
+    /// Visible Unicode scalar count in raw PARA_TEXT records, independent of
+    /// paragraph/control decoding. Extended control payloads and paragraph
+    /// terminators are excluded; tabs, line breaks and spaces count once.
+    pub para_text_chars: usize,
 }
 
 /// Count of a single tag ID in a decompressed HWP5 stream.
@@ -493,6 +497,11 @@ pub fn census_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5CensusReport> {
             decoded_size_bytes: section_data.len(),
             record_count: records.len(),
             tag_counts: summarize_tag_counts(&records),
+            para_text_chars: records
+                .iter()
+                .filter(|r| r.header.tag_id == 0x43)
+                .map(|r| raw_para_text_chars(&r.data))
+                .sum(),
             ctrl_ids: ctrl_counts
                 .into_iter()
                 .map(|(ctrl_id, (count, levels))| Hwp5CtrlIdCount {
@@ -524,6 +533,37 @@ pub fn census_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5CensusReport> {
         sections,
         bin_data_streams,
     })
+}
+
+/// Independent wire census: deliberately does not call Hwp5ParaText::parse.
+fn raw_para_text_chars(data: &[u8]) -> usize {
+    let units: Vec<u16> = data.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    let mut i = 0;
+    let mut count = 0;
+    while let Some(&unit) = units.get(i) {
+        match unit {
+            1..=9 | 11..=12 | 14..=23 => {
+                if unit == 9 {
+                    count += 1;
+                }
+                i += 8;
+            }
+            10 | 24 | 30 | 31 => {
+                count += 1;
+                i += 1;
+            }
+            0..=31 => i += 1,
+            0xD800..=0xDBFF if units.get(i + 1).is_some_and(|u| (0xDC00..=0xDFFF).contains(u)) => {
+                count += 1;
+                i += 2;
+            }
+            _ => {
+                count += 1;
+                i += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Builds a raw fixture census for an HWP5 document on disk.
@@ -689,8 +729,9 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         .collect();
     let (image_assets, mut budget) = join_hwp5_image_assets(bytes, &intermediate, budget_limit)?;
     let ole_assets = join_hwp5_ole_assets(bytes, &intermediate, &mut budget)?;
-    let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
+    let layout_hints =
+        layout_hint_patch::capture_layout_hints(&intermediate.sections, &mut warnings);
     // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
     // the projected Core Document so a downstream encoder emits a populated
     // `<opf:metadata>` block.
@@ -1016,6 +1057,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::NewNumber(_)
             | decoder::section::Hwp5Control::PageHiding(_)
             | decoder::section::Hwp5Control::OleObject(_)
+            | decoder::section::Hwp5Control::Bookmark { .. }
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
     }
@@ -1232,3 +1274,16 @@ fn summarize_document(sections: &[Hwp5SectionSummary]) -> Hwp5DocumentSummary {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod raw_census_tests {
+    /// 이것을 실패시키는 것: 제어 payload까지 글자로 세기 / surrogate를 두 자로 세기.
+    #[test]
+    fn raw_para_text_counts_scalars_and_skips_control_payloads() {
+        let mut units: Vec<u16> = "A😀가".encode_utf16().collect();
+        units.extend([0x17, 0x7073, 0x7463, 123, 456, 789, 999, 0x17]);
+        units.extend([9, 0, 0, 0, 0, 0, 0, 9, 10, 24, 30, 31, 13]);
+        let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
+        assert_eq!(super::raw_para_text_chars(&bytes), 8);
+    }
+}

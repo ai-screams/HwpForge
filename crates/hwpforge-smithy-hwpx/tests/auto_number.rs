@@ -226,3 +226,101 @@ fn caption_text_after_its_number_is_patched() {
         .collect();
     assert_eq!(numbers, [3, 4, 7]);
 }
+
+/// 이것을 실패시키는 것: pageNum 슬롯 전진을 각주·미주 처리 뒤로 이동하거나 삭제.
+/// XML 자식 순서 양쪽에서 실제 Core run 경로로 주석 본문을 보존 편집한다.
+#[test]
+fn r1_page_number_and_note_in_one_ctrl_preserve_the_same_run_order() {
+    use hwpforge_core::run::RunContent;
+    let original = fixture("user_samples/sample-field-footnote.hwpx");
+    let original_xml = section_xml(&original);
+    let page = r#"<hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/>"#;
+    for endnote in [false, true] {
+        let note_tag = if endnote { "endNote" } else { "footNote" };
+        let xml = if endnote {
+            original_xml
+                .replace("<hp:footNote ", "<hp:endNote ")
+                .replace("</hp:footNote>", "</hp:endNote>")
+        } else {
+            original_xml.clone()
+        };
+        for page_first in [false, true] {
+            let xml = if page_first {
+                xml.replacen(&format!("<hp:{note_tag} "), &format!("{page}<hp:{note_tag} "), 1)
+            } else {
+                xml.replacen(&format!("</hp:{note_tag}>"), &format!("</hp:{note_tag}>{page}"), 1)
+            };
+            let base = with_section(&original, &xml);
+            let decoded = HwpxDecoder::decode(&base).unwrap();
+            let section = decoded.document.sections()[0].clone();
+            let mut replacement = section.clone();
+            let mut edited = false;
+            for paragraph in &mut replacement.paragraphs {
+                let Some(page_index) = paragraph.runs.iter().position(|r| matches!(&r.content, RunContent::Control(c) if matches!(**c, Control::PageNumber { .. }))) else { continue; };
+                let RunContent::Control(note) = &mut paragraph.runs[page_index + 1].content else {
+                    panic!("note follows page run")
+                };
+                let paragraphs = match &mut **note {
+                    Control::Footnote { paragraphs, .. } if !endnote => paragraphs,
+                    Control::Endnote { paragraphs, .. } if endnote => paragraphs,
+                    other => panic!("wrong run order: {other:?}"),
+                };
+                let text = paragraphs
+                    .iter_mut()
+                    .flat_map(|p| &mut p.runs)
+                    .find_map(|r| match &mut r.content {
+                        RunContent::Text(t) if !t.is_empty() => Some(t),
+                        _ => None,
+                    })
+                    .expect("note text");
+                *text = "쪽번호 뒤 주석 수정".to_string();
+                edited = true;
+            }
+            assert!(edited);
+            let preservation =
+                HwpxPatcher::export_section_preservation(&base, 0, &section).unwrap();
+            let patched = HwpxPatcher::patch_section_preserving(
+                &base,
+                0,
+                &replacement,
+                None,
+                Some(&preservation),
+            )
+            .unwrap();
+            let output = section_xml(&patched);
+            assert!(output.contains("쪽번호 뒤 주석 수정"));
+            assert!(output.contains(page));
+            let reparsed = HwpxDecoder::decode(&patched).unwrap();
+            // Editing invalidates layout caches; compare the semantic tree.
+            fn without_cache(value: &mut serde_json::Value) {
+                match value {
+                    serde_json::Value::Object(map) => {
+                        map.remove("layout_cache");
+                        map.values_mut().for_each(without_cache);
+                    }
+                    serde_json::Value::Array(items) => items.iter_mut().for_each(without_cache),
+                    _ => {}
+                }
+            }
+            let mut expected = serde_json::to_value(&replacement).unwrap();
+            let mut actual = serde_json::to_value(&reparsed.document.sections()[0]).unwrap();
+            without_cache(&mut expected);
+            without_cache(&mut actual);
+            assert_eq!(actual["paragraphs"], expected["paragraphs"]);
+            let mut before = zip::ZipArchive::new(Cursor::new(&base)).unwrap();
+            let mut after = zip::ZipArchive::new(Cursor::new(&patched)).unwrap();
+            for i in 0..before.len() {
+                let mut entry = before.by_index(i).unwrap();
+                let name = entry.name().expect("ZIP entry name").into_owned();
+                if name == "Contents/section0.xml" {
+                    continue;
+                }
+                let mut a = Vec::new();
+                let mut b = Vec::new();
+                entry.read_to_end(&mut a).unwrap();
+                after.by_name(&name).unwrap().read_to_end(&mut b).unwrap();
+                assert_eq!(a, b, "untouched entry {name}");
+            }
+        }
+    }
+}

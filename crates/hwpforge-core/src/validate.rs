@@ -571,6 +571,7 @@ fn validate_control_run(
         // medium: do not let new variants slide through with a blanket `Ok(())`.
         Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
         Control::DateCodeField { .. }
+        | Control::PageNumber { .. }
         | Control::InlinePageNumber { .. }
         | Control::PathField { .. } => Ok(()),
         // W2 (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이

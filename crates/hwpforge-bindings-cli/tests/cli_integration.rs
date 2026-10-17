@@ -1187,7 +1187,7 @@ fn audit_hwp5_human_report() {
     assert_eq!(code, 0);
     assert!(stdout.contains("Audit:"));
     assert!(stdout.contains("Status:"));
-    assert!(stdout.contains("Source metrics come from parser-backed HWP5 semantic truth."));
+    assert!(stdout.contains("independent raw record census"));
     assert!(stdout.contains("Visual Checklist:"));
     assert!(stdout.contains("tables"));
 }
@@ -6518,5 +6518,84 @@ fn audit_hwp5_cell_header_mixedhdr_matches_source() {
             .map(|c| c["is_header"].as_bool().unwrap_or(false))
             .collect();
         assert_eq!(flags, [false, false, true, false], "{side}");
+    }
+}
+
+/// 이것을 실패시키는 것: 원본 집계를 semantic parser로 되돌리거나 원시 비교를 빼기.
+#[test]
+fn audit_hwp5_raw_records_detect_nested_content_loss() {
+    for (name, tag, metric, expected) in [
+        ("nested_controls/compose-link.hwp", "compose", "compose_controls", "3"),
+        ("shapes/group-f2-textbox-table.hwp", "tbl", "table_records", "1"),
+    ] {
+        let source = fixture(name);
+        let tmp = test_tmp();
+        let full = tmp.join("full.hwpx");
+        hwpforge_convert::hwp5_to_hwpx(&source, &full).unwrap();
+        let (good, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), full.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        let key = format!("raw.sections[0].{metric}");
+        let find = |v: &serde_json::Value| {
+            v["comparisons"].as_array().unwrap().iter().find(|v| v["field"] == key).unwrap().clone()
+        };
+        assert_eq!(find(&good)["source"], expected);
+        assert_eq!(find(&good)["verdict"], "MATCH");
+        if tag == "tbl" {
+            assert_eq!(good["source"]["totals"]["tables"], 1);
+            assert_eq!(good["source"]["sections"][0]["tables"], 1);
+        }
+        let input = std::fs::read(&full).unwrap();
+        let mut zip = ZipArchive::new(std::io::Cursor::new(input)).unwrap();
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name().expect("ZIP entry name") == "Contents/section0.xml" {
+                let mut xml = String::from_utf8(bytes).unwrap();
+                let open = format!("<hp:{tag} ");
+                let close = format!("</hp:{tag}>");
+                while let Some(start) = xml.find(&open) {
+                    let end = start + xml[start..].find(&close).unwrap() + close.len();
+                    xml.replace_range(start..end, "");
+                }
+                bytes = xml.into_bytes();
+            }
+            writer
+                .start_file(
+                    entry.name().expect("ZIP entry name"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        let damaged = tmp.join("lost.hwpx");
+        std::fs::write(&damaged, writer.finish().unwrap().into_inner()).unwrap();
+        let (bad, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), damaged.to_str().unwrap()]);
+        assert_eq!(code, 0);
+        assert_eq!(bad["status"], "mismatch");
+        assert_eq!(find(&bad)["source"], expected);
+        assert_eq!(find(&bad)["output"], "0");
+        assert_eq!(find(&bad)["verdict"], "DIFF");
+        if tag == "tbl" {
+            let controls = bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v["field"] == "raw.sections[0].table_controls")
+                .unwrap();
+            assert_eq!(controls["source"], "1");
+            assert_eq!(controls["output"], "0");
+            assert_eq!(controls["verdict"], "DIFF");
+            assert!(bad["comparisons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["field"] == "raw.sections[0].para_text_chars"
+                    && v["source"] == "19"
+                    && v["output"] == "15"));
+        }
     }
 }

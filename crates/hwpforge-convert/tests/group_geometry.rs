@@ -576,21 +576,13 @@ fn f12_group_in_a_table_cell_matches_hancom() {
     assert_eq!(groups_in(cell_paragraphs(paragraphs)).len(), 1);
 }
 
-/// F2: a group holding a text box with a table and a picture in it. The
-/// group child parser keeps only the text box's own text, so the text box
-/// stays and the two objects in it are reported, one each. Hancom's HWPX twin
-/// carries both objects, so its decode reports nothing. Before, the
-/// picture's records leaked into the text box's own and the whole text box
-/// was dropped.
-///
-/// 이것을 실패시키는 것: 묶음 자식 아래 `CtrlHeader` 수집을 지우는 것, 자식의
-/// 도형 기록을 자기 수준으로 제한하지 않는 것(글상자가 `unknown` 으로 사라진다),
-/// 문단 기록을 자기 수준으로 제한하지 않는 것(표 칸 글자가 글상자 문단을 덮는다).
+/// F2: child paragraphs use the body parser; table, picture and paragraph
+/// ownership survive together. 이것을 실패시키는 것: 깊은 레코드 라우팅 삭제.
 #[test]
-fn f2_objects_in_a_grouped_text_box_are_reported() {
+fn f2_objects_in_a_grouped_text_box_are_preserved() {
     let (group, warnings) = hwp5_group("group-f2-textbox-table.hwp");
     let ours = lost_kinds(&warnings);
-    assert_eq!(ours, ["group_nested_object", "group_nested_object"], "{warnings:?}");
+    assert!(ours.is_empty(), "{warnings:?}");
     let Control::Group { children, .. } = &group else { unreachable!() };
     assert!(
         children

@@ -768,6 +768,8 @@ pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32)
 /// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
+/// Positioned PageNumber is consumed by emit_page_numbers via the derived
+/// section summary and has no body glyph.
 /// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
     hwpforge_core::field_view::is_boundary(content)
@@ -778,6 +780,7 @@ fn is_replay_consumed_marker(content: &RunContent) -> bool {
                 kind: hwpforge_core::control::NewNumberKind::Page,
                 ..
             } | hwpforge_core::control::Control::PageHiding { .. }
+              | hwpforge_core::control::Control::PageNumber { .. }
         ))
 }
 
@@ -4430,6 +4433,22 @@ mod tests {
 
     fn bottom_digit() -> PageNumber {
         PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
+    }
+
+    /// 이것을 실패시키는 것: 위치 있는 쪽번호를 본문 비텍스트 장애물로 취급하기.
+    #[test]
+    fn positioned_page_number_is_a_zero_width_replay_marker() {
+        let mut body = body_pages(2);
+        body[1].runs.push(Run::control(
+            hwpforge_core::Control::PageNumber { number: bottom_digit() },
+            CharShapeIndex::new(0),
+        ));
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body, bottom_digit()));
+        let doc = doc.validate().unwrap();
+        let layout = replay(&doc, &PdfOptions::default()).unwrap();
+        assert_eq!(layout.pages.len(), 2);
+        assert_eq!(layout.pages[1].page_number.as_ref().unwrap().text, "2");
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(super) fn build_table(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTable> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
@@ -198,7 +198,7 @@ fn build_table_row(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTableRow> {
     let row_fallback_height =
         (!row.cells.iter().any(|cell| cell.height.is_some())).then_some(row.height).flatten();
@@ -252,7 +252,7 @@ fn build_table_cell(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxTableCell> {
     Ok(HxTableCell {
         name: String::new(),
@@ -340,7 +340,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let out = hx.out_margin.expect("outMargin");
@@ -362,7 +362,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.out_margin.expect("outMargin"), DEFAULT_OUT_MARGIN);
@@ -383,7 +383,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.sz.expect("sz").height, 0, "decode-only cache must not reach the wire");
@@ -398,7 +398,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let cell = &hx.rows[0].cells[0];

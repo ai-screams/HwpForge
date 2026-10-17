@@ -368,7 +368,7 @@ impl Hwp5ParaText {
                 }
                 // 0x16: IndexMark (찾아보기) inline marker (Wave 12k).
                 // `extra[0..4]` carries the LE-stored ctrl_id `idxm`.
-                // Only `idxm`-tagged `0x16` markers are promoted to a
+                // `idxm` and named point bookmark `bokm` markers are promoted to a
                 // `ControlRef`; other 0x16 owners (unknown extended
                 // controls) keep falling through to the silent-consume
                 // arm below so we don't accidentally promote a control
@@ -377,7 +377,10 @@ impl Hwp5ParaText {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
-                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK {
+                    if matches!(
+                        ctrl_id_from_inline_extra_bytes(&extra),
+                        CTRL_ID_INDEXMARK | crate::ctrl_ids::CTRL_ID_BOOKMARK_POINT
+                    ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {
                         silent_wires.push(SilentWire {
@@ -438,20 +441,18 @@ impl Hwp5ParaText {
                         });
                     }
                 }
-                // 0x15: page-control marker (새 번호 `nwno`·감추기 `pghd`·
-                // 쪽번호 위치 `pgnp` 공유 — F1/F2 실측 2026-08-12). `nwno`
-                // 만 `ControlRef` 로 승격해 위치를 보존한다 (0x11 각주
-                // 선례): 마커를 버리면 컨트롤이 문단 꼬리로 밀려 재시작이
-                // 엉뚱한 쪽에 적용된다. `pgnp` 는 구역 수준에서 소비되므로
-                // (object_controls 큐에 안 들어감) 마커도 승격하지 않아야
-                // 큐 정렬이 유지된다.
+                // Number restart, page hiding and page-number placement all
+                // retain their inline anchor. Their CtrlHeaders share the
+                // paragraph's object queue (including pgnp).
                 0x15 => {
                     flush_text!();
                     let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if matches!(
                         ctrl_id_from_inline_extra_bytes(&extra),
-                        CTRL_ID_NEW_NUMBER | CTRL_ID_PAGE_HIDING
+                        CTRL_ID_NEW_NUMBER
+                            | CTRL_ID_PAGE_HIDING
+                            | crate::ctrl_ids::CTRL_ID_PAGE_NUMBER
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
                     } else {

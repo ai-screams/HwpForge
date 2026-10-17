@@ -33,7 +33,7 @@ const MASTER_PAGE_DEFAULT_TEXT_HEIGHT: u32 = 65762;
 /// paragraph encoder — and then gets the per-part steps the section part
 /// gets: marker replacement and the XML-forbidden character scan. Its
 /// warnings carry its own part name and a `section[s].masterpage[N]` path and
-/// are appended to `section_sink`.
+/// remain in the shared document context.
 ///
 /// # Errors
 ///
@@ -44,7 +44,7 @@ pub(super) fn build_masterpage_entries(
     section_index: usize,
     masterpage_offset: usize,
     options: EncodeOptions,
-    section_sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<Vec<(String, String)>> {
     use hwpforge_core::section::MasterPageSpecial;
     use std::fmt::Write as _;
@@ -54,7 +54,16 @@ pub(super) fn build_masterpage_entries(
     let mut entries = Vec::with_capacity(masters.len());
     for (i, mp) in masters.iter().enumerate() {
         let idx = masterpage_offset + i;
-        let mut sink = EncodeSink::for_master_page(section_index, idx);
+        let saved_path = std::mem::replace(
+            &mut sink.path,
+            vec![
+                crate::decoder::PathSeg::Section(section_index),
+                crate::decoder::PathSeg::MasterPage(idx),
+            ],
+        );
+        let saved_part = std::mem::replace(&mut sink.part, format!("Contents/masterpage{idx}.xml"));
+        sink.in_master_page = true;
+        let saved_caches = std::mem::take(&mut sink.dropped_caches);
         let (apply_type, page_number) = match mp.special {
             None => (
                 match mp.apply_page_type {
@@ -88,7 +97,7 @@ pub(super) fn build_masterpage_entries(
             vert_align,
             &mut replacements,
             options,
-            &mut sink,
+            sink,
         )?;
         sub_list.text_width = match u32::try_from(mp.text_width.as_i32()) {
             Ok(0) | Err(_) => MASTER_PAGE_DEFAULT_TEXT_WIDTH,
@@ -127,7 +136,10 @@ pub(super) fn build_masterpage_entries(
             std::borrow::Cow::Borrowed(_) => xml,
         };
         sink.warnings.extend(crate::encoder::forbidden_char_warnings(&part, sites));
-        section_sink.warnings.append(&mut sink.warnings);
+        sink.path = saved_path;
+        sink.part = saved_part;
+        sink.in_master_page = false;
+        sink.dropped_caches = saved_caches;
         entries.push((part, xml));
     }
     Ok(entries)
@@ -153,7 +165,7 @@ pub(super) fn inject_header_footer_pagenum(
     anchor_runs: &[super::AnchorRun],
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<()> {
     // Header — emit each `<hp:header>` element preserving the HWPX
     // multi-cardinality wire shape (ADR-002) — into the paragraph it is
@@ -199,7 +211,9 @@ pub(super) fn inject_header_footer_pagenum(
     }
 
     // Page number
-    if let Some(ref page_number) = section.page_number {
+    if let Some(page_number) =
+        section.page_number.as_ref().filter(|_| section.needs_page_number_injection())
+    {
         injection.push_str(&build_page_number_xml(page_number));
     }
 
@@ -243,7 +257,7 @@ pub(super) fn build_header_xml(
     tag_name: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     use std::fmt::Write as _;
 
@@ -405,7 +419,7 @@ mod tests {
                 "header",
                 &mut entries,
                 EncodeOptions::default(),
-                &mut EncodeSink::new(0),
+                &mut DocumentEncodeContext::new(0),
             )
             .unwrap();
             assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
@@ -426,7 +440,7 @@ mod tests {
             "footer",
             &mut entries,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(xml.contains(r#"vertAlign="BOTTOM""#), "{xml}");
@@ -454,7 +468,7 @@ mod tests {
     fn masterpage_refs_empty_without_masters() {
         let section = Section::new(hwpforge_core::PageSettings::a4());
         assert!(build_masterpage_refs(&section, 0).is_empty());
-        let mut sink = EncodeSink::new(0);
+        let mut sink = DocumentEncodeContext::new(0);
         let entries =
             build_masterpage_entries(&section, 0, 0, EncodeOptions::default(), &mut sink).unwrap();
         assert!(entries.is_empty());

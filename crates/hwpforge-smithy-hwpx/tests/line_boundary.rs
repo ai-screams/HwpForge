@@ -345,8 +345,8 @@ fn only_folded_field_interiors_drop_the_cache() {
 
 /// S22 r1: a bookmark span that crosses paragraphs writes its begin in the
 /// first paragraph and its text one to one after it, so that paragraph keeps
-/// its line cache; the end paragraph drops its cache because the encoder
-/// cannot write a span end without its start ("unmatched bookmark span end").
+/// its line cache; the end paragraph now retains the shared host span ID
+/// and keeps its cache too. 이것을 실패시키는 것: 문단마다 span 맵 초기화.
 /// A span closed in its own paragraph keeps both caches.
 /// 이것을 실패시키는 것: 인코더에서 "끝 없는 필드 시작이 있으면 캐시 drop" 을
 /// 넣는 것(시작 문단의 맞는 캐시가 사라진다).
@@ -380,7 +380,7 @@ fn a_bookmark_span_across_paragraphs_keeps_its_first_cache() {
         host(vec![mark(BookmarkType::SpanStart), text("가나")], vec![line(0, None), line(1, None)]),
         host(vec![text("다"), mark(BookmarkType::SpanEnd)], vec![line(0, None)]),
     ];
-    assert_eq!(caches(across), (1, 1));
+    assert_eq!(caches(across), (2, 0));
 
     let within = vec![
         host(

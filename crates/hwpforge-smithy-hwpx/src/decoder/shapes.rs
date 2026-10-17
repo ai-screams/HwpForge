@@ -3906,7 +3906,7 @@ mod tests {
             0,
             &mut hl,
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(
@@ -4029,7 +4029,7 @@ mod tests {
             0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(encoded.numbering_type, "PICTURE");
@@ -4085,7 +4085,7 @@ mod tests {
             0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(encoded.numbering_type, "PICTURE");
@@ -5087,7 +5087,7 @@ mod group_tests {
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(xml.contains(r##"faceColor="#FF0000""##), "{xml}");
@@ -6269,7 +6269,7 @@ mod group_tests {
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(xml.contains(r#"<hp:orgSz width="1000" height="600"/>"#), "{xml}");
@@ -6815,7 +6815,7 @@ mod group_tests {
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         )
         .unwrap()
     }
@@ -7821,7 +7821,7 @@ mod frame_tests {
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),
-            &mut crate::encoder::section::EncodeSink::new(0),
+            &mut crate::encoder::section::DocumentEncodeContext::new(0),
         );
         assert!(err.is_err());
     }

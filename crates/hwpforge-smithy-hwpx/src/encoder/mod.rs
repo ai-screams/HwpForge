@@ -1421,9 +1421,7 @@ impl HwpxEncoder {
         // W0: ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
-        let core_ids = object_ids::core_object_ids(document);
-        let _ids = object_ids::IdScope::enter(core_ids.iter().map(|&(_, id)| id).collect());
-        object_ids::reserve_field_ids(document);
+        let mut context = section::DocumentEncodeContext::for_document(document, image_store);
         // Core already follows the decoder's manifest-resolved spine order.
         // Number output parts from that order; never reconstruct original filenames.
         let sections = document.sections();
@@ -1432,7 +1430,7 @@ impl HwpxEncoder {
         // Step 1: Encode header
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
-        let mut warnings: Vec<EncodeWarning> =
+        context.warnings =
             hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections())
                 .warnings()
                 .iter()
@@ -1466,15 +1464,9 @@ impl HwpxEncoder {
         for (location, count) in scanned {
             crate::wire_xml::tally_removed(&mut header_sites, &location, count);
         }
-        warnings.extend(forbidden_char_warnings("Contents/header.xml", header_sites));
+        context.warnings.extend(forbidden_char_warnings("Contents/header.xml", header_sites));
 
-        // Step 2: Encode sections (each produces XML + chart + masterpage entries)
-        // chart_offset / masterpage_offset / embedded_ole_offset track global
-        // indices across sections to avoid duplicate filenames or item ids in
-        // the ZIP archive and content.hpf manifest.
-        let mut chart_offset = 0usize;
-        let mut masterpage_offset = 0usize;
-        let mut embedded_ole_offset = 0usize;
+        // All parts share one document asset/diagnostic context.
         let mut section_results = Vec::with_capacity(sections.len());
         // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
         // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
@@ -1488,54 +1480,34 @@ impl HwpxEncoder {
             let mut result = encode_section_with_note_counters(
                 section,
                 i,
-                chart_offset,
-                masterpage_offset,
-                embedded_ole_offset,
                 options,
                 &mut note_counters,
+                &mut context,
             )?;
             origins::finish_part(&format!("Contents/section{i}.xml"), &mut result.xml)?;
             for (part, xml) in &mut result.master_pages {
                 origins::finish_part(part, xml)?;
             }
-            chart_offset += result.charts.len();
-            masterpage_offset += result.master_pages.len();
-            embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
         let dropped_caches: Vec<Vec<EncodeWarning>> =
             section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
-        for r in &mut section_results {
-            warnings.append(&mut r.warnings);
-        }
         // W0: two written objects with one Core id keep it, and are reported
         // — counted from the ids the encoder actually wrote (review W0 r3).
         // 이것을 실패시키는 것: 이 경고 삭제(`shared_core_id_is_kept_and_reported`).
         for (id, kinds) in object_ids::conflicts(&object_ids::written()) {
-            warnings.push(EncodeWarning::ObjectIdConflict {
+            context.warnings.push(EncodeWarning::ObjectIdConflict {
                 id,
                 kinds: kinds.into_iter().map(str::to_string).collect(),
             });
         }
 
-        // Single move-consuming pass: extract all four fields without cloning
-        // (previously xml/charts/embedded_oles were `.iter().clone()`d).
-        // Push/extend order preserves the original per-section ordering.
-        type SectionParts =
-            (Vec<String>, Vec<(String, String)>, Vec<(String, Vec<u8>)>, Vec<(String, String)>);
-        let (section_xmls, charts, embedded_oles, master_pages): SectionParts = section_results
-            .into_iter()
-            .fold(Default::default(), |(mut xmls, mut charts, mut oles, mut mps), r| {
-                xmls.push(r.xml);
-                charts.extend(r.charts);
-                oles.extend(r.embedded_oles);
-                mps.extend(r.master_pages);
-                (xmls, charts, oles, mps)
-            });
-
-        // Step 3: Collect image binaries
-        let images: Vec<(String, Vec<u8>)> =
-            image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
+        let (section_xmls, master_pages): (Vec<_>, Vec<_>) =
+            section_results.into_iter().map(|r| (r.xml, r.master_pages)).unzip();
+        let master_pages: Vec<_> = master_pages.into_iter().flatten().collect();
+        let charts = std::mem::take(&mut context.charts);
+        let embedded_oles = std::mem::take(&mut context.embedded_oles);
+        let images = std::mem::take(&mut context.images);
 
         // Step 4: Package into ZIP with images, charts, master pages, and
         // embedded-chart OLE blobs. Document.metadata flows into content.hpf
@@ -1552,9 +1524,9 @@ impl HwpxEncoder {
         // before it is read back, so the checks read the text that is written.
         let rendered = package::render_content_hpf(document.metadata(), &manifest);
         let (content_hpf, sites) = crate::wire_xml::strip_xml_forbidden_chars(&rendered);
-        warnings.extend(forbidden_char_warnings("Contents/content.hpf", sites));
+        context.warnings.extend(forbidden_char_warnings("Contents/content.hpf", sites));
         let written = references::read_manifest(&content_hpf)?;
-        warnings.extend(references::manifest_id_conflicts(&written));
+        context.warnings.extend(references::manifest_id_conflicts(&written));
         let mut parts: Vec<(String, &str)> = vec![("Contents/header.xml".to_string(), &header_xml)];
         parts.extend(
             section_xmls
@@ -1585,7 +1557,7 @@ impl HwpxEncoder {
             })
             .map(|(_, written_item)| written_item.clone())
             .collect();
-        warnings.extend(references::unresolved_references(&resolvable, &parts)?);
+        context.warnings.extend(references::unresolved_references(&resolvable, &parts)?);
         let (bytes, package_warnings) = PackageWriter::write_hwpx_with_content_hpf(
             &content_hpf,
             &header_xml,
@@ -1595,8 +1567,8 @@ impl HwpxEncoder {
             &master_pages,
             &embedded_oles,
         )?;
-        warnings.extend(package_warnings);
-        Ok((EncodeOutcome { bytes, warnings }, dropped_caches))
+        context.warnings.extend(package_warnings);
+        Ok((EncodeOutcome { bytes, warnings: context.warnings }, dropped_caches))
     }
 
     /// Encodes a validated document and writes it to a file.
@@ -2541,3 +2513,6 @@ mod attr_control_whitespace_call_site_tests {
         assert_no_control_refs_in_start_tags("section0.xml", &section);
     }
 }
+
+#[cfg(test)]
+mod context_tests;

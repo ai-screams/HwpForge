@@ -13,10 +13,10 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader,
-    Hwp5ParaLineSeg, Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse,
-    Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
-    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapeTextArt, TextSegment,
+    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
+    Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
+    Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
+    Hwp5ShapeTextArt, TextSegment,
 };
 
 mod gso;
@@ -80,16 +80,45 @@ const GSO_GROUP_MAX_DEPTH: u16 = 16;
 /// bound. A deeper shape is skipped and reported (`shape_text_depth`).
 pub(super) const SHAPE_TEXT_MAX_DEPTH: u16 = GSO_GROUP_MAX_DEPTH;
 
-/// Maximum nesting depth of `tbl ` contexts on [`BodyTextParserState::table_stack`].
-///
-/// `table_stack` grows on every `tbl ` CtrlHeader (top-level or re-entered
-/// inside a cell). A malicious or corrupt stream can nest tables arbitrarily,
-/// growing the stack — and the eventual recursive projection — without bound.
-/// This cap mirrors [`GSO_GROUP_MAX_DEPTH`]: once the stack is this deep, an
-/// additional `tbl ` still pushes a context (so the level-driven pop/cell
-/// finalize machinery stays balanced) but the context is flagged over-cap and
-/// dropped at finalize with a `DroppedControl` warning, rather than attached.
-const MAX_TABLE_NESTING: usize = 32;
+/// Global container path limit, shared by tables, notes, shapes, groups and
+/// group child text. The original table limit remains the overall ceiling.
+const MAX_CONTROL_NESTING: usize = 32;
+
+/// One path budget inherited across *all* container kinds, including group
+/// children. No nested parser creates a fresh budget. Family caps remain for
+/// compatibility, but changing kinds cannot reset the total depth.
+#[derive(Clone, Copy, Default)]
+struct NestingBudget {
+    total: usize,
+    shapes: u16,
+    groups: u16,
+}
+
+impl NestingBudget {
+    fn enter(self, shape: bool, group: bool) -> Option<Self> {
+        let next = Self {
+            total: self.total + 1,
+            shapes: self.shapes + u16::from(shape),
+            groups: self.groups + u16::from(group),
+        };
+        (next.total <= MAX_CONTROL_NESTING
+            && next.shapes <= SHAPE_TEXT_MAX_DEPTH + 2
+            && next.groups <= GSO_GROUP_MAX_DEPTH)
+            .then_some(next)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ControlHost {
+    Cell,
+    Subtree,
+}
+
+struct NestedParagraphControl {
+    level: u16,
+    host: ControlHost,
+    parser: Box<BodyTextParserState>,
+}
 
 const TABLE_CELL_HEADER_FLAG: u32 = 0x0004_0000;
 
@@ -240,16 +269,14 @@ fn split_end_mark_shape(
 struct MemoContentCapture {
     memo_id: u32,
     saw_list_header: bool,
-    current_para: Option<ParaBuf>,
-    paragraphs: Vec<Hwp5Paragraph>,
+    parser: Box<BodyTextParserState>,
 }
 
 impl MemoContentCapture {
-    fn into_paragraphs(mut self, warnings: &mut Vec<Hwp5Warning>) -> Vec<Hwp5Paragraph> {
-        if let Some(buf) = self.current_para.take() {
-            self.paragraphs.push(buf.finish(warnings));
-        }
-        self.paragraphs
+    fn into_paragraphs(self, warnings: &mut Vec<Hwp5Warning>) -> Vec<Hwp5Paragraph> {
+        let result = self.parser.finish();
+        warnings.extend(result.warnings);
+        result.paragraphs
     }
 }
 
@@ -260,31 +287,10 @@ struct TableContext {
     seen_table_body: bool,
     current_cell: Option<ActiveTableCell>,
     current_cell_para: Option<ParaBuf>,
-    inline_cell_gso_ctx: Option<InlineGsoContext>,
-    /// A `head`/`foot` control opened in the current cell paragraph whose
-    /// own paragraphs are being collected (§19.7 F). Without it those
-    /// paragraphs were read as more cell paragraphs and the control itself
-    /// was dropped as unknown.
-    cell_header_footer: Option<CellHeaderFooter>,
-    /// True when this table was opened past [`MAX_TABLE_NESTING`]. The context
-    /// is still tracked (to keep the level-driven pop/cell machinery balanced
-    /// with the surrounding records) but its finalized control is dropped
-    /// rather than attached to the parent (E1 #3).
-    over_cap: bool,
 }
 
 impl TableContext {
     fn new(ctrl_depth: u16, instance_id: u32) -> Self {
-        Self::new_with_cap(ctrl_depth, instance_id, false)
-    }
-
-    /// Construct a context flagged as over the nesting cap; behaves identically
-    /// while parsing but is dropped (not attached) at finalize.
-    fn new_over_cap(ctrl_depth: u16, instance_id: u32) -> Self {
-        Self::new_with_cap(ctrl_depth, instance_id, true)
-    }
-
-    fn new_with_cap(ctrl_depth: u16, instance_id: u32, over_cap: bool) -> Self {
         Self {
             ctrl_depth,
             table: Hwp5Table {
@@ -305,33 +311,6 @@ impl TableContext {
             seen_table_body: false,
             current_cell: None,
             current_cell_para: None,
-            inline_cell_gso_ctx: None,
-            cell_header_footer: None,
-            over_cap,
-        }
-    }
-
-    fn flush_inline_gso(&mut self, warnings: &mut Vec<Hwp5Warning>) {
-        attach_inline_gso_control(
-            &mut self.current_cell_para,
-            self.inline_cell_gso_ctx.take(),
-            warnings,
-        );
-    }
-
-    /// Closes the open cell header/footer and attaches it to the cell
-    /// paragraph that holds it.
-    fn close_cell_header_footer(&mut self, warnings: &mut Vec<Hwp5Warning>) {
-        let Some(mut capture) = self.cell_header_footer.take() else {
-            return;
-        };
-        attach_inline_gso_control(&mut capture.current_para, capture.gso.take(), warnings);
-        if let Some(buf) = capture.current_para.take() {
-            capture.ctx.paragraphs.push(buf.finish(warnings));
-        }
-        let control = capture.ctx.into_control(warnings);
-        if let Some(buf) = self.current_cell_para.as_mut() {
-            buf.controls.push(control);
         }
     }
 
@@ -367,21 +346,10 @@ impl TableContext {
     }
 
     fn finalize(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
-        self.close_cell_header_footer(warnings);
-        self.flush_inline_gso(warnings);
         self.flush_current_cell_paragraph(warnings);
         self.finish_active_cell_if_ready();
         Hwp5Control::Table(self.table)
     }
-}
-
-/// A header/footer control inside a table cell and the paragraphs read so
-/// far (§19.7 F). Records deeper than the control belong to it.
-struct CellHeaderFooter {
-    ctx: NestedSubtreeContext,
-    current_para: Option<ParaBuf>,
-    /// A shape (`gso`) opened in the current header/footer paragraph.
-    gso: Option<InlineGsoContext>,
 }
 
 /// Cell currently receiving nested paragraph records.
@@ -469,10 +437,8 @@ fn extract_ctrl_header_instance_id(data: &[u8], ctrl_id: u32) -> u32 {
 
 /// `CtrlHeader` bytes `[4..8]` — HWP 5.0 spec §4.3.10.3 표 140/70 공통
 /// 개체 속성 DWORD (header/footer 는 applyPageType, gso 는 bit0=글자처럼
-/// 취급 등 family 별 의미). Shared by the top-level `handle_ctrl_header`
-/// and the two nested `gso ` `InlineGsoContext` entry points (table cell
-/// / subtree), which need the DWORD before a `NestedSubtreeContext`
-/// exists to carry it (W2p — #134 후속).
+/// 취급 등 family 별 의미). The common control interpreter reads this word
+/// identically in body paragraphs and every nested host.
 fn ctrl_header_properties_raw(data: &[u8]) -> u32 {
     if data.len() >= 8 {
         u32::from_le_bytes([data[4], data[5], data[6], data[7]])
@@ -483,6 +449,7 @@ fn ctrl_header_properties_raw(data: &[u8]) -> u32 {
 
 /// Active non-table control while collecting a nested paragraph subtree.
 struct NestedSubtreeContext {
+    wire_order: usize,
     ctrl_depth: u16,
     ctrl_id: u32,
     /// Bytes [4..8] of the `CtrlHeader` payload (see
@@ -544,6 +511,7 @@ impl NestedSubtreeContext {
         geometry: Option<Hwp5ShapeComponentGeometry>,
     ) -> Self {
         Self {
+            wire_order: 0,
             ctrl_depth,
             ctrl_id,
             properties_raw,
@@ -715,6 +683,7 @@ impl NestedSubtreeContext {
         match self.kind() {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
+                    wire_order: self.wire_order,
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
                     instance_id: self.instance_id,
@@ -723,6 +692,7 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::Footer) if self.saw_list_header => {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
+                    wire_order: self.wire_order,
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
                     instance_id: self.instance_id,
@@ -731,6 +701,7 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::Footnote) if self.saw_list_header => {
                 Hwp5Control::Footnote(Hwp5NestedSubtree {
+                    wire_order: self.wire_order,
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
                     instance_id: self.instance_id,
@@ -739,6 +710,7 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::Endnote) if self.saw_list_header => {
                 Hwp5Control::Endnote(Hwp5NestedSubtree {
+                    wire_order: self.wire_order,
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
                     instance_id: self.instance_id,
@@ -1075,6 +1047,24 @@ pub(crate) fn parse_body_text(data: &[u8], _version: &HwpVersion) -> Hwp5Result<
 
 #[derive(Default)]
 struct BodyTextParserState {
+    wire_sequence: std::rc::Rc<std::cell::Cell<usize>>,
+    /// Absolute paragraph level; records and their payloads stay borrowed.
+    base_level: u16,
+    budget: NestingBudget,
+    active_budget: NestingBudget,
+    nested_control: Option<NestedParagraphControl>,
+    skipped_control: Option<u16>,
+    pending_clickhere_level: u16,
+    /// (record depth, owning paragraph's control index). Only an immediate
+    /// CtrlData child can name that bookmark; a sibling cancels this binding.
+    pending_bookmark: Option<(u16, usize)>,
+    /// Only the section owner resolves MEMO anchors after collecting all lists.
+    nested: bool,
+    #[cfg(test)]
+    work: std::rc::Rc<std::cell::Cell<usize>>,
+    #[cfg(test)]
+    record_identity: std::rc::Rc<std::cell::Cell<*const Record>>,
+
     paragraphs: Vec<Hwp5Paragraph>,
     page_def: Option<Hwp5PageDef>,
     /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
@@ -1090,7 +1080,6 @@ struct BodyTextParserState {
     table_stack: Vec<TableContext>,
     subtree_ctx: Option<NestedSubtreeContext>,
     current_subtree_para: Option<ParaBuf>,
-    inline_subtree_gso_ctx: Option<InlineGsoContext>,
     /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
     /// Wave 12p Step 1c-2: stash (geometry, instance_id) from the
     /// `eqed` CtrlHeader; finalized by the paired `HWPTAG_EQEDIT` record.
@@ -1116,6 +1105,28 @@ impl BodyTextParserState {
         let tag = TagId::from(record.header.tag_id);
         let level = record.header.level;
 
+        #[cfg(test)]
+        {
+            self.work.set(self.work.get() + 1);
+            let expected = self.record_identity.get();
+            assert!(expected.is_null() || std::ptr::eq(expected, record), "record was cloned");
+        }
+        if let Some(skipped) = self.skipped_control {
+            if level > skipped {
+                return;
+            }
+            self.skipped_control = None;
+        }
+        if self.nested_control.as_ref().is_some_and(|c| level <= c.level) {
+            self.close_nested_control();
+        }
+        if let Some(capture) = self.nested_control.as_mut() {
+            capture.parser.handle_record(record);
+            return;
+        }
+        if self.try_attach_bookmark_name(record) {
+            return;
+        }
         self.prepare_for_record(level);
 
         if self.handle_active_table_record(record, tag, level) {
@@ -1127,27 +1138,111 @@ impl BodyTextParserState {
         self.handle_top_level_record(record, tag, level);
     }
 
-    /// Push a new `tbl ` context onto [`Self::table_stack`], enforcing the
-    /// [`MAX_TABLE_NESTING`] depth cap (E1 #3).
-    ///
-    /// At/over the cap the context is still pushed (flagged `over_cap`) so the
-    /// level-driven pop/cell/finalize machinery stays balanced with the inner
-    /// table's body records — but a `DroppedControl` warning is emitted and the
-    /// finalized table is dropped instead of attached, preventing unbounded
-    /// nesting from reaching projection.
-    fn push_table_context(&mut self, level: u16, instance_id: u32) {
-        if self.table_stack.len() >= MAX_TABLE_NESTING {
-            self.warnings.push(Hwp5Warning::DroppedControl {
-                control: "table",
-                reason: format!(
-                    "table nesting exceeds depth cap {MAX_TABLE_NESTING}; \
-                     dropping deepest table"
-                ),
-            });
-            self.table_stack.push(TableContext::new_over_cap(level, instance_id));
-        } else {
-            self.table_stack.push(TableContext::new(level, instance_id));
+    fn try_attach_bookmark_name(&mut self, record: &Record) -> bool {
+        let Some((level, index)) = self.pending_bookmark.take() else {
+            return false;
+        };
+        if TagId::from(record.header.tag_id) != TagId::CtrlData
+            || record.header.level != level.saturating_add(1)
+        {
+            return false;
         }
+        let Some(Hwp5Control::Bookmark { name, .. }) =
+            self.current.as_mut().and_then(|p| p.controls.get_mut(index))
+        else {
+            return false;
+        };
+        // Named parameter set: set 0x21b, one item, item 0, PIT_BSTR=0x4000.
+        // Reuse the bounded UTF-16 reader, but require the bookmark parameter
+        // identity as well as the owning record scope.
+        if record.data.starts_with(&[0x1b, 2, 1, 0, 0, 0, 0, 0x40, 1, 0]) {
+            if let crate::schema::section::ClickHereNameSubrecord::Named(value) =
+                crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(&record.data)
+            {
+                *name = Some(value);
+            }
+        }
+        true
+    }
+
+    fn warn_nested_section_state(&mut self) {
+        if self.nested
+            && (self.page_def.is_some()
+                || self.section_def_properties.is_some()
+                || self.section_def_start_numbers.is_some()
+                || self.column_def.is_some()
+                || !self.page_border_fills.is_empty())
+        {
+            self.warnings.push(Hwp5Warning::DroppedControl {
+                control: "nested_section_settings",
+                reason: "page/section/column/border settings inside a nested paragraph host have no independent Core section scope; omitted".into(),
+            });
+        }
+    }
+
+    fn nested_parser(&self, base_level: u16) -> Self {
+        Self {
+            base_level,
+            budget: self.active_budget,
+            active_budget: self.active_budget,
+            nested: true,
+            wire_sequence: self.wire_sequence.clone(),
+            #[cfg(test)]
+            work: self.work.clone(),
+            #[cfg(test)]
+            record_identity: self.record_identity.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// All nested CtrlHeaders call the very same interpreter as body controls.
+    /// Move the host buffer so pending equations/fields attach to its exact run
+    /// queue. The buffer is returned before the enclosing paragraph can close.
+    fn open_nested_control(&mut self, record: &Record, level: u16, host: ControlHost) {
+        let mut parser = self.nested_parser(self.base_level);
+        parser.current = match host {
+            ControlHost::Cell => {
+                self.table_stack.last_mut().and_then(|t| t.current_cell_para.take())
+            }
+            ControlHost::Subtree => self.current_subtree_para.take(),
+        };
+        if parser.current.is_none() {
+            if parse_ctrl_id(&record.data) == CTRL_ID_TABLE {
+                self.warnings.push(Hwp5Warning::ParserFallback {
+                    subject: "table.nested_attach",
+                    reason: "orphaned_nested_table_without_parent_paragraph".to_string(),
+                });
+            }
+            self.skipped_control = Some(level);
+            return;
+        }
+        parser.handle_ctrl_header(record, level);
+        self.nested_control =
+            Some(NestedParagraphControl { level, host, parser: Box::new(parser) });
+    }
+
+    fn close_nested_control(&mut self) {
+        let Some(mut capture) = self.nested_control.take() else {
+            return;
+        };
+        capture.parser.close_nested_control();
+        capture.parser.prepare_for_record(0);
+        capture.parser.flush_pending_clickhere();
+        match capture.host {
+            ControlHost::Cell => {
+                if let Some(table) = self.table_stack.last_mut() {
+                    table.current_cell_para = capture.parser.current.take();
+                }
+            }
+            ControlHost::Subtree => self.current_subtree_para = capture.parser.current.take(),
+        }
+        capture.parser.warn_nested_section_state();
+        self.warnings.append(&mut capture.parser.warnings);
+    }
+
+    /// The common interpreter already charged the global container budget.
+    fn push_table_context(&mut self, level: u16, instance_id: u32) {
+        self.table_stack.push(TableContext::new(level, instance_id));
     }
 
     /// Keeps the just-opened table's `CtrlHeader` placement facts.
@@ -1158,52 +1253,19 @@ impl BodyTextParserState {
     }
 
     fn prepare_for_record(&mut self, level: u16) {
-        if self
-            .table_stack
-            .last()
-            .and_then(|ctx| ctx.inline_cell_gso_ctx.as_ref())
-            .is_some_and(|ctx| level <= ctx.ctrl_depth)
-        {
-            if let Some(ctx) = self.table_stack.last_mut() {
-                ctx.flush_inline_gso(&mut self.warnings);
-            }
-        }
-
-        if self.inline_subtree_gso_ctx.as_ref().is_some_and(|ctx| level <= ctx.ctrl_depth) {
-            attach_inline_gso_control(
-                &mut self.current_subtree_para,
-                self.inline_subtree_gso_ctx.take(),
-                &mut self.warnings,
-            );
-        }
-
         while self.table_stack.last().is_some_and(|ctx| level <= ctx.ctrl_depth) {
             let ctx =
                 self.table_stack.pop().expect("table_stack.last().is_some() implies pop succeeds");
-            let over_cap = ctx.over_cap;
             let finished = ctx.finalize(&mut self.warnings);
-            // Over-cap tables are tracked only to keep pop/cell balance; their
-            // finalized control is dropped (a `DroppedControl` warning was
-            // already emitted at push time) so they cannot corrupt the parent
-            // table or leak unbounded nesting into projection (E1 #3).
-            if !over_cap {
-                // An outermost table opened inside a header/footer/note
-                // belongs to that subtree's paragraph.
-                let host = if self.table_stack.is_empty() && self.subtree_ctx.is_some() {
-                    &mut self.current_subtree_para
-                } else {
-                    &mut self.current
-                };
-                attach_finished_table(host, &mut self.table_stack, finished, &mut self.warnings);
-            }
+            attach_finished_table(
+                &mut self.current,
+                &mut self.table_stack,
+                finished,
+                &mut self.warnings,
+            );
         }
 
         if self.subtree_ctx.as_ref().is_some_and(|ctx| level <= ctx.ctrl_depth) {
-            attach_inline_gso_control(
-                &mut self.current_subtree_para,
-                self.inline_subtree_gso_ctx.take(),
-                &mut self.warnings,
-            );
             flush_subtree_paragraph(
                 &mut self.current_subtree_para,
                 self.subtree_ctx.as_mut(),
@@ -1213,144 +1275,9 @@ impl BodyTextParserState {
         }
     }
 
-    /// Routes a record into the open cell header/footer
-    /// ([`TableContext::cell_header_footer`]). A record at or above the
-    /// control's level closes it first and is handled as usual (`false`).
-    ///
-    /// Inside, the records are read the way a top-level header's are
-    /// ([`Self::handle_active_subtree_record`]): its list header, its
-    /// paragraphs, and inline controls (page numbers etc.; others are kept
-    /// as unknown).
-    fn route_cell_header_footer_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
-        let Some(table) = self.table_stack.last_mut() else {
-            return false;
-        };
-        let Some(capture) = table.cell_header_footer.as_mut() else {
-            return false;
-        };
-        if level <= capture.ctx.ctrl_depth {
-            table.close_cell_header_footer(&mut self.warnings);
-            return false;
-        }
-        // A shape in the header/footer paragraph owns the records below it;
-        // a record back at its level closes it into that paragraph.
-        if capture.gso.as_ref().is_some_and(|g| level <= g.ctrl_depth) {
-            attach_inline_gso_control(
-                &mut capture.current_para,
-                capture.gso.take(),
-                &mut self.warnings,
-            );
-        }
-        if Self::handle_inline_gso_record(
-            record,
-            tag,
-            level,
-            &mut self.warnings,
-            capture.gso.as_mut(),
-        ) {
-            return true;
-        }
-        match tag {
-            TagId::ListHeader => capture.ctx.note_list_header(&record.data),
-            TagId::ParaHeader => {
-                if let Some(buf) = capture.current_para.take() {
-                    capture.ctx.paragraphs.push(buf.finish(&mut self.warnings));
-                }
-                capture.current_para = Self::parse_para_header_buf(
-                    record.header.tag_id,
-                    &record.data,
-                    &mut self.warnings,
-                );
-            }
-            TagId::ParaText => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(text) = Self::parse_para_text_value(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.text = Some(text);
-                    }
-                }
-            }
-            TagId::ParaCharShape => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(runs) = Self::parse_para_char_shape_runs(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.char_shape_runs = runs;
-                    }
-                }
-            }
-            TagId::ParaLineSeg => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(segments) = Self::parse_para_line_segments(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.line_segments = segments;
-                    }
-                }
-            }
-            TagId::CtrlHeader => {
-                let ctrl_id = parse_ctrl_id(&record.data);
-                if capture.current_para.is_none() {
-                    return true;
-                }
-                // §19.7 F (review r1): a table or shape in a cell's
-                // header/footer is decoded like one in a top-level paragraph
-                // — the table on the table stack (it attaches back into this
-                // paragraph, [`attach_finished_table`]), the shape in its own
-                // context — not flattened into the header's text.
-                // 이것을 실패시키는 것: 이 두 갈래를 지우기
-                // (`cell_footer_keeps_its_table_and_picture`).
-                if ctrl_id == CTRL_ID_TABLE {
-                    self.push_table_context(
-                        level,
-                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                    );
-                    self.note_table_ctrl(&record.data);
-                } else if ctrl_id == CTRL_ID_GSO {
-                    capture.gso = Some(InlineGsoContext::new(
-                        level,
-                        ctrl_id,
-                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                        ctrl_header_properties_raw(&record.data),
-                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
-                    ));
-                } else if let Some(buf) = capture.current_para.as_mut() {
-                    buf.controls.push(
-                        Self::typed_inline_family_control(ctrl_id, &record.data).unwrap_or_else(
-                            || Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() },
-                        ),
-                    );
-                }
-            }
-            _ => {}
-        }
-        true
-    }
-
     fn handle_active_table_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.table_stack.last().is_none_or(|ctx| level <= ctx.ctrl_depth) {
             return false;
-        }
-
-        if self.route_cell_header_footer_record(record, tag, level) {
-            return true;
-        }
-
-        if Self::handle_inline_gso_record(
-            record,
-            tag,
-            level,
-            &mut self.warnings,
-            self.table_stack.last_mut().and_then(|table| table.inline_cell_gso_ctx.as_mut()),
-        ) {
-            return true;
         }
 
         match tag {
@@ -1503,55 +1430,7 @@ impl BodyTextParserState {
                     }
                 }
             }
-            TagId::CtrlHeader => {
-                let ctrl_id = parse_ctrl_id(&record.data);
-                // A re-entered `tbl ` inside a cell opens a nested table. Handle
-                // it before borrowing the current context so the depth-cap check
-                // and `DroppedControl` warning don't fight the `last_mut()`
-                // borrow (E1 #3).
-                if ctrl_id == CTRL_ID_TABLE {
-                    self.push_table_context(
-                        level,
-                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                    );
-                    self.note_table_ctrl(&record.data);
-                } else if let Some(ctx) = self.table_stack.last_mut() {
-                    // 이것을 실패시키는 것: 이 갈래를 지우기 — 칸 안 꼬리말
-                    // 문단이 칸 문단으로 새고 제어는 unknown 으로 버려진다
-                    // (convert `cell_footer_converts_with_and_without_the_layout_cache`).
-                    if matches!(ctrl_id, CTRL_ID_HEADER | CTRL_ID_FOOTER)
-                        && ctx.current_cell_para.is_some()
-                    {
-                        ctx.cell_header_footer = Some(CellHeaderFooter {
-                            ctx: NestedSubtreeContext::new(
-                                level,
-                                ctrl_id,
-                                ctrl_header_properties_raw(&record.data),
-                                extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                                None,
-                            ),
-                            current_para: None,
-                            gso: None,
-                        });
-                    } else if ctrl_id == CTRL_ID_GSO {
-                        ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
-                            level,
-                            ctrl_id,
-                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                            ctrl_header_properties_raw(&record.data),
-                            Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
-                        ));
-                    } else if let Some(buf) = ctx.current_cell_para.as_mut() {
-                        buf.controls.push(
-                            Self::typed_inline_family_control(ctrl_id, &record.data)
-                                .unwrap_or_else(|| Hwp5Control::Unknown {
-                                    ctrl_id,
-                                    header_data: record.data.clone(),
-                                }),
-                        );
-                    }
-                }
-            }
+            TagId::CtrlHeader => self.open_nested_control(record, level, ControlHost::Cell),
             TagId::Unknown(id) => {
                 self.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
@@ -1617,9 +1496,31 @@ impl BodyTextParserState {
             // its type tag twice.
             let render = crate::schema::section::Hwp5ShapeRender::parse(&record.data, true)
                 .map_err(|e| e.to_string());
+            if self.active_budget.groups >= GSO_GROUP_MAX_DEPTH {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "gso_group",
+                    reason: "shared group depth cap exceeded".to_string(),
+                });
+                self.skipped_control = Some(ctrl_depth);
+                return true;
+            }
             if let Some(ctx) = self.subtree_ctx.as_mut() {
-                ctx.group =
-                    Some(GsoGroupBuilder::new(level, geometry, instance_id, properties, render));
+                ctx.group = Some(GsoGroupBuilder::new(
+                    level,
+                    geometry,
+                    instance_id,
+                    properties,
+                    render,
+                    NestingBudget { groups: self.active_budget.groups + 1, ..self.active_budget },
+                ));
+                if let Some(group) = &mut ctx.group {
+                    group.wire_sequence = self.wire_sequence.clone();
+                }
+                #[cfg(test)]
+                if let Some(group) = &mut ctx.group {
+                    group.work = self.work.clone();
+                    group.record_identity = self.record_identity.clone();
+                }
             }
             // The `$con` record itself opens the group scope; it carries no
             // child payload, so nothing further to route for this record.
@@ -1644,16 +1545,6 @@ impl BodyTextParserState {
     fn handle_active_subtree_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.subtree_ctx.as_ref().is_none_or(|ctx| level <= ctx.ctrl_depth) {
             return false;
-        }
-
-        if Self::handle_inline_gso_record(
-            record,
-            tag,
-            level,
-            &mut self.warnings,
-            self.inline_subtree_gso_ctx.as_mut(),
-        ) {
-            return true;
         }
 
         // Group (묶음 객체) routing. A gso scope whose first `ShapeComponent`
@@ -1802,42 +1693,7 @@ impl BodyTextParserState {
                     }
                 }
             }
-            TagId::CtrlHeader => {
-                if let Some(buf) = self.current_subtree_para.as_mut() {
-                    let ctrl_id = parse_ctrl_id(&record.data);
-                    // §19.7 F (review r1): a table in a header/footer/note is
-                    // read on the table stack and attaches back into this
-                    // paragraph ([`attach_finished_table`]) instead of its
-                    // cells being flattened into the subtree's text.
-                    // 이것을 실패시키는 것: 이 갈래를 지우기
-                    // (`header_keeps_its_table`).
-                    if ctrl_id == CTRL_ID_TABLE {
-                        self.push_table_context(
-                            level,
-                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                        );
-                        self.note_table_ctrl(&record.data);
-                        return true;
-                    }
-                    if ctrl_id == CTRL_ID_GSO {
-                        self.inline_subtree_gso_ctx = Some(InlineGsoContext::new(
-                            level,
-                            ctrl_id,
-                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                            ctrl_header_properties_raw(&record.data),
-                            Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
-                        ));
-                    } else {
-                        buf.controls.push(
-                            Self::typed_inline_family_control(ctrl_id, &record.data)
-                                .unwrap_or_else(|| Hwp5Control::Unknown {
-                                    ctrl_id,
-                                    header_data: record.data.clone(),
-                                }),
-                        );
-                    }
-                }
-            }
+            TagId::CtrlHeader => self.open_nested_control(record, level, ControlHost::Subtree),
             TagId::Unknown(id) => {
                 self.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
@@ -1847,26 +1703,79 @@ impl BodyTextParserState {
         true
     }
 
-    /// 중첩 컨텍스트(표 셀·subtree)의 CtrlHeader 를 top-level 과 동일하게
-    /// 타입화한다 — **inline marker 가족(atno/nwno/pghd)만**. 나머지는
-    /// Unknown round-trip 보존. (W4: 집계 경고가 각주 subtree 안 atno 의
-    /// 기존 무음 드롭을 적발 — 중첩에서도 같은 wire 이므로 같은 parse 재사용.)
-    fn typed_inline_family_control(ctrl_id: u32, data: &[u8]) -> Option<Hwp5Control> {
-        match ctrl_id {
-            CTRL_ID_ATNO => {
-                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, data)
-                    .map(Hwp5Control::InlinePageNumber)
-            }
-            CTRL_ID_NEW_NUMBER => {
-                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, data)
-                    .map(Hwp5Control::NewNumber)
-            }
-            CTRL_ID_PAGE_HIDING => {
-                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, data)
-                    .map(Hwp5Control::PageHiding)
-            }
-            _ => None,
+    /// One-shot controls use the same typing and malformed-payload policy in
+    /// body paragraphs, cells, notes, headers and shape text. A placeholder
+    /// retains marker/control queue alignment when a known payload is invalid.
+    fn typed_paragraph_control(
+        ctrl_id: u32,
+        data: &[u8],
+        warnings: &mut Vec<Hwp5Warning>,
+    ) -> Option<Hwp5Control> {
+        use crate::schema::section::*;
+        if ctrl_id == CTRL_ID_MEMO {
+            return Hwp5MemoCommand::parse(data).map(|command| {
+                Hwp5Control::Memo(Hwp5MemoControl { ctrl_id, command, paragraphs: Vec::new() })
+            });
         }
+        let (parsed, name) = match ctrl_id {
+            CTRL_ID_DUTMAL => {
+                (Hwp5DutmalControl::parse(ctrl_id, data).map(Hwp5Control::Dutmal), "dutmal")
+            }
+            CTRL_ID_COMPOSE => {
+                (Hwp5ComposeControl::parse(ctrl_id, data).map(Hwp5Control::Compose), "compose")
+            }
+            CTRL_ID_INDEXMARK => (
+                Hwp5IndexMarkControl::parse(ctrl_id, data).map(Hwp5Control::IndexMark),
+                "indexmark",
+            ),
+            CTRL_ID_FIELD_SUMMERY => (
+                Hwp5SummaryControl::parse(ctrl_id, data).map(Hwp5Control::SummaryField),
+                "summary_field",
+            ),
+            CTRL_ID_FIELD_DATE_CODE => (
+                Hwp5DateCodeControl::parse(ctrl_id, data).map(Hwp5Control::DateCodeField),
+                "date_code_field",
+            ),
+            CTRL_ID_FIELD_PATH => (
+                Hwp5PathFieldControl::parse(ctrl_id, data).map(Hwp5Control::PathField),
+                "path_field",
+            ),
+            CTRL_ID_FIELD_CROSSREF => {
+                (Hwp5CrossRefControl::parse(ctrl_id, data).map(Hwp5Control::CrossRef), "crossref")
+            }
+            CTRL_ID_NEW_NUMBER => (
+                Hwp5NewNumberControl::parse(ctrl_id, data).map(Hwp5Control::NewNumber),
+                "new_number",
+            ),
+            CTRL_ID_PAGE_HIDING => (
+                Hwp5PageHidingControl::parse(ctrl_id, data).map(Hwp5Control::PageHiding),
+                "page_hiding",
+            ),
+            CTRL_ID_ATNO => (
+                Hwp5InlinePageNumberControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::InlinePageNumber),
+                "inline_page_number",
+            ),
+            CTRL_ID_CLICK_HERE => {
+                return Some(match Hwp5ClickHereControl::parse(ctrl_id, data) {
+                    Ok(control) => Hwp5Control::ClickHere(control),
+                    Err(err) => {
+                        warnings.push(Hwp5Warning::DroppedControl { control: "clickhere", reason: format!("malformed %clk CtrlHeader payload ({}); preserving queue placeholder", err.as_str()) });
+                        Hwp5Control::Unknown { ctrl_id, header_data: data.to_vec() }
+                    }
+                })
+            }
+            _ => return None,
+        };
+        Some(parsed.unwrap_or_else(|| {
+            warnings.push(Hwp5Warning::DroppedControl {
+                control: name,
+                reason: format!(
+                    "malformed {name} CtrlHeader payload; preserving queue placeholder"
+                ),
+            });
+            Hwp5Control::Unknown { ctrl_id, header_data: data.to_vec() }
+        }))
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
@@ -1880,7 +1789,7 @@ impl BodyTextParserState {
         }
 
         match tag {
-            TagId::ParaHeader if level == 0 => {
+            TagId::ParaHeader if level == self.base_level => {
                 if let Some(buf) = self.current.take() {
                     self.paragraphs.push(buf.finish(&mut self.warnings));
                 }
@@ -1957,14 +1866,26 @@ impl BodyTextParserState {
     /// `ParaHeader` at lvl=0 closes the capture and falls through so
     /// the next body paragraph opens cleanly.
     fn try_intercept_memo_cluster(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        if self.nested {
+            return false;
+        }
         if matches!(tag, TagId::MemoList) && level == 1 {
             if let Some(memo_id) = parse_memo_list_id(&record.data) {
                 self.flush_memo_content_capture();
                 self.memo_content_capture = Some(MemoContentCapture {
                     memo_id,
                     saw_list_header: false,
-                    current_para: None,
-                    paragraphs: Vec::new(),
+                    parser: Box::new(Self {
+                        base_level: level,
+                        budget: self.budget.enter(false, false).expect("section memo budget"),
+                        nested: true,
+                        wire_sequence: self.wire_sequence.clone(),
+                        #[cfg(test)]
+                        work: self.work.clone(),
+                        #[cfg(test)]
+                        record_identity: self.record_identity.clone(),
+                        ..Self::default()
+                    }),
                 });
             } else {
                 self.push_unsupported_tag(record.header.tag_id);
@@ -2003,7 +1924,8 @@ impl BodyTextParserState {
         if self.pending_clickhere.is_none() {
             return false;
         }
-        if matches!(tag, TagId::CtrlData) && level == 2 {
+        if matches!(tag, TagId::CtrlData) && level == self.pending_clickhere_level.saturating_add(1)
+        {
             let mut clickhere = self
                 .pending_clickhere
                 .take()
@@ -2036,8 +1958,8 @@ impl BodyTextParserState {
         false
     }
 
-    /// Dispatches a top-level `CtrlHeader` (`0x47`) record by its
-    /// `ctrl_id` (task #90 — extracted from `handle_top_level_record`).
+    /// The sole CtrlHeader interpreter, used by body paragraphs and every
+    /// nested host. Host routing never selects supported control families.
     ///
     /// Families that open nested regions (`tbl `, `head`/`foot`/`fn`/`en`/
     /// `gso `) push parser state; one-shot field/annotation controls parse
@@ -2045,6 +1967,52 @@ impl BodyTextParserState {
     /// to `Hwp5Control::Unknown` for round-trip preservation.
     fn handle_ctrl_header(&mut self, record: &Record, level: u16) {
         let ctrl_id = parse_ctrl_id(&record.data);
+        if matches!(
+            ctrl_id,
+            crate::ctrl_ids::CTRL_ID_BOOKMARK_POINT | crate::ctrl_ids::CTRL_ID_BOOKMARK_SPAN
+        ) {
+            if let Some(p) = self.current.as_mut() {
+                let index = p.controls.len();
+                p.controls.push(Hwp5Control::Bookmark {
+                    ctrl_id,
+                    header_data: record.data.clone(),
+                    name: None,
+                });
+                self.pending_bookmark = Some((level, index));
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "bookmark",
+                    reason: "no owning paragraph for bookmark".into(),
+                });
+            }
+            return;
+        }
+        if matches!(
+            ctrl_id,
+            CTRL_ID_TABLE
+                | CTRL_ID_GSO
+                | CTRL_ID_HEADER
+                | CTRL_ID_FOOTER
+                | CTRL_ID_FOOTNOTE
+                | CTRL_ID_ENDNOTE
+        ) {
+            let Some(budget) = self.budget.enter(ctrl_id == CTRL_ID_GSO, false) else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: if ctrl_id == CTRL_ID_TABLE { "table" } else { "nested_control" },
+                    reason: "shared container depth cap exceeded".to_string(),
+                });
+                if ctrl_id == CTRL_ID_GSO {
+                    self.warnings.push(Hwp5Warning::ContentLost {
+                        kind: "shape_text_depth".to_string(),
+                        reason: "shared container depth cap exceeded".to_string(),
+                        location: format!("record level {level}"),
+                    });
+                }
+                self.skipped_control = Some(level);
+                return;
+            };
+            self.active_budget = budget;
+        }
         if ctrl_id == CTRL_ID_TABLE {
             self.push_table_context(level, extract_ctrl_header_instance_id(&record.data, ctrl_id));
             self.note_table_ctrl(&record.data);
@@ -2076,6 +2044,9 @@ impl BodyTextParserState {
                 instance_id,
                 geometry,
             ));
+            let wire_order = self.wire_sequence.get();
+            self.wire_sequence.set(wire_order + 1);
+            self.subtree_ctx.as_mut().expect("just opened subtree").wire_order = wire_order;
         } else if ctrl_id == CTRL_ID_EQED {
             // The `eqed` ctrl carries only geometry; its HancomEQN
             // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
@@ -2092,34 +2063,6 @@ impl BodyTextParserState {
                 });
             let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
             self.eqed_pending = Some((geometry, instance_id));
-        } else if ctrl_id == CTRL_ID_DUTMAL {
-            // `tdut` ctrl carries the dutmal (덧말) main/sub text
-            // strings + posType. The paired inline `0x17` marker
-            // in the body's `ParaText` decides the visible
-            // position; this push keeps the projected Control in
-            // doc order via `current.controls`.
-            if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::Dutmal(dutmal));
-                }
-            } else {
-                self.push_unsupported_tag(record.header.tag_id);
-            }
-        } else if ctrl_id == CTRL_ID_COMPOSE {
-            // `tcps` ctrl carries the compose (글자겹침) text,
-            // circleType/composeType enums, and 10 charPr refs.
-            // Layout assumes `charPrCnt == 10` per HWPX schema;
-            // malformed payloads fall through to Unknown so the
-            // surrounding section keeps round-tripping.
-            if let Some(compose) =
-                crate::schema::section::Hwp5ComposeControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::Compose(compose));
-                }
-            } else {
-                self.push_unsupported_tag(record.header.tag_id);
-            }
         } else if ctrl_id == CTRL_ID_CLICK_HERE {
             // `%clk` ctrl carries the CLICK_HERE (누름틀) press-field
             // hint/help text. The form-mode `name` lives in the
@@ -2128,190 +2071,21 @@ impl BodyTextParserState {
             // the parsed control so the next `0x57` can attach the
             // name. (Wave 12l.)
             self.flush_pending_clickhere();
-            match crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data) {
-                Ok(clickhere) => self.pending_clickhere = Some(clickhere),
-                Err(err) => {
-                    self.warnings.push(Hwp5Warning::DroppedControl {
-                        control: "clickhere",
-                        reason: format!(
-                            "malformed %clk CtrlHeader payload ({}); \
-                                     dropping press-field metadata",
-                            err.as_str()
-                        ),
-                    });
+            self.pending_clickhere_level = level;
+            match Self::typed_paragraph_control(ctrl_id, &record.data, &mut self.warnings) {
+                Some(Hwp5Control::ClickHere(control)) => self.pending_clickhere = Some(control),
+                Some(control) => {
+                    if let Some(buf) = self.current.as_mut() {
+                        buf.controls.push(control);
+                    }
                 }
+                None => {}
             }
-        } else if ctrl_id == CTRL_ID_INDEXMARK {
-            // `idxm` ctrl carries the IndexMark (찾아보기 표시)
-            // `primary` text and optional `secondary` text. A
-            // malformed payload emits a targeted
-            // `DroppedControl` warning (per Codex review) so
-            // audit baselines can attribute the loss to the
-            // IndexMark code path instead of the generic
-            // `UnsupportedTag(0x47)` bucket. (Wave 12k.)
-            if let Some(indexmark) =
-                crate::schema::section::Hwp5IndexMarkControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::IndexMark(indexmark));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "indexmark",
-                    reason: "malformed idxm CtrlHeader payload; dropping index mark".to_string(),
-                });
-            }
-        } else if ctrl_id == CTRL_ID_FIELD_SUMMERY {
-            // `%smr` ctrl carries a SUMMERY auto-field Command
-            // `$token` (e.g. `$author`, `$modifiedtime`). The
-            // projection layer dispatches the token to a typed
-            // `FieldType` or `Control::UnknownSummary`. No
-            // follow-up sub-record (Wave 12n).
-            if let Some(summary) =
-                crate::schema::section::Hwp5SummaryControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::SummaryField(summary));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "summary_field",
-                    reason: "malformed %smr CtrlHeader payload; dropping auto-field".to_string(),
-                });
-            }
-        } else if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
-            // `%dte` ctrl carries a raw date/time format-code
-            // (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`). The
-            // projection layer wraps it in `Control::DateCodeField`
-            // with `is_time_mode` derived from the `T` prefix.
-            // (Wave 12n.)
-            if let Some(date_code) =
-                crate::schema::section::Hwp5DateCodeControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::DateCodeField(date_code));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "date_code_field",
-                    reason: "malformed %dte CtrlHeader payload; dropping date-code field"
-                        .to_string(),
-                });
-            }
-        } else if ctrl_id == CTRL_ID_FIELD_PATH {
-            // `%pat` ctrl carries a path/file-name format-code
-            // Command (`"$P"`, `"$F"`, `"$P$F"`). Wave 12n.
-            if let Some(pat) =
-                crate::schema::section::Hwp5PathFieldControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::PathField(pat));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "path_field",
-                    reason: "malformed %pat CtrlHeader payload; dropping path field".to_string(),
-                });
-            }
-        } else if ctrl_id == CTRL_ID_FIELD_CROSSREF {
-            // `%xrf` ctrl carries a structured cross-reference Command
-            // `?<target>;N1;N2;N3;N4;` + 8-byte trailer. Wave 12m
-            // Phase 2. Schema preserves raw N1/N2/N3 codes;
-            // projection boundary maps them to typed RefType /
-            // RefContentType / RefTarget.
-            if let Some(xrf) =
-                crate::schema::section::Hwp5CrossRefControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::CrossRef(xrf));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "crossref",
-                    reason: "malformed %xrf CtrlHeader payload; dropping cross-reference"
-                        .to_string(),
-                });
-            }
-        } else if ctrl_id == CTRL_ID_NEW_NUMBER {
-            // `nwno` 새 번호 지정 — 10바이트 payload (W2, F1 실측 §1.2).
-            // malformed 여도 **Unknown placeholder 를 push** 해 marker↔control
-            // 큐 정렬을 보존한다 (독립 리뷰 High #1: 승격된 0x15 marker 가
-            // 뒤따르는 GSO 를 오소비하는 queue poisoning 방지).
-            if let Some(nwno) =
-                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::NewNumber(nwno));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "new_number",
-                    reason: "malformed nwno CtrlHeader payload; dropping number restart"
-                        .to_string(),
-                });
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls
-                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
-                }
-            }
-        } else if ctrl_id == CTRL_ID_PAGE_HIDING {
-            // `pghd` 감추기 — 8바이트 payload (W3, F2 실측 §1.2).
-            if let Some(pghd) =
-                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::PageHiding(pghd));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "page_hiding",
-                    reason: "malformed pghd CtrlHeader payload; dropping page hiding".to_string(),
-                });
-                // 큐 정렬 보존 placeholder (독립 리뷰 High #1).
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls
-                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
-                }
-            }
-        } else if ctrl_id == CTRL_ID_ATNO {
-            // `atno` ctrl carries a single 4-byte kind flag
-            // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
-            if let Some(atno) =
-                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, &record.data)
-            {
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::InlinePageNumber(atno));
-                }
-            } else {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "inline_page_number",
-                    reason: "malformed atno CtrlHeader payload; dropping inline page".to_string(),
-                });
-                // 큐 정렬 보존 placeholder — 0x12 marker 승격과 동계열의
-                // 선행 결함도 함께 수리 (독립 리뷰 High #1).
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls
-                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
-                }
-            }
-        } else if let Some(command) =
-            (ctrl_id == CTRL_ID_MEMO).then(|| Hwp5MemoCommand::parse(&record.data)).flatten()
+        } else if let Some(control) =
+            Self::typed_paragraph_control(ctrl_id, &record.data, &mut self.warnings)
         {
-            // Push a placeholder `Hwp5Control::Memo` now; its content
-            // paragraphs get filled in `finish()` by matching this
-            // `memo_id` against the captured `HWPTAG_MEMO_LIST`
-            // clusters. The `%unk` ctrl_id is shared with other
-            // user-defined controls, so we only treat it as a memo
-            // when the command string starts with `"MEMO/"` (the
-            // `parse_memo_command_id` discriminator); non-memo
-            // `%unk` payloads keep falling through to the Unknown
-            // arm below for round-trip preservation.
             if let Some(buf) = self.current.as_mut() {
-                buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
-                    ctrl_id: CTRL_ID_MEMO,
-                    command,
-                    paragraphs: Vec::new(),
-                }));
+                buf.controls.push(control);
             }
         } else if let Some(buf) = self.current.as_mut() {
             // Snapshot the `secd` ctrl property word for
@@ -2420,64 +2194,12 @@ impl BodyTextParserState {
         let Some(capture) = self.memo_content_capture.as_mut() else {
             return false;
         };
-        match (tag, level) {
-            (TagId::ListHeader, 1) => {
-                capture.saw_list_header = true;
-                true
-            }
-            (TagId::ParaHeader, 1) if capture.saw_list_header => {
-                if let Some(buf) = capture.current_para.take() {
-                    capture.paragraphs.push(buf.finish(&mut self.warnings));
-                }
-                capture.current_para = Self::parse_para_header_buf(
-                    record.header.tag_id,
-                    &record.data,
-                    &mut self.warnings,
-                );
-                true
-            }
-            (TagId::ParaText, 2) => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(text) = Self::parse_para_text_value(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.text = Some(text);
-                    }
-                }
-                true
-            }
-            (TagId::ParaCharShape, 2) => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(runs) = Self::parse_para_char_shape_runs(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.char_shape_runs = runs;
-                    }
-                }
-                true
-            }
-            (TagId::ParaLineSeg, 2) => {
-                if let Some(buf) = capture.current_para.as_mut() {
-                    if let Some(segments) = Self::parse_para_line_segments(
-                        record.header.tag_id,
-                        &record.data,
-                        &mut self.warnings,
-                    ) {
-                        buf.line_segments = segments;
-                    }
-                }
-                true
-            }
-            _ => {
-                // Unknown record inside the cluster region: swallow rather
-                // than letting the normal arms touch body-paragraph state.
-                true
-            }
+        if tag == TagId::ListHeader && level == 1 {
+            capture.saw_list_header = true;
+        } else if capture.saw_list_header {
+            capture.parser.handle_record(record);
         }
+        true
     }
 
     /// Finalizes a pending `%clk` ClickHere control whose trailing
@@ -2549,51 +2271,37 @@ impl BodyTextParserState {
     /// placeholders by `memo_id`. Called once from `finish()` after the
     /// last body paragraph is committed.
     fn attach_memo_contents_to_placeholders(&mut self) {
-        if !self.memo_contents.is_empty() {
-            fill_memo_placeholders(
-                &mut self.paragraphs,
-                &mut self.memo_contents,
-                &mut self.warnings,
-            );
-            for orphan_id in self.memo_contents.keys() {
-                self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "memo_content_cluster",
-                    reason: format!(
-                        "orphan content cluster for memo_id={orphan_id}; no matching MEMO ctrl"
-                    ),
-                });
-            }
-            self.memo_contents.clear();
-        } else {
-            warn_unfilled_memo_placeholders(&self.paragraphs, &mut self.warnings);
+        fill_memo_placeholders(
+            &mut self.paragraphs,
+            &mut self.memo_contents,
+            &mut self.warnings,
+            self.budget,
+        );
+        for orphan_id in self.memo_contents.keys() {
+            self.warnings.push(Hwp5Warning::DroppedControl {
+                control: "memo_content_cluster",
+                reason: format!(
+                    "orphan content cluster for memo_id={orphan_id}; no matching MEMO ctrl"
+                ),
+            });
         }
+        self.memo_contents.clear();
     }
 
     fn finish(mut self) -> SectionResult {
+        self.close_nested_control();
         // Drain any orphan `%clk` whose `0x57` name sub-record was
         // missing or replaced by another top-level record (Wave 12l).
         self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
-            let over_cap = ctx.over_cap;
             let finished = ctx.finalize(&mut self.warnings);
-            // See `prepare_for_record`: over-cap tables are dropped, not
-            // attached (E1 #3).
-            if !over_cap {
-                // An outermost table opened inside a header/footer/note
-                // belongs to that subtree's paragraph.
-                let host = if self.table_stack.is_empty() && self.subtree_ctx.is_some() {
-                    &mut self.current_subtree_para
-                } else {
-                    &mut self.current
-                };
-                attach_finished_table(host, &mut self.table_stack, finished, &mut self.warnings);
-            }
+            attach_finished_table(
+                &mut self.current,
+                &mut self.table_stack,
+                finished,
+                &mut self.warnings,
+            );
         }
-        attach_inline_gso_control(
-            &mut self.current_subtree_para,
-            self.inline_subtree_gso_ctx.take(),
-            &mut self.warnings,
-        );
         flush_subtree_paragraph(
             &mut self.current_subtree_para,
             self.subtree_ctx.as_mut(),
@@ -2609,8 +2317,11 @@ impl BodyTextParserState {
         // then join captured clusters to inline `Memo` placeholders by
         // `memo_id`. See `phase12e_memo_design.md` for the wire layout.
         self.flush_memo_content_capture();
-        self.attach_memo_contents_to_placeholders();
+        if !self.nested {
+            self.attach_memo_contents_to_placeholders();
+        }
 
+        self.warn_nested_section_state();
         SectionResult {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
@@ -2681,29 +2392,6 @@ impl BodyTextParserState {
             }
         }
     }
-
-    fn handle_inline_gso_record(
-        record: &Record,
-        tag: TagId,
-        level: u16,
-        warnings: &mut Vec<Hwp5Warning>,
-        inline_gso_ctx: Option<&mut InlineGsoContext>,
-    ) -> bool {
-        let Some(ctx) = inline_gso_ctx else {
-            return false;
-        };
-        // A group (`$con`) in a table cell or another object's text takes the
-        // same group path as one in a body paragraph.
-        if ctx.route_group_record(record, tag, level, warnings) {
-            return true;
-        }
-        // The shape's text and any shape inside it (§19.5 1a).
-        if ctx.route_text_record(record, tag, level, warnings) {
-            return true;
-        }
-        ctx.note_shape_record(record, tag, warnings);
-        true
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2734,73 +2422,111 @@ fn fill_memo_placeholders(
     paragraphs: &mut [Hwp5Paragraph],
     memo_contents: &mut HashMap<u32, Vec<Hwp5Paragraph>>,
     warnings: &mut Vec<Hwp5Warning>,
+    budget: NestingBudget,
 ) {
     for para in paragraphs {
-        for control in &mut para.controls {
-            match control {
-                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
-                    if let Some(content) = memo_contents.remove(&memo.command.memo_id) {
-                        memo.paragraphs = content;
-                    } else {
-                        warnings.push(Hwp5Warning::DroppedControl {
-                            control: "memo",
-                            reason: format!(
-                                "no content cluster for memo_id={}",
-                                memo.command.memo_id
-                            ),
-                        });
-                    }
-                }
-                Hwp5Control::Table(table) => {
-                    for cell in &mut table.cells {
-                        fill_memo_placeholders(&mut cell.paragraphs, memo_contents, warnings);
-                    }
-                }
-                Hwp5Control::Header(subtree)
-                | Hwp5Control::Footer(subtree)
-                | Hwp5Control::Footnote(subtree)
-                | Hwp5Control::Endnote(subtree) => {
-                    fill_memo_placeholders(&mut subtree.paragraphs, memo_contents, warnings);
-                }
-                Hwp5Control::TextBox(textbox) => {
-                    fill_memo_placeholders(&mut textbox.paragraphs, memo_contents, warnings);
-                }
-                _ => {}
-            }
-        }
+        para.controls
+            .retain_mut(|control| fill_control_memos(control, memo_contents, warnings, budget));
     }
 }
 
-/// Walks paragraphs and surfaces a warning for every empty `Memo`
-/// placeholder. Used in the no-clusters fast path.
-fn warn_unfilled_memo_placeholders(paragraphs: &[Hwp5Paragraph], warnings: &mut Vec<Hwp5Warning>) {
-    for para in paragraphs {
-        for control in &para.controls {
-            match control {
-                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
+fn fill_control_memos(
+    control: &mut Hwp5Control,
+    memo_contents: &mut HashMap<u32, Vec<Hwp5Paragraph>>,
+    warnings: &mut Vec<Hwp5Warning>,
+    budget: NestingBudget,
+) -> bool {
+    // Only containers consume nesting. A compose/equation at depth 32 is
+    // still a valid leaf, just like plain text in the same paragraph.
+    if !matches!(
+        control,
+        Hwp5Control::Memo(_)
+            | Hwp5Control::Group(_)
+            | Hwp5Control::Table(_)
+            | Hwp5Control::Header(_)
+            | Hwp5Control::Footer(_)
+            | Hwp5Control::Footnote(_)
+            | Hwp5Control::Endnote(_)
+            | Hwp5Control::TextBox(_)
+            | Hwp5Control::Ellipse(_)
+            | Hwp5Control::Polygon(_)
+    ) {
+        return true;
+    }
+    // MEMO_LIST bodies are joined after parsing, so references can otherwise
+    // create a new, unbounded nesting chain across individually shallow lists.
+    let Some(budget) = budget.enter(false, false) else {
+        warnings.push(Hwp5Warning::DroppedControl {
+            control: "memo_depth",
+            reason:
+                "shared container depth cap exceeded while joining memo bodies; subtree removed"
+                    .to_string(),
+        });
+        return false;
+    };
+    match control {
+        Hwp5Control::Memo(memo) => {
+            if memo.paragraphs.is_empty() {
+                if let Some(content) = memo_contents.remove(&memo.command.memo_id) {
+                    memo.paragraphs = content;
+                } else {
                     warnings.push(Hwp5Warning::DroppedControl {
                         control: "memo",
                         reason: format!("no content cluster for memo_id={}", memo.command.memo_id),
                     });
                 }
-                Hwp5Control::Table(table) => {
-                    for cell in &table.cells {
-                        warn_unfilled_memo_placeholders(&cell.paragraphs, warnings);
-                    }
+            }
+            fill_memo_placeholders(&mut memo.paragraphs, memo_contents, warnings, budget);
+        }
+        Hwp5Control::Group(group) => {
+            group.children.retain_mut(|child| {
+                if !fill_control_memos(&mut child.control, memo_contents, warnings, budget) {
+                    return false;
                 }
-                Hwp5Control::Header(subtree)
-                | Hwp5Control::Footer(subtree)
-                | Hwp5Control::Footnote(subtree)
-                | Hwp5Control::Endnote(subtree) => {
-                    warn_unfilled_memo_placeholders(&subtree.paragraphs, warnings);
+                if let Some(text_budget) = budget.enter(false, false) {
+                    fill_memo_placeholders(
+                        &mut child.paragraphs,
+                        memo_contents,
+                        warnings,
+                        text_budget,
+                    );
+                } else if !child.paragraphs.is_empty() {
+                    warnings.push(Hwp5Warning::DroppedControl {
+                        control: "memo_depth",
+                        reason: "shared container depth cap exceeded at group child text; subtree removed"
+                            .to_string(),
+                    });
+                    child.paragraphs.clear();
                 }
-                Hwp5Control::TextBox(textbox) => {
-                    warn_unfilled_memo_placeholders(&textbox.paragraphs, warnings);
-                }
-                _ => {}
+                true
+            });
+        }
+        Hwp5Control::Table(table) => {
+            if let Some(caption) = &mut table.caption {
+                fill_memo_placeholders(&mut caption.paragraphs, memo_contents, warnings, budget);
+            }
+            for cell in &mut table.cells {
+                fill_memo_placeholders(&mut cell.paragraphs, memo_contents, warnings, budget);
             }
         }
+        Hwp5Control::Header(subtree)
+        | Hwp5Control::Footer(subtree)
+        | Hwp5Control::Footnote(subtree)
+        | Hwp5Control::Endnote(subtree) => {
+            fill_memo_placeholders(&mut subtree.paragraphs, memo_contents, warnings, budget);
+        }
+        Hwp5Control::TextBox(shape) => {
+            fill_memo_placeholders(&mut shape.paragraphs, memo_contents, warnings, budget)
+        }
+        Hwp5Control::Ellipse(shape) => {
+            fill_memo_placeholders(&mut shape.paragraphs, memo_contents, warnings, budget)
+        }
+        Hwp5Control::Polygon(shape) => {
+            fill_memo_placeholders(&mut shape.paragraphs, memo_contents, warnings, budget)
+        }
+        _ => {}
     }
+    true
 }
 
 fn parse_ctrl_id(data: &[u8]) -> u32 {
@@ -3007,15 +2733,6 @@ fn attach_finished_table(
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     if let Some(parent) = table_stack.last_mut() {
-        // A table read inside a cell's header/footer belongs to that
-        // header/footer's paragraph (the capture is still open: it closes
-        // only on a record at or above its own level, after this pop).
-        if let Some(buf) =
-            parent.cell_header_footer.as_mut().and_then(|capture| capture.current_para.as_mut())
-        {
-            buf.controls.push(control);
-            return;
-        }
         if let Some(buf) = parent.current_cell_para.as_mut() {
             buf.controls.push(control);
             return;
@@ -3058,20 +2775,6 @@ fn attach_finished_subtree(
     };
     let control = ctx.into_control(warnings);
     if let Some(buf) = current.as_mut() {
-        buf.controls.push(control);
-    }
-}
-
-fn attach_inline_gso_control(
-    current_para: &mut Option<ParaBuf>,
-    inline_gso_ctx: Option<InlineGsoContext>,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    let Some(ctx) = inline_gso_ctx else {
-        return;
-    };
-    let control = ctx.into_control(warnings);
-    if let Some(buf) = current_para.as_mut() {
         buf.controls.push(control);
     }
 }
@@ -4185,7 +3888,10 @@ mod tests {
         assert_eq!(ctrl(in_footer), Some((0x082a_2311, 700)));
         // The output height: each table's hint is its `CtrlHeader` height
         // (body, then the header's — the layout-hint queue's order).
-        let hints = crate::layout_hint_patch::capture_layout_hints(std::slice::from_ref(&result));
+        let hints = crate::layout_hint_patch::capture_layout_hints(
+            std::slice::from_ref(&result),
+            &mut Vec::new(),
+        );
         let heights: Vec<_> = hints[0].tables.iter().map(|t| t.height).collect();
         // Body tables (the body's, its nested one, the cell-footer host),
         // then the header's, then the footer's.
@@ -5666,11 +5372,11 @@ mod tests {
 
     #[test]
     fn over_cap_table_nesting_is_dropped_without_panic() {
-        // MAX_TABLE_NESTING + 1 deep: must NOT panic/OOM, must emit at least one
+        // MAX_CONTROL_NESTING + 1 deep: must NOT panic/OOM, must emit at least one
         // DroppedControl{control:"table"} warning, must keep decoding the outer
         // content, and the attached tree must be capped (no deeper than the
         // cap) — proving push/pop stayed balanced.
-        let depth = MAX_TABLE_NESTING + 1;
+        let depth = MAX_CONTROL_NESTING + 1;
         let stream = nested_tables_stream(depth);
 
         let result = parse_body_text(&stream, &version()).expect("deep nesting must not error");
@@ -5704,8 +5410,8 @@ mod tests {
         // (otherwise the outer table would be malformed or missing).
         let attached_depth = count_nested_table_depth(outer);
         assert!(
-            attached_depth <= MAX_TABLE_NESTING,
-            "attached nesting depth {attached_depth} must not exceed cap {MAX_TABLE_NESTING}",
+            attached_depth <= MAX_CONTROL_NESTING,
+            "attached nesting depth {attached_depth} must not exceed cap {MAX_CONTROL_NESTING}",
         );
 
         // The closing paragraph (para_shape_id 1) must still be decoded after
@@ -6399,8 +6105,7 @@ mod tests {
 
     #[test]
     fn gso_shape_picture_carries_ctrl_header_object_properties_inside_table_cell() {
-        // W2p: 표 셀 안 `gso ` 는 `InlineGsoContext`(cell 경로,
-        // `ctx.inline_cell_gso_ctx`) 를 통해 같은 DWORD 를 carry 해야 한다 —
+        // W2p: 표 셀 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 한다 —
         // top-level 과 별개 코드 경로.
         const KNOWN_PROPERTIES: u32 = 0x0000_0001;
         let mut stream = Vec::new();
@@ -6452,8 +6157,7 @@ mod tests {
 
     #[test]
     fn gso_shape_picture_carries_ctrl_header_object_properties_inside_textbox_subtree() {
-        // W2p: 글상자 subtree 안 `gso ` 는 `InlineGsoContext`(subtree 경로,
-        // `self.inline_subtree_gso_ctx`) 를 통해 같은 DWORD 를 carry 해야
+        // W2p: 글상자 subtree 안 `gso ` 도 공통 컨트롤 해석기로 같은 DWORD 를 carry 해야
         // 한다 — table-cell 경로와도 별개.
         const KNOWN_PROPERTIES: u32 = 0x0000_0001;
         let mut stream = Vec::new();
@@ -6628,7 +6332,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
+        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
         ctx.note_shape_component(&[], 0);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
@@ -6721,4 +6425,129 @@ mod tests {
             }
         }
     }
+    /// 이것을 실패시키는 것: 어느 중첩 경로에서든 공통 타입화를 우회하거나
+    /// 덧말/겹침/찾아보기/필드 갈래를 빼기. 실제 fixture의 wire를 각 문맥에 넣는다.
+    #[test]
+    fn nested_one_shot_controls_share_body_typing() {
+        let mut payloads = Vec::new();
+        for (file, id) in [
+            ("sample-compose-basic.hwp", CTRL_ID_COMPOSE),
+            ("sample-dutmal-basic.hwp", CTRL_ID_DUTMAL),
+            ("sample-indexmark-basic.hwp", CTRL_ID_INDEXMARK),
+            ("sample-field-docsummary.hwp", CTRL_ID_FIELD_SUMMERY),
+            ("sample-bookmark-page.hwp", CTRL_ID_FIELD_CROSSREF),
+            ("sample-memo-basic.hwp", CTRL_ID_MEMO),
+        ] {
+            let bytes = std::fs::read(fixture_path(file)).unwrap();
+            let pkg = PackageReader::open(&bytes).unwrap();
+            let records = Record::parse_stream(&mut Cursor::new(&pkg.sections_data()[0])).unwrap();
+            payloads.push(
+                records
+                    .into_iter()
+                    .find(|r| r.header.tag_id == 0x47 && parse_ctrl_id(&r.data) == id)
+                    .unwrap_or_else(|| panic!("missing {id:08x} in {file}"))
+                    .data,
+            );
+        }
+        for (id, command) in [
+            (CTRL_ID_FIELD_DATE_CODE, "YYYY-MM-DD"),
+            (CTRL_ID_FIELD_PATH, "$P$F"),
+            (CTRL_ID_CLICK_HERE, "Clickhere:set:0:Direction:wstring:1:힌 HelpState:wstring:0:  "),
+        ] {
+            let mut data = id.to_le_bytes().to_vec();
+            data.extend([0; 4]);
+            data.push(9);
+            let units: Vec<_> = command.encode_utf16().collect();
+            data.extend_from_slice(&(units.len() as u16).to_le_bytes());
+            data.extend(units.into_iter().flat_map(|u| u.to_le_bytes()));
+            data.extend([0; 8]);
+            payloads.push(data);
+        }
+        for (id, size) in [(CTRL_ID_ATNO, 16), (CTRL_ID_NEW_NUMBER, 10), (CTRL_ID_PAGE_HIDING, 8)] {
+            let mut data = vec![0; size];
+            data[..4].copy_from_slice(&id.to_le_bytes());
+            payloads.push(data);
+        }
+        for data in payloads {
+            let mut body = BodyTextParserState::default();
+            body.handle_record(&Record {
+                header: crate::schema::record::RecordHeader { tag_id: 0x42, level: 0, size: 22 },
+                data: para_header_data(0, 0),
+            });
+            let record = Record {
+                header: crate::schema::record::RecordHeader {
+                    tag_id: 0x47,
+                    level: 1,
+                    size: data.len() as u32,
+                },
+                data,
+            };
+            body.handle_record(&record);
+            let mut name = vec![0x1B, 0x02, 0x01, 0, 0, 0, 0, 0x40, 0x01, 0, 1, 0];
+            name.extend_from_slice(&('명' as u16).to_le_bytes());
+            if parse_ctrl_id(&record.data) == CTRL_ID_CLICK_HERE {
+                body.handle_record(&Record {
+                    header: crate::schema::record::RecordHeader {
+                        tag_id: 0x57,
+                        level: 2,
+                        size: name.len() as u32,
+                    },
+                    data: name.clone(),
+                });
+            }
+            let result = body.finish();
+            let control = &result.paragraphs[0].controls[0];
+            assert!(!matches!(control, Hwp5Control::Unknown { .. }), "{control:?}");
+            for container in [CTRL_ID_TABLE, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE] {
+                let mut bytes = make_record(TagId::ParaHeader, 0, &para_header_data(0, 0));
+                bytes.extend(make_record(TagId::CtrlHeader, 1, &container.to_le_bytes()));
+                if container == CTRL_ID_TABLE {
+                    bytes.extend(make_record(TagId::Table, 2, &basic_table_data(1, 1)));
+                    let mut cell = vec![0; 34];
+                    cell[..4].copy_from_slice(&1u32.to_le_bytes());
+                    cell[12] = 1;
+                    cell[14] = 1;
+                    bytes.extend(make_record(TagId::ListHeader, 2, &cell));
+                } else {
+                    bytes.extend(make_record(TagId::ListHeader, 2, &1u32.to_le_bytes()));
+                }
+                bytes.extend(make_record(TagId::ParaHeader, 2, &para_header_data(0, 0)));
+                bytes.extend(make_record(TagId::CtrlHeader, 3, &record.data));
+                if parse_ctrl_id(&record.data) == CTRL_ID_CLICK_HERE {
+                    bytes.extend(make_record(TagId::CtrlData, 4, &name));
+                }
+                let nested = parse_body_text(&bytes, &HwpVersion::new(5, 0, 0, 0)).unwrap();
+                let children = match &nested.paragraphs[0].controls[0] {
+                    Hwp5Control::Table(t) => &t.cells[0].paragraphs,
+                    Hwp5Control::Footer(t) | Hwp5Control::Footnote(t) => &t.paragraphs,
+                    other => panic!("{other:?}"),
+                };
+                assert_eq!(format!("{:?}", children[0].controls[0]), format!("{control:?}"));
+            }
+        }
+    }
+    /// 이것을 실패시키는 것: 잘못된 payload의 큐 자리나 진단을 버리기.
+    #[test]
+    fn nested_malformed_controls_keep_a_warned_queue_slot() {
+        for id in [
+            CTRL_ID_COMPOSE,
+            CTRL_ID_DUTMAL,
+            CTRL_ID_INDEXMARK,
+            CTRL_ID_FIELD_SUMMERY,
+            CTRL_ID_FIELD_DATE_CODE,
+            CTRL_ID_FIELD_PATH,
+            CTRL_ID_FIELD_CROSSREF,
+            CTRL_ID_CLICK_HERE,
+            CTRL_ID_ATNO,
+            CTRL_ID_NEW_NUMBER,
+            CTRL_ID_PAGE_HIDING,
+        ] {
+            let mut warnings = Vec::new();
+            let control =
+                BodyTextParserState::typed_paragraph_control(id, &id.to_le_bytes(), &mut warnings);
+            assert!(matches!(control,Some(Hwp5Control::Unknown {ctrl_id,..}) if ctrl_id==id));
+            assert_eq!(warnings.len(), 1);
+        }
+    }
+    include!("review_tests.rs");
 }

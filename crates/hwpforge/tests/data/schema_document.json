@@ -48,7 +48,7 @@
           }
         },
         "page_number": {
-          "description": "Optional page number settings for this section.",
+          "description": "Legacy section-wide page number settings. Decoders derive this summary\nfrom the first positioned `Control::PageNumber`; positioned controls\ncarry the authoritative values and locations. With no positioned\ncontrols, the encoder emits this setting at the section start.",
           "anyOf": [
             {
               "$ref": "#/$defs/PageNumber"
@@ -2996,6 +2996,28 @@
           "additionalProperties": false
         },
         {
+          "description": "Page-number placement at this exact paragraph/run position. Decoders\npreserve every occurrence here; Section::page_number is a legacy\nsummary/fallback for documents created without positioned controls.",
+          "type": "object",
+          "properties": {
+            "PageNumber": {
+              "type": "object",
+              "properties": {
+                "number": {
+                  "description": "Placement and decoration of the page number.",
+                  "$ref": "#/$defs/PageNumber"
+                }
+              },
+              "required": [
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "PageNumber"
+          ],
+          "additionalProperties": false
+        },
+        {
           "description": "An `atno` **inline** page number control (Wave 12n).\n\nHWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴\n`상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct\nfrom `pgnp` (section-level page numbering control already modeled\nas `Section.page_number`). Inline `atno` renders to HWPX\n`<hp:autoNum>` inside a `<hp:run>`.\n\nThe 16-byte wire envelope carries a single 4-byte flag that\ndistinguishes current-page from total-pages; the HWP5 projection\nmaps it to [`InlinePageKind`].",
           "type": "object",
           "properties": {
@@ -4367,6 +4389,35 @@
         }
       ]
     },
+    "PageNumber": {
+      "description": "Page number display settings for a section.\n\nIn HWPX, page numbers appear as `<hp:pageNum>` inside `<hp:ctrl>`.\nThis struct controls position, format, and optional decoration characters.\n\n# Examples\n\n```\nuse hwpforge_core::section::PageNumber;\nuse hwpforge_foundation::{NumberFormatType, PageNumberPosition};\n\nlet pn = PageNumber::new(\n    PageNumberPosition::BottomCenter,\n    NumberFormatType::Digit,\n);\nassert_eq!(pn.position, PageNumberPosition::BottomCenter);\n```",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Where to display the page number.",
+          "$ref": "#/$defs/PageNumberPosition"
+        },
+        "number_format": {
+          "description": "Numbering format (digits, roman, etc.).",
+          "$ref": "#/$defs/NumberFormatType"
+        },
+        "decoration": {
+          "description": "Optional decoration string placed around the number\n(e.g. `\"- \"` for `\"- 1 -\"`). Empty means no decoration.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "position",
+        "number_format",
+        "decoration"
+      ]
+    },
+    "PageNumberPosition": {
+      "type": "string"
+    },
+    "NumberFormatType": {
+      "type": "string"
+    },
     "InlinePageKind": {
       "description": "Typed variant of the HWP5 `atno` inline page-number `flag` byte\n(Wave 12n).\n\nObserved values: `0x00` = current page, `0x06` = total page count.\nOther values surface as [`InlinePageKind::Unknown`].",
       "oneOf": [
@@ -4451,9 +4502,6 @@
         "number_type",
         "superscript"
       ]
-    },
-    "NumberFormatType": {
-      "type": "string"
     },
     "NewNumberKind": {
       "description": "Which counter a [`Control::NewNumber`] restarts.\n\n[`Control::NewNumber`]: crate::control::Control::NewNumber\n\nMaps 1:1 to HWPX `<hp:newNum numType>` and HWP5 `nwno` property\nbits 0-3 (native fixture 실측 2026-08-12: 쪽 번호 = `0`, corpus 613회 중\n607회가 `Page`). Unmapped wire values are surfaced as [`Self::Unknown`]\n— encoders must skip them instead of fabricating a type.",
@@ -4842,32 +4890,6 @@
       ]
     },
     "ApplyPageType": {
-      "type": "string"
-    },
-    "PageNumber": {
-      "description": "Page number display settings for a section.\n\nIn HWPX, page numbers appear as `<hp:pageNum>` inside `<hp:ctrl>`.\nThis struct controls position, format, and optional decoration characters.\n\n# Examples\n\n```\nuse hwpforge_core::section::PageNumber;\nuse hwpforge_foundation::{NumberFormatType, PageNumberPosition};\n\nlet pn = PageNumber::new(\n    PageNumberPosition::BottomCenter,\n    NumberFormatType::Digit,\n);\nassert_eq!(pn.position, PageNumberPosition::BottomCenter);\n```",
-      "type": "object",
-      "properties": {
-        "position": {
-          "description": "Where to display the page number.",
-          "$ref": "#/$defs/PageNumberPosition"
-        },
-        "number_format": {
-          "description": "Numbering format (digits, roman, etc.).",
-          "$ref": "#/$defs/NumberFormatType"
-        },
-        "decoration": {
-          "description": "Optional decoration string placed around the number\n(e.g. `\"- \"` for `\"- 1 -\"`). Empty means no decoration.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "position",
-        "number_format",
-        "decoration"
-      ]
-    },
-    "PageNumberPosition": {
       "type": "string"
     },
     "ColumnSettings": {

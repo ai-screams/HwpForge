@@ -49,6 +49,9 @@ pub(crate) struct Hwp5Paragraph {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) enum Hwp5Control {
+    /// Name bound to this exact CtrlHeader's immediate CtrlData child, never
+    /// inferred from cross-reference order. Raw header retains source identity.
+    Bookmark { ctrl_id: u32, header_data: Vec<u8>, name: Option<String> },
     /// Table reference with nested cell paragraphs parsed from child records.
     Table(Hwp5Table),
     /// Image evidence resolved from `gso ` + `ShapeComponent` + `ShapePicture`.
@@ -790,6 +793,8 @@ pub(crate) struct Hwp5TableCell {
 /// Parsed nested subtree carried by a non-table control.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5NestedSubtree {
+    /// Section-wide CtrlHeader encounter order, independent of the host.
+    pub wire_order: usize,
     /// Original control identifier that owns the subtree.
     pub ctrl_id: u32,
     /// Raw 4-byte property field that follows `ctrl_id` in the

@@ -11,7 +11,7 @@ pub(crate) use group::written_group_text;
 mod shapes;
 mod text;
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 #[cfg(test)]
 thread_local! {
@@ -92,46 +92,6 @@ const HWP5_CROSSREF_REF_TYPE_OUTLINE: u8 = 5;
 const HWP5_CROSSREF_REF_TYPE_BOOKMARK: u8 = 6;
 // CTRL_ID constants moved to `crate::ctrl_ids` (#94 Step B1).
 
-#[derive(Debug, Default)]
-struct SectionProjectionHints {
-    unresolved_bookmark_names: VecDeque<String>,
-}
-
-impl SectionProjectionHints {
-    fn from_paragraphs(paragraphs: &[Hwp5Paragraph]) -> Self {
-        // Wave 12m Phase 2 Step 4: %xrf is now `Hwp5Control::CrossRef`
-        // (typed schema). Only Bookmark cross-refs (ref_type_code == 6)
-        // carry a bookmark NAME in `target_raw`; other ref types use
-        // `#<id>` SystemIds and won't resolve to a bookmark span, so
-        // they are skipped here. Preserves the previous behavior of
-        // back-feeding bookmark span names from forward cross-refs.
-        let mut seen = BTreeSet::new();
-        let mut unresolved_bookmark_names = VecDeque::new();
-        for paragraph in paragraphs {
-            for control in &paragraph.controls {
-                let Hwp5Control::CrossRef(xrf) = control else {
-                    continue;
-                };
-                if xrf.ref_type_code != HWP5_CROSSREF_REF_TYPE_BOOKMARK {
-                    continue;
-                }
-                let target_name = xrf.target_raw.clone();
-                if target_name.is_empty() {
-                    continue;
-                }
-                if seen.insert(target_name.clone()) {
-                    unresolved_bookmark_names.push_back(target_name);
-                }
-            }
-        }
-        Self { unresolved_bookmark_names }
-    }
-
-    fn take_bookmark_name(&mut self) -> Option<String> {
-        self.unresolved_bookmark_names.pop_front()
-    }
-}
-
 #[derive(Debug)]
 struct ProjectedParagraph {
     paragraph: Paragraph,
@@ -141,6 +101,7 @@ struct ProjectedParagraph {
 struct UnknownControlHeader<'a> {
     ctrl_id: u32,
     header_data: &'a [u8],
+    bookmark_name: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -171,7 +132,7 @@ struct ParagraphProjectionQueues<'a> {
     /// segments via `start_active_field`. Same lifecycle as the other
     /// CtrlHeader-backed field queues above.
     crossref_controls: VecDeque<crate::schema::section::Hwp5CrossRefControl>,
-    point_bookmark_names: VecDeque<String>,
+    point_bookmark_names: VecDeque<Option<String>>,
 }
 
 #[derive(Debug)]
@@ -210,11 +171,8 @@ enum ActiveField {
     /// ClickHere (누름틀, CLICK_HERE press-field) — Wave 12l. The
     /// inline `FieldBegin %clk` to `FieldEnd` span is rendered as a
     /// single `Control::Field { field_type: ClickHere, hint_text,
-    /// help_text, name }` Run emitted at `FieldEnd`. Per Codex review
-    /// the span text between the markers is *not* accumulated: in
-    /// HWP5 wire that span is empty, and HWPX renders `hint_text` as
-    /// the visible placeholder, so accumulating display text would
-    /// risk double-emitting it.
+    /// help_text, name, display_text }` Run emitted at `FieldEnd`. The
+    /// actual span is collected at closure; only an empty body uses the hint.
     ClickHere {
         start_utf16: u32,
         hint_text: Option<String>,
@@ -411,75 +369,30 @@ fn project_to_core_internal(
                 }
             }
         }
-        let mut section_field_hints =
-            SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
-        // ADR-002 + gap A: collect per-ctrl subtrees instead of
-        // flattening all headers/footers into one. Each tuple is
-        // `(projected paragraphs, raw 4-byte property field)` so the
-        // applyPageType bits survive (HWP 5.0 spec §4.3.10.3 표 141).
-        let mut header_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
-        let mut footer_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
-
-        // The page number is a section-level property. 한글 stores its `pgnp`
-        // control in a top-level body paragraph OR inside a layout table cell,
-        // so resolve it once by scanning the whole body (recursing into table
-        // cells) rather than treating it as a per-paragraph output.
-        section.page_number =
-            find_section_page_number(&section_result.paragraphs, &mut projection_images.warnings);
-
-        // Project each paragraph. A header/footer is anchored to the Core
-        // index of the paragraph it sits in (or whose table holds it) — the
-        // index it gets in `section.paragraphs`, taken before it is added.
-        let mut header_anchors: Vec<usize> = Vec::new();
-        let mut footer_anchors: Vec<usize> = Vec::new();
+        // All hosts use project_control_run, including section-scoped controls.
+        // Nested headers/footers inherit the owning top-level paragraph anchor.
         for hwp_para in section_result.paragraphs {
-            let anchor = section.paragraphs.len();
-            let headers = collect_header_subtrees(&hwp_para, &mut projection_images);
-            header_anchors.extend(std::iter::repeat_n(anchor, headers.len()));
-            header_subtrees.extend(headers);
-            let footers = collect_footer_subtrees(&hwp_para, &mut projection_images);
-            footer_anchors.extend(std::iter::repeat_n(anchor, footers.len()));
-            footer_subtrees.extend(footers);
-
+            projection_images.section_anchor = section.paragraphs.len();
             let projected = project_paragraph_with_images(
                 &hwp_para,
                 &mut projection_images,
                 ImageProjectionContext::Flow,
-                Some(&mut section_field_hints),
             );
             section.add_paragraph(projected.paragraph);
         }
 
-        // ADR-002 + gap A: per-ctrl applyPageType carry.
-        //
-        // HWP 5.0 spec §4.3.10.3 표 141: header/footer ctrl payload's
-        // bytes [4..8] hold a property word whose bit 0~1 encode the
-        // page-type scope (0=BOTH, 1=EVEN, 2=ODD). The decoder
-        // preserved this as `Hwp5NestedSubtree.properties_raw`; here
-        // each subtree becomes its own `HeaderFooter` entry so HWPX
-        // emits matching `<hp:header applyPageType="..."/>` × N.
-        for ((paragraphs, properties_raw), anchor) in
-            header_subtrees.into_iter().zip(header_anchors)
-        {
-            section.headers.push(
-                HeaderFooter::new(
-                    paragraphs,
-                    hwp5_header_property_to_apply_page_type(properties_raw),
-                )
-                .with_anchor(anchor),
-            );
-        }
-        for ((paragraphs, properties_raw), anchor) in
-            footer_subtrees.into_iter().zip(footer_anchors)
-        {
-            section.footers.push(
-                HeaderFooter::new(
-                    paragraphs,
-                    hwp5_header_property_to_apply_page_type(properties_raw),
-                )
-                .with_anchor(anchor),
-            );
-        }
+        section.page_number = PageNumber::first_in(&section.paragraphs);
+
+        projection_images.headers.sort_by_key(|(order, _)| *order);
+        projection_images.footers.sort_by_key(|(order, _)| *order);
+        section.headers = std::mem::take(&mut projection_images.headers)
+            .into_iter()
+            .map(|(_, unit)| unit)
+            .collect();
+        section.footers = std::mem::take(&mut projection_images.footers)
+            .into_iter()
+            .map(|(_, unit)| unit)
+            .collect();
 
         // Ensure every section has at least one paragraph (validation requirement).
         if section.is_empty() {
@@ -526,7 +439,7 @@ fn project_to_core_internal(
         });
     }
 
-    // Chart extraction runs deep inside `Option<Run>`/`Paragraph` returning
+    // Chart extraction and table construction run inside `Option<Run>`/`Paragraph` returning
     // helpers, so a document-budget overrun is parked in the shared state and
     // surfaced here. No partial document is returned.
     if let Some(err) = projection_images.budget_error.take() {
@@ -553,6 +466,10 @@ fn ctrl_id_ascii(ctrl_id: u32) -> String {
 // ---------------------------------------------------------------------------
 
 struct ProjectionImageState<'a> {
+    /// Section effects are emitted by the same control projection as inline runs.
+    section_anchor: usize,
+    headers: Vec<(usize, HeaderFooter)>,
+    footers: Vec<(usize, HeaderFooter)>,
     image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
     ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
@@ -565,9 +482,10 @@ struct ProjectionImageState<'a> {
     /// Document decompression budget continued from the OLE join; every chart
     /// extraction charges the bytes it makes resident.
     budget: DecompressBudget,
-    /// First document-budget overrun. Once set, no further chart extraction
-    /// runs, and `project_to_core_internal` returns it as the document error.
+    /// First document-budget overrun. Once set, chart extraction and table
+    /// cell generation stop; `project_to_core_internal` returns the error.
     budget_error: Option<Hwp5Error>,
+    generated_cells: u64,
     /// Top-level groups projected so far — numbers group warnings.
     group_seq: usize,
     /// Pixel size of each image asset read so far (by storage name), a
@@ -590,6 +508,9 @@ impl<'a> ProjectionImageState<'a> {
         budget: DecompressBudget,
     ) -> Self {
         Self {
+            section_anchor: 0,
+            headers: Vec::new(),
+            footers: Vec::new(),
             image_assets,
             ole_assets,
             image_store: ImageStore::new(),
@@ -597,6 +518,7 @@ impl<'a> ProjectionImageState<'a> {
             dropped_unknown: std::collections::BTreeMap::new(),
             budget,
             budget_error: None,
+            generated_cells: 0,
             group_seq: 0,
             pixel_sizes: std::cell::RefCell::default(),
         }
@@ -1434,7 +1356,6 @@ fn project_paragraph_with_images(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
-    field_hints: Option<&mut SectionProjectionHints>,
 ) -> ProjectedParagraph {
     let mut projected = if !paragraph_needs_structural_projection(hwp_para) {
         ProjectedParagraph {
@@ -1445,12 +1366,7 @@ fn project_paragraph_with_images(
             ),
         }
     } else {
-        project_paragraph_with_images_structural(
-            hwp_para,
-            projection_images,
-            image_context,
-            field_hints,
-        )
+        project_paragraph_with_images_structural(hwp_para, projection_images, image_context)
     };
 
     // Carry inline `<hp:tab>` attributes (width / leader / type) by
@@ -1581,8 +1497,7 @@ fn project_paragraph_with_images_flat(
     image_context: ImageProjectionContext,
 ) -> Paragraph {
     let mut runs: Vec<Run> = Vec::new();
-    // Marker-header controls (secd / cold / %bmk / %hlk / %xrf / bokm /
-    // pgnp) are consumed by `SectionColumnDef` / `FieldBegin` text
+    // Marker-header controls (secd / cold / %bmk / %hlk / %xrf / bokm) are consumed by `SectionColumnDef` / `FieldBegin` text
     // segments in the structural path, never by `ControlRef`
     // (`\u{FFFC}`) markers. The flat path historically iterated *all*
     // controls and so mis-aligned the FFFC↔control pairing for first
@@ -1599,8 +1514,7 @@ fn project_paragraph_with_images_flat(
                     | CTRL_ID_BOOKMARK_SPAN
                     | CTRL_ID_HYPERLINK
                     | CTRL_ID_FIELD_CROSSREF
-                    | CTRL_ID_BOOKMARK_POINT
-                    | CTRL_ID_PAGE_NUMBER,
+                    | CTRL_ID_BOOKMARK_POINT,
                 ..
             }
         )
@@ -2118,13 +2032,17 @@ fn project_paragraph_with_images_structural(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
-    mut field_hints: Option<&mut SectionProjectionHints>,
 ) -> ProjectedParagraph {
-    let mut queues =
-        build_paragraph_projection_queues(hwp_para, projection_images, field_hints.as_deref_mut());
+    let mut queues = build_paragraph_projection_queues(hwp_para, projection_images);
     let mut runs: Vec<Run> = Vec::new();
     let mut visible_utf16: u32 = 0;
     let mut active_field: Option<ActiveField> = None;
+    // Core's folded fields cannot contain arbitrary controls. Keep the outer
+    // field active while balancing nested markers; preserve inner memo bodies
+    // and objects separately, with an unconditional semantic-loss diagnostic.
+    let mut nested_fields: Vec<ActiveField> = Vec::new();
+    let mut field_extras: Vec<Run> = Vec::new();
+    let mut field_text = FieldTextIndex::new(hwp_para);
     let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
     let mut gso = gso_kinds(hwp_para);
 
@@ -2193,18 +2111,36 @@ fn project_paragraph_with_images_structural(
             crate::schema::section::TextSegment::ControlRef { extra }
             | crate::schema::section::TextSegment::ExtendedControlRef { extra } => {
                 ledger.observe_marker(marker_kind(ctrl_id_from_inline_extra(extra), &mut gso));
-                if active_field.is_none() {
-                    if let Some(control) = queues.object_controls.pop_front() {
-                        if let Some(run) = project_control_run(
+                let run = if ctrl_id_from_inline_extra(extra) == CTRL_ID_BOOKMARK_POINT {
+                    queues.point_bookmark_names.pop_front().flatten().map(|name| {
+                        Run::control(
+                            Control::Bookmark { name, bookmark_type: BookmarkType::Point },
+                            shape_starting_at(hwp_para, visible_utf16),
+                        )
+                    })
+                } else {
+                    queues.object_controls.pop_front().and_then(|control| {
+                        project_control_run(
                             control,
                             projection_images,
                             image_context,
                             shape_starting_at(hwp_para, visible_utf16),
-                        ) {
-                            runs.push(run);
-                        }
+                        )
+                    })
+                };
+                if let Some(run) = run {
+                    if active_field.is_some() {
+                        ledger.fail("object inside folded field");
+                        projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                                subject: "field.object",
+                                reason: "object inside a folded field cannot retain its inline position; preserving the outer field and emitting the object immediately after it".into(),
+                            });
+                        field_extras.push(run);
+                    } else {
+                        runs.push(run);
                     }
                 }
+
                 visible_utf16 += 1;
             }
             crate::schema::section::TextSegment::SectionColumnDef { extra } => {
@@ -2214,29 +2150,35 @@ fn project_paragraph_with_images_structural(
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
                 ledger.begin_field();
+                let field =
+                    start_field_from_marker(extra, &mut queues, visible_utf16, projection_images);
                 if active_field.is_some() {
-                    // 기존 동작(교체)은 유지하되 ledger 는 nested 로 실패
-                    // 처리됨 — 좌표를 추측하지 않는다.
                     ledger.fail("nested field begin");
+                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "field.nested",
+                        reason: "nested field semantics flattened; preserving outer field, visible text and all memo bodies".into(),
+                    });
+                    nested_fields.push(field);
+                } else {
+                    active_field = Some(field);
                 }
-                active_field = Some(start_field_from_marker(
-                    extra,
-                    &mut queues,
-                    visible_utf16,
-                    projection_images,
-                    field_hints.as_deref_mut(),
-                ));
             }
             crate::schema::section::TextSegment::FieldEnd => {
+                if let Some(field) = nested_fields.pop() {
+                    preserve_nested_memo(field, hwp_para, projection_images, &mut field_extras);
+                    continue;
+                }
                 if let Some(field) = active_field.take() {
                     let outcome = finish_active_field(
                         field,
+                        &mut field_text,
                         hwp_para,
                         visible_utf16,
                         &mut runs,
                         projection_images,
                     );
                     ledger.commit_field(outcome);
+                    runs.append(&mut field_extras);
                 } else {
                     ledger.commit_field(FieldEmissionOutcome::Folded);
                 }
@@ -2247,11 +2189,27 @@ fn project_paragraph_with_images_structural(
         }
     }
 
+    for field in nested_fields {
+        preserve_nested_memo(field, hwp_para, projection_images, &mut field_extras);
+    }
     if let Some(field) = active_field.take() {
+        projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "field.unclosed",
+            reason: "field has no end marker in its paragraph; preserving field and content up to paragraph end".into(),
+        });
         // 방출은 기존 동작대로 완료하되, 좌표는 신뢰 불가 (v5 fail-closed).
-        let _ = finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
+        let _ = finish_active_field(
+            field,
+            &mut field_text,
+            hwp_para,
+            visible_utf16,
+            &mut runs,
+            projection_images,
+        );
         ledger.fail("dangling field begin");
     }
+
+    runs.append(&mut field_extras);
 
     drain_unconsumed_paragraph_queues(
         queues,
@@ -2293,9 +2251,8 @@ fn project_paragraph_with_images_structural(
 /// `MAX_SUMMERY_COMMAND_UNITS` etc. at the decoder boundary), this body
 /// text comes from `ParaText` and bypasses those caps. A malicious file
 /// with a pathologically long FieldBegin..FieldEnd span would otherwise
-/// grow `display_text` unbounded. A legitimate cached render
-/// (author/date/path/title) is far under this; truncation only bites
-/// adversarial input. (Architect review P1.)
+/// grow `display_text` unbounded. Closure reports the exact lost UTF-16
+/// unit count; legitimate long cached values can also reach this limit.
 const MAX_FIELD_DISPLAY_TEXT_UNITS: usize = 4096;
 
 /// Appends `text` to an auto-field `display_text`, stopping once the
@@ -2321,6 +2278,144 @@ fn push_field_display_text(display_text: &mut String, text: &str) {
         }
         display_text.push(ch);
         current += n;
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FIELD_TEXT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Paragraph-local character/style/object index. Both construction and the
+/// forward cursor visit each input item at most once across sibling fields.
+/// Literal U+FFFC text stays visible; only wire object markers are excluded.
+struct FieldTextIndex<'a> {
+    chars: std::str::CharIndices<'a>,
+    text: &'a str,
+    styles: &'a [Hwp5CharShapeRun],
+    objects: Vec<u32>,
+    position: u32,
+    object: usize,
+    style: usize,
+    #[cfg(test)]
+    visits: usize,
+}
+
+impl<'a> FieldTextIndex<'a> {
+    fn new(para: &'a Hwp5Paragraph) -> Self {
+        use crate::schema::section::TextSegment;
+        let mut objects = Vec::new();
+        let mut position = 0;
+        #[cfg(test)]
+        let mut visits = 0;
+        for segment in &para.text_segments {
+            #[cfg(test)]
+            {
+                visits += 1;
+                FIELD_TEXT_VISITS.with(|n| n.set(n.get() + 1));
+            }
+            match segment {
+                TextSegment::Text(text) => position += text.encode_utf16().count() as u32,
+                TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
+                    objects.push(position);
+                    position += 1;
+                }
+                TextSegment::Tab { .. }
+                | TextSegment::LineBreak
+                | TextSegment::NonBreakingSpace
+                | TextSegment::FwSpace => position += 1,
+                _ => {}
+            }
+        }
+        Self {
+            text: &para.text,
+            chars: para.text.char_indices(),
+            styles: &para.char_shape_runs,
+            objects,
+            position: 0,
+            object: 0,
+            style: 0,
+            #[cfg(test)]
+            visits,
+        }
+    }
+
+    fn visit(&mut self, start: u32, end: u32, mut emit: impl FnMut(&str, u32)) {
+        // Empty fields must not even advance the paragraph cursor.
+        if start >= end {
+            return;
+        }
+        while self.position < end {
+            let Some((byte, ch)) = self.chars.next() else {
+                break;
+            };
+            #[cfg(test)]
+            {
+                self.visits += 1;
+                FIELD_TEXT_VISITS.with(|n| n.set(n.get() + 1));
+            }
+            let position = self.position;
+            self.position += ch.len_utf16() as u32;
+            while self.object < self.objects.len() && self.objects[self.object] < position {
+                self.object += 1;
+            }
+            while self.style + 1 < self.styles.len()
+                && self.styles[self.style + 1].position <= position
+            {
+                self.style += 1;
+            }
+            if position < start || self.objects.get(self.object) == Some(&position) {
+                continue;
+            }
+            let shape = self
+                .styles
+                .get(self.style)
+                .filter(|r| r.position <= position)
+                .map_or(0, |r| r.char_shape_id);
+            emit(&self.text[byte..byte + ch.len_utf8()], shape);
+        }
+    }
+
+    fn project(&mut self, start: u32, end: u32) -> Vec<Run> {
+        let mut runs: Vec<Run> = Vec::new();
+        self.visit(start, end, |text, shape| {
+            if let Some(Run { content: RunContent::Text(previous), char_shape_id, .. }) =
+                runs.last_mut()
+            {
+                if char_shape_id.get() == shape as usize {
+                    previous.push_str(text);
+                    return;
+                }
+            }
+            runs.push(Run::text(text, CharShapeIndex::new(shape as usize)));
+        });
+        runs
+    }
+
+    fn visible_units(&mut self, start: u32, end: u32) -> usize {
+        let mut units = 0;
+        self.visit(start, end, |text, _| units += text.encode_utf16().count());
+        units
+    }
+}
+
+fn project_field_text(index: &mut FieldTextIndex<'_>, start: u32, end: u32) -> Vec<Run> {
+    index.project(start, end)
+}
+
+fn preserve_nested_memo(
+    field: ActiveField,
+    para: &Hwp5Paragraph,
+    state: &mut ProjectionImageState<'_>,
+    extras: &mut Vec<Run>,
+) {
+    if let ActiveField::MemoAnchor { start_utf16, memo } = field {
+        extras.push(project_memo_run(
+            &memo,
+            state,
+            shape_starting_at(para, start_utf16),
+            Vec::new(),
+        ));
     }
 }
 
@@ -2382,7 +2477,6 @@ fn start_field_from_marker(
     queues: &mut ParagraphProjectionQueues<'_>,
     visible_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
-    field_hints: Option<&mut SectionProjectionHints>,
 ) -> ActiveField {
     let ctrl_id = ctrl_id_from_inline_extra(extra);
     let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
@@ -2408,15 +2502,14 @@ fn start_field_from_marker(
         crossref,
         visible_utf16,
         projection_images,
-        field_hints,
     )
 }
 
 /// Drains queue entries that no inline marker consumed (task #91 —
 /// extracted from `project_paragraph_with_images_structural`).
 ///
-/// Point bookmarks and object controls emit at the end of the
-/// paragraph in document order. Memo placeholders with body content
+/// Unanchored point bookmarks and object controls emit at paragraph end.
+/// Named point bookmarks with markers emit at their original position. Memo placeholders with body content
 /// emit with a `ProjectionFallback` warning — properly anchored memos
 /// always consume their queue entry, so a leftover means the inline
 /// `FieldBegin %unk MEMO` anchor was missing; emitting preserves the
@@ -2429,7 +2522,11 @@ fn drain_unconsumed_paragraph_queues(
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
 ) {
-    for bookmark_name in queues.point_bookmark_names {
+    for bookmark_name in queues.point_bookmark_names.into_iter().flatten() {
+        projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "field.bookmark_point.position",
+            reason: "point bookmark has no inline marker; preserved at paragraph end".into(),
+        });
         let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
             &hwp_para.char_shape_runs,
             visible_utf16,
@@ -2458,6 +2555,19 @@ fn drain_unconsumed_paragraph_queues(
         *projection_images.dropped_unknown.entry(leftover.ctrl_id).or_insert(0) += 1;
     }
 
+    // Typed fields without an inline anchor must never disappear silently.
+    for (kind, count) in [
+        ("clickhere", queues.clickhere_controls.len()),
+        ("summary", queues.summary_fields.len()),
+        ("datecode", queues.datecode_fields.len()),
+        ("path", queues.pathfield_controls.len()),
+        ("crossref", queues.crossref_controls.len()),
+    ] {
+        for _ in 0..count {
+            warn_unpaired_field(projection_images, kind);
+        }
+    }
+
     for memo in queues.memo_controls {
         if !memo.paragraphs.is_empty() {
             projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
@@ -2474,8 +2584,17 @@ fn drain_unconsumed_paragraph_queues(
                 shape_starting_at(hwp_para, visible_utf16),
                 Vec::new(),
             ));
+        } else {
+            warn_unpaired_field(projection_images, "memo");
         }
     }
+}
+
+fn warn_unpaired_field(state: &mut ProjectionImageState<'_>, control: &'static str) {
+    state.warnings.push(Hwp5Warning::DroppedControl {
+        control,
+        reason: "typed field has no matching inline anchor".to_string(),
+    });
 }
 
 fn append_visible_unit(
@@ -2520,7 +2639,7 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
             matches!(
                 control,
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
-            ) || matches!(control, Hwp5Control::Memo(_))
+            ) || matches!(control, Hwp5Control::Bookmark { .. } | Hwp5Control::Memo(_))
                 || matches!(control, Hwp5Control::ClickHere(_))
                 || matches!(control, Hwp5Control::SummaryField(_))
                 || matches!(control, Hwp5Control::DateCodeField(_))
@@ -2533,7 +2652,6 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
 fn build_paragraph_projection_queues<'a>(
     hwp_para: &'a Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-    field_hints: Option<&mut SectionProjectionHints>,
 ) -> ParagraphProjectionQueues<'a> {
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
@@ -2544,7 +2662,6 @@ fn build_paragraph_projection_queues<'a>(
     let mut pathfield_controls = VecDeque::new();
     let mut crossref_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
-    let mut field_hints = field_hints;
 
     for control in &hwp_para.controls {
         // Memos consume a dedicated queue so the `FieldBegin %unk MEMO`
@@ -2603,17 +2720,10 @@ fn build_paragraph_projection_queues<'a>(
             CTRL_ID_SECD | CTRL_ID_COLUMN_DEF | CTRL_ID_BOOKMARK_SPAN | CTRL_ID_HYPERLINK => {
                 marker_headers.push_back(unknown)
             }
-            // Page numbers are resolved at section level by
-            // `find_section_page_number` (which also reaches `pgnp` controls
-            // inside table cells). Skip here so it is not mistaken for a
-            // generic object control.
-            CTRL_ID_PAGE_NUMBER => {}
+            CTRL_ID_PAGE_NUMBER => object_controls.push_back(control),
             CTRL_ID_BOOKMARK_POINT => {
-                if let Some(name) =
-                    field_hints.as_deref_mut().and_then(SectionProjectionHints::take_bookmark_name)
-                {
-                    point_bookmark_names.push_back(name);
-                } else {
+                point_bookmark_names.push_back(unknown.bookmark_name.map(str::to_string));
+                if unknown.bookmark_name.is_none() {
                     projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                         subject: "field.bookmark_point",
                         reason: "bookmark point name unavailable; dropping bookmark control"
@@ -2655,7 +2765,6 @@ fn start_active_field(
     crossref: Option<crate::schema::section::Hwp5CrossRefControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
-    field_hints: Option<&mut SectionProjectionHints>,
 ) -> ActiveField {
     match ctrl_id {
         CTRL_ID_MEMO_INLINE => {
@@ -2686,7 +2795,7 @@ fn start_active_field(
             }
         }
         CTRL_ID_BOOKMARK_SPAN => {
-            if let Some(name) = field_hints.and_then(SectionProjectionHints::take_bookmark_name) {
+            if let Some(name) = header.and_then(|h| h.bookmark_name).map(str::to_string) {
                 ActiveField::BookmarkSpan { name, start_utf16 }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
@@ -2794,38 +2903,51 @@ fn start_active_field(
 
 fn finish_active_field(
     field: ActiveField,
+    field_text: &mut FieldTextIndex<'_>,
     hwp_para: &Hwp5Paragraph,
     end_utf16: u32,
     runs: &mut Vec<Run>,
     projection_images: &mut ProjectionImageState<'_>,
 ) -> FieldEmissionOutcome {
+    if let ActiveField::SummaryField { start_utf16, display_text, .. }
+    | ActiveField::DateCodeField { start_utf16, display_text, .. }
+    | ActiveField::PathField { start_utf16, display_text, .. } = &field
+    {
+        let source_units = field_text.visible_units(*start_utf16, end_utf16);
+        let lost = source_units.saturating_sub(display_text.encode_utf16().count());
+        if lost > 0 {
+            projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.display_text.truncated",
+                reason: format!("auto-field cached text truncated at {MAX_FIELD_DISPLAY_TEXT_UNITS} UTF-16 units; lost {lost} UTF-16 units of visible text"),
+            });
+        }
+    }
     match field {
         ActiveField::Hyperlink { url, start_utf16, display_text } => {
             if display_text.is_empty() {
                 return FieldEmissionOutcome::Folded;
             }
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
+            if hwp_para.char_shape_runs.iter().any(|r| {
+                r.position > start_utf16
+                    && r.position < end_utf16
+                    && r.char_shape_id as usize != char_shape_id.get()
+            }) {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.hyperlink.mixed_style",
+                    reason: "hyperlink display text contains multiple character styles; using its first character style".to_string(),
+                });
+            }
             runs.push(Run::control(Control::Hyperlink { text: display_text, url }, char_shape_id));
             FieldEmissionOutcome::Folded
         }
         ActiveField::BookmarkSpan { name, start_utf16 } => {
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             runs.push(Run::control(
                 Control::Bookmark { name: name.clone(), bookmark_type: BookmarkType::SpanStart },
                 char_shape_id,
             ));
-            runs.extend(project_text_segment(
-                &hwp_para.text,
-                &hwp_para.char_shape_runs,
-                start_utf16,
-                end_utf16,
-            ));
+            runs.extend(project_field_text(field_text, start_utf16, end_utf16));
             runs.push(Run::control(
                 Control::Bookmark { name, bookmark_type: BookmarkType::SpanEnd },
                 char_shape_id,
@@ -2837,20 +2959,12 @@ fn finish_active_field(
             // Boundary functions decode the wire codes into typed
             // `RefType` / `RefContentType` / `RefTarget`. The HWPX
             // encoder embeds `display_text` between fieldBegin/fieldEnd.
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             if display_text.is_empty() {
                 // No visible body between FieldBegin/FieldEnd — preserve
                 // any latent body text so users at least see the source
                 // span. This mirrors the pre-Step-4 fallback.
-                runs.extend(project_text_segment(
-                    &hwp_para.text,
-                    &hwp_para.char_shape_runs,
-                    start_utf16,
-                    end_utf16,
-                ));
+                runs.extend(project_field_text(field_text, start_utf16, end_utf16));
                 return FieldEmissionOutcome::ReEmitted;
             }
             let ref_type = decode_hwp5_crossref_ref_type(control.ref_type_code);
@@ -2865,12 +2979,7 @@ fn finish_active_field(
             FieldEmissionOutcome::Folded
         }
         ActiveField::PlainTextFallback { start_utf16 } => {
-            runs.extend(project_text_segment(
-                &hwp_para.text,
-                &hwp_para.char_shape_runs,
-                start_utf16,
-                end_utf16,
-            ));
+            runs.extend(project_field_text(field_text, start_utf16, end_utf16));
             FieldEmissionOutcome::ReEmitted
         }
         ActiveField::MemoAnchor { start_utf16, memo } => {
@@ -2882,40 +2991,27 @@ fn finish_active_field(
             // Wave 12e/12f-pre-fix, made 한컴 mis-render the end marker as
             // generic `[필드 끝]` because the field span was effectively
             // empty.
-            let anchor_runs = project_text_segment(
-                &hwp_para.text,
-                &hwp_para.char_shape_runs,
-                start_utf16,
-                end_utf16,
-            );
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let anchor_runs = project_field_text(field_text, start_utf16, end_utf16);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
             FieldEmissionOutcome::Folded
         }
         ActiveField::ClickHere { start_utf16, hint_text, help_text, name } => {
-            // Emit a single Control::Field Run at the span start. The
-            // HWPX encoder builds `<fieldBegin> + visible hint + <fieldEnd>`
-            // from this control, so we must *not* additionally project
-            // the span text (HWP5 wire span is empty between
-            // FIELD_BEGIN/FIELD_END; double-emitting would duplicate
-            // hint as both placeholder and run text in HWPX).
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
-            let _ = end_utf16; // span text intentionally not consumed
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
+            let display_text = project_field_text(field_text, start_utf16, end_utf16)
+                .into_iter()
+                .filter_map(|run| match run.content {
+                    RunContent::Text(text) => Some(text),
+                    _ => None,
+                })
+                .collect::<String>();
             runs.push(Run::control(
                 Control::Field {
                     field_type: hwpforge_foundation::FieldType::ClickHere,
                     hint_text,
                     help_text,
                     name,
-                    // ClickHere's visible body is `hint_text`, not a cached
-                    // render — leave display_text empty (span not accumulated).
-                    display_text: String::new(),
+                    display_text,
                 },
                 char_shape_id,
             ));
@@ -2928,10 +3024,7 @@ fn finish_active_field(
             // resolved value accumulated from the FieldBegin..FieldEnd
             // span — 한컴 native HWPX carries it in the body and an empty
             // body triggers the "낮은 보안 수준 복구" warning (#120/#136).
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             let _ = end_utf16;
             let control = match hwpforge_foundation::FieldType::from_summary_token(&command_token) {
                 Some(field_type) => Control::Field {
@@ -2951,10 +3044,7 @@ fn finish_active_field(
             // from the `T` prefix convention. The raw HWP5 command pattern
             // is smithy-internal and not carried into the core IR (E6 slice C).
             // `display_text` is the cached resolved date/time (#120/#136).
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             let _ = end_utf16;
             let is_time_mode = raw_command.starts_with('T');
             runs.push(Run::control(
@@ -2967,10 +3057,7 @@ fn finish_active_field(
             // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
             // (Unknown for forward compatibility). Wave 12n. `display_text`
             // is the cached resolved path accumulated from the span (#120).
-            let char_shape_id = CharShapeIndex::new(shape_of_previous_char(
-                &hwp_para.char_shape_runs,
-                start_utf16,
-            ) as usize);
+            let char_shape_id = shape_starting_at(hwp_para, start_utf16);
             let _ = end_utf16;
             use hwpforge_core::control::PathFieldCommand;
             let command = PathFieldCommand::from_wire(&raw_command);
@@ -3098,33 +3185,6 @@ fn project_dutmal_run(
         },
         CharShapeIndex::new(0),
     )
-}
-
-/// Gathers each `Hwp5Control::Header` subtree separately, returning a
-/// `(projected paragraphs, raw 4-byte properties)` tuple per ctrl.
-///
-/// ADR-002 + gap A: cardinality is preserved (one tuple per `head`
-/// ctrl) so projection can map each ctrl to its own `<hp:header
-/// applyPageType="..."/>` element.
-fn collect_header_subtrees(
-    paragraph: &Hwp5Paragraph,
-    projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<(Vec<Paragraph>, u32)> {
-    collect_subtree_units(paragraph, projection_images, |control| match control {
-        Hwp5Control::Header(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
-        _ => None,
-    })
-}
-
-/// Mirror of [`collect_header_subtrees`] for `Hwp5Control::Footer`.
-fn collect_footer_subtrees(
-    paragraph: &Hwp5Paragraph,
-    projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<(Vec<Paragraph>, u32)> {
-    collect_subtree_units(paragraph, projection_images, |control| match control {
-        Hwp5Control::Footer(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
-        _ => None,
-    })
 }
 
 /// Anchors a header/footer to Core paragraph `index` (§19.17 F2); paragraph
@@ -3256,55 +3316,6 @@ fn hwp5_page_border_fills_to_entries(
         .collect()
 }
 
-/// Cardinality-preserving collector for header/footer-style ctrls:
-/// returns one `(projected paragraphs, extra)` tuple per matching ctrl
-/// instead of flattening across all ctrls. Used by gap A to keep each
-/// `head`/`foot` ctrl separable for `applyPageType` decoding.
-fn collect_subtree_units<F, X>(
-    paragraph: &Hwp5Paragraph,
-    projection_images: &mut ProjectionImageState<'_>,
-    unit_for_control: F,
-) -> Vec<(Vec<Paragraph>, X)>
-where
-    F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
-{
-    let mut units: Vec<(Vec<Paragraph>, X)> = Vec::new();
-    collect_subtree_units_into(paragraph, projection_images, &unit_for_control, &mut units);
-    units
-}
-
-/// [`collect_subtree_units`] body: the paragraph's own controls in order,
-/// and the controls in its table cells (recursively) where they stand —
-/// a header/footer in a cell belongs to the section like a top-level one
-/// (§19.7 F; Hancom applies it from the paragraph holding the table, X4).
-fn collect_subtree_units_into<F, X>(
-    paragraph: &Hwp5Paragraph,
-    projection_images: &mut ProjectionImageState<'_>,
-    unit_for_control: &F,
-    units: &mut Vec<(Vec<Paragraph>, X)>,
-) where
-    F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
-{
-    for control in &paragraph.controls {
-        if let Some((nested_paragraphs, extra)) = unit_for_control(control) {
-            let projected = project_nested_paragraphs(
-                nested_paragraphs,
-                projection_images,
-                ImageProjectionContext::Flow,
-            );
-            units.push((projected, extra));
-        } else if let Hwp5Control::Table(table) = control {
-            // 이것을 실패시키는 것: 이 갈래를 지우기(칸 안 꼬리말 소실,
-            // convert `cell_footer_converts_with_and_without_the_layout_cache`).
-            for cell in &table.cells {
-                for nested in &cell.paragraphs {
-                    collect_subtree_units_into(nested, projection_images, unit_for_control, units);
-                }
-            }
-        }
-    }
-}
-
 fn project_nested_paragraphs(
     paragraphs: &[Hwp5Paragraph],
     projection_images: &mut ProjectionImageState<'_>,
@@ -3313,15 +3324,20 @@ fn project_nested_paragraphs(
     paragraphs
         .iter()
         .map(|nested| {
-            project_paragraph_with_images(nested, projection_images, image_context, None).paragraph
+            project_paragraph_with_images(nested, projection_images, image_context).paragraph
         })
         .collect()
 }
 
 fn unknown_control_header(control: &Hwp5Control) -> Option<UnknownControlHeader<'_>> {
     match control {
+        Hwp5Control::Bookmark { ctrl_id, header_data, name } => Some(UnknownControlHeader {
+            ctrl_id: *ctrl_id,
+            header_data,
+            bookmark_name: name.as_deref(),
+        }),
         Hwp5Control::Unknown { ctrl_id, header_data } => {
-            Some(UnknownControlHeader { ctrl_id: *ctrl_id, header_data })
+            Some(UnknownControlHeader { ctrl_id: *ctrl_id, header_data, bookmark_name: None })
         }
         _ => None,
     }
@@ -3481,38 +3497,6 @@ fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warni
     })
 }
 
-/// Finds the section's page number: the first `pgnp` control anywhere in the
-/// section body, including inside layout-table cells (recursively).
-///
-/// A page number is a section-level property even when 한글 stores its control
-/// inside a table cell, so a body-paragraph-only scan misses those. The search
-/// short-circuits on the first match. Header/footer/note subtrees are
-/// intentionally excluded — those carry their own content and are projected
-/// separately.
-fn find_section_page_number(
-    paragraphs: &[Hwp5Paragraph],
-    warnings: &mut Vec<Hwp5Warning>,
-) -> Option<PageNumber> {
-    for paragraph in paragraphs {
-        for control in &paragraph.controls {
-            match control {
-                Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data } => {
-                    return Some(page_number_from_pgnp_header(header_data, warnings));
-                }
-                Hwp5Control::Table(table) => {
-                    for cell in &table.cells {
-                        if let Some(found) = find_section_page_number(&cell.paragraphs, warnings) {
-                            return Some(found);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
 fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     let pos_code = *header_data.get(5)?;
     let position = match pos_code {
@@ -3634,14 +3618,48 @@ fn project_control_run(
         Hwp5Control::Group(group) => group::project_group_run(group, projection_images),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
-        // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
-        // `project_paragraph_with_images_structural`, not through this dispatch.
-        // If a Memo control ever reaches here (no matching FieldBegin in text
-        // segments), prefer dropping over silently double-emitting.
-        Hwp5Control::Memo(_) | Hwp5Control::Header(_) | Hwp5Control::Footer(_) => None,
+        Hwp5Control::Header(subtree) | Hwp5Control::Footer(subtree) => {
+            // Reserve before recursion to preserve control order even when a
+            // header itself contains another header. No separate tree scan.
+            let is_header = matches!(control, Hwp5Control::Header(_));
+            let unit = HeaderFooter::new(
+                Vec::new(),
+                hwp5_header_property_to_apply_page_type(subtree.properties_raw),
+            )
+            .with_anchor(projection_images.section_anchor);
+            let units = if is_header {
+                &mut projection_images.headers
+            } else {
+                &mut projection_images.footers
+            };
+            let index = units.len();
+            units.push((subtree.wire_order, unit));
+            let paragraphs = project_nested_paragraphs(
+                &subtree.paragraphs,
+                projection_images,
+                ImageProjectionContext::Flow,
+            );
+            let units = if is_header {
+                &mut projection_images.headers
+            } else {
+                &mut projection_images.footers
+            };
+            units[index].1.paragraphs = paragraphs;
+            None
+        }
+        Hwp5Control::Memo(_) => {
+            warn_unpaired_field(projection_images, "memo");
+            None
+        }
         // W4 무음 드롭 종결: 미지원 ctrl 은 여전히 드롭되지만 **집계 카운트**
         // 를 남겨 문서 끝에서 경고로 방출된다 (nwno/pghd 가 여기서 소리 없이
         // 죽던 것이 corpus 18% 문서의 fake output 원인이었다 — 계획 §0).
+        Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data } => Some(Run::control(
+            Control::PageNumber {
+                number: page_number_from_pgnp_header(header_data, &mut projection_images.warnings),
+            },
+            CharShapeIndex::new(0),
+        )),
         Hwp5Control::Unknown { ctrl_id, .. } => {
             *projection_images.dropped_unknown.entry(*ctrl_id).or_insert(0) += 1;
             None
@@ -3654,15 +3672,27 @@ fn project_control_run(
         // Memo dispatch above). If a ClickHere ever reaches this flat dispatch
         // path it means the structural pairing failed — drop rather than
         // silently emit a free-floating field run.
-        Hwp5Control::ClickHere(_) => None,
+        Hwp5Control::ClickHere(_) => {
+            warn_unpaired_field(projection_images, "clickhere");
+            None
+        }
         // SUMMERY auto-fields (Wave 12n) follow the same structural-pairing
         // pattern as ClickHere. Free-floating SummaryField means the inline
         // FieldBegin marker did not pair with this CtrlHeader; drop.
-        Hwp5Control::SummaryField(_) => None,
+        Hwp5Control::SummaryField(_) => {
+            warn_unpaired_field(projection_images, "summary");
+            None
+        }
         // %dte date/time format-code fields (Wave 12n) — same pattern.
-        Hwp5Control::DateCodeField(_) => None,
+        Hwp5Control::DateCodeField(_) => {
+            warn_unpaired_field(projection_images, "datecode");
+            None
+        }
         // %pat path fields (Wave 12n) — same pattern.
-        Hwp5Control::PathField(_) => None,
+        Hwp5Control::PathField(_) => {
+            warn_unpaired_field(projection_images, "path");
+            None
+        }
         // atno inline page-number controls (Wave 12n) emit immediately.
         // The 0x12 inline marker is a ControlRef (no FieldEnd), so the
         // emission flows through the object-control queue, not an
@@ -3751,7 +3781,14 @@ fn project_control_run(
         // ClickHere / SummaryField / DateCodeField / PathField. A
         // free-floating CrossRef CtrlHeader means the inline `FieldBegin`
         // marker did not pair with it; drop rather than silently emit.
-        Hwp5Control::CrossRef(_) => None,
+        Hwp5Control::Bookmark { .. } => {
+            warn_unpaired_field(projection_images, "bookmark");
+            None
+        }
+        Hwp5Control::CrossRef(_) => {
+            warn_unpaired_field(projection_images, "crossref");
+            None
+        }
     };
     run.map(|mut r| {
         r.char_shape_id = char_shape_id;
@@ -4315,6 +4352,51 @@ fn core_image_format(format: &crate::Hwp5SemanticImageFormat) -> ImageFormat {
 // Table construction
 // ---------------------------------------------------------------------------
 
+// A generated cell owns a paragraph and a run as well as table metadata.
+// Bound that amplification independently of compressed bytes and nesting depth.
+const MAX_TABLE_CELLS: u64 = 65_536;
+const MAX_DOCUMENT_CELLS: u64 = 262_144;
+
+impl ProjectionImageState<'_> {
+    fn charge_table(&mut self, table: &Hwp5Table) -> bool {
+        if self.budget_error.is_some() {
+            return false;
+        }
+        let rows = table
+            .cells
+            .iter()
+            .map(|c| u64::from(c.row) + u64::from(c.row_span.max(1)))
+            .max()
+            .unwrap_or(1)
+            .max(u64::from(table.rows.max(1)));
+        let cols = table
+            .cells
+            .iter()
+            .map(|c| u64::from(c.column) + u64::from(c.col_span.max(1)))
+            .max()
+            .unwrap_or(1)
+            .max(u64::from(table.cols.max(1)));
+        let area = rows.saturating_mul(cols);
+        // Explicit cells plus at most one placeholder per uncovered row;
+        // empty tables materialize the full rectangle.
+        let generated = if table.cells.is_empty() {
+            area
+        } else {
+            (table.cells.len() as u64).saturating_add(rows)
+        };
+        let total = self.generated_cells.saturating_add(generated);
+        if area > MAX_TABLE_CELLS || generated > MAX_TABLE_CELLS || total > MAX_DOCUMENT_CELLS {
+            self.budget_error = Some(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!("table cell budget exceeded: {rows}x{cols}, generated={generated}, document={total}; limits table={MAX_TABLE_CELLS}, document={MAX_DOCUMENT_CELLS}"),
+            });
+            return false;
+        }
+        self.generated_cells = total;
+        true
+    }
+}
+
 /// Build a structurally minimal table with `rows × cols` empty cells.
 fn build_empty_table(table: &Hwp5Table, warnings: &mut Vec<Hwp5Warning>) -> Table {
     let row_count = table.rows.max(1) as usize;
@@ -4352,6 +4434,11 @@ fn build_table_with_images(
     table: &Hwp5Table,
     projection_images: &mut ProjectionImageState<'_>,
 ) -> Table {
+    // Charge before building even a single Core cell or row buffer. Keep the
+    // first error in the document state, as chart decompression does.
+    if !projection_images.charge_table(table) {
+        return Table::new(Vec::new());
+    }
     if table.cells.is_empty() {
         return build_empty_table(table, &mut projection_images.warnings);
     }
@@ -4441,7 +4528,6 @@ fn project_table_caption(
                 paragraph,
                 projection_images,
                 ImageProjectionContext::Flow,
-                None,
             )
             .paragraph
         })
@@ -4657,7 +4743,6 @@ fn project_table_cell_with_images(
                     paragraph,
                     projection_images,
                     ImageProjectionContext::Flow,
-                    None,
                 )
                 .paragraph
             })
@@ -5056,6 +5141,80 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![],
         }
+    }
+
+    /// 이것을 실패시키는 것: 필드마다 인덱스 재생성·커서 초기화 또는 빈 범위에서 커서 진행.
+    #[test]
+    fn r5_field_segment_visits_are_linear() {
+        use crate::schema::section::TextSegment;
+        for n in [1_000, 10_000] {
+            for filled in [false, true] {
+                let mut para =
+                    make_paragraph(&if filled { "가😀".repeat(n) } else { String::new() }, 0, 0);
+                for _ in 0..n {
+                    para.text_segments.push(TextSegment::FieldBegin { extra: [0; 14] });
+                    if filled {
+                        para.text_segments.push(TextSegment::Text("가😀".into()));
+                    }
+                    para.text_segments.push(TextSegment::FieldEnd);
+                }
+                let mut index = FieldTextIndex::new(&para);
+                for i in 0..n {
+                    let start = if filled { 3 * i as u32 } else { 0 };
+                    let runs =
+                        project_field_text(&mut index, start, start + if filled { 3 } else { 0 });
+                    assert_eq!(runs.len(), usize::from(filled));
+                    if filled {
+                        assert_eq!(runs[0].content, RunContent::Text("가😀".into()));
+                    }
+                }
+                let expected = n * if filled { 5 } else { 2 };
+                assert_eq!(index.visits, expected, "N={n} filled={filled}");
+                FIELD_TEXT_VISITS.with(|n| n.set(0));
+                let mut state = ProjectionImageState::new(
+                    None,
+                    None,
+                    DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+                );
+                let _ = project_paragraph_with_images_structural(
+                    &para,
+                    &mut state,
+                    ImageProjectionContext::Flow,
+                );
+                assert_eq!(FIELD_TEXT_VISITS.with(|n| n.get()), expected);
+                eprintln!("N={n} filled={filled} segment+character visits={}", index.visits);
+            }
+        }
+        let para = make_paragraph("prefix", 0, 0);
+        let mut index = FieldTextIndex::new(&para);
+        assert!(index.project(6, 6).is_empty());
+        assert_eq!(index.visits, 0);
+        assert_eq!(index.project(0, 6)[0].content, RunContent::Text("prefix".into()));
+    }
+
+    /// 이것을 실패시키는 것: 객체 제외·UTF-16 커서·서식 진행 또는 시작 서식 공백 처리 제거.
+    #[test]
+    fn r5_field_cursor_preserves_styles_unicode_and_literal_object_char() {
+        use crate::schema::section::TextSegment;
+        let mut para = make_paragraph("앞a\u{fffc}😀\u{fffc}b끝", 0, 0);
+        para.text_segments = vec![
+            TextSegment::Text("앞a".into()),
+            TextSegment::ControlRef { extra: [0; 14] },
+            TextSegment::Text("😀\u{fffc}b끝".into()),
+        ];
+        para.char_shape_runs = vec![
+            Hwp5CharShapeRun { position: 1, char_shape_id: 2 },
+            Hwp5CharShapeRun { position: 3, char_shape_id: 3 },
+            Hwp5CharShapeRun { position: 6, char_shape_id: 4 },
+        ];
+        let mut index = FieldTextIndex::new(&para);
+        let first = index.project(0, 1);
+        assert_eq!(first[0].char_shape_id.get(), 0);
+        let runs = index.project(1, 7);
+        let facts: Vec<_> =
+            runs.iter().map(|r| (r.content.as_text().unwrap(), r.char_shape_id.get())).collect();
+        assert_eq!(facts, [("a", 2), ("😀\u{fffc}", 3), ("b", 4)]);
+        assert_eq!(index.project(7, 8)[0].content.as_text(), Some("끝"));
     }
 
     fn _make_paragraph_with_runs(text: &str, runs: Vec<Hwp5CharShapeRun>) -> Hwp5Paragraph {
@@ -5684,6 +5843,7 @@ mod tests {
                 line_segments: Vec::new(),
                 controls: vec![
                     Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
                         instance_id: 0,
@@ -5702,6 +5862,7 @@ mod tests {
                         }],
                     }),
                     Hwp5Control::Footer(crate::decoder::section::Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
                         instance_id: 0,
@@ -7714,6 +7875,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Footnote(crate::decoder::section::Hwp5NestedSubtree {
+                wire_order: 0,
                 ctrl_id: 0x666E_2020,
                 properties_raw: 0,
                 instance_id: 7,
@@ -8434,6 +8596,7 @@ mod tests {
                 return make_section(vec![grid_test_table_paragraph(1, 1, vec![cell])], None);
             }
             "header" => Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
+                wire_order: 0,
                 ctrl_id: 0x6865_6164,
                 properties_raw: 0,
                 instance_id: 0,
@@ -8770,5 +8933,123 @@ mod shape_style_tests {
         assert!(empty.crop.is_none() && empty.note.is_some(), "{empty:?}");
         let far = picture_crop(&pic([0, 0, i32::MAX, 15_000], dim), display, None);
         assert!(far.crop.is_none() && far.note.is_some(), "{far:?}");
+    }
+    /// 이것을 실패시키는 것: 앞 글자 서식 재사용 / 다중 서식 경고 무조건 발생·삭제 /
+    /// 링크 뒤 경계까지 링크 내부라고 판단하기.
+    #[test]
+    fn field_start_styles_and_mixed_link_warning() {
+        for mixed in [false, true] {
+            let mut para = Hwp5Paragraph {
+                end_char_shape: None,
+                silent_wires: Vec::new(),
+                page_break: false,
+                column_break: false,
+                text: "(abc)".into(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: Vec::new(),
+                line_segments: Vec::new(),
+                controls: Vec::new(),
+            };
+            para.char_shape_runs = vec![
+                Hwp5CharShapeRun { position: 0, char_shape_id: 267 },
+                Hwp5CharShapeRun { position: 1, char_shape_id: 215 },
+                Hwp5CharShapeRun { position: 2, char_shape_id: if mixed { 216 } else { 215 } },
+                Hwp5CharShapeRun { position: 4, char_shape_id: 267 },
+            ];
+            let fields = vec![
+                ActiveField::Hyperlink {
+                    url: "https://example.test".into(),
+                    start_utf16: 1,
+                    display_text: "abc".into(),
+                },
+                ActiveField::SummaryField {
+                    command_token: "$author".into(),
+                    start_utf16: 1,
+                    display_text: "abc".into(),
+                },
+                ActiveField::DateCodeField {
+                    raw_command: "YYYY".into(),
+                    start_utf16: 1,
+                    display_text: "abc".into(),
+                },
+                ActiveField::PathField {
+                    raw_command: "$P$F".into(),
+                    start_utf16: 1,
+                    display_text: "abc".into(),
+                },
+                ActiveField::ClickHere {
+                    start_utf16: 1,
+                    hint_text: Some("abc".into()),
+                    help_text: None,
+                    name: None,
+                },
+                ActiveField::CrossRef {
+                    start_utf16: 1,
+                    display_text: "abc".into(),
+                    control: crate::schema::section::Hwp5CrossRefControl {
+                        ctrl_id: CTRL_ID_FIELD_CROSSREF,
+                        command_raw: "?target;6;0;0;0;".into(),
+                        target_raw: "target".into(),
+                        ref_type_code: 6,
+                        content_type_code: 0,
+                        hyperlink_code: 0,
+                        param4_raw: 0,
+                        header_flag_raw: 0,
+                        trailer_begin_id: 1,
+                        trailer_field_id: 2,
+                    },
+                },
+                ActiveField::BookmarkSpan { name: "bookmark".into(), start_utf16: 1 },
+                ActiveField::MemoAnchor {
+                    start_utf16: 1,
+                    memo: Hwp5MemoControl {
+                        ctrl_id: crate::ctrl_ids::CTRL_ID_MEMO,
+                        command: crate::schema::section::Hwp5MemoCommand {
+                            raw: "MEMO/65535/1/2/3/author/".into(),
+                            shape_id: 65535,
+                            memo_id: 1,
+                            hancom_inst_a: 2,
+                            hancom_inst_b: 3,
+                            author: "author".into(),
+                            terminator: String::new(),
+                        },
+                        paragraphs: Vec::new(),
+                    },
+                },
+            ];
+            for (index, field) in fields.into_iter().enumerate() {
+                let mut images = ProjectionImageState::new(
+                    None,
+                    None,
+                    DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+                );
+                let mut runs = Vec::new();
+                finish_active_field(
+                    field,
+                    &mut FieldTextIndex::new(&para),
+                    &para,
+                    4,
+                    &mut runs,
+                    &mut images,
+                );
+                assert_eq!(runs[0].char_shape_id.get(), 215);
+                assert_eq!(
+                    images
+                        .warnings
+                        .iter()
+                        .filter(|w| matches!(
+                            w,
+                            Hwp5Warning::ProjectionFallback {
+                                subject: "field.hyperlink.mixed_style",
+                                ..
+                            }
+                        ))
+                        .count(),
+                    usize::from(mixed && index == 0)
+                );
+            }
+        }
     }
 }

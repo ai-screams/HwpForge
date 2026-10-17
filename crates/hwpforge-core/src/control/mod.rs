@@ -782,6 +782,14 @@ pub enum Control {
         display_text: String,
     },
 
+    /// Page-number placement at this exact paragraph/run position. Decoders
+    /// preserve every occurrence here; Section::page_number is a legacy
+    /// summary/fallback for documents created without positioned controls.
+    PageNumber {
+        /// Placement and decoration of the page number.
+        number: crate::section::PageNumber,
+    },
+
     /// An `atno` **inline** page number control (Wave 12n).
     ///
     /// HWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴
@@ -1110,6 +1118,7 @@ impl Control {
             | Self::UnknownSummary { .. }
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
+            | Self::PageNumber { .. }
             | Self::InlinePageNumber { .. }
             | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
@@ -1190,6 +1199,7 @@ impl Control {
             | Self::UnknownSummary { .. }
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
+            | Self::PageNumber { .. }
             | Self::InlinePageNumber { .. }
             | Self::AutoNumber { .. }
             | Self::NewNumber { .. }
@@ -1233,6 +1243,7 @@ impl Control {
             Self::UnknownSummary { .. } => "unknown_summary",
             Self::DateCodeField { .. } => "date_code_field",
             Self::PathField { .. } => "path_field",
+            Self::PageNumber { .. } => "page_number",
             Self::InlinePageNumber { .. } => "inline_page_number",
             Self::AutoNumber { .. } => "auto_number",
             Self::NewNumber { .. } => "new_number",
@@ -2248,6 +2259,7 @@ impl std::fmt::Display for Control {
             Self::PathField { command, .. } => {
                 write!(f, "PathField({})", command.wire_command())
             }
+            Self::PageNumber { number } => write!(f, "{number}"),
             Self::InlinePageNumber { kind } => match kind {
                 InlinePageKind::CurrentPage => write!(f, "InlinePageNumber(current)"),
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),

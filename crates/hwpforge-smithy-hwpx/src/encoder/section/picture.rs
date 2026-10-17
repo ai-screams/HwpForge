@@ -26,7 +26,7 @@ pub(crate) fn build_picture(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
@@ -179,7 +179,7 @@ impl PictureFrame {
 /// empty. A URL with an unsafe scheme (`javascript:`, `file:`, …) is not
 /// written and is reported as lost; a schemeless one gets `http://`, as a
 /// text hyperlink does.
-fn picture_href(img: &Image, sink: &mut EncodeSink) -> String {
+fn picture_href(img: &Image, sink: &mut DocumentEncodeContext) -> String {
     let Some(url) = img.hyperlink.as_deref() else { return String::new() };
     match super::super::normalize_hyperlink_url(url) {
         Some(safe) if !safe.is_empty() => {

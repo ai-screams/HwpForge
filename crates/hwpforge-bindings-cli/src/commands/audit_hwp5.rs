@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+mod raw_counts;
+
 use serde::Serialize;
 
 use hwpforge_smithy_hwp5::{
@@ -191,20 +193,33 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
         .exit(json_mode, 2),
     };
 
-    let source_side = audit_side_from_hwp5_semantic(
+    let mut source_side = audit_side_from_hwp5_semantic(
         &source_semantic,
         &source_metadata.doc_info,
         source_metadata.warning_count,
         source_metadata.validation_error.as_deref(),
     );
     let output_side = audit_side_from_hwpx(&hwpx_doc, &output_deep);
-    let (comparisons, section_comparisons, mismatch_found) =
+    let raw = hwpforge_smithy_hwp5::census_hwp5(&source_bytes).unwrap_or_else(|err| {
+        CliError::new("HWP5_CENSUS_FAILED", err.to_string()).exit(json_mode, 2)
+    });
+    // TABLE counts must not inherit losses from the parser being audited.
+    source_side.totals.tables = 0;
+    for (section, census) in source_side.sections.iter_mut().zip(&raw.sections) {
+        section.tables =
+            census.tag_counts.iter().filter(|t| t.tag_id == 0x4D).map(|t| t.count).sum();
+        source_side.totals.tables += section.tables;
+    }
+    let (mut comparisons, section_comparisons, mut mismatch_found) =
         compare_sides(&source_side, &output_side);
+    raw_counts::compare(&raw, &result_bytes, &mut comparisons, &mut mismatch_found).unwrap_or_else(
+        |err| CliError::new("HWPX_ANALYSIS_FAILED", err.to_string()).exit(json_mode, 2),
+    );
     let checklist = build_checklist(source, result, &source_side, mismatch_found);
 
     let report = AuditResult {
         status: if mismatch_found { "mismatch" } else { "ok" },
-        scope_note: "This is a structural/semantic audit, not a pixel-perfect visual guarantee. Source metrics come from parser-backed HWP5 semantic truth. DocInfo style counts and warning count still come from the current decode summary. Output metrics come from recursive HWPX XML/package analysis, not top-level body-only counts.",
+        scope_note: "This is a structural/semantic audit, not a pixel-perfect visual guarantee. Source TABLE, tbl/tcps CTRL_HEADER and PARA_TEXT counts come from an independent raw record census; other semantic/property metrics remain parser-backed. DocInfo style counts and warning count still come from the current decode summary. Output metrics come from recursive HWPX XML/package analysis, not top-level body-only counts.",
         source: source_side,
         output: output_side,
         comparisons,

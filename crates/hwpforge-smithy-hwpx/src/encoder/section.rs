@@ -46,6 +46,7 @@ mod memo;
 mod picture;
 mod section_pr;
 mod table;
+pub(crate) mod traversal;
 mod typography;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
@@ -172,11 +173,13 @@ pub(crate) struct SectionEncodeResult {
     /// The section XML string.
     pub xml: String,
     /// 인코드 경고 (캐시 드롭 등 — W1b).
+    #[cfg(test)]
     pub warnings: Vec<super::EncodeWarning>,
     /// With [`super::EncodeOptions::mark_dropped_caches`]: the warning of
     /// each marked cache, by the marker's ordinal.
     pub dropped_caches: Vec<super::EncodeWarning>,
     /// Chart entries: (ZIP path, OOXML chart XML content).
+    #[cfg(test)]
     pub charts: Vec<(String, String)>,
     /// Master page entries: (ZIP path, masterpage XML content).
     pub master_pages: Vec<(String, String)>,
@@ -186,6 +189,7 @@ pub(crate) struct SectionEncodeResult {
     /// matching `<opf:item id="{item_id}" href="BinData/{item_id}.ole"
     /// media-type="application/ole" isEmbeded="0"/>` line in `content.hpf`.
     /// Populated by [`Control::EmbeddedChart`] (Wave 4c HWP5 chart carry).
+    #[cfg(test)]
     pub embedded_oles: Vec<(String, Vec<u8>)>,
 }
 
@@ -203,7 +207,20 @@ pub(crate) struct SectionEncodeResult {
 /// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails,
 /// or [`HwpxError::InvalidStructure`] if table nesting exceeds the limit.
 /// 인코드 경고 sink + 현재 문단 경로 (W1b — 디코더 `DecodeCtx` 대칭).
-pub(crate) struct EncodeSink {
+/// One context per document, shared by every body and nested encoder.
+/// Part/path scopes change; asset collections and allocators never reset.
+pub(crate) struct DocumentEncodeContext {
+    pub(crate) charts: Vec<(String, String)>,
+    pub(crate) embedded_oles: Vec<(String, Vec<u8>)>,
+    pub(crate) images: Vec<(String, Vec<u8>)>,
+    object_ids: Option<super::object_ids::IdScope>,
+    note_numbers: std::collections::HashMap<usize, u32>,
+    field_sequence: usize,
+    bookmark_span_ids: std::collections::HashMap<String, usize>,
+    binary_ids: std::collections::HashSet<String>,
+    chart_sequence: usize,
+    ole_sequence: usize,
+    pub(crate) masterpage_sequence: usize,
     pub(crate) warnings: Vec<super::EncodeWarning>,
     /// The warnings of the caches marked so far in this part (see
     /// [`super::EncodeOptions::mark_dropped_caches`]), by marker ordinal.
@@ -215,9 +232,20 @@ pub(crate) struct EncodeSink {
     in_master_page: bool,
 }
 
-impl EncodeSink {
+impl DocumentEncodeContext {
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
+            charts: Vec::new(),
+            embedded_oles: Vec::new(),
+            images: Vec::new(),
+            object_ids: None,
+            note_numbers: Default::default(),
+            field_sequence: 0,
+            bookmark_span_ids: Default::default(),
+            binary_ids: Default::default(),
+            chart_sequence: 0,
+            ole_sequence: 0,
+            masterpage_sequence: 0,
             warnings: Vec::new(),
             dropped_caches: Vec::new(),
             path: vec![crate::decoder::PathSeg::Section(section_index)],
@@ -226,19 +254,68 @@ impl EncodeSink {
         }
     }
 
-    /// 구역 `section_index` 의 바탕쪽 part `Contents/masterpage{global}.xml`
-    /// 용 sink. `global` 은 패키지 전역 바탕쪽 번호(파일 번호)다.
-    pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
-        Self {
-            warnings: Vec::new(),
-            dropped_caches: Vec::new(),
-            path: vec![
-                crate::decoder::PathSeg::Section(section_index),
-                crate::decoder::PathSeg::MasterPage(global),
-            ],
-            part: format!("Contents/masterpage{global}.xml"),
-            in_master_page: true,
+    fn finish_bookmark_scope(&mut self) {
+        let mut names: Vec<_> = self.bookmark_span_ids.drain().map(|(name, _)| name).collect();
+        names.sort();
+        for name in names {
+            self.content_lost("bookmark_span", format!("unclosed bookmark span: {name}"));
         }
+    }
+
+    fn next_field_id(&mut self) -> usize {
+        let id = self.field_sequence;
+        self.field_sequence += 1;
+        id
+    }
+
+    pub(crate) fn for_document(
+        document: &hwpforge_core::Document<hwpforge_core::Validated>,
+        images: &hwpforge_core::ImageStore,
+    ) -> Self {
+        let mut context = Self::new(0);
+        context.object_ids = Some(super::object_ids::IdScope::enter(
+            super::object_ids::core_object_ids(document).iter().map(|&(_, id)| id).collect(),
+        ));
+        // Reserve field boundaries in the same scope used by every nested host.
+        // Opening another scope here would hide the Core and field reservations.
+        super::object_ids::reserve_field_ids(document);
+        context.images =
+            images.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
+        context.binary_ids = super::package::manifest_items(
+            document.sections().len(),
+            &context.images.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>(),
+            &[],
+            &[],
+        )
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+        context
+    }
+
+    pub(crate) fn begin_section(&mut self, section_index: usize) {
+        self.path = vec![crate::decoder::PathSeg::Section(section_index)];
+        self.part = format!("Contents/section{section_index}.xml");
+        self.in_master_page = false;
+    }
+
+    fn add_chart(&mut self, xml: String) -> String {
+        self.chart_sequence += 1;
+        let path = format!("Chart/chart{}.xml", self.chart_sequence);
+        self.charts.push((path.clone(), xml));
+        path
+    }
+
+    fn add_ole(&mut self, bytes: Vec<u8>) -> String {
+        let id = loop {
+            self.ole_sequence += 1;
+            let candidate = format!("ole{}", self.ole_sequence);
+            if self.binary_ids.insert(candidate.clone()) {
+                break candidate;
+            }
+        };
+        self.embedded_oles.push((id.clone(), bytes));
+        id
     }
 
     /// 지금 쓰는 패키지 part 이름.
@@ -457,26 +534,30 @@ pub(crate) fn encode_section(
     // [`encode_section_with_note_counters`] (인코더 본 경로) 소유.
     let mut local_numbering = NoteNumbering::new();
     let _ids = super::object_ids::IdScope::enter(Default::default());
-    encode_section_with_note_counters(
+    let mut context = DocumentEncodeContext::new(section_index);
+    context.chart_sequence = chart_offset;
+    context.ole_sequence = embedded_ole_offset;
+    context.masterpage_sequence = masterpage_offset;
+    let mut result = encode_section_with_note_counters(
         section,
         section_index,
-        chart_offset,
-        masterpage_offset,
-        embedded_ole_offset,
         options,
         &mut local_numbering,
-    )
+        &mut context,
+    )?;
+    result.warnings = context.warnings;
+    result.charts = context.charts;
+    result.embedded_oles = context.embedded_oles;
+    Ok(result)
 }
 
 /// [`encode_section`] + 문서 전역 각주/미주 autoNum 카운터 관통.
 pub(crate) fn encode_section_with_note_counters(
     section: &Section,
     section_index: usize,
-    chart_offset: usize,
-    masterpage_offset: usize,
-    embedded_ole_offset: usize,
     options: EncodeOptions,
     numbering: &mut NoteNumbering,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<SectionEncodeResult> {
     // 주의 — 섹션 단위로 `begin_num.footnote/endnote` 를 재시작에 쓰지 말 것
     // (H-N2 회귀 실사고): `<hp:startNum>` wire 에는 각주/미주 속성이 없어
@@ -487,12 +568,11 @@ pub(crate) fn encode_section_with_note_counters(
     // 본문 `NewNumber` 재시작만 처리한다. 후속 섹션에 **비기본 실값**이
     // 들어온 경우는 무음으로 버리지 않고 경고한다 (`ON_SECTION` typed
     // 지원은 Core 승격이 필요한 후속 — 계획 문서 §7f).
-    let mut chart_entries: Vec<(String, String)> = Vec::new();
-    let mut embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
-    let mut sink = EncodeSink::new(section_index);
+    sink.begin_section(section_index);
+    let masterpage_offset = sink.masterpage_sequence;
     // 후속 섹션의 명시적 비기본 시작번호는 현재 반영 불가 — 무음 무시 금지.
     if section_index > 0 {
         if let Some(b) = section.begin_num.as_ref() {
@@ -505,19 +585,10 @@ pub(crate) fn encode_section_with_note_counters(
             }
         }
     }
+    traversal::plan_section_notes(section, numbering, sink)?;
     let mut anchor_runs: Vec<AnchorRun> = Vec::new();
-    let mut hx_section = build_section(
-        section,
-        &mut chart_entries,
-        &mut embedded_oles,
-        &mut run_xml_replacements,
-        chart_offset,
-        embedded_ole_offset,
-        options,
-        &mut anchor_runs,
-        &mut sink,
-    )?;
-    renumber_note_autonums(&mut hx_section, numbering, &mut sink)?;
+    let hx_section =
+        build_section(section, &mut run_xml_replacements, options, &mut anchor_runs, sink)?;
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
@@ -539,7 +610,7 @@ pub(crate) fn encode_section_with_note_counters(
         &anchor_runs,
         &mut run_xml_replacements,
         options,
-        &mut sink,
+        sink,
     )?;
 
     // Replace hyperlink placeholder runs with real interleaved XML.
@@ -547,10 +618,10 @@ pub(crate) fn encode_section_with_note_counters(
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
     enriched = apply_run_xml_replacements(enriched, &run_xml_replacements)?;
 
-    // Master pages are parts of their own: each gets its own sink, marker
-    // list and forbidden-character scan (see `build_masterpage_entries`).
+    // Master pages enter a part/path scope in the same document context.
+    // Their XML replacements and forbidden-character scan are part-local.
     let master_pages =
-        build_masterpage_entries(section, section_index, masterpage_offset, options, &mut sink)?;
+        build_masterpage_entries(section, section_index, masterpage_offset, options, sink)?;
 
     // #198: serde writes XML-forbidden characters as they are; scan the
     // assembled part so memo, header/footer and shape fragments are covered.
@@ -563,13 +634,17 @@ pub(crate) fn encode_section_with_note_counters(
     let part = sink.part().to_string();
     sink.warnings.extend(super::forbidden_char_warnings(&part, sites));
 
+    sink.masterpage_sequence += master_pages.len();
     Ok(SectionEncodeResult {
         xml,
-        warnings: sink.warnings,
-        dropped_caches: sink.dropped_caches,
-        charts: chart_entries,
+        #[cfg(test)]
+        warnings: Vec::new(),
+        dropped_caches: std::mem::take(&mut sink.dropped_caches),
+        #[cfg(test)]
+        charts: Vec::new(),
         master_pages,
-        embedded_oles,
+        #[cfg(test)]
+        embedded_oles: Vec::new(),
     })
 }
 
@@ -751,14 +826,10 @@ pub(crate) fn header_footer_anchor(hf: &hwpforge_core::section::HeaderFooter) ->
 #[allow(clippy::too_many_arguments)]
 fn build_section(
     section: &Section,
-    chart_entries: &mut Vec<(String, String)>,
-    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
-    chart_offset: usize,
-    embedded_ole_offset: usize,
     options: EncodeOptions,
     anchor_runs: &mut Vec<AnchorRun>,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSection> {
     // 문단마다 그 문단에 앵커된 머리말/꼬리말 수 (§19.17 F2).
     let mut anchored = vec![0usize; section.paragraphs.len()];
@@ -799,12 +870,13 @@ fn build_section(
     }
     let mut first_kinds = vec![hwpforge_core::layout::WireTokenKind::ColumnDef];
     first_kinds.extend(anchored_kinds.first().cloned().unwrap_or_default());
-    if section.page_number.is_some() {
+    if section.needs_page_number_injection() {
         first_kinds.push(hwpforge_core::layout::WireTokenKind::PageNumber);
     }
     debug_assert_eq!(
         first_kinds.len(),
-        1 + anchored.first().copied().unwrap_or(0) + usize::from(section.page_number.is_some())
+        1 + anchored.first().copied().unwrap_or(0)
+            + usize::from(section.needs_page_number_injection())
     );
     let mut paragraphs = Vec::with_capacity(section.paragraphs.len());
     for (idx, para) in section.paragraphs.iter().enumerate() {
@@ -821,11 +893,7 @@ fn build_section(
             section.text_direction,
             idx,
             0,
-            chart_entries,
-            embedded_oles,
             hyperlink_entries,
-            chart_offset,
-            embedded_ole_offset,
             options,
             leading,
             sink,
@@ -852,6 +920,7 @@ fn build_section(
         paragraphs.push(built);
     }
 
+    sink.finish_bookmark_scope();
     Ok(HxSection { paragraphs })
 }
 
@@ -868,14 +937,10 @@ fn build_paragraph(
     text_direction: TextDirection,
     para_idx: usize,
     depth: usize,
-    chart_entries: &mut Vec<(String, String)>,
-    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
-    chart_offset: usize,
-    embedded_ole_offset: usize,
     options: EncodeOptions,
     injected: Vec<hwpforge_core::layout::WireTokenKind>,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxParagraph> {
     let mut ledger = EncoderLedger::new(injected, inject_sec_pr && page_settings.is_some());
     let mut runs = build_runs(
@@ -884,11 +949,7 @@ fn build_paragraph(
         page_settings,
         text_direction,
         depth,
-        chart_entries,
-        embedded_oles,
         hyperlink_entries,
-        chart_offset,
-        embedded_ole_offset,
         options,
         &mut ledger,
         sink,
@@ -1108,20 +1169,13 @@ fn build_runs(
     page_settings: Option<&PageSettings>,
     text_direction: TextDirection,
     depth: usize,
-    chart_entries: &mut Vec<(String, String)>,
-    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
-    chart_offset: usize,
-    embedded_ole_offset: usize,
     options: EncodeOptions,
     ledger: &mut EncoderLedger,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
-    // Track bookmark span field_ids for matching SpanStart → SpanEnd
-    let mut bookmark_span_ids: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
 
     for run in runs {
         // 독립 리뷰 High #8: 첫 문단이 control run(NewNumber/PageHiding 등)
@@ -1346,10 +1400,7 @@ fn build_runs(
                         // — raw 위치 손실을 cache equality 로 세탁하지 않는다
                         // (§1g v5 R3#6).
                         ledger.mark_cache_inadmissible("chart emission reorders content");
-                        let chart_idx = chart_offset + chart_entries.len() + 1;
-                        let chart_ref = format!("Chart/chart{chart_idx}.xml");
-                        let chart_xml = generate_chart_xml(ctrl)?;
-                        chart_entries.push((chart_ref.clone(), chart_xml));
+                        let chart_ref = sink.add_chart(generate_chart_xml(ctrl)?);
                         switches.push(encode_chart_switch(ctrl, &chart_ref));
                     }
                     Control::EmbeddedChart { chart_xml, ole_bytes, width, height, placement } => {
@@ -1360,24 +1411,15 @@ fn build_runs(
                             .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
                             .unwrap_or((0, 0));
                         ledger.mark_cache_inadmissible("chart emission reorders content");
-                        // Allocate stable per-document ids for the new chart
-                        // XML file and the OLE blob. Both lists are
-                        // section-global; we add `*_offset` to keep ids
-                        // unique across sections (parallel to the Chart arm).
-                        let chart_idx = chart_offset + chart_entries.len() + 1;
-                        let chart_ref = format!("Chart/chart{chart_idx}.xml");
-                        chart_entries.push((chart_ref.clone(), chart_xml.clone()));
-
-                        let ole_idx = embedded_ole_offset + embedded_oles.len() + 1;
-                        let ole_item_id = format!("ole{ole_idx}");
-                        embedded_oles.push((ole_item_id.clone(), ole_bytes.clone()));
+                        let chart_ref = sink.add_chart(chart_xml.clone());
+                        let ole_item_id = sink.add_ole(ole_bytes.clone());
 
                         // Serde cannot express the `<hp:switch><hp:case>…
                         // </hp:case><hp:default>…</hp:default></hp:switch>`
                         // shape (HxRunSwitch only models the `<hp:case>`
                         // arm). Emit the full switch as a marker-replaced
                         // run XML, mirroring the Hyperlink pattern.
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPECH", field_id);
                         let real_xml = build_embedded_chart_run_xml(
                             char_pr_id_ref,
@@ -1412,7 +1454,7 @@ fn build_runs(
                             });
                         };
                         ledger.folded_field(text);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPHL", field_id);
                         let real_xml =
                             build_hyperlink_run_xml(text, &safe_url, char_pr_id_ref, field_id);
@@ -1496,8 +1538,8 @@ fn build_runs(
                         if *bookmark_type == BookmarkType::SpanStart =>
                     {
                         ledger.token(hwpforge_core::layout::WireTokenKind::FieldBegin);
-                        let field_id = hyperlink_entries.len();
-                        bookmark_span_ids.insert(name.clone(), field_id);
+                        let field_id = sink.next_field_id();
+                        sink.bookmark_span_ids.insert(name.clone(), field_id);
                         let marker = next_marker("HWPBM", field_id);
                         let real_xml =
                             build_bookmark_span_start_run_xml(name, char_pr_id_ref, field_id);
@@ -1510,7 +1552,7 @@ fn build_runs(
                     Control::Bookmark { name, bookmark_type }
                         if *bookmark_type == BookmarkType::SpanEnd =>
                     {
-                        if let Some(&field_id) = bookmark_span_ids.get(name) {
+                        if let Some(field_id) = sink.bookmark_span_ids.remove(name) {
                             ledger.token(hwpforge_core::layout::WireTokenKind::FieldEnd);
                             let marker = next_marker("HWPBE", field_id);
                             let real_xml =
@@ -1522,6 +1564,10 @@ fn build_runs(
                             texts.push(HxText::new(marker));
                         } else {
                             // 무짝 SpanEnd 방출 스킵 — choke 경유 (v5 변경 4).
+                            sink.content_lost(
+                                "bookmark_span",
+                                format!("unmatched bookmark span end: {name}"),
+                            );
                             ledger.mark_cache_inadmissible("unmatched bookmark span end");
                         }
                     }
@@ -1572,7 +1618,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::Field { field_type, hint_text, help_text, name, display_text } => {
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
                         // 본문 = 미채움이면 힌트 (E1/gotcha #30 계약과 동일).
@@ -1610,7 +1656,7 @@ fn build_runs(
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
                     Control::UnknownSummary { token, display_text } => {
                         ledger.folded_field(display_text);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
                         // recomputes (editable="1"). Matches pre-fix behavior.
@@ -1636,7 +1682,7 @@ fn build_runs(
                         // Round-trip through HWPX comes back as `Field(ModifiedTime)`
                         // or `Field(CreatedTime)` — proven by
                         // `lossy_roundtrip_datecodefield_{date,time}_becomes_*` tests.
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let token: &str =
                             if *is_time_mode { "$createtime" } else { "$modifiedtime" };
@@ -1671,7 +1717,7 @@ fn build_runs(
                         // directly. #120/#136: the cached resolved path is
                         // carried in the body (an empty body still triggers the
                         // recovery warning); 한컴 recomputes `$P$F` on save.
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let real_xml = build_path_field_run_xml_raw(
                             command.wire_command(),
@@ -1685,6 +1731,19 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
+                    Control::PageNumber { number } => {
+                        ledger.token(hwpforge_core::layout::WireTokenKind::PageNumber);
+                        let marker = next_marker("HWPPN", hyperlink_entries.len());
+                        let real_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}">{}<hp:t/></hp:run>"#,
+                            header_footer::build_page_number_xml(number),
+                        );
+                        let marker_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#
+                        );
+                        hyperlink_entries.push((marker_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
                     Control::InlinePageNumber { kind, .. } => {
                         // atno inline page number renders as <hp:autoNum
                         // numType="PAGE"|"TOTAL_PAGE">. Unknown flag values are
@@ -1696,7 +1755,7 @@ fn build_runs(
                             continue;
                         };
                         ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -1714,7 +1773,7 @@ fn build_runs(
                             continue;
                         };
                         ledger.token(hwpforge_core::layout::WireTokenKind::AutoNumber);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -1741,7 +1800,7 @@ fn build_runs(
                             display_text.as_str()
                         };
                         ledger.folded_field(visible_text);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
                             target,
@@ -1762,12 +1821,17 @@ fn build_runs(
                         if anchor_runs.iter().any(|r| r.content.plain_text().is_none()) {
                             // 비텍스트 anchor run 은 방출에서 버려짐
                             // (memo.rs) — 기하 stale.
+                            sink.content_lost(
+                                "memo_anchor",
+                                "non-text memo anchor runs have no supported HWPX form; omitted"
+                                    .to_string(),
+                            );
                             ledger.mark_cache_inadmissible("memo anchor drops non-text runs");
                         }
                         let anchor_text: String =
                             anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect();
                         ledger.folded_field(&anchor_text);
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =
                             encode_memo_sublist(content, depth, hyperlink_entries, options, sink)?;
@@ -1801,7 +1865,7 @@ fn build_runs(
                             options,
                             sink,
                         )?;
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPGRP", field_id);
                         let real_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}">{container_xml}</hp:run>"#,
@@ -1820,7 +1884,7 @@ fn build_runs(
                         // full fragment and inject it via the marker-substitution
                         // path (mirroring group/chart/hyperlink).
                         let textart_xml = super::shapes::encode_text_art_to_xml(ctrl, false)?;
-                        let field_id = hyperlink_entries.len();
+                        let field_id = sink.next_field_id();
                         let marker = next_marker("HWPTAT", field_id);
                         let real_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}">{textart_xml}</hp:run>"#,
@@ -1971,44 +2035,72 @@ fn encode_control_to_ctrl(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<Option<HxCtrl>> {
     match ctrl {
         Control::Footnote { inst_id, paragraphs } => {
             if let Some(id) = inst_id {
                 super::object_ids::record("footnote", id.value());
             }
+            let num =
+                *sink.note_numbers.get(&(std::ptr::from_ref(ctrl) as usize)).ok_or_else(|| {
+                    HwpxError::InvalidStructure {
+                        detail: "footnote missing from pre-serialization traversal".to_string(),
+                    }
+                })?;
             sink.enter(crate::decoder::PathSeg::Footnote);
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+            let result = sub_list_result.map(|mut sub_list| {
+                report_note_head(
+                    inject_note_autonum_head(&mut sub_list, "FOOTNOTE", num),
+                    "footnote",
+                    sink,
+                );
+                HxCtrl {
+                    foot_note: Some(HxFootNote {
+                        number: Some(num),
+                        suffix_char: Some("41".to_string()),
+                        inst_id: inst_id.map(hwpforge_core::ObjectId::value),
+                        sub_list,
+                    }),
+                    ..Default::default()
+                }
+            });
             sink.leave();
-            Ok(Some(HxCtrl {
-                foot_note: Some(HxFootNote {
-                    number: None, // renumber pass 가 문서 순서로 확정
-                    suffix_char: None,
-                    inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                    sub_list: sub_list_result?,
-                }),
-                ..Default::default()
-            }))
+            result.map(Some)
         }
         Control::Endnote { inst_id, paragraphs } => {
             if let Some(id) = inst_id {
                 super::object_ids::record("endnote", id.value());
             }
+            let num =
+                *sink.note_numbers.get(&(std::ptr::from_ref(ctrl) as usize)).ok_or_else(|| {
+                    HwpxError::InvalidStructure {
+                        detail: "endnote missing from pre-serialization traversal".to_string(),
+                    }
+                })?;
             sink.enter(crate::decoder::PathSeg::Endnote);
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+            let result = sub_list_result.map(|mut sub_list| {
+                report_note_head(
+                    inject_note_autonum_head(&mut sub_list, "ENDNOTE", num),
+                    "endnote",
+                    sink,
+                );
+                HxCtrl {
+                    end_note: Some(HxFootNote {
+                        number: Some(num),
+                        suffix_char: Some("41".to_string()),
+                        inst_id: inst_id.map(hwpforge_core::ObjectId::value),
+                        sub_list,
+                    }),
+                    ..Default::default()
+                }
+            });
             sink.leave();
-            Ok(Some(HxCtrl {
-                end_note: Some(HxFootNote {
-                    number: None, // renumber pass 가 문서 순서로 확정
-                    suffix_char: None,
-                    inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                    sub_list: sub_list_result?,
-                }),
-                ..Default::default()
-            }))
+            result.map(Some)
         }
         Control::Bookmark { name, bookmark_type: BookmarkType::Point } => Ok(Some(HxCtrl {
             bookmark: Some(HxBookmark { name: name.clone() }),
@@ -2073,7 +2165,7 @@ fn encode_control_to_ctrl(
 /// 키가 깨져 최종 XML 에 내부 마커가 유출된다. 한컴형 번호-본문 간격은
 /// 공백 하나를 담은 **별도 텍스트 run** 으로 방출한다 (공백 전용 run 은
 /// ws-only 보존 수정(`preserve_ws_only_text`)으로 왕복에서도 안전).
-/// 주입 결과 — 호출부([`renumber_note_autonums`])가 경고로 표면화한다.
+/// 주입 결과 — 공통 note builder가 경고로 표면화한다.
 pub(crate) enum NoteHeadInjection {
     /// 주입 완료. `cache_dropped` = 어긋나게 될 lineseg 캐시를 드롭했는지.
     Injected {
@@ -2138,7 +2230,7 @@ fn inject_note_autonum_head(
 }
 
 /// [`inject_note_autonum_head`] 결과를 typed 경고로 표면화한다.
-fn report_note_head(outcome: NoteHeadInjection, kind: &str, sink: &mut EncodeSink) {
+fn report_note_head(outcome: NoteHeadInjection, kind: &str, sink: &mut DocumentEncodeContext) {
     match outcome {
         NoteHeadInjection::Injected { cache_dropped: true } => {
             sink.cache_dropped(format!(
@@ -2269,76 +2361,6 @@ impl NoteNumbering {
     }
 }
 
-/// 섹션 트리를 문서 순서로 걷어 각주/미주에 autoNum 번호 머리를 **주입하며**
-/// 번호를 확정한다 (주입과 번호 부여를 한 pass 로 — 주입만 되고 번호를 못
-/// 받는 `num=0` 잔존 상태가 구조적으로 존재하지 않는다, Codex H-W3.5-1).
-///
-/// 걷기 범위 = 본문 문단 · 비병합 GFM 표 셀 · note subList 재귀 (MD 인코딩이
-/// 생성 가능한 형상 — 디코더 M1 계약과 동일). raw-XML 로 굳는 경로(메모·그룹·
-/// 머리말)와 캡션/도형 내부의 note 는 이 pass 가 닿지 않아 번호 머리가 붙지
-/// 않는다 — 기존 동작과 동일하며 데이터 오염은 없다 (후속 확장 지점).
-pub(crate) fn renumber_note_autonums(
-    section: &mut HxSection,
-    numbering: &mut NoteNumbering,
-    sink: &mut EncodeSink,
-) -> HwpxResult<()> {
-    fn walk_paragraphs(
-        paragraphs: &mut [HxParagraph],
-        numbering: &mut NoteNumbering,
-        sink: &mut EncodeSink,
-    ) -> HwpxResult<()> {
-        for para in paragraphs {
-            for run in &mut para.runs {
-                for ctrl in &mut run.ctrls {
-                    // `hp:newNum@num` 은 XSD 상 `xs:integer` — 0 포함 wire
-                    // 값을 그대로 재시작에 반영한다 (걸러내면 방출되는
-                    // newNum 과 재생성 캐시의 의미가 갈라진다, 4차 평결).
-                    if let Some(new_num) = ctrl.new_num.as_ref() {
-                        match new_num.num_type.as_str() {
-                            "FOOTNOTE" => numbering.footnote.restart(new_num.num),
-                            "ENDNOTE" => numbering.endnote.restart(new_num.num),
-                            _ => {}
-                        }
-                    }
-                    if let Some(note) = ctrl.foot_note.as_mut() {
-                        let num = numbering.footnote.take("footnote")?;
-                        note.number = Some(num);
-                        note.suffix_char.get_or_insert_with(|| "41".to_string());
-                        report_note_head(
-                            inject_note_autonum_head(&mut note.sub_list, "FOOTNOTE", num),
-                            "footnote",
-                            sink,
-                        );
-                        walk_paragraphs(&mut note.sub_list.paragraphs, numbering, sink)?;
-                    }
-                    if let Some(note) = ctrl.end_note.as_mut() {
-                        let num = numbering.endnote.take("endnote")?;
-                        note.number = Some(num);
-                        note.suffix_char.get_or_insert_with(|| "41".to_string());
-                        report_note_head(
-                            inject_note_autonum_head(&mut note.sub_list, "ENDNOTE", num),
-                            "endnote",
-                            sink,
-                        );
-                        walk_paragraphs(&mut note.sub_list.paragraphs, numbering, sink)?;
-                    }
-                }
-                for table in &mut run.tables {
-                    for row in &mut table.rows {
-                        for cell in &mut row.cells {
-                            if let Some(sub_list) = cell.sub_list.as_mut() {
-                                walk_paragraphs(&mut sub_list.paragraphs, numbering, sink)?;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    walk_paragraphs(&mut section.paragraphs, numbering, sink)
-}
-
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults
 /// (vertical alignment `TOP`).
 pub(crate) fn encode_paragraphs_to_sublist(
@@ -2346,7 +2368,7 @@ pub(crate) fn encode_paragraphs_to_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
     build_sublist(paragraphs, depth, "TOP", hyperlink_entries, options, sink)
 }
@@ -2360,7 +2382,7 @@ pub(crate) fn encode_paragraphs_to_sublist_with_align(
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
     build_sublist(paragraphs, depth, vert_align, hyperlink_entries, options, sink)
 }
@@ -2371,10 +2393,9 @@ fn build_sublist(
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxSubList> {
-    let mut sub_chart_entries = Vec::new();
-    let mut sub_embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
+    let parent_bookmarks = std::mem::take(&mut sink.bookmark_span_ids);
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()
@@ -2387,11 +2408,7 @@ fn build_sublist(
                 TextDirection::Horizontal,
                 idx,
                 depth + 1,
-                &mut sub_chart_entries,
-                &mut sub_embedded_oles,
                 hyperlink_entries,
-                0,
-                0,
                 options,
                 Vec::new(), // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
                 sink,
@@ -2401,6 +2418,8 @@ fn build_sublist(
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
+    sink.finish_bookmark_scope();
+    sink.bookmark_span_ids = parent_bookmarks;
     Ok(HxSubList {
         id: String::new(),
         text_direction: "HORIZONTAL".to_string(),
@@ -2441,7 +2460,7 @@ pub(crate) fn build_hx_caption(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxCaption> {
     let side = match caption.side {
         CaptionSide::Left => "LEFT",
@@ -3026,7 +3045,7 @@ mod tests {
         );
     }
 
-    /// 이것을 실패시키는 것: `EncodeSink::new` 가 part 이름을
+    /// 이것을 실패시키는 것: `DocumentEncodeContext::new` 가 part 이름을
     /// `Contents/section0.xml` 상수로 두는 것.
     #[test]
     fn unknown_control_in_the_second_section_names_its_part() {
@@ -3112,7 +3131,7 @@ mod tests {
             MAX_NESTING_DEPTH,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap_err();
         match &err {
@@ -3140,7 +3159,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap_err();
         match &err {
@@ -3164,7 +3183,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(
@@ -3193,7 +3212,7 @@ mod tests {
                 ImageFormat::Png,
             );
             img.hyperlink = Some(url.to_string());
-            let mut sink = EncodeSink::new(0);
+            let mut sink = DocumentEncodeContext::new(0);
             let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
                 .unwrap();
             assert_eq!(hx.href, href, "{url}");
@@ -3227,7 +3246,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.text_wrap, "SQUARE");
@@ -3255,7 +3274,7 @@ mod tests {
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let pos = hx.pos.expect("picture position should exist");
@@ -3794,7 +3813,7 @@ mod tests {
 
     /// Core 문단 하나를 담은 `HxSubList` (주입 단위 테스트용).
     fn test_sublist(para: Paragraph) -> crate::schema::section::HxSubList {
-        let mut sink = EncodeSink::new(0);
+        let mut sink = DocumentEncodeContext::new(0);
         encode_paragraphs_to_sublist(
             &[para],
             0,
@@ -4026,25 +4045,22 @@ mod tests {
 
         let mut numbering = NoteNumbering::new();
         let _ids = super::super::object_ids::IdScope::enter(Default::default());
+        let mut context = DocumentEncodeContext::new(0);
         let x1 = encode_section_with_note_counters(
             &s1,
             0,
-            0,
-            0,
-            0,
             EncodeOptions::default(),
             &mut numbering,
+            &mut context,
         )
         .unwrap()
         .xml;
         let x2 = encode_section_with_note_counters(
             &s2,
             1,
-            0,
-            0,
-            0,
             EncodeOptions::default(),
             &mut numbering,
+            &mut context,
         )
         .unwrap()
         .xml;

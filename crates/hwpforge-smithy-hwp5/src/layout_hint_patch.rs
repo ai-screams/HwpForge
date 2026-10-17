@@ -32,6 +32,7 @@ pub struct SectionLayoutHints {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ScopeLayoutHints {
+    uncertain: Option<&'static str>,
     paragraphs: VecDeque<ParagraphLayoutHint>,
     tables: VecDeque<TableLayoutHint>,
 }
@@ -56,8 +57,11 @@ pub struct TableLayoutHint {
 ///
 /// Crate-internal: the captured hints reach output-format orchestrators through
 /// the `Hwp5Decoded::layout_hints` bundle rather than this entry point.
-pub(crate) fn capture_layout_hints(sections: &[SectionResult]) -> Vec<SectionLayoutHints> {
-    sections.iter().map(collect_section_layout_hints).collect()
+pub(crate) fn capture_layout_hints(
+    sections: &[SectionResult],
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> Vec<SectionLayoutHints> {
+    sections.iter().map(|section| collect_section_layout_hints(section, warnings)).collect()
 }
 
 impl SectionLayoutHints {
@@ -67,7 +71,10 @@ impl SectionLayoutHints {
     }
 }
 
-fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
+fn collect_section_layout_hints(
+    section: &SectionResult,
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> SectionLayoutHints {
     let mut body = ScopeLayoutHints::default();
     let mut header = ScopeLayoutHints::default();
     let mut footer = ScopeLayoutHints::default();
@@ -78,6 +85,13 @@ fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
 
     body.append(&mut header);
     body.append(&mut footer);
+    if let Some(reason) = body.uncertain {
+        warnings.push(crate::Hwp5Warning::ProjectionFallback {
+            subject: "layout_hints.discarded",
+            reason: format!("section layout hints discarded: {reason}; positional hint queues cannot be linked reliably to output objects"),
+        });
+        return SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+    }
     SectionLayoutHints { paragraphs: body.paragraphs, tables: body.tables }
 }
 
@@ -88,10 +102,18 @@ impl ScopeLayoutHints {
     }
 
     fn push_table(&mut self, table: &Hwp5Table) {
+        if table
+            .cells
+            .windows(2)
+            .any(|cells| (cells[0].row, cells[0].column) > (cells[1].row, cells[1].column))
+        {
+            self.uncertain = Some("raw table cell order differs from projected row/column order");
+        }
         self.tables.push_back(TableLayoutHint { height: derive_table_height(table) });
     }
 
     fn append(&mut self, other: &mut Self) {
+        self.uncertain = self.uncertain.or(other.uncertain);
         self.paragraphs.append(&mut other.paragraphs);
         self.tables.append(&mut other.tables);
     }
@@ -149,6 +171,7 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::NewNumber(_)
             | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
+            | Hwp5Control::Bookmark { .. }
             | Hwp5Control::Unknown { .. } => {}
         }
     }
@@ -219,9 +242,10 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             }
             Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, scope),
             Hwp5Control::Group(group) => collect_group_child_layout_hints(group, scope),
-            Hwp5Control::Header(_)
-            | Hwp5Control::Footer(_)
-            | Hwp5Control::Image(_)
+            Hwp5Control::Header(_) | Hwp5Control::Footer(_) => {
+                scope.uncertain = Some("nested header/footer is lifted by projection but skipped by the scope hint collector");
+            }
+            Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
             | Hwp5Control::Arc(_)
@@ -241,6 +265,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::NewNumber(_)
             | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
+            | Hwp5Control::Bookmark { .. }
             | Hwp5Control::Unknown { .. } => {}
         }
     }
@@ -646,6 +671,7 @@ mod tests {
                     "body-a",
                     vec![line_segment(10, 0, 1000)],
                     vec![Hwp5Control::Header(Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
                         instance_id: 0,
@@ -660,6 +686,7 @@ mod tests {
                     "body-b",
                     vec![line_segment(20, 0, 1000)],
                     vec![Hwp5Control::Footer(Hwp5NestedSubtree {
+                        wire_order: 0,
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
                         instance_id: 0,
@@ -679,7 +706,7 @@ mod tests {
             warnings: Vec::new(),
         };
 
-        let hints = collect_section_layout_hints(&section);
+        let hints = collect_section_layout_hints(&section, &mut Vec::new());
         let order = hints
             .paragraphs
             .iter()

@@ -137,7 +137,7 @@ pub(super) fn encode_memo_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     sink.enter(crate::decoder::PathSeg::Memo);
     let sublist_result =

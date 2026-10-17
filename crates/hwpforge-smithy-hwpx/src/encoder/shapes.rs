@@ -47,7 +47,8 @@ use crate::wire_xml::textart_text_to_wire;
 
 use super::escape_xml;
 use super::section::{
-    build_hx_caption, encode_paragraphs_to_sublist_with_align, generate_instid, EncodeSink,
+    build_hx_caption, encode_paragraphs_to_sublist_with_align, generate_instid,
+    DocumentEncodeContext,
 };
 use super::EncodeOptions;
 use crate::decoder::PathSeg;
@@ -173,7 +174,7 @@ fn shape_parts(ctrl: &Control) -> (i32, i32, Option<&ShapeStyle>) {
 /// (`shape_emission`) — a large box turned by a fraction of a degree, say,
 /// once its angle is rounded to whole degrees, or an original box so much
 /// larger than the shape that even the displayed box misses.
-pub(crate) fn report_shape_emission(plan: &FramePlan, sink: &mut EncodeSink) {
+pub(crate) fn report_shape_emission(plan: &FramePlan, sink: &mut DocumentEncodeContext) {
     if let Some(loss) = plan.loss() {
         sink.content_lost("shape_emission", loss.detail().to_string());
     }
@@ -458,7 +459,7 @@ pub(crate) fn encode_textbox_to_rect(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxRect> {
     let (paragraphs, width, height, placement, caption, style, text_vertical_align, text_margin) =
         match ctrl {
@@ -582,7 +583,7 @@ pub(crate) fn encode_rect_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxRect> {
     let (width, height, placement, caption, style) = match ctrl {
         Control::Rect { frame: _, width, height, placement, caption, style } => {
@@ -649,7 +650,7 @@ pub(crate) fn encode_line_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxLine> {
     let (_, _, width, height, placement, caption, style) = match ctrl {
         Control::Line { frame: _, start, end, width, height, placement, caption, style } => {
@@ -714,7 +715,7 @@ pub(crate) fn encode_ellipse_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxEllipse> {
     let (
         _center,
@@ -838,7 +839,7 @@ pub(crate) fn encode_polygon_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxPolygon> {
     let (_vertices, width, height, placement, paragraphs, caption, style, text_vertical_align) =
         match ctrl {
@@ -943,7 +944,7 @@ pub(crate) fn encode_arc_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxEllipse> {
     let (
         arc_type,
@@ -1043,7 +1044,7 @@ pub(crate) fn encode_curve_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxCurve> {
     let (_points, segment_types, width, height, placement, caption, style) = match ctrl {
         Control::Curve {
@@ -1129,7 +1130,7 @@ pub(crate) fn encode_connect_line_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<HxConnectLine> {
     let (_start, _end, _control_points, connect_type, width, height, placement, caption, style) =
         match ctrl {
@@ -1458,6 +1459,22 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
     }
 }
 
+pub(crate) fn group_child_is_encodable(c: &Control) -> bool {
+    matches!(
+        c,
+        Control::TextBox { .. }
+            | Control::Rect { .. }
+            | Control::Line { .. }
+            | Control::Ellipse { .. }
+            | Control::Arc { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+            | Control::TextArt { .. }
+            | Control::Group { .. }
+    )
+}
+
 /// The name a group child is reported under.
 fn group_child_kind(child: &GroupChild) -> &'static str {
     match child {
@@ -1488,7 +1505,7 @@ fn encode_group_child_xml(
     nodes: &mut std::slice::Iter<'_, GroupNodePlan>,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<Option<String>> {
     let child = match child {
         GroupChild::Shape(control) => control,
@@ -1507,6 +1524,9 @@ fn encode_group_child_xml(
         }
         _ => return Ok(None),
     };
+    if !group_child_is_encodable(child) {
+        return Ok(None);
+    }
     let (dx, dy) = group_child_offset(child);
     let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
     // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
@@ -1655,7 +1675,7 @@ fn encode_group_picture_xml(
     parent_origin: (i32, i32),
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     let (dx, dy) = image
         .placement
@@ -1688,7 +1708,7 @@ pub(crate) fn encode_group_to_xml(
     group_level: u32,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     // S20: the group's emission plan, shared with the decoder's check. When
     // its original boxes do not store within 2 HWPUNIT, the whole group is
@@ -1705,6 +1725,7 @@ pub(crate) fn encode_group_to_xml(
     let target = if plan.is_fallback() {
         let mut plain = ctrl.clone();
         drop_original_sizes(&mut plain);
+        super::section::traversal::rebind_group_notes(ctrl, &plain, sink)?;
         stripped = plain;
         &stripped
     } else {
@@ -1739,7 +1760,7 @@ fn encode_group_at(
     nodes: &mut std::slice::Iter<'_, GroupNodePlan>,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
-    sink: &mut EncodeSink,
+    sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
     let (children, width, height, placement, inst_id) = match ctrl {
         Control::Group { frame: _, children, width, height, placement, inst_id } => {
@@ -2062,7 +2083,7 @@ mod tests {
             0,
             &mut entries,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
 
@@ -2253,7 +2274,7 @@ mod tests {
             0,
             &mut entries,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
 
@@ -2386,8 +2407,8 @@ mod tests {
         assert!(kinds.contains(&"shape_emission"), "{:?}", sink.warnings);
     }
 
-    fn encode_group(group: &Control) -> (String, EncodeSink) {
-        let mut sink = EncodeSink::new(0);
+    fn encode_group(group: &Control) -> (String, DocumentEncodeContext) {
+        let mut sink = DocumentEncodeContext::new(0);
         let xml =
             encode_group_to_xml(group, 0, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
                 .unwrap();
@@ -2944,9 +2965,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.has_arc_pr, 1, "Arc must have hasArcPr=1");
     }
 
@@ -2969,9 +2995,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.arc_type, "PIE");
     }
 
@@ -2994,9 +3025,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.center.as_ref().unwrap().x, 100);
         assert_eq!(result.center.as_ref().unwrap().y, 200);
         assert_eq!(result.ax1.as_ref().unwrap().x, 300);
@@ -3031,9 +3067,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.sz.as_ref().unwrap().width, 7000);
         assert_eq!(result.sz.as_ref().unwrap().height, 4000);
         // Floating placement (treat_as_char=false) → pos treatAsChar=0
@@ -3060,9 +3101,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "호입니다.");
     }
 
@@ -3085,9 +3131,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_arc_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert!(result.draw_text.is_none(), "Arc should have no draw_text");
     }
 
@@ -3111,7 +3162,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(result.segments.is_empty());
@@ -3140,7 +3191,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.segments.len(), 2);
@@ -3176,7 +3227,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(result.segments.is_empty(), "single point → no segments");
@@ -3206,7 +3257,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.segments.len(), 3);
@@ -3234,7 +3285,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "곡선입니다.");
@@ -3258,7 +3309,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 1);
@@ -3286,7 +3337,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let cp = result.control_points.as_ref().unwrap();
@@ -3320,7 +3371,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let cp = result.control_points.as_ref().unwrap();
@@ -3350,7 +3401,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.connect_type, "CURVED");
@@ -3377,7 +3428,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(result.fill_brush.is_none(), "connect lines must have no fill_brush");
@@ -3407,7 +3458,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
@@ -3439,7 +3490,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.numbering_type, "NONE");
@@ -3469,7 +3520,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.start_pt.as_ref().unwrap().x, 111);
@@ -3498,7 +3549,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "연결선입니다.");
@@ -3524,7 +3575,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 0);
@@ -3545,9 +3596,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_line_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert!(result.fill_brush.is_none(), "lines have no fill brush per golden");
     }
 
@@ -3564,9 +3620,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_line_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "선입니다.");
     }
 
@@ -3583,9 +3644,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_line_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.start_pt.as_ref().unwrap().x, 50);
         assert_eq!(result.start_pt.as_ref().unwrap().y, 100);
         assert_eq!(result.end_pt.as_ref().unwrap().x, 500);
@@ -3605,9 +3671,14 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_line_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
         assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
         let pos = result.pos.as_ref().unwrap();
@@ -3640,7 +3711,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "타원입니다.");
@@ -3667,7 +3738,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.has_arc_pr, 0, "Ellipse must have hasArcPr=0");
@@ -3694,7 +3765,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert!(result.draw_text.is_none());
@@ -3729,7 +3800,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
@@ -3745,7 +3816,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
@@ -3761,7 +3832,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
@@ -3795,7 +3866,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.points.len(), 4);
@@ -3829,7 +3900,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "다각형입니다.");
@@ -3859,7 +3930,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
@@ -3875,9 +3946,14 @@ mod tests {
     fn encode_rect_pure_emits_no_draw_text() {
         let ctrl = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
         let mut hl = empty_hyperlinks();
-        let result =
-            encode_rect_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let result = encode_rect_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert!(result.draw_text.is_none(), "pure rect must not emit <hp:drawText>");
         let sz = result.sz.as_ref().unwrap();
         assert_eq!(sz.width, 8000);
@@ -3890,9 +3966,14 @@ mod tests {
     fn encode_rect_serializes_to_hp_rect_element() {
         let ctrl = Control::rect(HwpUnit::new(5000).unwrap(), HwpUnit::new(3000).unwrap()).unwrap();
         let mut hl = empty_hyperlinks();
-        let rect =
-            encode_rect_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let rect = encode_rect_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         let mut buf = String::new();
         #[allow(clippy::disallowed_methods)] // test inspects raw serde output
         let ser = quick_xml::se::Serializer::with_root(&mut buf, Some("hp:rect")).unwrap();
@@ -3920,7 +4001,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
@@ -3940,9 +4021,14 @@ mod tests {
         // hard gate that the placement refactor left the None path byte-stable.
         let mut hl = empty_hyperlinks();
         let rect = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
-        let hx =
-            encode_rect_to_hx(&rect, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
-                .unwrap();
+        let hx = encode_rect_to_hx(
+            &rect,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut DocumentEncodeContext::new(0),
+        )
+        .unwrap();
         assert_eq!(hx.numbering_type, "NONE");
         assert_eq!(hx.text_wrap, "TOP_AND_BOTTOM");
         assert_eq!(hx.text_flow, "BOTH_SIDES");
@@ -3965,7 +4051,7 @@ mod tests {
             0,
             &mut hl,
             EncodeOptions::default(),
-            &mut EncodeSink::new(0),
+            &mut DocumentEncodeContext::new(0),
         )
         .unwrap();
         assert_eq!(hx.numbering_type, "NONE");

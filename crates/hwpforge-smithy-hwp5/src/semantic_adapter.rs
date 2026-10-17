@@ -465,7 +465,7 @@ fn adapt_control(
             }
             node_id
         }
-        Hwp5Control::Unknown { ctrl_id, .. } => {
+        Hwp5Control::Bookmark { ctrl_id, .. } | Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
             let literal = crate::ctrl_id_ascii(*ctrl_id);
             // The page-number control (`pgnp`) reaches us via the Unknown
@@ -792,6 +792,7 @@ fn adapt_textbox_control(
     ids: &mut SemanticIdAlloc,
 ) -> Hwp5SemanticControlId {
     let subtree = Hwp5NestedSubtree {
+        wire_order: 0,
         ctrl_id: textbox.ctrl_id,
         // textbox carries no header/footer applyPageType bits — set to
         // 0 so projection treats it as default (BOTH).

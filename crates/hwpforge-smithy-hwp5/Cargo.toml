@@ -24,4 +24,5 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
 serde_json = { workspace = true }
