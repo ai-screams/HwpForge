@@ -144,13 +144,10 @@ pub fn parse_section(
     section_index: usize,
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
-    parse_section_with_images(
-        xml,
-        section_index,
-        "Contents/section0.xml",
-        chart_xmls,
-        &HashMap::new(),
-    )
+    // Without a package there is no spine to resolve the part from; name the
+    // conventional part for this index so diagnostics point at the right file.
+    let part = format!("Contents/section{section_index}.xml");
+    parse_section_with_images(xml, section_index, &part, chart_xmls, &HashMap::new())
 }
 
 /// [`parse_section`] with the pixel sizes of the package's images, keyed by
