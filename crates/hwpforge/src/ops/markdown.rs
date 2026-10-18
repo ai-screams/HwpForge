@@ -186,8 +186,52 @@ pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsE
     let decoded = HwpxDecoder::decode(hwpx).map_err(OpsError::decode)?;
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.iter().cloned().map(OpsWarning::Decode).collect();
-    let document = decoded.document.validate()?;
+    let mut seen = std::collections::BTreeSet::new();
+    decoded.document.for_each_paragraph(|paragraph| {
+        let index = paragraph.para_shape_id;
+        if !seen.insert(index.get()) {
+            return;
+        }
+        if let Ok(para) = decoded.style_store.para_shape(index) {
+            for (field, measure) in [
+                ("margin_left", para.margin_left),
+                ("margin_right", para.margin_right),
+                ("indent", para.indent),
+                ("spacing_before", para.spacing_before),
+                ("spacing_after", para.spacing_after),
+            ] {
+                if opts.mode == MdMode::Styled && matches!(field, "margin_left" | "indent") {
+                    continue;
+                }
+                if measure.as_hwp_unit().is_none_or(|v| v.as_i32() != 0) {
+                    warnings.push(OpsWarning::Md(
+                        hwpforge_smithy_md::MdWarning::ParagraphMeasureLost {
+                            definition: index.get(),
+                            field: field.into(),
+                            measure,
+                        },
+                    ));
+                }
+            }
+            if let Some(tab) =
+                decoded.style_store.iter_tabs().find(|tab| tab.id == para.tab_pr_id_ref)
+            {
+                for (stop_index, stop) in tab.stops.iter().enumerate() {
+                    if stop.position.as_char_count().is_some() {
+                        warnings.push(OpsWarning::Md(
+                            hwpforge_smithy_md::MdWarning::ParagraphMeasureLost {
+                                definition: index.get(),
+                                field: format!("tabs[{}].stops[{stop_index}].position", tab.id),
+                                measure: stop.position,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    });
 
+    let document = decoded.document.validate()?;
     let (markdown, images) = match opts.mode {
         MdMode::Styled => {
             let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);

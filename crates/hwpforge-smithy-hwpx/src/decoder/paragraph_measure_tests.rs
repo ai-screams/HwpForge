@@ -301,3 +301,159 @@ fn fix3_empty_supported_tab_case_is_authoritative() {
         assert!(tab.stops.is_empty());
     }
 }
+
+// 이것을 실패시키는 것: HeaderFidelity를 source_id/배열 위치로 조회하거나,
+// setter·Clone·JSON 중 한 경로에서 fontLineHeight를 버리는 것.
+#[test]
+fn w2fix1_font_line_height_rust_clone_without_source_id() {
+    let mut store = HwpxStyleStore::new();
+    let original = store.push_para_shape(HwpxParaShape::default());
+    store.set_para_font_line_height(original, 1).unwrap();
+    let mut copy = store.para_shape(original).unwrap().clone();
+    copy.source_id = None;
+    let clone = store.push_para_shape(copy);
+    store.set_para_font_line_height(original, 0).unwrap();
+    let json = serde_json::to_string(&store).unwrap();
+    let store: HwpxStyleStore = serde_json::from_str(&json).unwrap();
+    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let parsed = parse_header(&xml).unwrap();
+    assert_eq!(parsed.style_store.para_shape(original).unwrap().font_line_height, 0);
+    assert_eq!(parsed.style_store.para_shape(clone).unwrap().font_line_height, 1);
+}
+
+// 이것을 실패시키는 것: 경고를 정규화 사실로 사용, case/default 일부만 비교,
+// unit·분기 유무 차이를 무시, 또는 무관한 switch 때문에 정상 입력을 정규화.
+#[test]
+fn w2fix1_measure_normalization_compares_encoder_payloads() {
+    use crate::schema::header::{HxHead, HxSwitch, HxSwitchCase, HxSwitchDefault};
+    let mut store = HwpxStyleStore::new();
+    store.push_para_shape(HwpxParaShape::default());
+    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    assert!(!parse_header(&xml).unwrap().requires_measure_normalization);
+    for change in [
+        "direct-margin",
+        "direct-line",
+        "missing-margin",
+        "missing-line",
+        "margin-default",
+        "line-default",
+        "case-only",
+        "default-only",
+        "unit",
+        "split",
+        "unrelated",
+    ] {
+        let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
+        let para = &mut head.ref_list.as_mut().unwrap().para_properties.as_mut().unwrap().items[0];
+        let sw = &mut para.switches[0];
+        match change {
+            "direct-margin" => {
+                sw.cases[0].margin = None;
+                para.margin = sw.default.as_mut().unwrap().margin.take();
+            }
+            "direct-line" => {
+                sw.cases[0].line_spacing = None;
+                para.line_spacing = sw.default.as_mut().unwrap().line_spacing.take();
+            }
+            "missing-margin" => {
+                sw.cases[0].margin = None;
+                sw.default.as_mut().unwrap().margin = None;
+            }
+            "missing-line" => {
+                sw.cases[0].line_spacing = None;
+                sw.default.as_mut().unwrap().line_spacing = None;
+            }
+            "margin-default" => {
+                sw.default.as_mut().unwrap().margin.as_mut().unwrap().left.as_mut().unwrap().value =
+                    2
+            }
+            "line-default" => {
+                sw.default.as_mut().unwrap().line_spacing.as_mut().unwrap().value = 170
+            }
+            "case-only" => sw.default = None,
+            "default-only" => sw.cases.clear(),
+            "unit" => sw.default.as_mut().unwrap().line_spacing.as_mut().unwrap().unit.clear(),
+            "split" => {
+                let line = HxSwitch {
+                    cases: vec![HxSwitchCase {
+                        required_namespace: NS.into(),
+                        margin: None,
+                        line_spacing: sw.cases[0].line_spacing.take(),
+                    }],
+                    default: Some(HxSwitchDefault {
+                        margin: None,
+                        line_spacing: sw.default.as_mut().unwrap().line_spacing.take(),
+                    }),
+                };
+                para.switches.push(line);
+            }
+            "unrelated" => para.switches.insert(
+                0,
+                HxSwitch {
+                    cases: vec![HxSwitchCase {
+                        required_namespace: "urn:unrelated".into(),
+                        margin: None,
+                        line_spacing: None,
+                    }],
+                    default: None,
+                },
+            ),
+            _ => unreachable!(),
+        }
+        #[allow(clippy::disallowed_methods)] // Normalize the serialized test header below.
+        let xml = quick_xml::se::to_string(&head).unwrap();
+        let xml = crate::wire_xml::normalize_attr_control_whitespace(&xml);
+        let parsed = parse_header(&xml).unwrap();
+        assert_eq!(
+            parsed.requires_measure_normalization,
+            !matches!(change, "split" | "unrelated"),
+            "{change}"
+        );
+    }
+}
+
+// 이것을 실패시키는 것: direct/empty/case-only/default-only 탭 또는 출력과 다른
+// default 척도·단위·개수를 원본 반환 가능으로 분류하는 것.
+#[test]
+fn w2fix1_tab_normalization_compares_encoder_payloads() {
+    use crate::schema::header::HxHead;
+    let mut store = HwpxStyleStore::new();
+    store.push_tab(hwpforge_core::TabDef {
+        id: 3,
+        auto_tab_left: false,
+        auto_tab_right: false,
+        stops: vec![hwpforge_core::TabStop {
+            position: ParagraphMeasure::from_char_count(CharCount::from_ticks(1000)),
+            align: hwpforge_foundation::TabAlign::Left,
+            leader: hwpforge_foundation::TabLeader::none(),
+        }],
+    });
+    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    assert!(!parse_header(&xml).unwrap().requires_measure_normalization);
+    for change in ["direct", "empty", "case-only", "default-only", "value", "unit", "count"] {
+        let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
+        let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[3];
+        let sw = &mut tab.switches[0];
+        match change {
+            "direct" => {
+                tab.items = sw.default.take().unwrap().items;
+                tab.switches.clear();
+            }
+            "empty" => {
+                sw.cases[0].items.clear();
+                sw.default.as_mut().unwrap().items.clear();
+            }
+            "case-only" => sw.default = None,
+            "default-only" => sw.cases.clear(),
+            "value" => sw.default.as_mut().unwrap().items[0].pos = 2000,
+            "unit" => sw.default.as_mut().unwrap().items[0].unit = "HWPUNIT".into(),
+            "count" => sw.default.as_mut().unwrap().items.clear(),
+            _ => unreachable!(),
+        }
+        #[allow(clippy::disallowed_methods)] // Normalize the serialized test header below.
+        let xml = quick_xml::se::to_string(&head).unwrap();
+        let parsed =
+            parse_header(&crate::wire_xml::normalize_attr_control_whitespace(&xml)).unwrap();
+        assert!(parsed.requires_measure_normalization, "{change}");
+    }
+}

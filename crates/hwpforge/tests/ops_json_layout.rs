@@ -1556,3 +1556,395 @@ fn metadata_layout_cache_user_data_edits_and_deletion_survive_public_json() {
         assert_eq!(flags(&output.bytes), [true; 5]);
     }
 }
+
+// 이것을 실패시키는 것: 변이 11 — 다른 스타일 문단의 공통 의존성에서 style 0 height 누락.
+#[test]
+fn w2_style_zero_height_invalidates_other_style_char_margins_and_tabs() {
+    for tab in [false, true] {
+        let mut value = export(&simple_base());
+        let mut default_char = value["styles"]["char_shapes"][0].clone();
+        default_char["source_id"] = json!(777);
+        value["styles"]["char_shapes"].as_array_mut().unwrap().push(default_char);
+        value["styles"]["styles"][0]["char_pr_id_ref"] = json!(777);
+        for para in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
+            para["style_id"] = json!(7);
+        }
+        if tab {
+            value["styles"]["tabs"][0]["stops"] = json!([
+                {"position":{"unit":"char","value":1000},"align":"Left","leader":"NONE"}
+            ]);
+        } else {
+            value["styles"]["para_shapes"][0]["margin_left"] = json!({"unit":"char","value":250});
+        }
+        let base = encode_fixture(&value);
+        let mut edited = export(&base);
+        let def = edited["styles"]["char_shapes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|v| v["source_id"] == 777)
+            .unwrap();
+        def["height"] = json!(2000);
+        let out = roundtrip(&base, &edited);
+        assert_eq!(flags(&out.bytes), [false; 5]);
+        assert!(out.warnings.iter().any(|w| w.info().code == "LAYOUT_CACHE_DROPPED"));
+    }
+}
+
+#[test]
+fn w2_margin_and_tab_edits_drop_caches_and_keep_units_and_ids() {
+    let base = simple_base();
+    for tab in [false, true] {
+        let mut edited = export(&base);
+        if tab {
+            edited["styles"]["tabs"][0]["stops"] = json!([
+                {"position":{"unit":"char","value":1000},"align":"Left","leader":"NONE"}
+            ]);
+        } else {
+            edited["styles"]["para_shapes"][0]["indent"] = json!({"unit":"char","value":-750});
+        }
+        let out = roundtrip(&base, &edited);
+        assert_eq!(flags(&out.bytes), [false; 5]);
+        let reread = export(&out.bytes);
+        for key in ["para_shapes", "char_shapes", "tabs", "styles"] {
+            assert_eq!(reread["styles"][key], edited["styles"][key], "{key}");
+        }
+    }
+}
+
+fn replace_first_para_measure_switch(header: &str, payload: &str) -> String {
+    let para = header.find("<hh:paraPr ").unwrap();
+    let start = para + header[para..].find("<hp:switch>").unwrap();
+    let end = start + header[start..].find("</hp:switch>").unwrap() + "</hp:switch>".len();
+    format!("{}{}{}", &header[..start], payload, &header[end..])
+}
+
+// 이것을 실패시키는 것: U6 odd 절삭 또는 원본 ZIP 반환으로 저장 preflight 우회.
+#[test]
+fn w2_odd_line_spacing_cannot_escape_through_unchanged_zip() {
+    let base = edit_package(&simple_base(), "Contents/header.xml", |header| {
+        // Replace the margin/line spacing switch with a legacy direct physical spacing.
+        replace_first_para_measure_switch(
+            header,
+            r#"<hh:lineSpacing type="FIXED" value="2001" unit="HWPUNIT"/>"#,
+        )
+    });
+    let value = export(&base); // Legacy odd raw remains readable.
+    let error =
+        from_json(&value.to_string(), &FromJsonOptions::default().with_base(base.as_slice()))
+            .unwrap_err();
+    assert_eq!(error.code().as_str(), "ENCODE_FAILED");
+    assert!(error.to_string().contains("odd"), "{error}");
+    let section = hwpforge::ops::export_section(&base, &Default::default()).unwrap();
+    let error = hwpforge::ops::patch(
+        &base,
+        &hwpforge::ops::PatchOptions::default()
+            .with_patch(serde_json::to_string(&section.section).unwrap()),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("odd"), "{error}");
+}
+
+// 이것을 실패시키는 것: direct margin 정규화를 원본 ZIP no-op으로 우회.
+#[test]
+fn w2_direct_margin_noop_normalizes_instead_of_returning_original_zip() {
+    let base = edit_package(&simple_base(), "Contents/header.xml", |header| {
+        let margin = ["left", "right", "intent", "prev", "next"]
+            .map(|field| format!(r#"<hc:{field} value="-1499" unit="HWPUNIT"/>"#))
+            .join("");
+        replace_first_para_measure_switch(header, &format!("<hh:margin>{margin}</hh:margin>"))
+    });
+    let value = export(&base);
+    assert_eq!(value["styles"]["para_shapes"][0]["indent"], json!({"unit":"char","value":-750}));
+    let out = roundtrip(&base, &value);
+    assert_ne!(out.bytes, base);
+    assert_eq!(export(&out.bytes)["styles"]["para_shapes"], value["styles"]["para_shapes"]);
+    assert!(!HwpxDecoder::decode(&out.bytes)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| matches!(w, hwpforge::hwpx::DecodeWarning::ParagraphMeasureNormalized { .. })));
+    let section = hwpforge::ops::export_section(&base, &Default::default()).unwrap();
+    let patched = hwpforge::ops::patch(
+        &base,
+        &hwpforge::ops::PatchOptions::default()
+            .with_patch(serde_json::to_string(&section.section).unwrap()),
+    )
+    .unwrap();
+    assert_ne!(patched.bytes, base);
+    assert_eq!(export(&patched.bytes)["styles"]["para_shapes"], value["styles"]["para_shapes"]);
+    assert!(!HwpxDecoder::decode(&patched.bytes)
+        .unwrap()
+        .warnings
+        .iter()
+        .any(|w| matches!(w, hwpforge::hwpx::DecodeWarning::ParagraphMeasureNormalized { .. })));
+}
+
+#[test]
+fn w2_font_line_height_follows_source_id_through_json_reorder() {
+    let base = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/line-height-mixed.hwpx"
+    ))
+    .unwrap();
+    let mut value = export(&base);
+    let len = value["styles"]["para_shapes"].as_array().unwrap().len();
+    value["styles"]["para_shapes"].as_array_mut().unwrap().reverse();
+    // Core references are branded indices; wire style references remain original IDs.
+    fn rebind(value: &mut Value, len: usize) {
+        match value {
+            Value::Object(fields) => {
+                if let Some(id) = fields.get_mut("para_shape_id") {
+                    *id = json!(len - 1 - id.as_u64().unwrap() as usize);
+                }
+                for v in fields.values_mut() {
+                    rebind(v, len);
+                }
+            }
+            Value::Array(items) => {
+                for v in items {
+                    rebind(v, len);
+                }
+            }
+            _ => {}
+        }
+    }
+    rebind(&mut value["document"], len);
+    let out = roundtrip(&base, &value);
+    let reread = export(&out.bytes);
+    assert_eq!(reread["styles"]["header_fidelity"], value["styles"]["header_fidelity"]);
+    assert_eq!(reread["styles"]["para_shapes"], value["styles"]["para_shapes"]);
+}
+
+// 이것을 실패시키는 것: source_id 없는 복제본의 fontLineHeight를 0으로 출력하거나,
+// JSON에서 보존값을 누락하거나, 재배열 뒤 다른 정의의 값을 사용하는 것.
+#[test]
+fn w2fix1_font_line_height_clone_reorder_json_and_output_id() {
+    let base = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/line-height-mixed.hwpx"
+    ))
+    .unwrap();
+    for flag in [0, 1] {
+        let mut value = export(&base);
+        assert!(value["styles"]["header_fidelity"].get("font_line_height").is_none());
+        let shapes = value["styles"]["para_shapes"].as_array_mut().unwrap();
+        let mut cloned = shapes.iter().find(|p| p["font_line_height"] == flag).unwrap().clone();
+        if flag == 1 {
+            assert_eq!(cloned["source_id"], 20);
+        }
+        cloned["source_id"] = Value::Null;
+        shapes.push(cloned);
+        shapes.reverse();
+        // Use the clone, now at index 0, in a real paragraph. Existing style
+        // references remain wire IDs and are resolved independently of order.
+        value["document"]["sections"][0]["paragraphs"][0]["para_shape_id"] = json!(0);
+        let output = roundtrip(&base, &value);
+        let reread = export(&output.bytes);
+        let clone = &reread["styles"]["para_shapes"][0];
+        assert_eq!(clone["font_line_height"], flag);
+        let id = clone["source_id"].as_u64().unwrap();
+        assert_eq!(id, 22);
+        let header = package_header(&output.bytes);
+        let start = header.find(&format!("<hh:paraPr id=\"{id}\"")).unwrap();
+        let tag = &header[start..start + header[start..].find('>').unwrap()];
+        assert!(tag.contains(&format!("fontLineHeight=\"{flag}\"")), "{tag}");
+        assert!(xml(&output.bytes).contains(&format!("paraPrIDRef=\"{id}\"")));
+        assert_eq!(reread["document"]["sections"][0]["paragraphs"][0]["para_shape_id"], 0);
+        let again = roundtrip(&output.bytes, &reread);
+        assert_eq!(again.bytes, output.bytes);
+    }
+}
+
+fn package_header(bytes: &[u8]) -> String {
+    let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut header = String::new();
+    zip.by_name("Contents/header.xml").unwrap().read_to_string(&mut header).unwrap();
+    header
+}
+
+/// Both save paths must write the canonical switch form instead of returning
+/// the original ZIP, whether or not the decoder reported the input form
+/// (`reported` = a `ParagraphMeasureNormalized` warning is expected).
+fn assert_measure_normalization(base: &[u8], canonical: &[u8], reported: bool) {
+    let decoded = HwpxDecoder::decode(base).unwrap();
+    assert_eq!(
+        decoded
+            .warnings
+            .iter()
+            .any(|w| matches!(w, hwpforge::hwpx::DecodeWarning::ParagraphMeasureNormalized { .. })),
+        reported
+    );
+    let expected = package_header(canonical);
+    let output = roundtrip(base, &export(base));
+    let section = hwpforge::ops::export_section(base, &Default::default()).unwrap();
+    let patched = hwpforge::ops::patch(
+        base,
+        &hwpforge::ops::PatchOptions::default()
+            .with_patch(serde_json::to_string(&section.section).unwrap()),
+    )
+    .unwrap();
+    for bytes in [&output.bytes, &patched.bytes] {
+        assert_ne!(bytes, base);
+        assert_eq!(package_header(bytes), expected);
+        assert_eq!(roundtrip(bytes, &export(bytes)).bytes, *bytes);
+        let section = hwpforge::ops::export_section(bytes, &Default::default()).unwrap();
+        assert_eq!(
+            hwpforge::ops::patch(
+                bytes,
+                &hwpforge::ops::PatchOptions::default()
+                    .with_patch(serde_json::to_string(&section.section).unwrap())
+            )
+            .unwrap()
+            .bytes,
+            *bytes
+        );
+    }
+}
+
+// 이것을 실패시키는 것: case-only CHAR 탭을 문서 또는 section에서
+// 원본 ZIP으로 반환하거나, 정상 default pos=2001을 생성하지 않는 것.
+#[test]
+fn w2fix1_case_only_char_tab_normalizes_both_save_paths() {
+    let mut value = export(&simple_base());
+    value["styles"]["tabs"].as_array_mut().unwrap().push(json!({
+        "id": 99, "auto_tab_left": false, "auto_tab_right": false,
+        "stops": [{"position": {"unit":"char", "value":1000}, "align":"Left", "leader":"NONE"}]
+    }));
+    value["styles"]["para_shapes"][0]["tab_pr_id_ref"] = json!(99);
+    let canonical = encode_fixture(&value);
+    let base = edit_package(&canonical, "Contents/header.xml", |header| {
+        let start = header.find("<hh:tabPr id=\"99\"").unwrap();
+        let default = start + header[start..].find("<hp:default>").unwrap();
+        let end =
+            default + header[default..].find("</hp:default>").unwrap() + "</hp:default>".len();
+        assert!(header[default..end].contains("pos=\"2001\""));
+        format!("{}{}", &header[..default], &header[end..])
+    });
+    assert_measure_normalization(&base, &canonical, true);
+}
+
+// 이것을 실패시키는 것: 직접 FIXED=2000 입력을 원본 ZIP 그대로 반환하거나,
+// case FIXED=1000 / default FIXED=2000 생성을 문서 또는 section에서 생략하는 것.
+#[test]
+fn w2fix1_direct_fixed_spacing_normalizes_both_save_paths() {
+    let mut value = export(&simple_base());
+    value["styles"]["para_shapes"][0]["line_spacing"] = json!(2000);
+    value["styles"]["para_shapes"][0]["line_spacing_type"] = json!("Fixed");
+    let canonical = encode_fixture(&value);
+    let base = edit_package(&canonical, "Contents/header.xml", |header| {
+        let start = header.find("<hh:paraPr ").unwrap();
+        let end = start + header[start..].find("</hh:paraPr>").unwrap();
+        let mut para = header[start..end].to_string();
+        for spacing in [1000, 2000] {
+            let tag =
+                format!("<hh:lineSpacing type=\"FIXED\" value=\"{spacing}\" unit=\"HWPUNIT\"/>");
+            assert!(para.contains(&tag));
+            para = para.replace(&tag, "");
+        }
+        format!(
+            "{}{}<hh:lineSpacing type=\"FIXED\" value=\"2000\" unit=\"HWPUNIT\"/>{}",
+            &header[..start],
+            para,
+            &header[end..]
+        )
+    });
+    assert_measure_normalization(&base, &canonical, true);
+}
+
+// 이것을 실패시키는 것: 저장 경로가 정규화 여부를 디코드 경고로 판단해,
+// 경고 없이 lineSpacing 이 빠진 입력을 원본 ZIP 그대로 반환하는 것.
+#[test]
+fn w2_unreported_missing_line_spacing_normalizes_both_save_paths() {
+    let canonical = encode_fixture(&export(&simple_base()));
+    let base = edit_package(&canonical, "Contents/header.xml", |header| {
+        let start = header.find("<hh:paraPr ").unwrap();
+        let end = start + header[start..].find("</hh:paraPr>").unwrap();
+        let tag = r#"<hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>"#;
+        let para = &header[start..end];
+        assert_eq!(para.matches(tag).count(), 2, "{para}");
+        format!("{}{}{}", &header[..start], para.replace(tag, ""), &header[end..])
+    });
+    assert_measure_normalization(&base, &canonical, false);
+}
+
+#[test]
+fn w2_field_inventory_and_protection_survive_measure_edit() {
+    use hwpforge::core::field_inventory::FieldInventory;
+    let base = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/field-mix.hwpx"
+    ))
+    .unwrap();
+    let decoded = HwpxDecoder::decode(&base).unwrap();
+    let before = FieldInventory::from_sections(decoded.document.sections());
+    assert!(!before.fields().is_empty());
+    let mut value = export(&base);
+    value["styles"]["para_shapes"][0]["margin_left"] = json!({"unit":"char","value":250});
+    let output = roundtrip(&base, &value);
+    let reread = HwpxDecoder::decode(&output.bytes).unwrap();
+    let after = FieldInventory::from_sections(reread.document.sections());
+    assert_eq!(before.fields().len(), after.fields().len());
+    assert_eq!(before.diagnostics(), after.diagnostics());
+    for (a, b) in before.fields().iter().zip(after.fields()) {
+        assert_eq!(a.current(), b.current());
+    }
+    FieldInventory::visit_flows(decoded.document.sections(), |section, paragraphs, path| {
+        for i in 0..paragraphs.len() {
+            assert_eq!(
+                before.protects_paragraph(section, path, i),
+                after.protects_paragraph(section, path, i)
+            );
+        }
+    });
+}
+
+#[test]
+fn w2_missing_default_style_cannot_authorize_cache_reuse() {
+    let mut value = export(&simple_base());
+    value["styles"]["styles"] = json!([value["styles"]["styles"][7]]);
+    value["styles"]["styles"][0]["next_style_id_ref"] = json!(7);
+    for paragraph in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
+        paragraph["style_id"] = json!(0); // Branded index 0 now resolves to wire style 7.
+    }
+    let base = encode_fixture(&value);
+    let out = roundtrip(&base, &export(&base));
+    assert_eq!(flags(&out.bytes), [false; 5]);
+    assert!(out.warnings.iter().any(|w| w.info().code == "LAYOUT_CACHE_DROPPED"));
+}
+
+#[test]
+fn w2_legacy_margin_migration_does_not_claim_base_cache_identity() {
+    let base = simple_base();
+    let mut legacy = export(&base);
+    legacy.as_object_mut().unwrap().remove("format_version");
+    for para in legacy["styles"]["para_shapes"].as_array_mut().unwrap() {
+        for key in ["margin_left", "margin_right", "indent", "spacing_before", "spacing_after"] {
+            let measure = &para[key];
+            let raw = measure["value"].as_i64().unwrap() * 2 + i64::from(measure["unit"] == "char");
+            para[key] = json!(raw);
+        }
+        para.as_object_mut().unwrap().remove("source_id");
+    }
+    for shape in legacy["styles"]["char_shapes"].as_array_mut().unwrap() {
+        shape.as_object_mut().unwrap().remove("source_id");
+    }
+    let out = roundtrip(&base, &legacy);
+    assert_eq!(flags(&out.bytes), [false; 5]);
+    for code in ["LEGACY_PARAGRAPH_MEASURES", "LAYOUT_CACHE_DROPPED"] {
+        assert!(out.warnings.iter().any(|w| w.info().code == code), "{code}");
+    }
+    let section = hwpforge::ops::export_section(&base, &Default::default()).unwrap();
+    let mut section = serde_json::to_value(section.section).unwrap();
+    section.as_object_mut().unwrap().remove("format_version");
+    section["styles"] = legacy["styles"].clone();
+    let patched = hwpforge::ops::patch(
+        &base,
+        &hwpforge::ops::PatchOptions::default().with_patch(section.to_string()),
+    )
+    .unwrap();
+    assert_eq!(flags(&patched.bytes), [false; 5]);
+    for code in ["LEGACY_PARAGRAPH_MEASURES", "LAYOUT_CACHE_DROPPED"] {
+        assert!(patched.warnings.iter().any(|w| w.info().code == code), "{code}");
+    }
+}

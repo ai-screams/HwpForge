@@ -6,6 +6,21 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+// Core uses branded positions; resolve raw style references through the shared registry.
+pub(super) fn cache_tree(store: &crate::HwpxStyleStore) -> crate::HwpxResult<Value> {
+    let refs = crate::header_references::HeaderReferences::build(store)?;
+    let mut value = super::tree(store)?;
+    for (i, style) in store.iter_styles().enumerate() {
+        value["styles"][i]["char_pr_id_ref"] =
+            serde_json::json!(refs.char_index(style.char_pr_id_ref)?.get());
+        if style.style_type == "PARA" {
+            value["styles"][i]["para_pr_id_ref"] =
+                serde_json::json!(refs.para_index(style.para_pr_id_ref)?.get());
+        }
+    }
+    Ok(value)
+}
+
 // Dependency order: a definition only refers to an earlier kind.
 const KINDS: [&str; 7] =
     ["border_fills", "tabs", "numberings", "bullets", "char_shapes", "para_shapes", "styles"];
@@ -38,8 +53,8 @@ impl<'a> Index<'a> {
             let mut items = HashMap::new();
             for (i, value) in store[kind].as_array().into_iter().flatten().enumerate() {
                 work.charge();
-                // Only char/para shapes have positional IDs in the typed store.
-                let id = if matches!(kind, "char_shapes" | "para_shapes") {
+                // Core char/para/style references are branded positions.
+                let id = if matches!(kind, "char_shapes" | "para_shapes" | "styles") {
                     Some(i as u64)
                 } else {
                     value["id"].as_u64()
@@ -233,18 +248,19 @@ mod tests {
         serde_json::to_value(crate::HwpxDecoder::decode(&bytes).unwrap().style_store).unwrap()
     }
 
-    // 이것을 실패시키는 것: styles를 명시적 ID 대신 배열 인덱스로 조회하기.
+    // 이것을 실패시키는 것: Core 스타일 인덱스를 원본 wire ID로 오인하기.
     #[test]
     fn sparse_style_ids_and_reordering_resolve_dependencies() {
         let mut a = store();
         a["styles"] = json!([a["styles"][0], a["styles"][7]]);
         let mut b = a.clone();
         b["styles"].as_array_mut().unwrap().reverse();
-        assert!(Styles::new(&a, &b).same("styles", 7));
+        assert!(Styles::new(&a, &a).same("styles", 1));
+        assert!(!Styles::new(&a, &b).same("styles", 1));
         for key in ["para_pr_id_ref", "char_pr_id_ref"] {
-            let mut edited = b.clone();
-            edited["styles"][0][key] = json!(if edited["styles"][0][key] == 0 { 1 } else { 0 });
-            assert!(!Styles::new(&a, &edited).same("styles", 7), "{key}");
+            let mut edited = a.clone();
+            edited["styles"][1][key] = json!(if edited["styles"][1][key] == 0 { 1 } else { 0 });
+            assert!(!Styles::new(&a, &edited).same("styles", 1), "{key}");
         }
     }
 

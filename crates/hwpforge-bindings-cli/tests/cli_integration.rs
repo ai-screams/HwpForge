@@ -6599,3 +6599,28 @@ fn audit_hwp5_raw_records_detect_nested_content_loss() {
         }
     }
 }
+
+#[test]
+fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
+    let dir = test_tmp();
+    let input = dir.join("legacy.json");
+    let output = dir.join("out.hwpx");
+    std::fs::write(&input, r#"{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}"#).unwrap();
+    let out = Command::new(hwpforge_bin())
+        .arg("--json")
+        .arg("from-json")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains("LEGACY_JSON_TABS"), "{text}");
+    assert!(text.contains("원래 단위와 case/default 척도를 복구할 수 없어"), "{text}");
+    assert!(text.contains("$.styles.tabs[0].stops[0].position"), "{text}");
+    assert!(text.contains("1건"), "{text}");
+    assert!(text.contains("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."));
+    assert!(!output.exists());
+}

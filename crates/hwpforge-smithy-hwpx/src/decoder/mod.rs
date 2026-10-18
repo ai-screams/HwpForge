@@ -141,6 +141,10 @@ impl HwpxEditBase {
 }
 
 impl HwpxDocument {
+    pub(crate) fn requires_measure_normalization(&self) -> bool {
+        self.source_basis.as_ref().is_none_or(|basis| basis.requires_measure_normalization)
+    }
+
     /// Decoder-owned original locations for a section's Core nodes.
     pub fn source_map(&self, section: usize) -> Option<&source_map::SourceMap> {
         self.source_maps.get(section)
@@ -719,6 +723,8 @@ pub struct HwpxDecoder;
 /// Decoder-only context: callers cannot construct this type or derive it from a claim.
 #[derive(Debug)]
 pub(crate) struct SourceBasis {
+    // Header-read fact belongs to the original package, not editable JSON styles.
+    requires_measure_normalization: bool,
     package: std::sync::Arc<[u8]>,
     origins: std::collections::HashMap<
         hwpforge_core::node_path::CorePath,
@@ -1040,6 +1046,7 @@ impl HwpxDecoder {
             package.clone(),
         );
         let source_basis = std::sync::Arc::new(SourceBasis {
+            requires_measure_normalization: header_result.requires_measure_normalization,
             package,
             origins: origins.into_iter().map(|origin| (origin.path().clone(), origin)).collect(),
         });
@@ -1389,7 +1396,11 @@ mod tests {
             } else {
                 Arc::from(altered.write().unwrap())
             };
-            let stale = Arc::new(SourceBasis { package, origins: basis.origins.clone() });
+            let stale = Arc::new(SourceBasis {
+                package,
+                origins: basis.origins.clone(),
+                requires_measure_normalization: basis.requires_measure_normalization,
+            });
             base.source_basis = Some(stale.clone());
             let mut submitted = base.document.clone();
             submitted.set_format_source(stale);

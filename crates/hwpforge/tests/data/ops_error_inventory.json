@@ -55,6 +55,12 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "LegacyJsonTabs",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "Zip",
           "shape": "tuple",
           "cfg": [],
@@ -1224,6 +1230,12 @@
       "non_exhaustive": true,
       "wrapped": true,
       "variants": [
+        {
+          "name": "ParagraphMeasureLost",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
         {
           "name": "MergedCellsFlattened",
           "shape": "struct",

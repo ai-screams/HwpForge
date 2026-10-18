@@ -106,6 +106,7 @@ impl DefaultStyleEntry {
 /// files for 한글 2020 or earlier ([`Classic`][HancomStyleSet::Classic])
 /// or 한글 2025+ ([`Latest`][HancomStyleSet::Latest]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum HancomStyleSet {
     /// 18 built-in styles — 한글 2014 through 2020.

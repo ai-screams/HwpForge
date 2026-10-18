@@ -8,7 +8,7 @@ use crate::error::{CoreError, CoreResult};
 /// An exact character count on the 1/500 ch grid, independent of font size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
-pub struct CharCount(i32);
+pub struct CharCount(#[schemars(range(min = -2147483648i64, max = 2147483647))] i32);
 
 impl CharCount {
     /// Creates a count from signed 1/500 ch ticks.
@@ -55,10 +55,10 @@ impl CharCount {
 
 /// A paragraph margin or tab position. Equality includes the unit, even at zero.
 ///
-/// The temporary W1 Serde representation is `{ "unit": "hwpunit" | "char",
-/// "value": integer }`. Exchange versioning is handled separately in W2.
+/// The v2 exchange representation is `{ "unit": "hwpunit" | "char",
+/// "value": integer }`. The exchange envelope supplies `format_version: 2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "unit", content = "value")]
+#[serde(tag = "unit", content = "value", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ParagraphMeasure {
     /// Absolute length in 1/100 pt units.

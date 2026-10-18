@@ -56,6 +56,7 @@ const ERROR_MAPPING: Table = &[
     (
         "HwpxError",
         &[
+            ("LegacyJsonTabs", "DECODE_FAILED"),
             ("Zip", "DECODE_FAILED"),
             ("InvalidMimetype", "DECODE_FAILED"),
             ("MissingFile", "DECODE_FAILED"),
@@ -315,6 +316,7 @@ const WARNING_MAPPING: Table = &[
     (
         "MdWarning",
         &[
+            ("ParagraphMeasureLost", "PARAGRAPH_MEASURE_LOST"),
             ("MergedCellsFlattened", "TABLE_MERGE_FLATTENED"),
             ("ImageEmbedSkipped", "IMAGE_EMBED_SKIPPED"),
             ("ContainerTooDeep", "CONTAINER_TOO_DEEP"),
@@ -345,6 +347,13 @@ fn io_error() -> std::io::Error {
 
 fn hwpx_errors() -> Vec<(&'static str, HwpxError)> {
     vec![
+        (
+            "LegacyJsonTabs",
+            HwpxError::LegacyJsonTabs {
+                count: 1,
+                paths: "$.styles.tabs[0].stops[0].position".into(),
+            },
+        ),
         ("Zip", HwpxError::Zip("bad central directory".into())),
         ("InvalidMimetype", HwpxError::InvalidMimetype { actual: "text/plain".into() }),
         ("MissingFile", HwpxError::MissingFile { path: "Contents/header.xml".into() }),
@@ -887,6 +896,16 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "MdWarning",
         vec![
+            (
+                "ParagraphMeasureLost",
+                OpsWarning::Md(MdWarning::ParagraphMeasureLost {
+                    definition: 0,
+                    field: "indent".into(),
+                    measure: hwpforge::core::ParagraphMeasure::from_hwp_unit(
+                        hwpforge::foundation::HwpUnit::ZERO,
+                    ),
+                }),
+            ),
             (
                 "MergedCellsFlattened",
                 OpsWarning::Md(MdWarning::MergedCellsFlattened { merged_cells: 2 }),

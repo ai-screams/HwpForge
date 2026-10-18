@@ -205,6 +205,8 @@ impl HwpxPatcher {
         }
 
         let mut decoded = HwpxDecoder::decode(base_bytes)?;
+        crate::paragraph_measure::validate_measure_output(&decoded.style_store)?;
+        let normalize_measures = decoded.requires_measure_normalization();
         let decode_warnings = decoded.warnings.clone();
         let mut replacement = replacement.clone();
         let mut authored = decoded.document.sections().to_vec();
@@ -281,7 +283,8 @@ impl HwpxPatcher {
         let sections = decoded.document.sections_mut();
         sections[section_idx] = replacement.clone();
         HwpxDecoder::verify_document_source(&decoded.document)?;
-        let _: hwpforge_core::document::Document<Validated> = decoded.document.validate()?;
+        let validated: hwpforge_core::document::Document<Validated> =
+            decoded.document.validate()?;
 
         let base_section_xml = raw_package.read_text_entry(&expected_section_path)?;
         let base_hash = sha256_hex(base_section_xml.as_bytes());
@@ -405,6 +408,28 @@ impl HwpxPatcher {
                 .extend(flow.stale_caches(changed).into_iter().map(|range| (range, String::new())));
         }
         let patched_section_xml = crate::cache_flow::splice(&base_section_xml, replacements)?;
+
+        // The text-only proof still applies, but an unnormalised header cannot
+        // escape through raw ZIP copying. Reuse the ordinary output/cache planner.
+        if normalize_measures
+            || crate::header_references::HeaderReferences::build(&decoded.style_store)?
+                .style_index(0)
+                .is_err()
+        {
+            let outcome = crate::HwpxEncoder::encode_with_base(
+                base_bytes,
+                &validated,
+                &decoded.style_store,
+                &decoded.image_store,
+                crate::EncodeOptions::default(),
+            )?;
+            encode_warnings.extend(outcome.warnings);
+            return Ok(crate::diagnostics::WithCodecWarnings::new(
+                outcome.bytes,
+                decode_warnings,
+                encode_warnings,
+            ));
+        }
 
         if patched_section_xml == base_section_xml {
             return Ok(crate::diagnostics::WithCodecWarnings::new(

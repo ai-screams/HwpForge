@@ -745,15 +745,7 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
     let items: Vec<HxParaPr> = store
         .iter_para_shapes()
         .enumerate()
-        .map(|(idx, ps)| {
-            let mut para = build_para_pr(refs.para_ids[idx], ps);
-            para.font_line_height = ps
-                .source_id
-                .and_then(|id| store.header_fidelity.font_line_height.get(&(id as usize)))
-                .copied()
-                .unwrap_or(0);
-            para
-        })
+        .map(|(idx, ps)| build_para_pr(refs.para_ids[idx], ps))
         .collect();
     let item_cnt = items.len() as u32;
     HxParaProperties { item_cnt, items }
@@ -783,7 +775,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         id,
         tab_pr_id_ref: ps.tab_pr_id_ref,
         condense: ps.condense,
-        font_line_height: 0,
+        font_line_height: ps.font_line_height,
         snap_to_grid: Some(u32::from(ps.snap_to_grid)),
         suppress_line_numbers: 0,
         checked: u32::from(ps.checked),
@@ -813,7 +805,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
 ///
 /// The case carries semantic values and units; default carries `2 * value + bit`.
 /// Physical line spacing uses its separate legacy ×2 contract.
-fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
+pub(crate) fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
     HxSwitch {
         cases: vec![HxSwitchCase {
             required_namespace: "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar".into(),

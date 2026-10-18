@@ -32,6 +32,7 @@ use hwpforge_core::ParagraphMeasure;
 /// Result of parsing `header.xml`.
 #[derive(Debug)]
 pub struct HeaderParseResult {
+    pub(crate) requires_measure_normalization: bool,
     /// Style information parsed from `header.xml`.
     pub style_store: HwpxStyleStore,
     /// Starting auto-numbering values from `<hh:beginNum>`, if present.
@@ -112,9 +113,11 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
             _ => {}
         }
     }
+    let mut normalize_measures = false;
     if let Some(ref_list) = &head.ref_list {
         populate_store_from_ref_list(&mut store, ref_list, &mut warnings)?;
         store.header_fidelity.capture(ref_list);
+        normalize_measures = requires_measure_normalization(ref_list, &store);
         warnings.extend(per_language_scalar_losses(ref_list));
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
@@ -129,7 +132,88 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         memo_ids,
         track_change_ids,
         track_change_author_ids,
+        requires_measure_normalization: normalize_measures,
     })
+}
+
+/// Compare the parsed measure payloads with the ordinary encoder's payloads.
+/// Diagnostics are deliberately not an input: the decision rests on the payloads,
+/// so it holds whether or not a form was reported. Output-invalid
+/// values (e.g. odd physical line spacing) remain readable; save preflight rejects them.
+fn requires_measure_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bool {
+    if crate::paragraph_measure::validate_measure_output(store).is_err() {
+        return true;
+    }
+    if let Some(paras) = &refs.para_properties {
+        for (raw, shape) in paras.items.iter().zip(store.iter_para_shapes()) {
+            let expected = crate::encoder::header::build_margin_switch(shape);
+            // Ignore switches for unrelated paragraph properties. Margin and
+            // spacing may occupy separate switches; compare their payloads.
+            let case = &expected.cases[0];
+            let default = expected.default.as_ref().unwrap();
+            let margin_matches = select_measure_branch(raw, false)
+                .expect("decoded margin branch")
+                .is_some_and(|(sw, supported)| {
+                    supported
+                        && sw
+                            .cases
+                            .iter()
+                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                            .unwrap()
+                            .margin
+                            == case.margin
+                        && sw.default.as_ref().and_then(|d| d.margin.as_ref())
+                            == default.margin.as_ref()
+                });
+            let line_matches = select_measure_branch(raw, true)
+                .expect("decoded spacing branch")
+                .is_some_and(|(sw, supported)| {
+                    supported
+                        && sw
+                            .cases
+                            .iter()
+                            .find(|c| c.required_namespace == MEASURE_NAMESPACE)
+                            .unwrap()
+                            .line_spacing
+                            == case.line_spacing
+                        && sw.default.as_ref().and_then(|d| d.line_spacing.as_ref())
+                            == default.line_spacing.as_ref()
+                });
+            if !margin_matches || !line_matches {
+                return true;
+            }
+        }
+    }
+    if let Some(tabs) = &refs.tab_properties {
+        for (raw, tab) in tabs.items.iter().zip(store.iter_tabs()) {
+            if tab.stops.is_empty() {
+                if !raw.switches.is_empty() {
+                    return true;
+                }
+                continue;
+            }
+            let items = |default| {
+                tab.stops
+                    .iter()
+                    .map(|stop| {
+                        crate::encoder::header_tabs::build_tab_item(stop, default)
+                            .expect("validated measure output")
+                    })
+                    .collect()
+            };
+            let expected = crate::schema::header::HxTabSwitch {
+                cases: vec![crate::schema::header::HxTabSwitchCase {
+                    required_namespace: MEASURE_NAMESPACE.into(),
+                    items: items(false),
+                }],
+                default: Some(crate::schema::header::HxTabSwitchDefault { items: items(true) }),
+            };
+            if raw.switches != [expected] {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A `paraPr` border offset outside the HWPUNIT range: the style store
@@ -881,6 +965,7 @@ fn convert_para_pr(
 
     Ok(HwpxParaShape {
         source_id: Some(pp.id),
+        font_line_height: pp.font_line_height,
         alignment,
         margin_left,
         margin_right,

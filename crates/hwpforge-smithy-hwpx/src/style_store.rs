@@ -34,6 +34,7 @@ use crate::error::{HwpxError, HwpxResult};
 
 /// A resolved font from `<hh:fontface>` → `<hh:font>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFont {
     /// Original `id` attribute from XML.
@@ -73,6 +74,7 @@ impl HwpxFont {
 
 /// Font kind of `<hh:font type>` / `<hh:substFont type>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub enum HwpxFontType {
     /// TrueType font (`TTF`).
@@ -102,6 +104,7 @@ impl HwpxFontType {
 
 /// A substitute font (`<hh:substFont face type>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxSubstFont {
     /// Font kind. `None` = unknown; the encoder writes `TTF`.
@@ -121,6 +124,7 @@ impl HwpxSubstFont {
 /// A font's classification (`<hh:typeInfo>`): the family type and the eight
 /// PANOSE-like numbers, as the wire carries them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFontTypeInfo {
     /// Family type (`FCAT_UNKNOWN`, `FCAT_MYUNGJO`, `FCAT_GOTHIC` …).
@@ -144,6 +148,7 @@ impl HwpxFontTypeInfo {
 /// Each [`FontIndex`] carries a language-local wire ID, resolved by
 /// `(language, font.id)`, never a position in the combined font vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFontRef {
     /// Hangul (한글) font index.
@@ -183,6 +188,7 @@ impl Default for HwpxFontRef {
 ///
 /// All raw XML strings have been converted to Foundation types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxCharShape {
     /// Original wire definition ID; absent for newly created definitions.
@@ -285,6 +291,7 @@ impl Default for HwpxCharShape {
 /// properties. This enables full roundtrip of style names like "바탕글",
 /// "본문", etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxStyle {
     /// Style ID (from `id` attribute).
@@ -341,11 +348,16 @@ impl HwpxStyle {
 
 /// Resolved paragraph properties from `<hh:paraPr>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxParaShape {
     /// Original wire definition ID; absent for newly created definitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_id: Option<u32>,
+    // Header fidelity belongs to the definition: Clone and JSON must carry it
+    // even when a duplicate clears source_id for fresh output ID assignment.
+    #[serde(default)]
+    pub(crate) font_line_height: u32,
     /// Horizontal alignment.
     pub alignment: Alignment,
     /// Left indent (from `<hc:left value="..."/>`).
@@ -359,6 +371,7 @@ pub struct HwpxParaShape {
     /// Space after paragraph (from `<hc:next value="..."/>`).
     pub spacing_after: ParagraphMeasure,
     /// Line spacing value.
+    #[cfg_attr(feature = "schemars", schemars(range(min = 0)))]
     pub line_spacing: i32,
     /// Line spacing type.
     pub line_spacing_type: LineSpacingType,
@@ -436,6 +449,7 @@ impl Default for HwpxParaShape {
     fn default() -> Self {
         Self {
             source_id: None,
+            font_line_height: 0,
             alignment: Alignment::Left,
             margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
             margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
@@ -474,6 +488,7 @@ impl Default for HwpxParaShape {
 /// Stores border line styles for all 4 sides plus diagonal borders,
 /// 3D/shadow flags, and optional fill configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxBorderFill {
     /// Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).
@@ -521,6 +536,7 @@ pub struct HwpxBorderFill {
 
 /// Resolved diagonal border metadata from `<hh:slash>` / `<hh:backSlash>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxDiagonalLine {
     /// Border type string (for example, `"NONE"` or `"CENTER"`).
     pub border_type: String,
@@ -538,6 +554,7 @@ impl Default for HwpxDiagonalLine {
 
 /// A single border line configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxBorderLine {
     /// Border line type (e.g. `"NONE"`, `"SOLID"`).
     pub line_type: String,
@@ -555,6 +572,7 @@ impl Default for HwpxBorderLine {
 
 /// Fill brush configuration for a [`HwpxBorderFill`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum HwpxFill {
     /// Solid or hatch fill via `<hc:winBrush>`.
     WinBrush {
@@ -581,6 +599,7 @@ pub(crate) enum ActiveBorderFillBrush<'a> {
 
 /// Gradient fill payload for table border fills.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxGradientFill {
     /// Gradient type.
     pub gradient_type: GradientType,
@@ -602,6 +621,7 @@ pub struct HwpxGradientFill {
 
 /// Image fill payload for table border fills.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxImageFill {
     /// HWPX image fill mode string (for example, `TOTAL`).
     pub mode: String,
@@ -1162,6 +1182,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 /// assert!(store.char_shape(CharShapeIndex::new(0)).is_err());
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct HwpxStyleStore {
     /// The 한글 version style set used when injecting default styles.
     style_set: HancomStyleSet,
@@ -1186,20 +1207,12 @@ pub(crate) struct RegistryStoreBuild {
 
 impl HwpxStyleStore {
     /// Retains the HWP5 font-line-height flag for an imported paragraph definition.
-    /// The definition must carry its original `source_id`.
     pub fn set_para_font_line_height(
         &mut self,
         index: ParaShapeIndex,
         value: u32,
     ) -> HwpxResult<()> {
-        let id = self.para_shape(index)?.source_id.ok_or_else(|| HwpxError::InvalidStructure {
-            detail: "fontLineHeight import requires the paragraph's source_id".into(),
-        })?;
-        if value == 0 {
-            self.header_fidelity.font_line_height.remove(&(id as usize));
-        } else {
-            self.header_fidelity.font_line_height.insert(id as usize, value);
-        }
+        self.para_shape_mut(index)?.font_line_height = value;
         Ok(())
     }
 

@@ -15,7 +15,7 @@ use hwpforge_foundation::UnderlineType;
 use super::guard::{Block, Source, TOO_DEEP};
 use super::list_format::{format_list_continuation, format_list_item};
 use super::markup::{Cell, Html, Md};
-use super::Part;
+use super::{MdWarning, Part};
 use crate::eqn::{render_equation, EqnRender};
 use crate::internal_styles::parse_list_continuation_style_name;
 
@@ -347,6 +347,32 @@ fn emit_picture_html(
 pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
     let mut blocks: Vec<Block> = Vec::new();
     let mut st = State::new();
+    let mut measured = std::collections::BTreeSet::new();
+    hwpforge_core::field_inventory::FieldInventory::visit_flows(
+        document.sections(),
+        |_, paragraphs, _| {
+            for paragraph in paragraphs {
+                let id = paragraph.para_shape_id;
+                if !measured.insert(id.get()) {
+                    continue;
+                }
+                for (field, measure) in [
+                    ("margin_left", styles.para_indent_left(id)),
+                    ("indent", styles.para_indent_first_line(id)),
+                ] {
+                    if let Some(measure) =
+                        measure.filter(|m| m.as_hwp_unit().is_none_or(|v| v.as_i32() != 0))
+                    {
+                        st.warnings.push(MdWarning::ParagraphMeasureLost {
+                            definition: id.get(),
+                            field: field.into(),
+                            measure,
+                        });
+                    }
+                }
+            }
+        },
+    );
     // The plain-text fallback of a block: its paragraphs' raw text.
     let source = |texts: Vec<String>, at: Vec<(usize, usize)>| {
         Some(Source { prefix: String::new(), texts, at })

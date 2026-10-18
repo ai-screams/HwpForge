@@ -373,7 +373,9 @@
     },
     "HwpUnit": {
       "type": "integer",
-      "format": "int32"
+      "format": "int32",
+      "minimum": -100000000,
+      "maximum": 100000000
     },
     "Table": {
       "description": "A table: a sequence of rows, with optional width and caption.\n\n# Design Decision\n\nNo `border: Option<BorderStyle>` in Phase 1. Border styling is a\nBlueprint concern (Phase 2). Core tables are purely structural.\n\n# Examples\n\n```\nuse hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet table = Table::new(vec![TableRow::new(vec![TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(100.0).unwrap(),\n)])])\n.with_page_break(TablePageBreak::Cell);\nassert_eq!(table.row_count(), 1);\n```",

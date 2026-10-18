@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::schema::header::{HxBulletParaHead, HxRefList};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct HeaderFidelity {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub font_line_height: BTreeMap<usize, u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub numbering: BTreeMap<u32, BTreeMap<u32, HeadMetrics>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -18,6 +17,7 @@ pub(crate) struct HeaderFidelity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct HeadMetrics {
     pub align: String,
     pub use_inst_width: u32,
@@ -54,17 +54,10 @@ impl HeadMetrics {
 
 impl HeaderFidelity {
     pub fn is_empty(&self) -> bool {
-        self.font_line_height.is_empty() && self.numbering.is_empty() && self.bullet.is_empty()
+        self.numbering.is_empty() && self.bullet.is_empty()
     }
 
     pub fn capture(&mut self, refs: &HxRefList) {
-        if let Some(paras) = &refs.para_properties {
-            for para in &paras.items {
-                if para.font_line_height != 0 {
-                    self.font_line_height.insert(para.id as usize, para.font_line_height);
-                }
-            }
-        }
         // Keys follow explicit numbering/bullet ids and wire level, not list
         // order, so callers may reorder definitions without moving metrics.
         macro_rules! capture_heads {

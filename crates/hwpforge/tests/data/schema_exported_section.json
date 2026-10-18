@@ -4,6 +4,13 @@
   "description": "Section-only export for targeted editing.\n\nProduced by `to-json --section N` and consumed by `patch`.",
   "type": "object",
   "properties": {
+    "format_version": {
+      "description": "Exchange format version, independent of section preservation metadata.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "const": 2
+    },
     "section_index": {
       "description": "Which section index this was extracted from.",
       "type": "integer",
@@ -13,6 +20,17 @@
     "section": {
       "description": "The section data.",
       "$ref": "#/$defs/Section"
+    },
+    "styles": {
+      "description": "Optional style information.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HwpxStyleStore"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "preservation": {
       "description": "Optional preservation metadata for byte-preserving section patching.",
@@ -27,6 +45,7 @@
     }
   },
   "required": [
+    "format_version",
     "section_index",
     "section"
   ],
@@ -386,7 +405,9 @@
     },
     "HwpUnit": {
       "type": "integer",
-      "format": "int32"
+      "format": "int32",
+      "minimum": -100000000,
+      "maximum": 100000000
     },
     "Table": {
       "description": "A table: a sequence of rows, with optional width and caption.\n\n# Design Decision\n\nNo `border: Option<BorderStyle>` in Phase 1. Border styling is a\nBlueprint concern (Phase 2). Core tables are purely structural.\n\n# Examples\n\n```\nuse hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet table = Table::new(vec![TableRow::new(vec![TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(100.0).unwrap(),\n)])])\n.with_page_break(TablePageBreak::Cell);\nassert_eq!(table.row_count(), 1);\n```",
@@ -5322,6 +5343,1364 @@
     },
     "TextDirection": {
       "type": "string"
+    },
+    "HwpxStyleStore": {
+      "description": "HWPX-specific style storage populated from `header.xml`.\n\nUnlike Blueprint's `StyleRegistry`, this has no inheritance or\ntemplate merging — it holds exactly what was parsed from the file.\n\n# Index Safety\n\nAll accessors return `HwpxResult<&T>` to guard against invalid\nindices from malformed HWPX files.\n\n# Examples\n\n```\nuse hwpforge_smithy_hwpx::HwpxStyleStore;\nuse hwpforge_foundation::CharShapeIndex;\n\nlet store = HwpxStyleStore::new();\nassert!(store.char_shape(CharShapeIndex::new(0)).is_err());\n```",
+      "type": "object",
+      "properties": {
+        "style_set": {
+          "description": "The 한글 version style set used when injecting default styles.",
+          "$ref": "#/$defs/HancomStyleSet"
+        },
+        "fonts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpxFont"
+          }
+        },
+        "char_shapes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpxCharShape"
+          }
+        },
+        "para_shapes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpxParaShape"
+          }
+        },
+        "styles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpxStyle"
+          }
+        },
+        "border_fills": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpxBorderFill"
+          }
+        },
+        "numberings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NumberingDef"
+          }
+        },
+        "bullets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BulletDef"
+          }
+        },
+        "tabs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TabDef"
+          }
+        },
+        "header_fidelity": {
+          "$ref": "#/$defs/HeaderFidelity"
+        }
+      },
+      "required": [
+        "style_set",
+        "fonts",
+        "char_shapes",
+        "para_shapes",
+        "styles",
+        "border_fills",
+        "numberings",
+        "bullets",
+        "tabs"
+      ]
+    },
+    "HancomStyleSet": {
+      "description": "The set of default styles to inject when building an HWPX file.\n\nDifferent versions of 한글 ship with different built-in style tables.\nChoosing the wrong set causes style ID mismatches, which can break\nautomatic numbering, table-of-contents generation, and other features.\n\n# Variant ordering\n\nUse [`HancomStyleSet::Modern`] (the default) unless you are targeting\nfiles for 한글 2020 or earlier ([`Classic`][HancomStyleSet::Classic])\nor 한글 2025+ ([`Latest`][HancomStyleSet::Latest]).",
+      "oneOf": [
+        {
+          "description": "18 built-in styles — 한글 2014 through 2020.\n\n개요 8–10 are absent; 쪽 번호 is at ID 9.",
+          "type": "string",
+          "const": "Classic"
+        },
+        {
+          "description": "22 built-in styles — 한글 2022 and later.\n\n개요 8–10 are **inserted** at IDs 9–11, shifting 쪽 번호 to ID 12.\n캡션 (Caption) style is added at ID 21.\n\nThis is the default variant because 한글 2022+ is now the most\nwidely deployed version.",
+          "type": "string",
+          "const": "Modern"
+        },
+        {
+          "description": "23 built-in styles — 한글 2025 and later.\n\nSame as [`Modern`][HancomStyleSet::Modern] with the addition of\n줄 번호 (Line Number) at ID 22.",
+          "type": "string",
+          "const": "Latest"
+        }
+      ]
+    },
+    "HwpxFont": {
+      "description": "A resolved font from `<hh:fontface>` → `<hh:font>`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Original `id` attribute from XML.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "face_name": {
+          "description": "Face name (e.g. `\"함초롬돋움\"`, `\"Times New Roman\"`).",
+          "type": "string"
+        },
+        "lang": {
+          "description": "Language group this font belongs to (e.g. `\"HANGUL\"`, `\"LATIN\"`).",
+          "type": "string"
+        },
+        "font_type": {
+          "description": "Font kind (`<hh:font type>`). `None` = unknown; the encoder writes\n`TTF`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxFontType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "substitute": {
+          "description": "Substitute font (`<hh:substFont>`), used when this face is missing.\n`None` = no substitute.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxSubstFont"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type_info": {
+          "description": "Classification (`<hh:typeInfo>`, PANOSE-like). `None` = unknown; the\nencoder writes its default classification.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxFontTypeInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "face_name",
+        "lang"
+      ]
+    },
+    "HwpxFontType": {
+      "description": "Font kind of `<hh:font type>` / `<hh:substFont type>`.",
+      "oneOf": [
+        {
+          "description": "TrueType font (`TTF`).",
+          "type": "string",
+          "const": "Ttf"
+        },
+        {
+          "description": "Hangul font (`HFT`).",
+          "type": "string",
+          "const": "Hft"
+        }
+      ]
+    },
+    "HwpxSubstFont": {
+      "description": "A substitute font (`<hh:substFont face type>`).",
+      "type": "object",
+      "properties": {
+        "font_type": {
+          "description": "Font kind. `None` = unknown; the encoder writes `TTF`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxFontType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "face_name": {
+          "description": "Face name of the substitute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "face_name"
+      ]
+    },
+    "HwpxFontTypeInfo": {
+      "description": "A font's classification (`<hh:typeInfo>`): the family type and the eight\nPANOSE-like numbers, as the wire carries them.",
+      "type": "object",
+      "properties": {
+        "family_type": {
+          "description": "Family type (`FCAT_UNKNOWN`, `FCAT_MYUNGJO`, `FCAT_GOTHIC` …).",
+          "type": "string"
+        },
+        "values": {
+          "description": "`weight`, `proportion`, `contrast`, `strokeVariation`, `armStyle`,\n`letterform`, `midline`, `xHeight`, in that order.",
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 8,
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "family_type",
+        "values"
+      ]
+    },
+    "HwpxCharShape": {
+      "description": "Resolved character properties from `<hh:charPr>`.\n\nAll raw XML strings have been converted to Foundation types.",
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "description": "Original wire definition ID; absent for newly created definitions.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "font_ref": {
+          "description": "Per-language font references.",
+          "$ref": "#/$defs/HwpxFontRef"
+        },
+        "height": {
+          "description": "Font height in HwpUnit (height attribute × 1, already HWPUNIT).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "text_color": {
+          "description": "Text color (from `textColor` attribute, e.g. `\"#000000\"`).",
+          "$ref": "#/$defs/Color"
+        },
+        "shade_color": {
+          "description": "Background shade color (from `shadeColor`, `\"none\"` → None).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bold": {
+          "description": "Bold formatting.",
+          "type": "boolean"
+        },
+        "italic": {
+          "description": "Italic formatting.",
+          "type": "boolean"
+        },
+        "underline_type": {
+          "description": "Underline type (e.g. `None`, `Bottom`).",
+          "$ref": "#/$defs/UnderlineType"
+        },
+        "underline_shape": {
+          "description": "Underline line family (e.g. SOLID, DOUBLE_SLIM, DASH, WAVE).",
+          "$ref": "#/$defs/UnderlineShape"
+        },
+        "underline_color": {
+          "description": "Underline color (None = inherit text color).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strikeout_shape": {
+          "description": "Strikeout shape (e.g. `None`, `Continuous`).",
+          "$ref": "#/$defs/StrikeoutShape"
+        },
+        "strikeout_color": {
+          "description": "Strikeout color (None = inherit text color).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vertical_position": {
+          "description": "Vertical position (Normal/Superscript/Subscript).",
+          "$ref": "#/$defs/VerticalPosition"
+        },
+        "outline_type": {
+          "description": "Text outline type.",
+          "$ref": "#/$defs/OutlineType"
+        },
+        "shadow": {
+          "description": "Character shadow: kind, color and offsets (from `<hh:shadow>`).\n\nOlder releases wrote only the kind, under `shadow_type`; that JSON\nstill reads, with the default color and offsets.",
+          "$ref": "#/$defs/CharShadow"
+        },
+        "emboss_type": {
+          "description": "Emboss effect type.",
+          "$ref": "#/$defs/EmbossType"
+        },
+        "engrave_type": {
+          "description": "Engrave effect type.",
+          "$ref": "#/$defs/EngraveType"
+        },
+        "emphasis": {
+          "description": "Emphasis mark type (from `symMark` attribute).",
+          "$ref": "#/$defs/EmphasisType"
+        },
+        "ratio": {
+          "description": "Character width ratio (uniform, from `ratio` child element).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "spacing": {
+          "description": "Inter-character spacing (uniform, from `spacing` child element).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "rel_sz": {
+          "description": "Relative font size (uniform, from `relSz` child element).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "char_offset": {
+          "description": "Vertical position offset (uniform, from `offset` child element).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "use_kerning": {
+          "description": "Enable kerning (from `useKerning` attribute, 0/1).",
+          "type": "boolean"
+        },
+        "use_font_space": {
+          "description": "Use font space (from `useFontSpace` attribute, 0/1).",
+          "type": "boolean"
+        },
+        "border_fill_id": {
+          "description": "Border/fill reference for character border (`borderFillIDRef`).\n\n`None` means use the default value of `2` (한글 default char background).\nSet to `Some(id)` to reference a custom `HwpxBorderFill` entry.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "font_ref",
+        "height",
+        "text_color",
+        "bold",
+        "italic",
+        "underline_type",
+        "underline_shape",
+        "strikeout_shape",
+        "vertical_position",
+        "outline_type",
+        "shadow",
+        "emboss_type",
+        "engrave_type",
+        "emphasis",
+        "ratio",
+        "spacing",
+        "rel_sz",
+        "char_offset",
+        "use_kerning",
+        "use_font_space"
+      ]
+    },
+    "HwpxFontRef": {
+      "description": "Per-language font index references from `<hh:fontRef>`.\n\nEach [`FontIndex`] carries a language-local wire ID, resolved by\n`(language, font.id)`, never a position in the combined font vector.",
+      "type": "object",
+      "properties": {
+        "hangul": {
+          "description": "Hangul (한글) font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "latin": {
+          "description": "Latin font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "hanja": {
+          "description": "Hanja (한자) font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "japanese": {
+          "description": "Japanese (日本語) font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "other": {
+          "description": "Other scripts font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "symbol": {
+          "description": "Symbol font index.",
+          "$ref": "#/$defs/Index"
+        },
+        "user": {
+          "description": "User-defined font index.",
+          "$ref": "#/$defs/Index"
+        }
+      },
+      "required": [
+        "hangul",
+        "latin",
+        "hanja",
+        "japanese",
+        "other",
+        "symbol",
+        "user"
+      ]
+    },
+    "UnderlineType": {
+      "type": "string"
+    },
+    "UnderlineShape": {
+      "type": "string"
+    },
+    "StrikeoutShape": {
+      "type": "string"
+    },
+    "VerticalPosition": {
+      "type": "string"
+    },
+    "OutlineType": {
+      "type": "string"
+    },
+    "CharShadow": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "None",
+            "Drop",
+            "Continuous",
+            "none",
+            "drop",
+            "continuous"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "None",
+                "Drop",
+                "Continuous",
+                "none",
+                "drop",
+                "continuous"
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^#[0-9A-Fa-f]{6}$"
+                },
+                {
+                  "const": "none"
+                }
+              ]
+            },
+            "offset_x": {
+              "type": "integer",
+              "minimum": -100,
+              "maximum": 100
+            },
+            "offset_y": {
+              "type": "integer",
+              "minimum": -100,
+              "maximum": 100
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "EmbossType": {
+      "type": "string"
+    },
+    "EngraveType": {
+      "type": "string"
+    },
+    "EmphasisType": {
+      "type": "string"
+    },
+    "HwpxParaShape": {
+      "description": "Resolved paragraph properties from `<hh:paraPr>`.",
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "description": "Original wire definition ID; absent for newly created definitions.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "font_line_height": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "alignment": {
+          "description": "Horizontal alignment.",
+          "$ref": "#/$defs/Alignment"
+        },
+        "margin_left": {
+          "description": "Left indent (from `<hc:left value=\"...\"/>`).",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "margin_right": {
+          "description": "Right indent.",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "indent": {
+          "description": "Paragraph indent (from `<hc:intent value=\"...\"/>`).",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "spacing_before": {
+          "description": "Space before paragraph (from `<hc:prev value=\"...\"/>`).",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "spacing_after": {
+          "description": "Space after paragraph (from `<hc:next value=\"...\"/>`).",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "line_spacing": {
+          "description": "Line spacing value.",
+          "type": "integer",
+          "format": "int32",
+          "minimum": 0
+        },
+        "line_spacing_type": {
+          "description": "Line spacing type.",
+          "$ref": "#/$defs/LineSpacingType"
+        },
+        "snap_to_grid": {
+          "description": "Whether the paragraph snaps to the document line grid.",
+          "type": "boolean"
+        },
+        "break_type": {
+          "description": "Page/column break type before paragraph.",
+          "$ref": "#/$defs/BreakType"
+        },
+        "keep_with_next": {
+          "description": "Keep paragraph with next (prevent page break between).",
+          "type": "boolean"
+        },
+        "keep_lines_together": {
+          "description": "Keep lines together (prevent page break within paragraph).",
+          "type": "boolean"
+        },
+        "widow_orphan": {
+          "description": "Widow/orphan control (minimum 2 lines at page boundaries).",
+          "type": "boolean"
+        },
+        "break_latin_word": {
+          "description": "Word-breaking rule for Latin text (default: KeepWord).",
+          "$ref": "#/$defs/WordBreakType"
+        },
+        "break_non_latin_word": {
+          "description": "Word-breaking rule for non-Latin text including Korean (default: KeepWord).",
+          "$ref": "#/$defs/WordBreakType"
+        },
+        "line_wrap": {
+          "description": "Raw HWPX line-wrap policy stored on `breakSetting@lineWrap`.\n\nKnown values include `BREAK`, `SQUEEZE`, and `KEEP`.",
+          "type": "string"
+        },
+        "border_fill_id": {
+          "description": "Border/fill reference (None = no border/fill).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Index"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "heading_type": {
+          "description": "Heading type for this paragraph.",
+          "$ref": "#/$defs/HeadingType"
+        },
+        "heading_id_ref": {
+          "description": "Heading numbering reference (idRef in heading element, 0 = none).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "heading_level": {
+          "description": "Heading list level stored on `paraPr/heading(level)`.\n\nHWPX uses zero-based values for paragraph heading/list state:\n- outline: `0..=9`\n- number/bullet: `0..=9`\n- none: `0`",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "checked": {
+          "description": "Checkbox state stored on `paraPr@checked` for checkable bullets.",
+          "type": "boolean"
+        },
+        "tab_pr_id_ref": {
+          "description": "Tab property reference (tabPrIDRef, 0 = default).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "condense": {
+          "description": "Condense value for tight outline spacing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vertical_align": {
+          "description": "Vertical alignment of a line's characters (`<hh:align vertical>`):\n`BASELINE`, `TOP`, `CENTER` or `BOTTOM`, kept as written.",
+          "type": "string"
+        },
+        "border_offset": {
+          "description": "Offsets of the paragraph border from the text (`<hh:border\noffsetLeft/offsetRight/offsetTop/offsetBottom>`): left, right, top,\nbottom.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpUnit"
+          },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "border_connect": {
+          "description": "The border joins the next paragraph's of the same border\n(`<hh:border connect>`).",
+          "type": "boolean"
+        },
+        "border_ignore_margin": {
+          "description": "The border is drawn ignoring the paragraph margins\n(`<hh:border ignoreMargin>`).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "alignment",
+        "margin_left",
+        "margin_right",
+        "indent",
+        "spacing_before",
+        "spacing_after",
+        "line_spacing",
+        "line_spacing_type",
+        "snap_to_grid",
+        "break_type",
+        "keep_with_next",
+        "keep_lines_together",
+        "widow_orphan",
+        "break_latin_word",
+        "break_non_latin_word",
+        "line_wrap",
+        "heading_type",
+        "heading_id_ref",
+        "heading_level",
+        "checked",
+        "tab_pr_id_ref",
+        "condense"
+      ]
+    },
+    "Alignment": {
+      "type": "string"
+    },
+    "ParagraphMeasure": {
+      "description": "A paragraph margin or tab position. Equality includes the unit, even at zero.\n\nThe v2 exchange representation is `{ \"unit\": \"hwpunit\" | \"char\",\n\"value\": integer }`. The exchange envelope supplies `format_version: 2`.",
+      "oneOf": [
+        {
+          "description": "Absolute length in 1/100 pt units.",
+          "type": "object",
+          "properties": {
+            "unit": {
+              "type": "string",
+              "const": "hwpunit"
+            },
+            "value": {
+              "$ref": "#/$defs/HwpUnit"
+            }
+          },
+          "required": [
+            "unit",
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Relative character count in 1/500 ch ticks.",
+          "type": "object",
+          "properties": {
+            "unit": {
+              "type": "string",
+              "const": "char"
+            },
+            "value": {
+              "$ref": "#/$defs/CharCount"
+            }
+          },
+          "required": [
+            "unit",
+            "value"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CharCount": {
+      "description": "An exact character count on the 1/500 ch grid, independent of font size.",
+      "type": "integer",
+      "format": "int32",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "LineSpacingType": {
+      "type": "string"
+    },
+    "BreakType": {
+      "type": "string"
+    },
+    "WordBreakType": {
+      "type": "string"
+    },
+    "HeadingType": {
+      "type": "string"
+    },
+    "HwpxStyle": {
+      "description": "Resolved style definition from `<hh:style>`.\n\nStores style metadata like names and references to character/paragraph\nproperties. This enables full roundtrip of style names like \"바탕글\",\n\"본문\", etc.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Style ID (from `id` attribute).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "style_type": {
+          "description": "Style type (e.g. `\"PARA\"`, `\"CHAR\"`).",
+          "type": "string"
+        },
+        "name": {
+          "description": "Korean style name (e.g. `\"바탕글\"`).",
+          "type": "string"
+        },
+        "eng_name": {
+          "description": "English style name (e.g. `\"Normal\"`).",
+          "type": "string"
+        },
+        "para_pr_id_ref": {
+          "description": "Reference to paragraph properties (from `paraPrIDRef`).\nWire ID (inactive for CHAR styles), never a vector index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "char_pr_id_ref": {
+          "description": "Reference to character properties (from `charPrIDRef`).\nWire ID, resolved through the header definition table.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "next_style_id_ref": {
+          "description": "Wire ID of the next style (from `nextStyleIDRef`), never a vector index.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "lang_id": {
+          "description": "Language ID (from `langID`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "lock_form": {
+          "description": "Form lock flag (from `lockForm`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "style_type",
+        "name",
+        "eng_name",
+        "para_pr_id_ref",
+        "char_pr_id_ref",
+        "next_style_id_ref",
+        "lang_id",
+        "lock_form"
+      ]
+    },
+    "HwpxBorderFill": {
+      "description": "Resolved border/fill definition from `<hh:borderFill>`.\n\nStores border line styles for all 4 sides plus diagonal borders,\n3D/shadow flags, and optional fill configuration.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "three_d": {
+          "description": "Whether 3D border effect is enabled.",
+          "type": "boolean"
+        },
+        "shadow": {
+          "description": "Whether shadow effect is enabled.",
+          "type": "boolean"
+        },
+        "center_line": {
+          "description": "Center line type string (e.g. `\"NONE\"`).",
+          "type": "string"
+        },
+        "left": {
+          "description": "Left border line.",
+          "$ref": "#/$defs/HwpxBorderLine"
+        },
+        "right": {
+          "description": "Right border line.",
+          "$ref": "#/$defs/HwpxBorderLine"
+        },
+        "top": {
+          "description": "Top border line.",
+          "$ref": "#/$defs/HwpxBorderLine"
+        },
+        "bottom": {
+          "description": "Bottom border line.",
+          "$ref": "#/$defs/HwpxBorderLine"
+        },
+        "diagonal": {
+          "description": "Diagonal border line (optional — omitted in some HWPX files).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxBorderLine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slash_type": {
+          "description": "Slash diagonal type string.",
+          "type": "string"
+        },
+        "back_slash_type": {
+          "description": "Back-slash diagonal type string.",
+          "type": "string"
+        },
+        "slash": {
+          "description": "Slash diagonal metadata.",
+          "$ref": "#/$defs/HwpxDiagonalLine",
+          "default": {
+            "border_type": "NONE",
+            "crooked": false,
+            "is_counter": false
+          }
+        },
+        "back_slash": {
+          "description": "Back-slash diagonal metadata.",
+          "$ref": "#/$defs/HwpxDiagonalLine",
+          "default": {
+            "border_type": "NONE",
+            "crooked": false,
+            "is_counter": false
+          }
+        },
+        "fill": {
+          "description": "Legacy `winBrush` fill configuration.\n\nGradient and image border fills use `gradient_fill` / `image_fill`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxFill"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill_hatch_style": {
+          "description": "Hatch pattern kind when `fill` uses `<hc:winBrush>`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "gradient_fill": {
+          "description": "Gradient fill payload when `<hc:gradation>` is present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxGradientFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "image_fill": {
+          "description": "Image fill payload when `<hc:imgBrush>` is present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpxImageFill"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "three_d",
+        "shadow",
+        "center_line",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "slash_type",
+        "back_slash_type"
+      ]
+    },
+    "HwpxBorderLine": {
+      "description": "A single border line configuration.",
+      "type": "object",
+      "properties": {
+        "line_type": {
+          "description": "Border line type (e.g. `\"NONE\"`, `\"SOLID\"`).",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width string (e.g. `\"0.1 mm\"`).",
+          "type": "string"
+        },
+        "color": {
+          "description": "Color string (e.g. `\"#000000\"`).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "line_type",
+        "width",
+        "color"
+      ]
+    },
+    "HwpxDiagonalLine": {
+      "description": "Resolved diagonal border metadata from `<hh:slash>` / `<hh:backSlash>`.",
+      "type": "object",
+      "properties": {
+        "border_type": {
+          "description": "Border type string (for example, `\"NONE\"` or `\"CENTER\"`).",
+          "type": "string"
+        },
+        "crooked": {
+          "description": "Crooked diagonal flag.",
+          "type": "boolean"
+        },
+        "is_counter": {
+          "description": "Counter direction flag.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "border_type",
+        "crooked",
+        "is_counter"
+      ]
+    },
+    "HwpxFill": {
+      "description": "Fill brush configuration for a [`HwpxBorderFill`].",
+      "oneOf": [
+        {
+          "description": "Solid or hatch fill via `<hc:winBrush>`.",
+          "type": "object",
+          "properties": {
+            "WinBrush": {
+              "type": "object",
+              "properties": {
+                "face_color": {
+                  "description": "Face color string (e.g. `\"none\"`, `\"#RRGGBB\"`).",
+                  "type": "string"
+                },
+                "hatch_color": {
+                  "description": "Hatch pattern color string.",
+                  "type": "string"
+                },
+                "alpha": {
+                  "description": "Alpha transparency string.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "face_color",
+                "hatch_color",
+                "alpha"
+              ]
+            }
+          },
+          "required": [
+            "WinBrush"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "HwpxGradientFill": {
+      "description": "Gradient fill payload for table border fills.",
+      "type": "object",
+      "properties": {
+        "gradient_type": {
+          "description": "Gradient type.",
+          "$ref": "#/$defs/GradientType"
+        },
+        "angle": {
+          "description": "Gradient angle in degrees.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "center_x": {
+          "description": "Gradient center X percentage.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "center_y": {
+          "description": "Gradient center Y percentage.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "step": {
+          "description": "Gradient step count.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "step_center": {
+          "description": "Gradient step center percentage.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "alpha": {
+          "description": "Alpha transparency.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "colors": {
+          "description": "Ordered gradient color stops.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Color"
+          }
+        }
+      },
+      "required": [
+        "gradient_type",
+        "angle",
+        "center_x",
+        "center_y",
+        "step",
+        "step_center",
+        "alpha",
+        "colors"
+      ]
+    },
+    "HwpxImageFill": {
+      "description": "Image fill payload for table border fills.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "HWPX image fill mode string (for example, `TOTAL`).",
+          "type": "string"
+        },
+        "binary_item_id_ref": {
+          "description": "`binaryItemIDRef` value without extension.",
+          "type": "string"
+        },
+        "bright": {
+          "description": "Brightness adjustment.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "contrast": {
+          "description": "Contrast adjustment.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "effect": {
+          "description": "HWPX effect string (for example, `REAL_PIC`).",
+          "type": "string"
+        },
+        "alpha": {
+          "description": "Alpha transparency.",
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "mode",
+        "binary_item_id_ref",
+        "bright",
+        "contrast",
+        "effect",
+        "alpha"
+      ]
+    },
+    "NumberingDef": {
+      "description": "A complete numbering definition.\n\nMaps to HWPX `<hh:numbering>` inside `<hh:numberings>`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Numbering ID (1-based).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start": {
+          "description": "Starting number offset.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "levels": {
+          "description": "Level definitions (up to 10).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParaHead"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "start",
+        "levels"
+      ]
+    },
+    "ParaHead": {
+      "description": "A single level definition within a numbering scheme.\n\nMaps to HWPX `<hh:paraHead>` inside `<hh:numbering>`.",
+      "type": "object",
+      "properties": {
+        "start": {
+          "description": "Starting number for this level.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "level": {
+          "description": "Outline level (1-10).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "num_format": {
+          "description": "Number format (DIGIT, HANGUL_SYLLABLE, etc.).",
+          "$ref": "#/$defs/NumberFormatType"
+        },
+        "text": {
+          "description": "Display template with `^N` placeholder (e.g. `\"^1.\"`, `\"(^5)\"`).\nEmpty string for levels 9 and 10 (self-closing in HWPX).",
+          "type": "string"
+        },
+        "checkable": {
+          "description": "Whether this level is checkable.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "start",
+        "level",
+        "num_format",
+        "text",
+        "checkable"
+      ]
+    },
+    "BulletDef": {
+      "description": "A bullet list definition.\n\nMaps to HWPX `<hh:bullet>` inside `<hh:bullets>`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Bullet definition ID (1-based on the wire).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "bullet_char": {
+          "description": "Bullet glyph string.",
+          "type": "string"
+        },
+        "checked_char": {
+          "description": "Checked bullet glyph string when this bullet is checkable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "use_image": {
+          "description": "Whether this bullet uses an image marker.",
+          "type": "boolean"
+        },
+        "para_head": {
+          "description": "Bullet paragraph-head metadata.",
+          "$ref": "#/$defs/ParaHead"
+        }
+      },
+      "required": [
+        "id",
+        "bullet_char",
+        "use_image",
+        "para_head"
+      ]
+    },
+    "TabDef": {
+      "description": "A single tab property definition.\n\nMaps to HWPX `<hh:tabPr>`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Tab property ID (0-based).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "auto_tab_left": {
+          "description": "Auto-insert tab at left margin.",
+          "type": "boolean"
+        },
+        "auto_tab_right": {
+          "description": "Auto-insert tab at right margin.",
+          "type": "boolean"
+        },
+        "stops": {
+          "description": "Explicit tab stops.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TabStop"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "auto_tab_left",
+        "auto_tab_right"
+      ]
+    },
+    "TabStop": {
+      "description": "A single explicit tab stop.",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Stop position from the paragraph start.",
+          "$ref": "#/$defs/ParagraphMeasure"
+        },
+        "align": {
+          "description": "Alignment mode at this stop.",
+          "$ref": "#/$defs/TabAlign"
+        },
+        "leader": {
+          "description": "Leader style used to fill the gap before the stop.",
+          "$ref": "#/$defs/TabLeader"
+        }
+      },
+      "required": [
+        "position",
+        "align",
+        "leader"
+      ]
+    },
+    "TabAlign": {
+      "type": "string"
+    },
+    "TabLeader": {
+      "type": "string"
+    },
+    "HeaderFidelity": {
+      "type": "object",
+      "properties": {
+        "numbering": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "object",
+              "additionalProperties": false,
+              "patternProperties": {
+                "^\\d+$": {
+                  "$ref": "#/$defs/HeadMetrics"
+                }
+              }
+            }
+          }
+        },
+        "bullet": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "type": "object",
+              "additionalProperties": false,
+              "patternProperties": {
+                "^\\d+$": {
+                  "$ref": "#/$defs/HeadMetrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "HeadMetrics": {
+      "type": "object",
+      "properties": {
+        "align": {
+          "type": "string"
+        },
+        "use_inst_width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "auto_indent": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "width_adjust": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "text_offset_type": {
+          "type": "string"
+        },
+        "text_offset": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "char_pr_id_ref": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "align",
+        "use_inst_width",
+        "auto_indent",
+        "width_adjust",
+        "text_offset_type",
+        "text_offset",
+        "char_pr_id_ref"
+      ]
     },
     "SectionPreservation": {
       "description": "Preservation metadata required for byte-preserving section patching.\n\nThis payload is intentionally opaque to end users: `to-json --section`\nproduces it, and `patch` consumes it to update only the touched `<hp:t>`\npayloads inside the original `sectionN.xml`.",

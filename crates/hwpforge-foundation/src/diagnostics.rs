@@ -73,6 +73,8 @@ ops_codes! {
     InternalInvariant => "INTERNAL_INVARIANT",
     /// JSON input could not be parsed.
     JsonParseFailed => "JSON_PARSE_FAILED",
+    /// Legacy tab units cannot be recovered; re-export the original.
+    LegacyJsonTabs => "LEGACY_JSON_TABS",
     /// A result could not be serialised to JSON.
     JsonSerializeFailed => "JSON_SERIALIZE_FAILED",
     /// Requested JSON schema kind does not exist.

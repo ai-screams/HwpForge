@@ -50,7 +50,7 @@ pub(super) fn build_tab_properties_xml(store: &HwpxStyleStore) -> HwpxResult<Str
     Ok(xml)
 }
 
-fn build_tab_item(stop: &TabStop, legacy_default_units: bool) -> HwpxResult<HxTabItem> {
+pub(crate) fn build_tab_item(stop: &TabStop, legacy_default_units: bool) -> HwpxResult<HxTabItem> {
     let (value, unit) = crate::paragraph_measure::parts(stop.position);
     let packed = crate::paragraph_measure::pack_tab(stop.position)?;
     let pos = if legacy_default_units { packed } else { i64::from(value) };

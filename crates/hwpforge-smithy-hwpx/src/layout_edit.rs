@@ -21,7 +21,9 @@
 //!
 //! # Original-byte emission
 //!
-//! `encode_with_base` first compares the complete typed Core (excluding supplied
+//! `encode_with_base` first validates measure output, including odd physical
+//! line spacing. Inputs needing measure normalization cannot return original bytes.
+//! With a resolved style 0, it compares the complete typed Core (excluding supplied
 //! caches), style store and image bytes with a fresh decode of the base. If all
 //! are unchanged, it returns the **entire original ZIP byte for byte**. This is
 //! a separate emission strategy, not a bypass attaching caches to regenerated
@@ -184,6 +186,13 @@ pub(crate) fn unchanged(
     styles: &HwpxStyleStore,
     images: &hwpforge_core::image::ImageStore,
 ) -> HwpxResult<bool> {
+    crate::paragraph_measure::validate_measure_output(styles)?;
+    if base.requires_measure_normalization() {
+        return Ok(false);
+    }
+    if crate::header_references::HeaderReferences::build(styles)?.style_index(0).is_err() {
+        return Ok(false);
+    }
     if &base.style_store != styles || &base.image_store != images {
         return Ok(false);
     }
@@ -226,8 +235,8 @@ pub(crate) fn prepare(
     )?;
     let base_wire = Wire::read(base_bytes)?;
     let edited_wire = Wire::read_emitted(&output_xml.bytes, &origins)?;
-    let base_styles = tree(&base.style_store)?;
-    let edited_styles = tree(style_store)?;
+    let base_styles = styles::cache_tree(&base.style_store)?;
+    let edited_styles = styles::cache_tree(style_store)?;
     let styles = Styles::new(&base_styles, &edited_styles);
     let mut plan = CoreCorrespondence::default();
     let old = original["sections"].as_array().expect("Core sections");

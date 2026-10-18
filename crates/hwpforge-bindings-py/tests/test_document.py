@@ -580,3 +580,15 @@ def test_converted_memos_remain_public_controls_and_markdown_comments(
             assert "메모 대상 문장" in markdown
             if mode == "styled":
                 assert "쇠부리야 여기가 메모야" in markdown
+
+
+def test_w2_legacy_json_tabs_share_code_reason_and_remedy() -> None:
+    source = '{"styles":{"tabs":[{"stops":[{"position":2001}]}]}}'
+    with pytest.raises(HwpForgeError) as caught:
+        hwpforge.from_json(source)
+    error = caught.value
+    assert error.code == "LEGACY_JSON_TABS"
+    assert "원래 단위와 case/default 척도를 복구할 수 없어" in error.message
+    assert "$.styles.tabs[0].stops[0].position" in error.message
+    assert "1건" in error.message
+    assert error.hint == "원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."

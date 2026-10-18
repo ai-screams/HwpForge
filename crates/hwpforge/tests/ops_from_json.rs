@@ -338,7 +338,7 @@ fn from_json_reports_no_layout_cache_warning_when_there_is_none_to_drop() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -399,7 +399,7 @@ fn from_json_warns_when_only_an_image_caption_paragraph_carries_a_layout_cache()
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -479,7 +479,7 @@ fn from_json_warns_when_only_a_memo_anchor_table_carries_a_layout_cache() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -579,7 +579,7 @@ fn from_json_group_child_path_uses_the_encoders_emitted_index_not_the_source_ind
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -648,7 +648,7 @@ fn from_json_group_child_path_counts_a_group_picture() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -711,7 +711,7 @@ fn from_json_finds_a_cache_in_a_group_picture_caption() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");
@@ -750,8 +750,12 @@ fn an_unknown_control_comes_back_as_content_lost_with_the_bytes() {
     let mut document = Document::new();
     document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let json =
-        serde_json::to_string(&ExportedDocument { document, styles: Some(styles) }).expect("json");
+    let json = serde_json::to_string(&ExportedDocument {
+        format_version: 2,
+        document,
+        styles: Some(styles),
+    })
+    .expect("json");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("generation does not fail");
 
@@ -790,7 +794,7 @@ fn document_with_a_title_mark_footnote() -> String {
     document.add_section(Section::with_paragraphs(vec![body], PageSettings::a4()));
 
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     serde_json::to_string(&exported).expect("serialise")
 }
 
@@ -861,7 +865,7 @@ fn from_json_names_the_master_page_whose_layout_cache_it_drops() {
     document.add_section(first);
     document.add_section(second);
     let styles = hwpforge::hwpx::style_store_for_preset("default").expect("preset");
-    let exported = ExportedDocument { document, styles: Some(styles) };
+    let exported = ExportedDocument { format_version: 2, document, styles: Some(styles) };
     let json = serde_json::to_string(&exported).expect("serialise");
 
     let out = from_json(&json, &FromJsonOptions::default()).expect("from_json");

@@ -457,7 +457,10 @@ impl schemars::JsonSchema for HwpUnit {
     }
 
     fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        gen.subschema_for::<i32>()
+        let mut schema = gen.subschema_for::<i32>();
+        schema.insert("minimum".into(), Self::MIN_VALUE.into());
+        schema.insert("maximum".into(), Self::MAX_VALUE.into());
+        schema
     }
 }
 

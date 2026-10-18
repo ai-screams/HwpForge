@@ -146,6 +146,7 @@ impl HwpxPatcher {
             };
 
         let exported = ExportedSection {
+            format_version: 2,
             section_index: section_idx,
             section,
             styles: include_styles.then_some(hwpx_doc.style_store),

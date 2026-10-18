@@ -126,6 +126,9 @@ pub use style::{
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum OpsError {
+    /// Shared JSON exchange validation failure.
+    #[error(transparent)]
+    Exchange(HwpxError),
     /// HWPX decode-stage failure: reading the package, parsing XML or
     /// projecting it to Core. Build it with [`OpsError::decode`].
     #[error(transparent)]
@@ -303,7 +306,8 @@ impl OpsError {
             Self::Stamper(e) => stamper_code(e),
             Self::StampMap(e) => stamp_map_code(e),
             Self::Core(e) => core_code(e),
-            Self::Json(_) => OpsCode::JsonParseFailed,
+            Self::Exchange(HwpxError::LegacyJsonTabs { .. }) => OpsCode::LegacyJsonTabs,
+            Self::Exchange(_) | Self::Json(_) => OpsCode::JsonParseFailed,
             Self::JsonSerialize(_) => OpsCode::JsonSerializeFailed,
             Self::PresetNotFound { .. } => OpsCode::PresetNotFound,
             Self::InvalidInput { .. } => OpsCode::InvalidInput,
@@ -449,6 +453,9 @@ enum Stage {
 /// frontend that wants its own spelling pins its own literal instead
 /// (`hwpforge-bindings-cli`'s `compat::TABLE`, `hwpforge-bindings-mcp`'s).
 fn hint_for(code: OpsCode) -> Option<&'static str> {
+    if code == OpsCode::LegacyJsonTabs {
+        return Some("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오.");
+    }
     Some(match code {
         OpsCode::DecodeFailed => "Check that the file is a valid HWPX document",
         OpsCode::EmptyFieldValue => {
@@ -519,7 +526,8 @@ fn hwpx_code(error: &HwpxError, stage: Stage) -> OpsCode {
         Stage::Encode => OpsCode::EncodeFailed,
     };
     match error.code() {
-        HwpxErrorCode::Zip
+        HwpxErrorCode::LegacyJsonTabs
+        | HwpxErrorCode::Zip
         | HwpxErrorCode::InvalidMimetype
         | HwpxErrorCode::MissingFile
         | HwpxErrorCode::XmlParse
@@ -749,6 +757,11 @@ const UNCLASSIFIED: &str = "OTHER";
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsWarning {
+    /// Shared exchange version/migration diagnostic.
+    LegacyParagraphMeasures {
+        /// Migration limits and affected JSON paths.
+        message: String,
+    },
     /// HWPX encoder warning.
     Encode(EncodeWarning),
     /// HWPX decoder warning.
@@ -807,6 +820,9 @@ impl OpsWarning {
     #[must_use]
     pub fn info(&self) -> WarningInfo {
         match self {
+            Self::LegacyParagraphMeasures { message } => {
+                WarningInfo::new("LEGACY_PARAGRAPH_MEASURES", message)
+            }
             Self::Encode(w) => WarningInfo::new(encode_warning_code(w), w.to_string()),
             Self::Decode(w) => WarningInfo::new(decode_warning_code(w), decode_warning_message(w)),
             Self::Structural(w) => WarningInfo::new(structural_warning_code(w), w.to_string()),
@@ -873,6 +889,7 @@ fn structural_warning_code(warning: &StructuralWarning) -> &'static str {
 #[cfg(feature = "ops-md")]
 fn md_warning_code(warning: &MdWarning) -> &'static str {
     match warning {
+        MdWarning::ParagraphMeasureLost { .. } => "PARAGRAPH_MEASURE_LOST",
         MdWarning::MergedCellsFlattened { .. } => "TABLE_MERGE_FLATTENED",
         MdWarning::ImageEmbedSkipped { .. } => "IMAGE_EMBED_SKIPPED",
         MdWarning::ContainerTooDeep { .. } => "CONTAINER_TOO_DEEP",

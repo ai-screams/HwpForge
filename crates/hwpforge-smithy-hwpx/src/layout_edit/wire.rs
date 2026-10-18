@@ -752,7 +752,9 @@ impl PackageAnalysis {
         remove_definitions(&mut global);
         let (package_global, metadata) = inputs::package_inputs(&package, &content)?;
         global.children.push(package_global);
-        let global = definitions.stamp(&global, false).0;
+        let mut global = definitions.stamp(&global, false).0;
+        // CHAR measures depend on style 0 even when this paragraph uses another style.
+        global.combine(&definitions.resolve(("style".into(), "0".into())).0);
         let document = definitions.stamp(&metadata, false).0;
         let mut result = Self {
             section_paths: package.order.sections.clone(),

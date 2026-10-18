@@ -22,6 +22,50 @@ fn styled_is_what_you_get_without_asking() {
     assert_eq!(implicit.markdown, export("SimpleTable.hwpx", MdMode::Styled).markdown);
 }
 
+// 이것을 실패시키는 것: CHAR 0·오른쪽/위/아래 여백·CHAR 탭의 MD 손실을 숨기기.
+#[test]
+fn w2_all_modes_report_margin_units_and_char_tab_loss() {
+    use hwpforge::ops::{
+        convert_md, from_json, to_json, ConvertMdOptions, FromJsonOptions, ToJsonOptions,
+    };
+    use serde_json::json;
+
+    let base = convert_md("본문", None, &ConvertMdOptions::default()).unwrap().bytes;
+    let mut value =
+        serde_json::to_value(to_json(&base, &ToJsonOptions::default()).unwrap().exported).unwrap();
+    let index = value["document"]["sections"][0]["paragraphs"][0]["para_shape_id"].as_u64().unwrap()
+        as usize;
+    for field in ["margin_left", "margin_right", "indent", "spacing_before", "spacing_after"] {
+        value["styles"]["para_shapes"][index][field] = json!({"unit":"char", "value":0});
+    }
+    value["styles"]["para_shapes"][index]["tab_pr_id_ref"] = json!(77);
+    value["styles"]["tabs"].as_array_mut().unwrap().push(json!({
+        "id":77, "auto_tab_left":false, "auto_tab_right":false,
+        "stops":[{"position":{"unit":"char", "value":250},"align":"Left","leader":"NONE"}]
+    }));
+    let bytes = from_json(&value.to_string(), &FromJsonOptions::default()).unwrap().bytes;
+    for mode in [MdMode::Styled, MdMode::Lossy, MdMode::Lossless] {
+        let out = to_md(&bytes, &MdExportOptions::default().with_mode(mode)).unwrap();
+        let warnings: Vec<_> = out
+            .warnings
+            .iter()
+            .map(|w| w.info())
+            .filter(|w| w.code == "PARAGRAPH_MEASURE_LOST")
+            .collect();
+        assert_eq!(warnings.len(), 6, "{mode:?}: {warnings:?}");
+        for field in [
+            "margin_left",
+            "margin_right",
+            "indent",
+            "spacing_before",
+            "spacing_after",
+            "tabs[77].stops[0].position",
+        ] {
+            assert!(warnings.iter().any(|w| w.message.contains(field)), "{field}: {warnings:?}");
+        }
+    }
+}
+
 #[test]
 fn all_three_modes_render_the_same_document() {
     for mode in [MdMode::Styled, MdMode::Lossy, MdMode::Lossless] {

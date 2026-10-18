@@ -102,8 +102,8 @@ pub use encoder::{
 };
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
-    ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,
-    SECTION_PRESERVATION_VERSION,
+    ExportedDocument, ExportedSection, ExportedStyles, PreservedTextSlot, SectionPreservation,
+    TextLocator, FORMAT_VERSION, SECTION_PRESERVATION_VERSION,
 };
 pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
 pub use patch::HwpxPatcher;

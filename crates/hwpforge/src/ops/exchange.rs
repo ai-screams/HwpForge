@@ -160,7 +160,7 @@ pub fn to_json(hwpx: &[u8], opts: &ToJsonOptions) -> Result<ToJsonOutput, OpsErr
     let mut warnings: Vec<OpsWarning> =
         decoded.warnings.into_iter().map(OpsWarning::Decode).collect();
     let styles = opts.styles.then_some(decoded.style_store);
-    let exported = ExportedDocument { document: decoded.document, styles };
+    let exported = ExportedDocument { format_version: 2, document: decoded.document, styles };
 
     let mut document = serde_json::to_value(&exported).map_err(OpsError::json_serialize)?;
     let unaddressed = annotate_document_addresses(&mut document, &exported.document)
@@ -454,7 +454,9 @@ impl FromJsonOutput {
 pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, OpsError> {
     // Parsed once: the typed document deserialises from the tree by
     // reference, and the same tree carries the addresses to verify.
-    let value: serde_json::Value = serde_json::from_str(json)?;
+    let mut value: serde_json::Value = serde_json::from_str(json)?;
+    let exchange_warnings =
+        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
     let mut exported = ExportedDocument::deserialize(&value)?;
     let base = opts
         .base
@@ -493,16 +495,16 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
         .filter_map(|(index, section)| {
             let offset = masterpage_offset;
             masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
-            first_layout_cache_path(section, index, offset).filter(|_| opts.base.is_none()).map(
-                |path| {
+            first_layout_cache_path(section, index, offset)
+                .filter(|_| opts.base.is_none() || !exchange_warnings.is_empty())
+                .map(|path| {
                     OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
                         path,
                         reason: "layout cache present in the JSON was not re-emitted — from_json \
                              encodes with emit_layout_cache off by design"
                             .to_string(),
                     })
-                },
-            )
+                })
         })
         .collect();
 
@@ -529,18 +531,36 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
     let options = EncodeOptions::default().with_memo_create_time(now);
     // 이것을 실패시키는 것: base가 있어도 일반 캐시 없는 인코더로 보내기.
     let outcome = match &base {
-        Some(base) => {
+        Some(base) if exchange_warnings.is_empty() => {
             HwpxEncoder::encode_with_edit_base(base, &validated, &style_store, image_store, options)
         }
-        None => {
-            HwpxEncoder::encode_with_diagnostics(&validated, &style_store, image_store, options)
-        }
+        _ => HwpxEncoder::encode_with_diagnostics(&validated, &style_store, image_store, options),
     }
     .map_err(OpsError::encode)?;
 
     let mut warnings: Vec<OpsWarning> =
         outcome.warnings.into_iter().map(OpsWarning::Encode).collect();
     warnings.extend(layout_cache_warnings);
+    if let Some(base) = &base {
+        warnings.extend(
+            base.decoded()
+                .warnings
+                .iter()
+                .filter(|w| {
+                    matches!(
+                        w,
+                        hwpforge_smithy_hwpx::DecodeWarning::ParagraphMeasureNormalized { .. }
+                    )
+                })
+                .cloned()
+                .map(OpsWarning::Decode),
+        );
+    }
+    warnings.extend(
+        exchange_warnings
+            .into_iter()
+            .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
+    );
 
     Ok(FromJsonOutput {
         bytes: outcome.bytes,
@@ -907,17 +927,48 @@ impl PatchOutput {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> {
-    let value: serde_json::Value = serde_json::from_str(&opts.patch)?;
+    let mut value: serde_json::Value = serde_json::from_str(&opts.patch)?;
+    let exchange_warnings =
+        hwpforge_smithy_hwpx::exchange::read_exchange_v2(&mut value).map_err(OpsError::Exchange)?;
     let exported = ExportedSection::deserialize(&value)?;
 
     verify_section_addresses(&value, &exported.section, exported.section_index)?;
 
     let diagnosed =
         HwpxPatcher::patch_exported_section_with_codec_diagnostics(hwpx, opts.section, &exported)?;
-    let SectionPatchOutcome { bytes, patched_section, sections } = diagnosed.value;
+    let SectionPatchOutcome { mut bytes, patched_section, sections } = diagnosed.value;
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    if !exchange_warnings.is_empty() {
+        // Legacy positional IDs do not prove cache identity, even if the
+        // text-only patch itself passed the existing preservation checks.
+        let decoded = HwpxDecoder::decode(&bytes).map_err(OpsError::decode)?;
+        let mut masterpage_offset = 0;
+        for (index, section) in decoded.document.sections().iter().enumerate() {
+            if let Some(path) = first_layout_cache_path(section, index, masterpage_offset) {
+                warnings.push(OpsWarning::Encode(EncodeWarning::LayoutCacheDropped {
+                    path,
+                    reason: "legacy JSON cannot prove original layout cache identity; re-export the original document".into(),
+                }));
+            }
+            masterpage_offset += section.master_pages.as_ref().map_or(0, Vec::len);
+        }
+        let outcome = HwpxEncoder::encode_with_diagnostics(
+            &decoded.document.validate()?,
+            &decoded.style_store,
+            &decoded.image_store,
+            EncodeOptions::default(),
+        )
+        .map_err(OpsError::encode)?;
+        bytes = outcome.bytes;
+        warnings.extend(outcome.warnings.into_iter().map(OpsWarning::Encode));
+    }
+    warnings.extend(
+        exchange_warnings
+            .into_iter()
+            .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
+    );
 
     Ok(PatchOutput { bytes, section: patched_section, sections, warnings })
 }

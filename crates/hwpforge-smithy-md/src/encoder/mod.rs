@@ -24,6 +24,15 @@ pub struct MdEncoder;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MdWarning {
+    /// Markdown has no representation for the source paragraph measure.
+    ParagraphMeasureLost {
+        /// Paragraph definition index.
+        definition: usize,
+        /// Margin field or referenced tab position that cannot be represented.
+        field: String,
+        /// Original semantic value, including its unit.
+        measure: hwpforge_core::ParagraphMeasure,
+    },
     /// A table with merged cells was flattened into a plain GFM pipe grid
     /// (spans are not representable there). The style-aware encoder
     /// (`encode_styled`) renders such tables as HTML with colspan/rowspan
@@ -82,6 +91,9 @@ pub enum MdWarning {
 impl core::fmt::Display for MdWarning {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::ParagraphMeasureLost { definition, field, measure } => write!(
+                f, "paragraph definition {definition} {field} {measure:?} cannot be represented in Markdown"
+            ),
             Self::MergedCellsFlattened { merged_cells } => write!(
                 f,
                 "table with {merged_cells} merged cell(s) flattened to a plain GFM grid \

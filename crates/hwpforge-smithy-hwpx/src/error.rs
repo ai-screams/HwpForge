@@ -24,6 +24,14 @@ use std::fmt;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum HwpxError {
+    /// Legacy JSON tab positions have irrecoverably ambiguous units.
+    #[error("버전 없는 JSON의 탭 position은 원래 단위와 case/default 척도를 복구할 수 없어 가져오기를 거부했습니다. 원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오. 문제 JSON 경로 ({count}건): {paths}")]
+    LegacyJsonTabs {
+        /// Number of ambiguous positions.
+        count: usize,
+        /// JSON paths of every ambiguous position.
+        paths: String,
+    },
     /// ZIP archive could not be read or is corrupt.
     #[error("ZIP error: {0}")]
     Zip(String),
@@ -118,6 +126,8 @@ pub enum HwpxError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HwpxErrorCode {
+    /// Legacy JSON tabs require re-export from the original document.
+    LegacyJsonTabs = 4012,
     /// Generic ZIP failure.
     Zip = 4000,
     /// Invalid mimetype in archive.
@@ -154,6 +164,7 @@ impl HwpxError {
     /// Returns the corresponding error code.
     pub fn code(&self) -> HwpxErrorCode {
         match self {
+            Self::LegacyJsonTabs { .. } => HwpxErrorCode::LegacyJsonTabs,
             Self::Zip(_) => HwpxErrorCode::Zip,
             Self::InvalidMimetype { .. } => HwpxErrorCode::InvalidMimetype,
             Self::MissingFile { .. } => HwpxErrorCode::MissingFile,
