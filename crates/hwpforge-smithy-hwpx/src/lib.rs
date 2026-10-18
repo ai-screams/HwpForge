@@ -61,11 +61,14 @@ pub mod error;
 pub mod exchange;
 mod fill;
 pub mod grid_addr;
+#[doc(hidden)]
+pub mod header_references;
 mod inline_text;
 mod layout_carry;
 pub mod layout_edit;
 mod list_bridge;
 mod package_path;
+pub mod paragraph_measure;
 mod patch;
 pub mod presets;
 mod read;

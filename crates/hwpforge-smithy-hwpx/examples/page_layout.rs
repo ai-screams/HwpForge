@@ -14,7 +14,7 @@ use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, ApplyPageType, CharShapeIndex, GutterType, HwpUnit, ParaShapeIndex, ShowMode,
 };
-use hwpforge_smithy_hwpx::style_store::{HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
 const CS_NORMAL: usize = 0;
@@ -27,8 +27,10 @@ fn text_para(text: &str, cs: usize, ps: usize) -> Paragraph {
 }
 
 fn build_style_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
+    // 이것을 실패시키는 것: 언어별 글꼴 또는 쪽 borderFill 1 정의 제거(실제 example 실행).
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    store
+        .push_border_fill(hwpforge_smithy_hwpx::style_store::HwpxBorderFill::default_page_border());
 
     let cs_normal = hwpforge_smithy_hwpx::style_store::HwpxCharShape::default();
     store.push_char_shape(cs_normal);

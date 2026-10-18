@@ -280,5 +280,6 @@ fn end_run_reference_is_bounded() {
         )
     };
     assert!(HwpxDecoder::decode(&with_ref(100_001)).is_err());
-    assert!(HwpxDecoder::decode(&with_ref(100_000)).is_ok());
+    assert!(HwpxDecoder::decode(&with_ref(100_000)).is_err());
+    assert!(HwpxDecoder::decode(&with_ref(13)).is_ok());
 }

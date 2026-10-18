@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use hwpforge_core::{ImageStore, StyleLookup};
+//! use hwpforge_core::{ImageStore, ParagraphMeasure, StyleLookup};
 //! use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 //! use hwpforge_smithy_hwpx::HwpxStyleLookup;
 //!
@@ -20,7 +20,7 @@
 //! assert!(lookup.image_data("logo.png").is_none());
 //! ```
 
-use hwpforge_core::{ImageStore, StyleLookup};
+use hwpforge_core::{ImageStore, ParagraphMeasure, StyleLookup};
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex, UnderlineType,
 };
@@ -69,6 +69,8 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit>;
         fn char_text_color(&self, id: CharShapeIndex) -> Option<Color>;
         fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
+        fn para_indent_left(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
+        fn para_indent_first_line(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure>;
         fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;

@@ -75,8 +75,11 @@ fn build_style_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::new();
 
     // ── Fonts ───────────────────────────────────────────────────
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
-    store.push_font(HwpxFont::new(1, "함초롬바탕", "HANGUL"));
+    // 이것을 실패시키는 것: 언어별 원본 글꼴 등록을 HANGUL/LATIN 일부로 되돌리기(실제 example 실행).
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        store.push_font(HwpxFont::new(1, "함초롬바탕", lang));
+    }
 
     // ── Wave 8: Numbering + Tab ────────────────────────────────
     store.push_numbering(NumberingDef::default_outline());
@@ -161,7 +164,7 @@ fn build_style_store() -> HwpxStyleStore {
     ps_ol1.heading_id_ref = 0; // outline headings use idRef=0 in HWPX
     ps_ol1.heading_level = 1;
     ps_ol1.tab_pr_id_ref = 1; // auto left tab
-    ps_ol1.spacing_after = HwpUnit::new(200).unwrap();
+    ps_ol1.spacing_after = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap());
     ps_ol1.line_spacing = 160;
     ps_ol1.line_spacing_type = LineSpacingType::Percentage;
     store.push_para_shape(ps_ol1);
@@ -173,8 +176,8 @@ fn build_style_store() -> HwpxStyleStore {
     ps_ol2.heading_id_ref = 0;
     ps_ol2.heading_level = 2;
     ps_ol2.tab_pr_id_ref = 1;
-    ps_ol2.margin_left = HwpUnit::new(800).unwrap();
-    ps_ol2.spacing_after = HwpUnit::new(100).unwrap();
+    ps_ol2.margin_left = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(800).unwrap());
+    ps_ol2.spacing_after = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap());
     ps_ol2.line_spacing = 160;
     ps_ol2.line_spacing_type = LineSpacingType::Percentage;
     store.push_para_shape(ps_ol2);
@@ -186,8 +189,8 @@ fn build_style_store() -> HwpxStyleStore {
     ps_ol3.heading_id_ref = 0;
     ps_ol3.heading_level = 3;
     ps_ol3.tab_pr_id_ref = 1;
-    ps_ol3.margin_left = HwpUnit::new(1600).unwrap();
-    ps_ol3.spacing_after = HwpUnit::new(100).unwrap();
+    ps_ol3.margin_left = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(1600).unwrap());
+    ps_ol3.spacing_after = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap());
     ps_ol3.line_spacing = 160;
     ps_ol3.line_spacing_type = LineSpacingType::Percentage;
     store.push_para_shape(ps_ol3);
@@ -201,6 +204,27 @@ fn build_style_store() -> HwpxStyleStore {
     let mut ps_tab_r = HwpxParaShape::default();
     ps_tab_r.tab_pr_id_ref = 2;
     store.push_para_shape(ps_tab_r);
+
+    // 이것을 실패시키는 것: 본문과 개요가 참조하는 named style 정의 제거(실제 example 실행).
+    for (id, name, para_id) in [
+        (0, "바탕글", PS_BODY),
+        (1, "본문", PS_BODY),
+        (2, "개요 1", PS_OUTLINE_LV1),
+        (3, "개요 2", PS_OUTLINE_LV2),
+        (4, "개요 3", PS_OUTLINE_LV3),
+    ] {
+        store.push_style(hwpforge_smithy_hwpx::HwpxStyle::new(
+            id,
+            "PARA",
+            name,
+            name,
+            para_id as u32,
+            CS_NORMAL as u32,
+            1,
+            1042,
+            0,
+        ));
+    }
 
     store
 }

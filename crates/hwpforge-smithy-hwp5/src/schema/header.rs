@@ -239,11 +239,11 @@ impl Hwp5RawIdMappings {
     /// minimum required 60 bytes.
     pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
         const MIN_SIZE: usize = 60; // 15 × i32
-        if data.len() < MIN_SIZE {
+        if data.len() < MIN_SIZE || (data.len() < 72 && !data.len().is_multiple_of(4)) {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
                 detail: format!(
-                    "IdMappings too short: {} bytes (expected >= {})",
+                    "IdMappings invalid length: {} bytes (expected >= {}, complete count words)",
                     data.len(),
                     MIN_SIZE
                 ),
@@ -294,6 +294,8 @@ impl Hwp5RawIdMappings {
 /// semantics are retained; layout-only attributes are parsed and discarded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5RawNumberingParaHead {
+    /// Original character definition ID; u32::MAX means inherit.
+    pub char_shape_id: u32,
     /// Start number for this level.
     pub start_number: u32,
     /// Zero-based list level within the numbering definition.
@@ -398,7 +400,7 @@ impl Hwp5RawBulletDef {
     /// # Record layout (verified against real Hancom `HWPTAG_BULLET` records)
     ///
     /// The published KS X 6101 / HWP5 spec (table 42) is incomplete here. Real
-    /// records are 25 bytes:
+    /// records have a 23-byte base and an optional 2-byte check glyph:
     ///
     /// | offset | bytes | field                                            |
     /// |--------|-------|--------------------------------------------------|
@@ -406,7 +408,7 @@ impl Hwp5RawBulletDef {
     /// | 12..14 | 2     | bullet glyph (WCHAR)                              |
     /// | 14..18 | 4     | image-bullet flag (INT32; 0 = glyph bullet)       |
     /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — ALWAYS present |
-    /// | 23..25 | 2     | check-bullet glyph (WCHAR)                        |
+    /// | 23..25 | 2     | optional check-bullet glyph (WCHAR)               |
     ///
     /// The image-bullet block is a fixed 5 bytes regardless of the flag value,
     /// so `check_bullet_char` always sits at offset 23, not at a flag-dependent
@@ -415,12 +417,12 @@ impl Hwp5RawBulletDef {
     pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
         const IMAGE_BLOCK_LEN: usize = 5;
         // 12 (para head) + 2 (bullet char) + 4 (image flag) + 5 (image block)
-        // + 2 (check char) = 25.
-        const MIN_SIZE: usize = 25;
-        if data.len() < MIN_SIZE {
+        // Optional check glyph starts at offset 23; a partial WCHAR is invalid.
+        const MIN_SIZE: usize = 23;
+        if data.len() < MIN_SIZE || data.len() == 24 {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
-                detail: format!("Bullet too short: {} bytes (expected >= {MIN_SIZE})", data.len()),
+                detail: format!("Bullet incomplete: {} bytes (expected 23 or >= 25)", data.len()),
             });
         }
 
@@ -436,8 +438,12 @@ impl Hwp5RawBulletDef {
         let mut _image_block = [0u8; IMAGE_BLOCK_LEN];
         cur.read_exact(&mut _image_block)?;
 
-        let code_unit = cur.read_u16::<LittleEndian>()?;
-        let check_bullet_char = (code_unit != 0).then(|| decode_utf16_code_unit(code_unit));
+        let check_bullet_char = if data.len() >= 25 {
+            let code_unit = cur.read_u16::<LittleEndian>()?;
+            (code_unit != 0).then(|| decode_utf16_code_unit(code_unit))
+        } else {
+            None
+        };
 
         Ok(Self { paragraph_head, bullet_char, use_image, image_id, check_bullet_char })
     }
@@ -599,7 +605,7 @@ impl Hwp5RawBinData {
 /// Parsed from a `FaceName` record (TagId 0x13).
 ///
 /// Contains the font property flags and the decoded UTF-16LE face name.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawFaceName {
     /// Font property flags byte.
     pub property: u8,
@@ -684,7 +690,7 @@ impl Hwp5RawFaceName {
 /// Parsed from a `CharShape` record (TagId 0x15).
 ///
 /// Minimum size is 68 bytes; optional fields appear in later format versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawCharShape {
     /// Font IDs for 7 language groups (hangul, english, hanja, japanese,
     /// other, symbol, user).
@@ -984,7 +990,7 @@ impl Hwp5RawCharShape {
 /// Parsed from a `ParaShape` record (TagId 0x19).
 ///
 /// Base size is 42 bytes; optional fields appear in later format versions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawParaShape {
     /// Property bitfield 1 (alignment in bits 2–4, etc.).
     pub property1: u32,
@@ -1304,14 +1310,21 @@ fn parse_numbering_para_head(
     let checkable = (attribute >> 5) & 1 != 0;
     let _width_adjust = cur.read_i16::<LittleEndian>()?;
     let _text_offset = cur.read_i16::<LittleEndian>()?;
-    let _char_shape_id = cur.read_u32::<LittleEndian>()?;
+    let char_shape_id = cur.read_u32::<LittleEndian>()?;
     let (num_format, text) = if numbering {
         (numbering_attr_num_format(attribute).to_string(), read_utf16le_string(cur)?)
     } else {
         (String::new(), String::new())
     };
 
-    Ok(Hwp5RawNumberingParaHead { start_number: 1, level, num_format, text, checkable })
+    Ok(Hwp5RawNumberingParaHead {
+        char_shape_id,
+        start_number: 1,
+        level,
+        num_format,
+        text,
+        checkable,
+    })
 }
 
 fn numbering_attr_num_format(attribute: u32) -> &'static str {
@@ -1519,7 +1532,7 @@ fn read_utf16le_string(cur: &mut Cursor<&[u8]>) -> Hwp5Result<String> {
 }
 
 /// Parsed from a `Style` record (TagId 0x1A).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Hwp5RawStyle {
     /// Style name in Korean (UTF-16LE).
     pub name: String,
@@ -2038,6 +2051,27 @@ mod tests {
     }
 
     #[test]
+    fn fix1_bullet_base_and_optional_wchar_lengths() {
+        let full = make_bullet_def_bytes_full(false, 0x2611, 0x08);
+        // 이것을 실패시키는 것: 23바이트 기본형 거부 또는 체크 글리프 합성.
+        let base = Hwp5RawBulletDef::parse(&full[..23]).unwrap();
+        assert_eq!(base.bullet_char, "●");
+        assert_eq!(base.check_bullet_char, None);
+        assert!(!base.paragraph_head.checkable);
+        // 이것을 실패시키는 것: 24바이트 잘린 WCHAR 허용 또는 기본형보다 짧은 입력 허용.
+        for len in (0..23).chain([24]) {
+            assert!(Hwp5RawBulletDef::parse(&full[..len]).is_err(), "length {len}");
+        }
+        // 이것을 실패시키는 것: 체크 WCHAR offset 변경 또는 25바이트 초과 입력 거부.
+        for extra in [vec![], vec![0x12, 0x34, 0x56]] {
+            let mut bytes = full.clone();
+            bytes.extend(extra);
+            let bullet = Hwp5RawBulletDef::parse(&bytes).unwrap();
+            assert_eq!(bullet.check_bullet_char.as_deref(), Some("☑"));
+        }
+    }
+
+    #[test]
     fn parse_bullet_def_zero_checked_char_becomes_none() {
         let bullet = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, 0))
             .expect("bullet parse should succeed");
@@ -2083,10 +2117,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_bullet_def_rejects_record_shorter_than_25_bytes() {
-        // The real Hancom record is always 25 bytes; a 20-byte record (the old
-        // incorrect minimum) must now be rejected rather than silently
-        // mis-parsing the check glyph offset.
+    fn parse_bullet_def_rejects_record_shorter_than_base() {
+        // A 20-byte record does not contain the complete image block.
         let mut short = make_bullet_def_bytes_with_checked_char(false, 0x2611);
         short.truncate(20);
         assert!(Hwp5RawBulletDef::parse(&short).is_err());

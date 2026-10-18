@@ -282,6 +282,7 @@ fn project_to_core_internal(
             .page_def
             .as_ref()
             .map(page_def_to_settings)
+            .transpose()?
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
@@ -1424,7 +1425,6 @@ fn carry_inline_tab_attrs(
     text_segments: &[crate::schema::section::TextSegment],
 ) -> Vec<(u32, u8, u8)> {
     use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
-    use hwpforge_core::tab::TabDef;
     use hwpforge_foundation::HwpUnit;
     use std::collections::VecDeque;
 
@@ -1437,10 +1437,10 @@ fn carry_inline_tab_attrs(
         let leader = extra[4];
         let tab_type = extra[5];
         attrs_q.push_back(InlineTabAttr {
-            // HWP5 stores raw HwpUnit; cap by the same helper that
-            // backs `TabStop.position` so the value always fits Core's
-            // ±100M `HwpUnit` range without losing the inline tab.
-            width: TabDef::clamp_position_from_unsigned(u64::from(width)),
+            // Inline width is a physical length, outside #242 packed tab stops.
+            // Preserve its existing cap policy independently of the removed helper.
+            width: HwpUnit::new(width.min(HwpUnit::MAX_VALUE as u32) as i32)
+                .expect("capped inline tab width fits HwpUnit"),
             leader,
             tab_type,
         });
@@ -3182,11 +3182,40 @@ fn project_memo_run(
     // `#[non_exhaustive]` and can't be constructed positionally outside
     // `hwpforge-core`.
     let mut metadata = hwpforge_core::MemoMetadata::default();
+    if memo.command.shape_id != 65535 {
+        push_projection_fallback(&mut projection_images.warnings, "memo.shape",
+            format!("memo shape {} is unsupported; original command {:?} retained, shape definition is not carried", memo.command.shape_id, memo.command.raw));
+    }
     metadata.shape_id_ref = memo.command.shape_id;
     metadata.number = memo.command.memo_id;
     metadata.author = memo.command.author.clone();
     metadata.command = memo.command.raw.clone();
     Run::control(Control::Memo { content: paragraphs, anchor_runs, metadata }, char_shape_id)
+}
+
+#[test]
+fn fix4_nondefault_memo_shape_loss_is_explicit() {
+    // 이것을 실패시키는 것: 메모 모양 참조/파싱 대체값의 무음 방출.
+    for id in [0, 7, 99, 65535] {
+        let memo = Hwp5MemoControl {
+            ctrl_id: crate::ctrl_ids::CTRL_ID_MEMO,
+            command: crate::schema::section::Hwp5MemoCommand {
+                raw: format!("MEMO/{id}/1/2/3/author/"),
+                shape_id: id,
+                memo_id: 1,
+                hancom_inst_a: 2,
+                hancom_inst_b: 3,
+                author: "author".into(),
+                terminator: String::new(),
+            },
+            paragraphs: Vec::new(),
+        };
+        let mut images =
+            ProjectionImageState::new(None, None, DecompressBudget::new(MAX_TOTAL_DECOMPRESSED));
+        project_memo_run(&memo, &mut images, CharShapeIndex::new(0), Vec::new());
+        assert_eq!(images.warnings.iter().any(|w| matches!(w,
+            Hwp5Warning::ProjectionFallback { subject: "memo.shape", reason } if reason.contains(&id.to_string()))), id != 65535);
+    }
 }
 
 /// Projects a HWP5 dutmal (덧말) control into a Core `Run` carrying
@@ -4698,7 +4727,10 @@ pub(crate) fn drop_cell_zones_with_unknown_border_fill(
 ) {
     document.for_each_table_mut(|table| {
         table.cell_zones.retain(|z| {
-            let ok = z.border_fill_id >= 1 && z.border_fill_id as usize <= border_fill_count;
+            let ok = hwpforge_core::style_lookup::lookup(
+                (z.border_fill_id >= 1 && z.border_fill_id as usize <= border_fill_count).then_some(()),
+                "cell zone borderFill", z.border_fill_id,
+            ).is_ok();
             if !ok {
                 push_projection_fallback(
                     warnings,
@@ -4888,24 +4920,29 @@ fn empty_cell() -> TableCell {
 /// Convert an `Hwp5PageDef` (raw HWP5 units) into Core `PageSettings`.
 ///
 /// HWP5 page dimensions are already in HwpUnit (720ths of an inch).
-/// `HwpUnit::new` rejects values outside ±100,000,000; for the rare case
-/// where a malformed file has an out-of-range value, `HwpUnit::ZERO` is
-/// used as a safe fallback.
-fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
-    let u = |v: u32| HwpUnit::new(v as i32).unwrap_or(HwpUnit::ZERO);
-    PageSettings {
-        width: u(pd.width),
-        height: u(pd.height),
-        margin_left: u(pd.margin_left),
-        margin_right: u(pd.margin_right),
-        margin_top: u(pd.margin_top),
-        margin_bottom: u(pd.margin_bottom),
-        header_margin: u(pd.header_margin),
-        footer_margin: u(pd.footer_margin),
-        gutter: u(pd.gutter),
+/// Dimensions are checked before conversion; an out-of-range positive value
+/// must never become a valid negative margin.
+fn page_def_to_settings(pd: &Hwp5PageDef) -> Hwp5Result<PageSettings> {
+    let u = |field: &str, v: u32| -> Hwp5Result<HwpUnit> {
+        let signed = i32::try_from(v).map_err(|_| Hwp5Error::RecordParse {
+            offset: 0,
+            detail: format!("PageDef {field} value {v} exceeds signed range"),
+        })?;
+        Ok(HwpUnit::new(signed)?)
+    };
+    Ok(PageSettings {
+        width: u("width", pd.width)?,
+        height: u("height", pd.height)?,
+        margin_left: u("margin_left", pd.margin_left)?,
+        margin_right: u("margin_right", pd.margin_right)?,
+        margin_top: u("margin_top", pd.margin_top)?,
+        margin_bottom: u("margin_bottom", pd.margin_bottom)?,
+        header_margin: u("header_margin", pd.header_margin)?,
+        footer_margin: u("footer_margin", pd.footer_margin)?,
+        gutter: u("gutter", pd.gutter)?,
         landscape: pd.landscape,
         ..PageSettings::a4()
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -6524,6 +6561,28 @@ mod tests {
     // ── page_def_to_settings ─────────────────────────────────────────────────
 
     #[test]
+    fn fix2_page_dimensions_reject_unsigned_wrap_and_out_of_range() {
+        // 이것을 실패시키는 것: PageDef u32를 as i32로 잘라 음수로 수용 / 범위 오류를 0으로.
+        for value in [u32::MAX, 100_000_001] {
+            let pd = Hwp5PageDef {
+                width: 59535,
+                height: 84183,
+                margin_left: value,
+                margin_right: 0,
+                margin_top: 0,
+                margin_bottom: 0,
+                header_margin: 0,
+                footer_margin: 0,
+                gutter: 0,
+                landscape: false,
+            };
+            assert!(page_def_to_settings(&pd).is_err());
+            let section = make_section(vec![make_paragraph("x", 0, 0)], Some(pd));
+            assert!(project_to_core(vec![section]).is_err());
+        }
+    }
+
+    #[test]
     fn page_def_dimensions_are_preserved() {
         let pd = Hwp5PageDef {
             width: 59535,
@@ -6537,7 +6596,7 @@ mod tests {
             gutter: 0,
             landscape: false,
         };
-        let ps = page_def_to_settings(&pd);
+        let ps = page_def_to_settings(&pd).unwrap();
         assert_eq!(ps.width, HwpUnit::new(59535).unwrap());
         assert_eq!(ps.height, HwpUnit::new(84183).unwrap());
         assert_eq!(ps.margin_left, HwpUnit::new(5669).unwrap());
@@ -6558,7 +6617,7 @@ mod tests {
             gutter: 0,
             landscape: true,
         };
-        let ps = page_def_to_settings(&pd);
+        let ps = page_def_to_settings(&pd).unwrap();
         assert!(ps.landscape);
     }
 

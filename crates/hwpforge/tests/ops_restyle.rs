@@ -168,10 +168,30 @@ fn a_dangling_image_reference_refuses_the_restyle() {
 }
 
 #[test]
-fn a_document_without_fonts_has_nothing_to_rebind() {
-    // A store with shapes but no font table. If the encoder accepts it, the
-    // package decodes into a document `restyle` cannot act on, which is the
-    // one input `NoFonts` exists for.
+fn a_new_store_without_fonts_gets_resolvable_defaults() {
+    // 이것을 실패시키는 것: 새 문서 char/para 0 기본값 예외 제거.
+    let store = HwpxStyleStore::new();
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("글꼴 없음", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    let validated = doc.validate().expect("validate");
+    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new())
+        .expect("new stores may request generated defaults");
+    assert!(HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_some());
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect("resolvable defaults can be restyled");
+    HwpxDecoder::decode(&out.bytes).expect("restyled references stay valid");
+}
+
+#[test]
+fn a_new_store_without_fonts_cannot_repair_explicit_references() {
+    // 이것을 실패시키는 것: 원본에 없는 명시 글꼴 0을 출력 기본 정의로 수복.
     let mut store = HwpxStyleStore::new();
     store.push_char_shape(HwpxCharShape::default());
     store.push_para_shape(HwpxParaShape::default());
@@ -185,18 +205,17 @@ fn a_document_without_fonts_has_nothing_to_rebind() {
         PageSettings::a4(),
     ));
     let validated = doc.validate().expect("validate");
+    let error = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap_err();
+    assert!(error.to_string().contains("font HANGUL"));
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
+    }
     let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new())
-        .expect("a fontless store must still encode for this branch to be reachable");
-    assert!(
-        HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_none(),
-        "the package must really come back without a font table"
-    );
-
-    let err = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
-        .expect_err("there is no base font to replace");
-
-    assert_eq!(err.code(), OpsCode::NoFonts, "{err}");
-    assert!(err.hint().is_some(), "the CLI hint points at `validate`");
+        .expect("original font definitions resolve explicit references");
+    assert!(HwpxDecoder::decode(&bytes).expect("decode").style_store.iter_fonts().next().is_some());
+    let out = restyle(&bytes, &RestyleOptions::default().with_preset("modern"))
+        .expect("resolvable defaults can be restyled");
+    HwpxDecoder::decode(&out.bytes).expect("restyled references stay valid");
 }
 
 #[test]

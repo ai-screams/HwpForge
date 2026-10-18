@@ -773,7 +773,14 @@ mod tests {
             doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::default()));
             HwpxEncoder::encode(
                 &doc.validate().unwrap(),
-                &crate::style_store::HwpxStyleStore::with_default_fonts("함초롬바탕"),
+                &{
+                    // 이것을 실패시키는 것: 합성 fixture의 원본 charPr/paraPr 0 정의 누락.
+                    let mut store =
+                        crate::style_store::HwpxStyleStore::with_default_fonts("함초롬바탕");
+                    store.push_char_shape(crate::HwpxCharShape::default());
+                    store.push_para_shape(crate::HwpxParaShape::default());
+                    store
+                },
                 &Default::default(),
             )
             .unwrap()

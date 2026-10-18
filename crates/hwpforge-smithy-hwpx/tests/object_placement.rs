@@ -167,7 +167,8 @@ fn api_table_doc(placement: Option<ObjectPlacement>) -> Vec<u8> {
     );
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
-    let mut styles = HwpxStyleStore::new();
+    // 이것을 실패시키는 것: 합성 fixture에서 참조하는 원본 글꼴 정의 누락.
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
     styles.push_char_shape(HwpxCharShape::default());
     styles.push_para_shape(HwpxParaShape::default());
     HwpxEncoder::encode(&doc.validate().expect("validate"), &styles, &ImageStore::new())
@@ -315,7 +316,8 @@ fn text_box_corner_ratio_is_written() {
     );
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
-    let mut styles = HwpxStyleStore::new();
+    // 이것을 실패시키는 것: 합성 fixture에서 참조하는 원본 글꼴 정의 누락.
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
     styles.push_char_shape(HwpxCharShape::default());
     styles.push_para_shape(HwpxParaShape::default());
     let bytes =

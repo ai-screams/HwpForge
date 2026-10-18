@@ -144,7 +144,13 @@ fn polygon_text_margin_is_reported() {
     ));
     let bytes = HwpxEncoder::encode(
         &doc.validate().expect("validate"),
-        &HwpxStyleStore::with_default_fonts("함초롬바탕"),
+        &{
+            // 이것을 실패시키는 것: 합성 fixture의 원본 charPr/paraPr 0 정의 누락.
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(hwpforge_smithy_hwpx::HwpxCharShape::default());
+            store.push_para_shape(hwpforge_smithy_hwpx::HwpxParaShape::default());
+            store
+        },
         &Default::default(),
     )
     .expect("encode");
@@ -188,7 +194,13 @@ fn text_box_without_a_margin_writes_283() {
     ));
     let bytes = HwpxEncoder::encode(
         &doc.validate().expect("validate"),
-        &HwpxStyleStore::with_default_fonts("함초롬바탕"),
+        &{
+            // 이것을 실패시키는 것: 합성 fixture의 원본 charPr/paraPr 0 정의 누락.
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(hwpforge_smithy_hwpx::HwpxCharShape::default());
+            store.push_para_shape(hwpforge_smithy_hwpx::HwpxParaShape::default());
+            store
+        },
         &Default::default(),
     )
     .expect("encode");

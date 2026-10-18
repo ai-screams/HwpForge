@@ -42,6 +42,8 @@ fn p_border(text: &str) -> Paragraph {
 
 fn build_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    // 이것을 실패시키는 것: 글자에서 참조하는 borderFill 3 정의 제거(실제 example 실행).
+    store.push_border_fill(hwpforge_smithy_hwpx::style_store::HwpxBorderFill::default_table_border());
 
     // CS 0: normal (10pt, black)
     store.push_char_shape(HwpxCharShape::default());

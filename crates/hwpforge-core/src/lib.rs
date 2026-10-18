@@ -98,6 +98,8 @@ pub mod object_id;
 pub mod outline;
 pub mod page;
 pub mod paragraph;
+pub mod paragraph_measure;
+pub use paragraph_measure::{CharCount, ParagraphMeasure};
 pub mod placement;
 pub mod run;
 pub mod section;

@@ -23,7 +23,13 @@ fn a_document_built_through_the_facade_round_trips() {
     let validated = doc.validate().expect("valid document");
     let bytes = HwpxEncoder::encode(
         &validated,
-        &HwpxStyleStore::with_default_fonts("함초롬바탕"),
+        &{
+            // 이것을 실패시키는 것: 합성 fixture의 원본 charPr/paraPr 0 정의 누락.
+            let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+            store.push_char_shape(hwpforge::hwpx::HwpxCharShape::default());
+            store.push_para_shape(hwpforge::hwpx::HwpxParaShape::default());
+            store
+        },
         &ImageStore::new(),
     )
     .expect("encode");

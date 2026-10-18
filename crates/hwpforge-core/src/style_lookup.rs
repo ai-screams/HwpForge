@@ -9,9 +9,64 @@
 //! All methods have default implementations returning `None`, so
 //! implementors only need to override the methods they can support.
 
+use crate::ParagraphMeasure;
+
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex, UnderlineType,
 };
+
+/// Strict definition lookup shared by format decoders and encoders.
+///
+/// # Errors
+/// Returns an invalid-structure error when the original ID has no definition.
+#[doc(hidden)]
+pub fn lookup<T>(value: Option<T>, kind: &str, id: impl std::fmt::Display) -> crate::CoreResult<T> {
+    value.ok_or_else(|| crate::CoreError::InvalidStructure {
+        context: kind.into(),
+        reason: format!("broken {kind} reference ID {id}"),
+    })
+}
+
+/// Check body border IDs against the supplied original definition IDs.
+/// Call before synthesizing any output definitions. Zero denotes no border.
+/// # Errors
+/// Returns an error for any active body border ID missing from definitions.
+#[doc(hidden)]
+pub fn validate_body_borders<S>(
+    document: &crate::Document<S>,
+    definitions: impl IntoIterator<Item = u32>,
+) -> crate::CoreResult<()> {
+    let borders: std::collections::BTreeSet<_> = definitions.into_iter().collect();
+    let check = |id, kind| {
+        if id == 0 {
+            return Ok(());
+        }
+        lookup(borders.get(&id), kind, id).map(|_| ())
+    };
+    for section in document.sections() {
+        for entry in section.page_border_fills.iter().flatten() {
+            check(entry.border_fill_id, "page borderFill")?;
+        }
+    }
+    let mut result = Ok(());
+    document.for_each_table(|table| {
+        if result.is_err() {
+            return;
+        }
+        result = (|| {
+            if let Some(id) = table.border_fill_id {
+                check(id, "table borderFill")?;
+            }
+            for cell in table.rows.iter().flat_map(|row| &row.cells) {
+                if let Some(id) = cell.border_fill_id {
+                    check(id, "cell borderFill")?;
+                }
+            }
+            Ok(())
+        })();
+    });
+    result
+}
 
 /// Trait for querying resolved style properties by index.
 ///
@@ -114,12 +169,12 @@ pub trait StyleLookup {
     }
 
     /// Returns the left indent of the paragraph shape at `id`.
-    fn para_indent_left(&self, _id: ParaShapeIndex) -> Option<HwpUnit> {
+    fn para_indent_left(&self, _id: ParaShapeIndex) -> Option<ParagraphMeasure> {
         None
     }
 
     /// Returns the first-line indent of the paragraph shape at `id`.
-    fn para_indent_first_line(&self, _id: ParaShapeIndex) -> Option<HwpUnit> {
+    fn para_indent_first_line(&self, _id: ParaShapeIndex) -> Option<ParagraphMeasure> {
         None
     }
 

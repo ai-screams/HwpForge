@@ -801,6 +801,18 @@
       "wrapped": true,
       "variants": [
         {
+          "name": "InactiveHeaderReference",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "ParagraphMeasureNormalized",
+          "shape": "struct",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
           "name": "UnclosedFieldBoundary",
           "shape": "struct",
           "cfg": [],
@@ -881,6 +893,24 @@
       "non_exhaustive": true,
       "wrapped": true,
       "variants": [
+        {
+          "name": "MeasureUnitMismatch",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MeasureOverflow",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
+        {
+          "name": "MeasureOffGrid",
+          "shape": "unit",
+          "cfg": [],
+          "discriminant": null
+        },
         {
           "name": "Validation",
           "shape": "tuple",

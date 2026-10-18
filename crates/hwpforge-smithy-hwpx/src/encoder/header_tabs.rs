@@ -2,7 +2,7 @@
 
 use hwpforge_core::{TabDef, TabStop};
 
-use crate::error::{HwpxError, HwpxResult};
+use crate::error::HwpxResult;
 use crate::schema::header::HxTabItem;
 use crate::style_store::HwpxStyleStore;
 
@@ -51,22 +51,14 @@ pub(super) fn build_tab_properties_xml(store: &HwpxStyleStore) -> HwpxResult<Str
 }
 
 fn build_tab_item(stop: &TabStop, legacy_default_units: bool) -> HwpxResult<HxTabItem> {
-    let pos = if legacy_default_units {
-        stop.position.as_i32().saturating_mul(2)
-    } else {
-        stop.position.as_i32()
-    };
-    let pos = u32::try_from(pos).map_err(|_| HwpxError::InvalidStructure {
-        detail: format!(
-            "tab stop position {} cannot be serialized as unsigned HWPX tabItem pos",
-            stop.position.as_i32()
-        ),
-    })?;
+    let (value, unit) = crate::paragraph_measure::parts(stop.position);
+    let packed = crate::paragraph_measure::pack_tab(stop.position)?;
+    let pos = if legacy_default_units { packed } else { i64::from(value) };
     Ok(HxTabItem {
         pos,
         tab_type: stop.align.to_hwpx_str().to_string(),
         leader: stop.leader.as_hwpx_str().to_string(),
-        unit: if legacy_default_units { String::new() } else { "HWPUNIT".to_string() },
+        unit: if legacy_default_units { String::new() } else { unit.to_string() },
     })
 }
 
@@ -101,7 +93,7 @@ mod tests {
             auto_tab_left: false,
             auto_tab_right: false,
             stops: vec![TabStop {
-                position: HwpUnit::new(15000).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::from_hwpx_str("DASH"),
             }],
@@ -159,20 +151,22 @@ tabs:
     }
 
     #[test]
-    fn build_tab_properties_xml_rejects_negative_tab_stop_positions() {
+    fn fix1_build_tab_properties_xml_preserves_negative_hwpunit() {
         let mut store = HwpxStyleStore::new();
         store.push_tab(TabDef {
             id: 3,
             auto_tab_left: false,
             auto_tab_right: false,
             stops: vec![TabStop {
-                position: HwpUnit::new(-100).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(-100).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::none(),
             }],
         });
 
-        let err = build_tab_properties_xml(&store).unwrap_err();
-        assert!(matches!(err, HwpxError::InvalidStructure { .. }));
+        // 이것을 실패시키는 것: 음수 HWPUNIT 출력 거부 또는 default의 unsigned 출력.
+        let xml = build_tab_properties_xml(&store).unwrap();
+        assert!(xml.contains(r#"pos="-100" type="LEFT" leader="NONE" unit="HWPUNIT""#));
+        assert!(xml.contains(r#"<hp:default><hh:tabItem pos="-200""#));
     }
 }

@@ -755,7 +755,11 @@ fn r2_package(section: &[u8]) -> Vec<u8> {
     header[..18].copy_from_slice(b"HWP Document File\0");
     header[32..36].copy_from_slice(&0x05000205u32.to_le_bytes());
     cfb.create_stream("/FileHeader").unwrap().write_all(&header).unwrap();
-    cfb.create_stream("/DocInfo").unwrap();
+    // 이것을 실패시키는 것: 캡션 경고 합성 입력의 원본 스타일 정의 제거.
+    let mut info = make_record(TagId::CharShape, 0, &[0; 68]);
+    info.extend(make_record(TagId::ParaShape, 0, &[0; 42]));
+    info.extend(make_record(TagId::Style, 0, &[0; 14]));
+    cfb.create_stream("/DocInfo").unwrap().write_all(&info).unwrap();
     cfb.create_storage("/BodyText").unwrap();
     cfb.create_stream("/BodyText/Section0").unwrap().write_all(section).unwrap();
     cfb.into_inner().into_inner()
@@ -890,8 +894,15 @@ fn r3_encode(
 ) -> hwpforge_smithy_hwpx::EncodeOutcome {
     use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
     let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
-    styles.push_char_shape(HwpxCharShape::default());
+    // The synthetic Compose fixture refers to wire charPr 7.
+    for _ in 0..=7 {
+        styles.push_char_shape(HwpxCharShape::default());
+    }
     styles.push_para_shape(HwpxParaShape::default());
+    // 이것을 실패시키는 것: 합성 셀의 명시적 borderFill 1 정의 누락.
+    // This helper authors its store directly; output defaults cannot resolve
+    // the cell's original reference on its behalf.
+    styles.push_border_fill(hwpforge_smithy_hwpx::style_store::HwpxBorderFill::default_page_border());
     hwpforge_smithy_hwpx::HwpxEncoder::encode_with_diagnostics(
         &doc.validate().unwrap(),
         &styles,
@@ -2116,4 +2127,84 @@ fn ck_single_shape_keeps_legacy_core_and_bytes() {
         ).unwrap();
         assert_eq!(hwpforge_smithy_hwpx::HwpxFiller::list_fields(&filled.bytes).unwrap()[0].current, "새값");
     }
+}
+
+// 이것을 실패시키는 것: charPr/paraPr/style lookup 각각 생략, 또는 level 0만 검사.
+#[test]
+fn body_style_references_check_original_definitions_in_every_container() {
+    let mut info = make_record(TagId::CharShape, 0, &[0; 68]);
+    info.extend(make_record(TagId::ParaShape, 0, &[0; 42]));
+    info.extend(make_record(TagId::Style, 0, &[0; 14]));
+    let definitions = crate::decoder::header::parse_doc_info(&info, &version()).unwrap();
+    assert_eq!(definitions.char_shapes.len(), 1);
+    assert_eq!(definitions.para_shapes.len(), 1);
+    assert_eq!(definitions.styles.len(), 1);
+    // 이것을 실패시키는 것: 기존 잘린 레코드의 경고/fallback을 새 hard error로 바꾸기.
+    for tag in [TagId::ParaHeader, TagId::ParaCharShape] {
+        validate_body_style_references(&make_record(tag, 3, &[1]), &definitions).unwrap();
+    }
+    let hosts = [CTRL_ID_TABLE, CTRL_ID_HEADER, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE,
+        CTRL_ID_ENDNOTE, CTRL_ID_GSO, CTRL_ID_MEMO, R1_CAPTION, R1_ELLIPSE,
+        R1_POLYGON, R1_GROUP, R1_NESTED_GROUP];
+    for host in hosts {
+        for kind in ["charPr", "paraPr", "style"] {
+            for id in [0, 1, 2, 3] {
+                let mut header = para_header_data(if kind == "paraPr" { id } else { 0 },
+                    if kind == "style" { id as u8 } else { 0 });
+                header[12..14].copy_from_slice(&1u16.to_le_bytes());
+                let mut leaf = make_record(TagId::ParaHeader, 0, &header);
+                leaf.extend(make_record(TagId::ParaText, 1, &para_text_data("leaf")));
+                let mut run = 0u32.to_le_bytes().to_vec();
+                run.extend_from_slice(&(if kind == "charPr" { u32::from(id) } else { 0 }).to_le_bytes());
+                leaf.extend(make_record(TagId::ParaCharShape, 1, &run));
+                let bytes = r1_in_path(&leaf, &[CTRL_ID_TABLE, host]);
+                let result = validate_body_style_references(&bytes, &definitions);
+                if id == 0 {
+                    result.unwrap();
+                } else {
+                    let error = result.unwrap_err().to_string();
+                    assert!(error.contains(&format!("broken {kind} reference ID {id}")), "host={host:x}: {error}");
+                }
+                let mut empty = crate::decoder::header::parse_doc_info(&info, &version()).unwrap();
+                match kind {
+                    "charPr" => empty.char_shapes.clear(),
+                    "paraPr" => empty.para_shapes.clear(),
+                    _ => empty.styles.clear(),
+                }
+                let error = validate_body_style_references(&bytes, &empty).unwrap_err().to_string();
+                assert!(error.contains(kind), "{error}");
+            }
+        }
+    }
+}
+
+// 이것을 실패시키는 것: compose charPr 검사 생략, 중첩 깊이 필터, MAX 상속값 거부.
+#[test]
+fn compose_references_check_original_char_definitions_in_every_container() {
+    let mut info = make_record(TagId::CharShape, 0, &[0; 68]);
+    info.extend(make_record(TagId::ParaShape, 0, &[0; 42]));
+    info.extend(make_record(TagId::Style, 0, &[0; 14]));
+    let definitions = crate::decoder::header::parse_doc_info(&info, &version()).unwrap();
+    let fixture = r1_fixture_control("sample-compose-basic.hwp", CTRL_ID_COMPOSE);
+    let records = Record::parse_stream(&mut Cursor::new(fixture)).unwrap();
+    let original = records.iter().find(|r| TagId::from(r.header.tag_id) == TagId::CtrlHeader).unwrap();
+    let hosts = [CTRL_ID_TABLE, CTRL_ID_HEADER, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE,
+        CTRL_ID_ENDNOTE, CTRL_ID_GSO, CTRL_ID_MEMO, R1_CAPTION, R1_ELLIPSE,
+        R1_POLYGON, R1_GROUP, R1_NESTED_GROUP];
+    for host in hosts {
+        for id in [0u32, 1, 2, 3, u32::MAX] {
+            let mut data = original.data.clone();
+            let start = data.len() - 40;
+            for slot in data[start..].chunks_exact_mut(4) { slot.copy_from_slice(&id.to_le_bytes()); }
+            let parsed = Hwp5ComposeControl::parse(CTRL_ID_COMPOSE, &data).unwrap();
+            assert_eq!(parsed.char_pr_ids, vec![id; 10]);
+            let mut leaf = r1_paragraph("compose");
+            leaf.extend(make_record(TagId::CtrlHeader, 1, &data));
+            let result = validate_body_style_references(&r1_in_path(&leaf, &[CTRL_ID_TABLE, host]), &definitions);
+            if id == 0 || id == u32::MAX { result.unwrap(); }
+            else { assert!(result.unwrap_err().to_string().contains(&format!("compose charPr reference ID {id}"))); }
+        }
+    }
+    // 잘린 compose는 기존 Unknown/fallback 계약을 유지한다.
+    validate_body_style_references(&make_record(TagId::CtrlHeader, 4, &CTRL_ID_COMPOSE.to_le_bytes()), &definitions).unwrap();
 }

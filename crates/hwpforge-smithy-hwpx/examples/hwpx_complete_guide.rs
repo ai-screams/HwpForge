@@ -33,8 +33,11 @@ fn build_style_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::new();
 
     // ── 폰트 ──────────────────────────────────────────────────────
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
-    store.push_font(HwpxFont::new(1, "함초롬바탕", "HANGUL"));
+    // 이것을 실패시키는 것: 언어별 원본 글꼴 등록을 HANGUL/LATIN 일부로 되돌리기(실제 example 실행).
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        store.push_font(HwpxFont::new(1, "함초롬바탕", lang));
+    }
 
     // ── CharShape 0: 기본 10pt ────────────────────────────────────
     store.push_char_shape(HwpxCharShape::default());
@@ -140,6 +143,19 @@ fn build_style_store() -> HwpxStyleStore {
     for tab in TabDef::defaults() {
         store.push_tab(tab);
     }
+
+    // 이것을 실패시키는 것: 제목에서 참조하는 named style 0 정의 제거(실제 example 실행).
+    store.push_style(hwpforge_smithy_hwpx::HwpxStyle::new(
+        0,
+        "PARA",
+        "바탕글",
+        "Normal",
+        0,
+        0,
+        0,
+        1042,
+        0,
+    ));
 
     store
 }

@@ -68,7 +68,8 @@ fn reencode(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn styles() -> HwpxStyleStore {
-    let mut styles = HwpxStyleStore::new();
+    // 이것을 실패시키는 것: 합성 fixture에서 참조하는 원본 글꼴 정의 누락.
+    let mut styles = HwpxStyleStore::with_default_fonts("함초롬바탕");
     styles.push_char_shape(HwpxCharShape::default());
     styles.push_para_shape(HwpxParaShape::default());
     styles

@@ -15,6 +15,7 @@ pub(crate) mod fidelity;
 use crate::color::{parse_hex_color_or_black, parse_hex_color_raw};
 use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
 use hwpforge_blueprint::registry::StyleRegistry;
+use hwpforge_core::ParagraphMeasure;
 use hwpforge_core::{
     BorderFillLines, BorderLine, BorderLineKind, BulletDef, FillKind, NumberingDef, StyleLookup,
     TabDef,
@@ -140,8 +141,8 @@ impl HwpxFontTypeInfo {
 
 /// Per-language font index references from `<hh:fontRef>`.
 ///
-/// Each field is a [`FontIndex`] pointing into the store's font list
-/// for that language group.
+/// Each [`FontIndex`] carries a language-local wire ID, resolved by
+/// `(language, font.id)`, never a position in the combined font vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxFontRef {
@@ -184,6 +185,9 @@ impl Default for HwpxFontRef {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxCharShape {
+    /// Original wire definition ID; absent for newly created definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<u32>,
     /// Per-language font references.
     pub font_ref: HwpxFontRef,
     /// Font height in HwpUnit (height attribute × 1, already HWPUNIT).
@@ -244,6 +248,7 @@ pub struct HwpxCharShape {
 impl Default for HwpxCharShape {
     fn default() -> Self {
         Self {
+            source_id: None,
             font_ref: HwpxFontRef::default(),
             height: HwpUnit::new(1000).unwrap(), // 10pt default (한글 compatible)
             text_color: Color::BLACK,
@@ -291,10 +296,12 @@ pub struct HwpxStyle {
     /// English style name (e.g. `"Normal"`).
     pub eng_name: String,
     /// Reference to paragraph properties (from `paraPrIDRef`).
+    /// Wire ID (inactive for CHAR styles), never a vector index.
     pub para_pr_id_ref: u32,
     /// Reference to character properties (from `charPrIDRef`).
+    /// Wire ID, resolved through the header definition table.
     pub char_pr_id_ref: u32,
-    /// Reference to next style (from `nextStyleIDRef`).
+    /// Wire ID of the next style (from `nextStyleIDRef`), never a vector index.
     pub next_style_id_ref: u32,
     /// Language ID (from `langID`).
     pub lang_id: u32,
@@ -336,18 +343,21 @@ impl HwpxStyle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxParaShape {
+    /// Original wire definition ID; absent for newly created definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<u32>,
     /// Horizontal alignment.
     pub alignment: Alignment,
     /// Left indent (from `<hc:left value="..."/>`).
-    pub margin_left: HwpUnit,
+    pub margin_left: ParagraphMeasure,
     /// Right indent.
-    pub margin_right: HwpUnit,
+    pub margin_right: ParagraphMeasure,
     /// Paragraph indent (from `<hc:intent value="..."/>`).
-    pub indent: HwpUnit,
+    pub indent: ParagraphMeasure,
     /// Space before paragraph (from `<hc:prev value="..."/>`).
-    pub spacing_before: HwpUnit,
+    pub spacing_before: ParagraphMeasure,
     /// Space after paragraph (from `<hc:next value="..."/>`).
-    pub spacing_after: HwpUnit,
+    pub spacing_after: ParagraphMeasure,
     /// Line spacing value.
     pub line_spacing: i32,
     /// Line spacing type.
@@ -425,12 +435,13 @@ fn all_zero(offsets: &[HwpUnit; 4]) -> bool {
 impl Default for HwpxParaShape {
     fn default() -> Self {
         Self {
+            source_id: None,
             alignment: Alignment::Left,
-            margin_left: HwpUnit::ZERO,
-            margin_right: HwpUnit::ZERO,
-            indent: HwpUnit::ZERO,
-            spacing_before: HwpUnit::ZERO,
-            spacing_after: HwpUnit::ZERO,
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            indent: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
             line_spacing: 160,
             line_spacing_type: LineSpacingType::Percentage,
             snap_to_grid: true,
@@ -887,6 +898,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
     };
 
     let base = HwpxCharShape {
+        source_id: None,
         font_ref: batang_ref,
         height: HwpUnit::new(1000).unwrap(), // 10pt
         text_color: Color::BLACK,
@@ -947,12 +959,13 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 
     // Base: JUSTIFY, no margins/indent, 160% line spacing, no widow/orphan
     let base = HwpxParaShape {
+        source_id: None,
         alignment: justify,
-        margin_left: HwpUnit::ZERO,
-        margin_right: HwpUnit::ZERO,
-        indent: HwpUnit::ZERO,
-        spacing_before: HwpUnit::ZERO,
-        spacing_after: HwpUnit::ZERO,
+        margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        indent: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
+        spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
         line_spacing: 160,
         line_spacing_type: LineSpacingType::Percentage,
         snap_to_grid: true,
@@ -977,10 +990,13 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         //  0: 바탕글 — JUSTIFY left=0 160%
         base.clone(),
         //  1: 본문 — JUSTIFY left=1500 160%
-        HwpxParaShape { margin_left: HwpUnit::new(1500).unwrap(), ..base.clone() },
+        HwpxParaShape {
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(750).unwrap()),
+            ..base.clone()
+        },
         //  2: 개요 1 — JUSTIFY left=1000 160% OUTLINE level=0
         HwpxParaShape {
-            margin_left: HwpUnit::new(1000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 0,
@@ -990,7 +1006,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  3: 개요 2 — JUSTIFY left=2000 160% OUTLINE level=1
         HwpxParaShape {
-            margin_left: HwpUnit::new(2000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 1,
@@ -1000,7 +1016,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  4: 개요 3 — JUSTIFY left=3000 160% OUTLINE level=2
         HwpxParaShape {
-            margin_left: HwpUnit::new(3000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 2,
@@ -1010,7 +1026,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  5: 개요 4 — JUSTIFY left=4000 160% OUTLINE level=3
         HwpxParaShape {
-            margin_left: HwpUnit::new(4000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(2000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 3,
@@ -1020,7 +1036,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  6: 개요 5 — JUSTIFY left=5000 160% OUTLINE level=4
         HwpxParaShape {
-            margin_left: HwpUnit::new(5000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(2500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 4,
@@ -1030,7 +1046,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  7: 개요 6 — JUSTIFY left=6000 160% OUTLINE level=5
         HwpxParaShape {
-            margin_left: HwpUnit::new(6000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(3000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 5,
@@ -1040,7 +1056,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  8: 개요 7 — JUSTIFY left=7000 160% OUTLINE level=6
         HwpxParaShape {
-            margin_left: HwpUnit::new(7000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(3500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 6,
@@ -1050,40 +1066,44 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         //  9: 머리말 — JUSTIFY left=0 150%
         HwpxParaShape { line_spacing: 150, ..base.clone() },
-        // 10: 각주/미주 — JUSTIFY indent=-1310 130%
-        HwpxParaShape { indent: HwpUnit::new(-1310).unwrap(), line_spacing: 130, ..base.clone() },
+        // 10: 각주/미주 — JUSTIFY indent=-655 HWPUNIT (-6.55 pt), 130%
+        HwpxParaShape {
+            indent: ParagraphMeasure::from_hwp_unit(HwpUnit::new(-655).unwrap()),
+            line_spacing: 130,
+            ..base.clone()
+        },
         // 11: 메모 — LEFT left=0 130%
         HwpxParaShape { alignment: left, line_spacing: 130, ..base.clone() },
         // 12: 차례 제목 — LEFT left=0 prev=1200 next=300 160%
         HwpxParaShape {
             alignment: left,
-            spacing_before: HwpUnit::new(1200).unwrap(),
-            spacing_after: HwpUnit::new(300).unwrap(),
+            spacing_before: ParagraphMeasure::from_hwp_unit(HwpUnit::new(600).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(150).unwrap()),
             ..base.clone()
         },
         // 13: 차례 1 — LEFT left=0 next=700 160%
         HwpxParaShape {
             alignment: left,
-            spacing_after: HwpUnit::new(700).unwrap(),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 14: 차례 2 — LEFT left=1100 next=700 160%
         HwpxParaShape {
             alignment: left,
-            margin_left: HwpUnit::new(1100).unwrap(),
-            spacing_after: HwpUnit::new(700).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(550).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 15: 차례 3 — LEFT left=2200 next=700 160%
         HwpxParaShape {
             alignment: left,
-            margin_left: HwpUnit::new(2200).unwrap(),
-            spacing_after: HwpUnit::new(700).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(1100).unwrap()),
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(350).unwrap()),
             ..base.clone()
         },
         // 16: 개요 9 (style 10→paraPr 16) — JUSTIFY left=9000 160% OUTLINE level=8
         HwpxParaShape {
-            margin_left: HwpUnit::new(9000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(4500).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 8,
@@ -1093,7 +1113,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         // 17: 개요 10 (style 11→paraPr 17) — JUSTIFY left=10000 160% OUTLINE level=9
         HwpxParaShape {
-            margin_left: HwpUnit::new(10000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(5000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 9,
@@ -1103,7 +1123,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         },
         // 18: 개요 8 (style 9→paraPr 18) — JUSTIFY left=8000 160% OUTLINE level=7
         HwpxParaShape {
-            margin_left: HwpUnit::new(8000).unwrap(),
+            margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::new(4000).unwrap()),
             heading_type: HeadingType::Outline,
             heading_id_ref: 0,
             heading_level: 7,
@@ -1112,7 +1132,11 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
             ..base.clone()
         },
         // 19: 캡션 — JUSTIFY left=0 next=800 150%
-        HwpxParaShape { line_spacing: 150, spacing_after: HwpUnit::new(800).unwrap(), ..base },
+        HwpxParaShape {
+            line_spacing: 150,
+            spacing_after: ParagraphMeasure::from_hwp_unit(HwpUnit::new(400).unwrap()),
+            ..base
+        },
     ]
 }
 
@@ -1144,7 +1168,7 @@ pub struct HwpxStyleStore {
     fonts: Vec<HwpxFont>,
     char_shapes: Vec<HwpxCharShape>,
     para_shapes: Vec<HwpxParaShape>,
-    styles: Vec<HwpxStyle>,
+    pub(crate) styles: Vec<HwpxStyle>,
     border_fills: Vec<HwpxBorderFill>,
     numberings: Vec<NumberingDef>,
     bullets: Vec<BulletDef>,
@@ -1161,6 +1185,24 @@ pub(crate) struct RegistryStoreBuild {
 }
 
 impl HwpxStyleStore {
+    /// Retains the HWP5 font-line-height flag for an imported paragraph definition.
+    /// The definition must carry its original `source_id`.
+    pub fn set_para_font_line_height(
+        &mut self,
+        index: ParaShapeIndex,
+        value: u32,
+    ) -> HwpxResult<()> {
+        let id = self.para_shape(index)?.source_id.ok_or_else(|| HwpxError::InvalidStructure {
+            detail: "fontLineHeight import requires the paragraph's source_id".into(),
+        })?;
+        if value == 0 {
+            self.header_fidelity.font_line_height.remove(&(id as usize));
+        } else {
+            self.header_fidelity.font_line_height.insert(id as usize, value);
+        }
+        Ok(())
+    }
+
     /// Creates an empty store.
     pub fn new() -> Self {
         Self::default()
@@ -1560,6 +1602,7 @@ fn build_store_from_registry_with(
             user: font_idx,
         };
         char_shape_map.push(store.push_char_shape(HwpxCharShape {
+            source_id: None,
             font_ref,
             height: cs.size,
             text_color: cs.color,
@@ -1598,12 +1641,13 @@ fn build_store_from_registry_with(
     for ps in &registry.para_shapes {
         let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
+            source_id: None,
             alignment: ps.alignment,
-            margin_left: ps.indent_left,
-            margin_right: ps.indent_right,
-            indent: ps.indent_first_line,
-            spacing_before: ps.space_before,
-            spacing_after: ps.space_after,
+            margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
+            margin_right: ParagraphMeasure::from_hwp_unit(ps.indent_right),
+            indent: ParagraphMeasure::from_hwp_unit(ps.indent_first_line),
+            spacing_before: ParagraphMeasure::from_hwp_unit(ps.space_before),
+            spacing_after: ParagraphMeasure::from_hwp_unit(ps.space_after),
             line_spacing: ps.line_spacing_value.round() as i32,
             line_spacing_type: ps.line_spacing_type,
             snap_to_grid: true,
@@ -1726,7 +1770,7 @@ pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
 
 fn heading_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
     if ps.heading_type == HeadingType::Outline {
-        Some((ps.heading_level as u8).saturating_add(1).clamp(1, 6))
+        Some(u8::try_from(ps.heading_level).ok()?.saturating_add(1).clamp(1, 6))
     } else {
         None
     }
@@ -1769,14 +1813,15 @@ impl StyleLookup for HwpxStyleStore {
 
     fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
         let cs = self.char_shapes.get(id.get())?;
-        let font = self.fonts.get(cs.font_ref.hangul.get())?;
+        let font = self.fonts.iter().find(|f| {
+            f.lang == "HANGUL" && usize::try_from(f.id).ok() == Some(cs.font_ref.hangul.get())
+        })?;
         Some(font.face_name.as_str())
     }
 
     fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str> {
         // fontRef 인덱스는 언어 그룹-로컬 — (lang, id) 쌍으로 정확 조회한다
-        // (char_font_name 의 평탄 인덱스는 HANGUL-선두 관례에 의존하는 기존
-        // 동작이라 유지). hangul 축을 먼저 넣어 [0] 이 char_font_name 과
+        // hangul 축을 먼저 넣어 [0] 이 char_font_name 과
         // 일치하게 한다 (양쪽 다 해석될 때).
         let Some(cs) = self.char_shapes.get(id.get()) else {
             return Vec::new();
@@ -1815,6 +1860,14 @@ impl StyleLookup for HwpxStyleStore {
         self.para_shapes.get(id.get()).map(|ps| ps.alignment)
     }
 
+    fn para_indent_left(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure> {
+        self.para_shapes.get(id.get()).map(|p| p.margin_left)
+    }
+
+    fn para_indent_first_line(&self, id: ParaShapeIndex) -> Option<ParagraphMeasure> {
+        self.para_shapes.get(id.get()).map(|p| p.indent)
+    }
+
     fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
         let ps = self.para_shapes.get(id.get())?;
         heading_type_to_para_list_type(ps.heading_type)
@@ -1835,7 +1888,10 @@ impl StyleLookup for HwpxStyleStore {
     }
 
     fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
-        let para_id = u32::try_from(id.get()).ok()?;
+        let para_id = crate::header_references::HeaderReferences::build(self)
+            .ok()?
+            .output_ids("paraPr", id.get())
+            .ok()?;
         self.styles
             .iter()
             .find(|style| style.style_type == "PARA" && style.para_pr_id_ref == para_id)
@@ -1855,12 +1911,22 @@ impl StyleLookup for HwpxStyleStore {
         self.styles
             .iter()
             .find(|s| s.style_type == "CHAR" && (s.name == name || s.eng_name == name))
-            .map(|s| CharShapeIndex::new(s.char_pr_id_ref as usize))
+            .and_then(|s| {
+                crate::header_references::HeaderReferences::build(self)
+                    .ok()?
+                    .char_index(s.char_pr_id_ref)
+                    .ok()
+            })
     }
 
     fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
         let style = self.styles.get(id.get())?;
-        if let Some(para_shape) = self.para_shapes.get(style.para_pr_id_ref as usize) {
+        if let Some(para_shape) = crate::header_references::HeaderReferences::build(self)
+            .ok()
+            .and_then(|r| r.para_index(style.para_pr_id_ref).ok())
+            .and_then(|id| self.para_shapes.get(id.get()))
+            .filter(|_| style.style_type == "PARA")
+        {
             if let Some(level) = heading_level_from_para_shape(para_shape) {
                 return Some(level);
             }
@@ -2002,6 +2068,25 @@ mod tests {
     };
 
     // ── HwpxStyleStore basic operations ──────────────────────────
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn fix2_style_lookup_does_not_wrap_font_or_heading() {
+        // 이것을 실패시키는 것: usize 글꼴 ID / u32 heading level의 좁히는 as 캐스트.
+        let mut store = HwpxStyleStore::with_default_fonts("바탕");
+        let mut shape = HwpxCharShape::default();
+        shape.font_ref.hangul = FontIndex::new(usize::try_from(u64::from(u32::MAX) + 1).unwrap());
+        let id = store.push_char_shape(shape);
+        assert_eq!(store.char_font_name(id), None);
+        assert_eq!(
+            heading_level_from_para_shape(&HwpxParaShape {
+                heading_type: HeadingType::Outline,
+                heading_level: 256,
+                ..Default::default()
+            }),
+            None
+        );
+    }
 
     #[test]
     fn empty_store_returns_errors() {
@@ -2267,8 +2352,8 @@ mod tests {
     fn para_shape_default_values() {
         let ps = HwpxParaShape::default();
         assert_eq!(ps.alignment, Alignment::Left);
-        assert_eq!(ps.margin_left, HwpUnit::ZERO);
-        assert_eq!(ps.indent, HwpUnit::ZERO);
+        assert_eq!(ps.margin_left, hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO));
+        assert_eq!(ps.indent, hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO));
         assert_eq!(ps.line_spacing, 160);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
@@ -2549,11 +2634,26 @@ mod tests {
         for (i, bp_ps) in registry.para_shapes.iter().enumerate() {
             let hwpx_ps = store.para_shape(ParaShapeIndex::new(20 + i)).unwrap();
             assert_eq!(hwpx_ps.alignment, bp_ps.alignment);
-            assert_eq!(hwpx_ps.margin_left, bp_ps.indent_left);
-            assert_eq!(hwpx_ps.margin_right, bp_ps.indent_right);
-            assert_eq!(hwpx_ps.indent, bp_ps.indent_first_line);
-            assert_eq!(hwpx_ps.spacing_before, bp_ps.space_before);
-            assert_eq!(hwpx_ps.spacing_after, bp_ps.space_after);
+            assert_eq!(
+                hwpx_ps.margin_left,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_left)
+            );
+            assert_eq!(
+                hwpx_ps.margin_right,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_right)
+            );
+            assert_eq!(
+                hwpx_ps.indent,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.indent_first_line)
+            );
+            assert_eq!(
+                hwpx_ps.spacing_before,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.space_before)
+            );
+            assert_eq!(
+                hwpx_ps.spacing_after,
+                hwpforge_core::ParagraphMeasure::HwpUnit(bp_ps.space_after)
+            );
             assert_eq!(hwpx_ps.line_spacing, bp_ps.line_spacing_value.round() as i32);
         }
     }
@@ -2584,7 +2684,7 @@ mod tests {
             auto_tab_left: false,
             auto_tab_right: false,
             stops: vec![TabStop {
-                position: HwpUnit::new(15000).unwrap(),
+                position: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap()),
                 align: TabAlign::Left,
                 leader: TabLeader::dot(),
             }],
@@ -2599,7 +2699,10 @@ mod tests {
         assert_eq!(tabs.len(), 1);
         assert_eq!(tabs[0].id, 3);
         assert_eq!(tabs[0].stops.len(), 1);
-        assert_eq!(tabs[0].stops[0].position, HwpUnit::new(15000).unwrap());
+        assert_eq!(
+            tabs[0].stops[0].position,
+            hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap())
+        );
     }
 
     #[test]
@@ -3227,7 +3330,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 0);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 0);
         assert_eq!(ps.line_spacing, 160);
     }
 
@@ -3241,7 +3344,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(2)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 1000);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 500);
         assert_eq!(ps.heading_type, HeadingType::Outline);
         assert_eq!(ps.heading_id_ref, 0);
         assert_eq!(ps.heading_level, 0);

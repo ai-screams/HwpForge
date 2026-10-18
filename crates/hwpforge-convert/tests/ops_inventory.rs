@@ -125,6 +125,8 @@ const AUDITED: &[Audited] = &[
             // Reported under the decoder's own code (`DecodeWarning::code`).
             ("ContentLost", "CONTENT_LOST"),
             ("BeginNumRepaired", "BEGIN_NUM_REPAIRED"),
+            ("InactiveHeaderReference", "INACTIVE_HEADER_REFERENCE"),
+            ("ParagraphMeasureNormalized", "PARAGRAPH_MEASURE_NORMALIZED"),
             ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
         ],

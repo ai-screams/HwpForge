@@ -23,7 +23,7 @@ use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, LineSpacingType, ParaShapeIndex,
 };
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 // ── Style indices ────────────────────────────────────────────────
@@ -254,8 +254,8 @@ fn data() -> Vec<Row> {
 }
 
 fn build_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    store.push_font(HwpxFont::new(0, "함초롬바탕", "HANGUL"));
+    // 이것을 실패시키는 것: HANGUL만 등록하기(large_table 실제 실행에서 LATIN 참조 거부).
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
     // CS0: normal 8pt
     let mut cs0 = HwpxCharShape::default();
     cs0.height = HwpUnit::from_pt(8.0).unwrap();

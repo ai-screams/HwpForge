@@ -84,6 +84,9 @@ const ERROR_MAPPING: Table = &[
     (
         "CoreError",
         &[
+            ("MeasureUnitMismatch", "VALIDATION_FAILED"),
+            ("MeasureOverflow", "VALIDATION_FAILED"),
+            ("MeasureOffGrid", "VALIDATION_FAILED"),
             ("Validation", "VALIDATION_FAILED"),
             ("Foundation", "INTERNAL_INVARIANT"),
             ("InvalidStructure", "VALIDATION_FAILED"),
@@ -294,6 +297,8 @@ const WARNING_MAPPING: Table = &[
     (
         "DecodeWarning",
         &[
+            ("InactiveHeaderReference", "INACTIVE_HEADER_REFERENCE"),
+            ("ParagraphMeasureNormalized", "PARAGRAPH_MEASURE_NORMALIZED"),
             ("UnclosedFieldBoundary", "UNCLOSED_FIELD_BOUNDARY"),
             ("InvalidFieldBoundary", "INVALID_FIELD_BOUNDARY"),
             ("UnknownEnumValue", "UNKNOWN_ENUM_VALUE"),
@@ -370,6 +375,9 @@ fn hwpx_errors() -> Vec<(&'static str, HwpxError)> {
 
 fn core_errors() -> Vec<(&'static str, CoreError)> {
     vec![
+        ("MeasureUnitMismatch", CoreError::MeasureUnitMismatch),
+        ("MeasureOverflow", CoreError::MeasureOverflow),
+        ("MeasureOffGrid", CoreError::MeasureOffGrid),
         ("Validation", CoreError::Validation(ValidationError::EmptyDocument)),
         (
             "Foundation",
@@ -811,6 +819,23 @@ fn wrapped_warnings() -> BTreeMap<&'static str, Vec<(&'static str, OpsWarning)>>
     all.insert(
         "DecodeWarning",
         vec![
+            (
+                "InactiveHeaderReference",
+                OpsWarning::Decode(DecodeWarning::InactiveHeaderReference {
+                    part: "Contents/header.xml".into(),
+                    kind: "memoPr".into(),
+                    reason: "unused definition".into(),
+                }),
+            ),
+            (
+                "ParagraphMeasureNormalized",
+                OpsWarning::Decode(DecodeWarning::ParagraphMeasureNormalized {
+                    definition: "paraPr",
+                    id: 7,
+                    field: "left".into(),
+                    reason: "case differs from default".into(),
+                }),
+            ),
             (
                 "UnclosedFieldBoundary",
                 OpsWarning::Decode(DecodeWarning::UnclosedFieldBoundary {

@@ -111,7 +111,10 @@ pub(super) fn build_memo_parameters_xml(
 
 /// Serializes each anchor run with its character shape and inline attributes.
 /// As with the existing memo writer, only text-bearing anchor runs are emitted.
-pub(super) fn build_memo_anchor_xml(anchor_runs: &[hwpforge_core::run::Run]) -> String {
+pub(super) fn build_memo_anchor_xml(
+    anchor_runs: &[hwpforge_core::run::Run],
+    sink: &DocumentEncodeContext,
+) -> HwpxResult<String> {
     let mut xml = String::new();
     for run in anchor_runs {
         let text = match &run.content {
@@ -121,10 +124,10 @@ pub(super) fn build_memo_anchor_xml(anchor_runs: &[hwpforge_core::run::Run]) -> 
         };
         xml.push_str(&format!(
             r#"<hp:run charPrIDRef="{}">{text}</hp:run>"#,
-            run.char_shape_id.get()
+            sink.output_id("charPr", run.char_shape_id.get())?
         ));
     }
-    xml
+    Ok(xml)
 }
 
 /// Encodes memo body paragraphs as an XML string for embedding inside fieldBegin.

@@ -2,7 +2,7 @@
 //!
 //! Maps to HWPX `<hh:tabProperties>` and `<hh:tabPr>`.
 
-use hwpforge_foundation::{HwpUnit, TabAlign, TabLeader};
+use hwpforge_foundation::{TabAlign, TabLeader};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TabStop {
     /// Stop position from the paragraph start.
-    pub position: HwpUnit,
+    pub position: crate::ParagraphMeasure,
     /// Alignment mode at this stop.
     pub align: TabAlign,
     /// Leader style used to fill the gap before the stop.
@@ -86,17 +86,12 @@ impl TabDef {
     pub fn reference_is_known(id: u32, known_custom_ids: impl IntoIterator<Item = u32>) -> bool {
         Self::is_builtin_id(id) || known_custom_ids.into_iter().any(|candidate| candidate == id)
     }
-
-    /// Clamps an unsigned raw tab position into the valid [`HwpUnit`] range.
-    pub fn clamp_position_from_unsigned(raw: u64) -> HwpUnit {
-        let clamped = raw.min(HwpUnit::MAX_VALUE as u64) as i32;
-        HwpUnit::new(clamped).expect("tab stop positions must clamp into valid HwpUnit range")
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_foundation::HwpUnit;
 
     #[test]
     fn defaults_has_3_entries() {
@@ -141,11 +136,14 @@ mod tests {
     #[test]
     fn tab_stop_preserves_position_and_semantics() {
         let stop = TabStop {
-            position: HwpUnit::new(8000).unwrap(),
+            position: crate::ParagraphMeasure::from_hwp_unit(HwpUnit::new(8000).unwrap()),
             align: TabAlign::Decimal,
             leader: TabLeader::dot(),
         };
-        assert_eq!(stop.position, HwpUnit::new(8000).unwrap());
+        assert_eq!(
+            stop.position,
+            crate::ParagraphMeasure::from_hwp_unit(HwpUnit::new(8000).unwrap())
+        );
         assert_eq!(stop.align, TabAlign::Decimal);
         assert_eq!(stop.leader.as_hwpx_str(), "DOT");
     }
@@ -158,7 +156,7 @@ mod tests {
                 auto_tab_left: false,
                 auto_tab_right: false,
                 stops: vec![TabStop {
-                    position: HwpUnit::new(5000).unwrap(),
+                    position: crate::ParagraphMeasure::from_hwp_unit(HwpUnit::new(5000).unwrap()),
                     align: TabAlign::Right,
                     leader: TabLeader::from_hwpx_str("DASH"),
                 }],
@@ -168,7 +166,7 @@ mod tests {
                 auto_tab_left: false,
                 auto_tab_right: false,
                 stops: vec![TabStop {
-                    position: HwpUnit::new(7500).unwrap(),
+                    position: crate::ParagraphMeasure::from_hwp_unit(HwpUnit::new(7500).unwrap()),
                     align: TabAlign::Left,
                     leader: TabLeader::none(),
                 }],
@@ -191,11 +189,5 @@ mod tests {
         assert!(TabDef::reference_is_known(0, []));
         assert!(TabDef::reference_is_known(3, [3, 5]));
         assert!(!TabDef::reference_is_known(4, [3, 5]));
-    }
-
-    #[test]
-    fn clamp_position_from_unsigned_caps_large_values() {
-        let clamped = TabDef::clamp_position_from_unsigned(u64::MAX);
-        assert_eq!(clamped, HwpUnit::new(HwpUnit::MAX_VALUE).unwrap());
     }
 }

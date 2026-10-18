@@ -537,7 +537,11 @@ fn hwpx_code(error: &HwpxError, stage: Stage) -> OpsCode {
 
 fn core_code(error: &CoreError) -> OpsCode {
     match error {
-        CoreError::Validation(_) | CoreError::InvalidStructure { .. } => OpsCode::ValidationFailed,
+        CoreError::Validation(_)
+        | CoreError::InvalidStructure { .. }
+        | CoreError::MeasureUnitMismatch
+        | CoreError::MeasureOverflow
+        | CoreError::MeasureOffGrid => OpsCode::ValidationFailed,
         CoreError::Foundation(_) => OpsCode::InternalInvariant,
         _ => OpsCode::UpstreamUnmapped,
     }

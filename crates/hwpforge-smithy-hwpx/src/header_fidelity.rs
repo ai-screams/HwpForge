@@ -59,9 +59,9 @@ impl HeaderFidelity {
 
     pub fn capture(&mut self, refs: &HxRefList) {
         if let Some(paras) = &refs.para_properties {
-            for (i, para) in paras.items.iter().enumerate() {
+            for para in &paras.items {
                 if para.font_line_height != 0 {
-                    self.font_line_height.insert(i, para.font_line_height);
+                    self.font_line_height.insert(para.id as usize, para.font_line_height);
                 }
             }
         }

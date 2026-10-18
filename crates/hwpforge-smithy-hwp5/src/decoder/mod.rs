@@ -157,11 +157,19 @@ pub(crate) fn decode_intermediate(bytes: &[u8]) -> Hwp5Result<DecodedHwp5Interme
 
     let mut sections: Vec<SectionResult> = Vec::with_capacity(pkg.sections_data().len());
     for section_data in pkg.sections_data() {
+        section::validate_body_style_references(section_data, &doc_info)?;
         let mut result = section::parse_body_text(section_data, &pkg.file_header().version)?;
         // Transfer ownership: projection must not report these events again.
         warnings.append(&mut result.warnings);
         sections.push(result);
     }
+
+    // Projection also synthesizes char/para 0 for missing runs or empty sections.
+    // Those implicit references still need original definitions; otherwise a
+    // decoded document could reach the encoder's new-document-only exception.
+    // 이것을 실패시키는 것: 아래 기본 인덱스 원본 검사 제거(implicit_zero_decode_gate).
+    hwpforge_core::style_lookup::lookup(doc_info.para_shapes.first(), "paraPr", 0)?;
+    hwpforge_core::style_lookup::lookup(doc_info.char_shapes.first(), "charPr", 0)?;
 
     // Wave 12o Phase 3: parse \x05HwpSummaryInformation PropertySet
     // when present. Errors are demoted to warnings + empty metadata so
@@ -324,24 +332,116 @@ mod tests {
     }
 
     #[test]
+    fn implicit_zero_decode_gate() {
+        // 이것을 실패시키는 것: 원본 빈 표를 projection 기본 0으로 수복하도록 허용.
+        let char_def = make_record(0x15, 0, &[0; 68]);
+        let para_def = make_record(0x19, 0, &[0; 42]);
+        let style_def = make_record(0x1a, 0, &[0; 14]);
+        for (info, kind) in [(para_def.clone(), "charPr"), (char_def.clone(), "paraPr")] {
+            let bytes = make_test_cfb(&info, &[]);
+            for error in [
+                Hwp5Decoder::decode(&bytes).unwrap_err(),
+                crate::decode_hwp5_to_core(&bytes).unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains(&format!("broken {kind} reference ID 0")),
+                    "{error}"
+                );
+            }
+        }
+        let mut info = para_def;
+        info.extend(style_def);
+        let section = make_record(0x42, 0, &para_header_data());
+        let bytes = make_test_cfb(&info, &section);
+        assert!(Hwp5Decoder::decode(&bytes).unwrap_err().to_string().contains("charPr"));
+        info.extend(char_def);
+        let bytes = make_test_cfb(&info, &section);
+        Hwp5Decoder::decode(&bytes).unwrap();
+        crate::decode_hwp5_to_core(&bytes).unwrap();
+    }
+
+    #[test]
+    fn empty_definitions_zero_decode_gate() {
+        // 이것을 실패시키는 것: decode_intermediate의 원본 본문 참조 검사 제거.
+        let mut header = para_header_data();
+        header[12..14].copy_from_slice(&1u16.to_le_bytes());
+        let mut section = make_record(0x42, 0, &header);
+        section.extend(make_record(0x43, 1, &para_text_data("Hello")));
+        let mut char_ref = 0u32.to_le_bytes().to_vec();
+        char_ref.extend_from_slice(&0u32.to_le_bytes());
+        section.extend(make_record(0x44, 1, &char_ref));
+        let parsed =
+            section::parse_body_text(&section, &crate::schema::header::HwpVersion::new(5, 0, 2, 5))
+                .unwrap();
+        assert_eq!(parsed.paragraphs[0].char_shape_runs[0].char_shape_id, 0);
+        let bytes = make_test_cfb(&[], &section);
+        for error in [
+            Hwp5Decoder::decode(&bytes).unwrap_err(),
+            crate::decode_hwp5_to_core(&bytes).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("broken paraPr reference ID 0"), "{error}");
+        }
+    }
+
+    #[test]
+    fn public_decoders_reject_undefined_body_style_ids() {
+        // 이것을 실패시키는 것: decode_intermediate의 본문 lookup 호출 제거.
+        for kind in ["charPr", "paraPr", "style"] {
+            let mut header = para_header_data();
+            header[12..14].copy_from_slice(&1u16.to_le_bytes());
+            if kind == "paraPr" {
+                header[8..10].copy_from_slice(&1u16.to_le_bytes());
+            }
+            if kind == "style" {
+                header[10] = 1;
+            }
+            let mut section = make_record(0x42, 0, &header);
+            section.extend(make_record(0x43, 1, &para_text_data("Hello")));
+            let mut run = 0u32.to_le_bytes().to_vec();
+            run.extend_from_slice(&u32::from(kind == "charPr").to_le_bytes());
+            section.extend(make_record(0x44, 1, &run));
+            let bytes = make_test_cfb(&minimal_doc_info(), &section);
+            for error in [
+                Hwp5Decoder::decode(&bytes).unwrap_err(),
+                crate::decode_hwp5_to_core(&bytes).unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains(&format!("broken {kind} reference ID 1")),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    fn minimal_doc_info() -> Vec<u8> {
+        // 이것을 실패시키는 것: 합성 입력의 원본 char/para/style 정의 제거.
+        let mut info = make_record(0x15, 0, &[0; 68]);
+        info.extend(make_record(0x19, 0, &[0; 42]));
+        info.extend(make_record(0x1a, 0, &[0; 14]));
+        info
+    }
+
+    #[test]
     fn decode_minimal_document() {
+        // 이것을 실패시키는 것: minimal_doc_info의 원본 스타일 정의 제거.
         // Build a section stream with one paragraph
         let mut section = Vec::new();
         section.extend(make_record(0x42, 0, &para_header_data())); // ParaHeader
         section.extend(make_record(0x43, 0, &para_text_data("Hello"))); // ParaText
 
-        let bytes = make_test_cfb(&[], &section);
+        let bytes = make_test_cfb(&minimal_doc_info(), &section);
         let result = Hwp5Decoder::decode(&bytes).unwrap();
         assert!(!result.document.sections().is_empty());
     }
 
     #[test]
     fn decode_intermediate_collects_shared_parse_output() {
+        // 이것을 실패시키는 것: minimal_doc_info의 원본 스타일 정의 제거.
         let mut section = Vec::new();
         section.extend(make_record(0x42, 0, &para_header_data()));
         section.extend(make_record(0x43, 0, &para_text_data("Hello")));
 
-        let bytes = make_test_cfb(&[], &section);
+        let bytes = make_test_cfb(&minimal_doc_info(), &section);
         let intermediate = decode_intermediate(&bytes).unwrap();
         assert_eq!(intermediate.version, "5.0.2.5");
         assert!(!intermediate.compressed);
@@ -352,8 +452,9 @@ mod tests {
     }
 
     #[test]
-    fn decode_empty_doc_info_and_section() {
-        let bytes = make_test_cfb(&[], &[]);
+    fn decode_empty_section_with_defined_styles() {
+        // 이것을 실패시키는 것: 빈 구역의 합성 0이 참조할 원본 정의 제거.
+        let bytes = make_test_cfb(&minimal_doc_info(), &[]);
         let result = Hwp5Decoder::decode(&bytes).unwrap();
         // Even empty sections should produce at least one section with default paragraph
         assert!(!result.document.sections().is_empty());

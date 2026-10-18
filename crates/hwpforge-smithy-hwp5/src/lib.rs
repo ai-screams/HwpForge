@@ -749,6 +749,10 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
     document.set_metadata(metadata.clone());
     projection::fill_memo_create_times(&mut document);
     warnings.extend(proj_warnings);
+    hwpforge_core::style_lookup::validate_body_borders(
+        &document,
+        style_store.border_fills().iter().map(|slot| slot.id),
+    )?;
     projection::drop_cell_zones_with_unknown_border_fill(
         &mut document,
         style_store.border_fills.len(),

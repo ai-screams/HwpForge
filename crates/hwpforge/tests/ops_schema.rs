@@ -139,7 +139,7 @@ fn an_unknown_kind_name_is_rejected_with_the_valid_ones_listed() {
 /// 이것을 실패시키는 것: 스키마에서 `GroupChild` 의 Shape 갈래(`$ref Control`)를 빼는
 /// 것(검증 실패) / `GroupChild` 를 외부 태그 derive 로 바꾸는 것(옛 자식이 읽히지 않음).
 #[test]
-fn group_json_from_0_16_10_still_validates_and_reads() {
+fn group_payload_from_0_16_10_still_validates_and_reads() {
     use hwpforge::core::control::{Control, GroupChild};
     use hwpforge::core::run::RunContent;
 
@@ -157,7 +157,10 @@ fn group_json_from_0_16_10_still_validates_and_reads() {
         panic!("0.16.10 group JSON no longer validates: {e:#}");
     }
 
-    let doc: hwpforge::hwpx::ExportedDocument = serde_json::from_str(&old).expect("reads");
+    // Keep testing the unchanged legacy Group payload. Legacy style measure
+    // migration belongs to W2; W1's temporary unit objects are incompatible.
+    let doc: hwpforge::core::Document<hwpforge::core::Draft> =
+        serde_json::from_value(instance["document"].clone()).expect("group document reads");
     fn shapes(children: &[GroupChild]) -> usize {
         children
             .iter()
@@ -168,7 +171,7 @@ fn group_json_from_0_16_10_still_validates_and_reads() {
             })
             .sum()
     }
-    let counted: usize = doc.document.sections()[0]
+    let counted: usize = doc.sections()[0]
         .paragraphs
         .iter()
         .flat_map(|p| p.runs.iter())

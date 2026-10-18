@@ -134,50 +134,51 @@ pub(crate) fn push_fonts_with_warnings(
     store: &mut HwpxStyleStore,
     src: &Hwp5StyleStore,
     warnings: &mut Vec<Hwp5Warning>,
-) {
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
     for (raw_id, face) in src.fonts.iter().enumerate() {
         append_face_name_projection_warnings(face, raw_id, warnings);
     }
-    push_fonts(store, src);
+    push_fonts(store, src)
 }
 
-fn push_fonts(store: &mut HwpxStyleStore, src: &Hwp5StyleStore) {
+fn push_fonts(
+    store: &mut HwpxStyleStore,
+    src: &Hwp5StyleStore,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
     const FONT_LANGS: [&str; 7] =
         ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
 
-    if src.fonts.is_empty() {
-        for &lang in &FONT_LANGS {
-            store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
-        }
-        return;
-    }
-
-    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts) {
+    // Validate declarations even when the font record list is empty.
+    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts)? {
         for (lang, fonts) in FONT_LANGS.into_iter().zip(groups.into_iter()) {
+            // Empty declared groups have only the established implicit font 0.
+            // Materialize it before validation so encoder group cloning cannot
+            // accidentally make IDs 1..N valid in an empty source group.
+            if fonts.is_empty() {
+                let font = match src.fonts.first() {
+                    Some(face) => hwp5_face_to_hwpx_font(0, face, lang),
+                    None => HwpxFont::new(0, "함초롬바탕", lang),
+                };
+                store.push_font(font);
+            }
             for (idx, face) in fonts.iter().enumerate() {
                 store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
             }
         }
-        return;
-    }
-
-    for &lang in &FONT_LANGS {
-        for (idx, face) in src.fonts.iter().enumerate() {
-            store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
+    } else if src.fonts.is_empty() {
+        for &lang in &FONT_LANGS {
+            store.push_font(HwpxFont::new(0, "함초롬바탕", lang));
+        }
+    } else {
+        // Without a declaration, retain the legacy shared font table.
+        // A damaged declaration must never enter this branch.
+        for &lang in &FONT_LANGS {
+            for (idx, face) in src.fonts.iter().enumerate() {
+                store.push_font(hwp5_face_to_hwpx_font(idx as u32, face, lang));
+            }
         }
     }
-}
-
-pub(crate) fn resolved_font_group_counts(src: &Hwp5StyleStore) -> [usize; 7] {
-    if src.fonts.is_empty() {
-        return [1; 7];
-    }
-
-    if let Some(groups) = font_groups_from_id_mappings(src.id_mappings.as_ref(), &src.fonts) {
-        return groups.map(|group| group.len());
-    }
-
-    [src.fonts.len(); 7]
+    Ok(())
 }
 
 pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
@@ -259,57 +260,48 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape
 }
 
-pub(crate) fn hwp5_char_shape_to_hwpx_with_counts(
+pub(crate) fn hwp5_char_shape_to_hwpx_with_warnings(
     raw: &Hwp5RawCharShape,
-    font_group_counts: [usize; 7],
-) -> HwpxCharShape {
-    let mut shape = hwp5_char_shape_to_hwpx(raw);
-    let clamp = |value: u16, count: usize| -> FontIndex {
-        if count == 0 {
-            return FontIndex::new(0);
-        }
-        FontIndex::new((value as usize).min(count.saturating_sub(1)))
-    };
-
-    shape.font_ref.hangul = clamp(raw.font_ids[0], font_group_counts[0]);
-    shape.font_ref.latin = clamp(raw.font_ids[1], font_group_counts[1]);
-    shape.font_ref.hanja = clamp(raw.font_ids[2], font_group_counts[2]);
-    shape.font_ref.japanese = clamp(raw.font_ids[3], font_group_counts[3]);
-    shape.font_ref.other = clamp(raw.font_ids[4], font_group_counts[4]);
-    shape.font_ref.symbol = clamp(raw.font_ids[5], font_group_counts[5]);
-    shape.font_ref.user = clamp(raw.font_ids[6], font_group_counts[6]);
-    shape
-}
-
-pub(crate) fn hwp5_char_shape_to_hwpx_with_counts_and_warnings(
-    raw: &Hwp5RawCharShape,
-    font_group_counts: [usize; 7],
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> HwpxCharShape {
     append_char_shape_projection_warnings(raw, raw_id, warnings);
-    hwp5_char_shape_to_hwpx_with_counts(raw, font_group_counts)
+    hwp5_char_shape_to_hwpx(raw)
 }
 
 #[cfg(test)]
-pub(crate) fn hwp5_para_shape_to_hwpx(raw: &Hwp5RawParaShape) -> HwpxParaShape {
+pub(crate) fn hwp5_para_shape_to_hwpx(
+    raw: &Hwp5RawParaShape,
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     hwp5_para_shape_to_hwpx_with_tab_id(raw, raw.tab_def_id as u32)
 }
 
 pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     raw: &Hwp5RawParaShape,
     tab_pr_id_ref: u32,
-) -> HwpxParaShape {
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     let to_unit = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
     let (heading_type, heading_id_ref, heading_level) = hwp5_heading_wire_parts(raw);
 
+    let margin = |field, value| {
+        hwpforge_smithy_hwpx::paragraph_measure::unpack_margin(value).map_err(|e| {
+            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                detail: format!("{field} raw {value}: {e}"),
+            }
+        })
+    };
     let mut shape = HwpxParaShape::default();
     shape.alignment = raw.alignment();
-    shape.margin_left = to_unit(raw.left_margin);
-    shape.margin_right = to_unit(raw.right_margin);
-    shape.indent = to_unit(raw.indent);
-    shape.spacing_before = to_unit(raw.space_before);
-    shape.spacing_after = to_unit(raw.space_after);
+    shape.margin_left = margin("margin_left", raw.left_margin)?;
+    shape.margin_right = margin("margin_right", raw.right_margin)?;
+    shape.indent = margin("indent", raw.indent)?;
+    shape.spacing_before = margin("spacing_before", raw.space_before)?;
+    shape.spacing_after = margin("spacing_after", raw.space_after)?;
+    if raw.line_spacing_kind_raw() > 3 || raw.line_spacing2.is_some_and(|v| v > i32::MAX as u32) {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "HWP5 lineSpacing unknown type or overflow".into(),
+        });
+    }
     shape.line_spacing = raw.line_spacing_value();
     shape.line_spacing_type = raw.line_spacing_type();
     shape.snap_to_grid = raw.snap_to_grid();
@@ -354,7 +346,12 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     if raw.line_wrap_raw() == 1 {
         shape.line_wrap = "SQUEEZE".to_string();
     }
-    shape
+    if shape.line_spacing < 0 {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "negative HWP5 lineSpacing".into(),
+        });
+    }
+    Ok(shape)
 }
 
 pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
@@ -362,9 +359,13 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
     tab_pr_id_ref: u32,
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
-) -> HwpxParaShape {
+) -> hwpforge_smithy_hwpx::HwpxResult<HwpxParaShape> {
     append_para_shape_projection_warnings(raw, raw_id, warnings);
-    hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref)
+    hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref).map_err(|e| {
+        hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: format!("HWP5 DocInfo paraPr {raw_id}: {e}"),
+        }
+    })
 }
 
 fn optional_non_black_color(bgr: u32) -> Option<Color> {
@@ -396,7 +397,6 @@ fn append_para_shape_projection_warnings(
 ) {
     warn_on_para_line_spacing_kind(raw, raw_id, warnings);
     warn_on_para_break_latin_word(raw, raw_id, warnings);
-    warn_on_para_font_line_height(raw, raw_id, warnings);
     warn_on_para_auto_spacing(raw, raw_id, warnings);
     warn_on_para_line_wrap(raw, raw_id, warnings);
 }
@@ -555,23 +555,6 @@ fn warn_on_para_break_latin_word(
     }
 }
 
-fn warn_on_para_font_line_height(
-    raw: &Hwp5RawParaShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if !raw.font_line_height() {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.para_shape.font_line_height",
-        format!(
-            "para shape {raw_id} font-line-height flag was dropped because the current style surface does not carry that switch"
-        ),
-    );
-}
-
 fn warn_on_para_auto_spacing(
     raw: &Hwp5RawParaShape,
     raw_id: usize,
@@ -671,40 +654,36 @@ fn hwp5_fill_type_to_tab_leader(fill_type: u8) -> TabLeader {
     TabLeader::from_hwpx_str(leader)
 }
 
-pub(crate) fn hwp5_tab_def_to_hwpx(id: u32, raw: &Hwp5RawTabDef) -> TabDef {
-    TabDef {
+pub(crate) fn hwp5_tab_def_to_hwpx(
+    id: u32,
+    raw: &Hwp5RawTabDef,
+) -> hwpforge_smithy_hwpx::HwpxResult<TabDef> {
+    Ok(TabDef {
         id,
         auto_tab_left: raw.auto_tab_left(),
         auto_tab_right: raw.auto_tab_right(),
         stops: raw
             .tab_stops
             .iter()
-            .map(|stop| TabStop {
-                position: hwp5_tab_position_to_hwp_unit(stop.position),
-                align: hwp5_tab_align_to_foundation(stop.tab_type),
-                leader: hwp5_fill_type_to_tab_leader(stop.fill_type),
+            .enumerate()
+            .map(|(index, stop)| {
+                Ok(TabStop {
+                    position: hwpforge_smithy_hwpx::paragraph_measure::unpack_tab(stop.position)
+                        .map_err(|e| hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                            detail: format!(
+                                "HWP5 DocInfo tabPr {id}.position[{index}] raw {}: {e}",
+                                stop.position
+                            ),
+                        })?,
+                    align: hwp5_tab_align_to_foundation(stop.tab_type),
+                    leader: hwp5_fill_type_to_tab_leader(stop.fill_type),
+                })
             })
-            .collect(),
-    }
+            .collect::<hwpforge_smithy_hwpx::HwpxResult<_>>()?,
+    })
 }
 
-/// Converts a HWP5 raw tab stop position (HwpUnit) into the value
-/// expected by `crates/hwpforge-smithy-hwpx/src/encoder/header_tabs.rs`.
-///
-/// The HWPX encoder treats `TabStop.position` as **HwpUnitChar**: it emits
-/// the value as-is into the `HwpUnitChar` switch branch and doubles it
-/// into the legacy default branch. HWP5 stores the position in HwpUnit
-/// (per HWP 5.0 spec §4.2.7), so we halve here to land in the encoder's
-/// HwpUnitChar convention. Confirmed against the
-/// `sample-tab.hwp{,x}` truth pair: HWP5 raw `30000` → HWPX
-/// `pos="15000"` (HwpUnitChar) / `pos="30000"` (default).
-///
-/// See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1).
-fn hwp5_tab_position_to_hwp_unit(position: u32) -> HwpUnit {
-    TabDef::clamp_position_from_unsigned(u64::from(position) / 2)
-}
-
-pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize) -> HwpxStyle {
+pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle) -> HwpxStyle {
     HwpxStyle::new(
         id,
         if raw.kind == 1 { "CHAR" } else { "PARA" },
@@ -712,7 +691,7 @@ pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize
         raw.english_name.clone(),
         raw.para_shape_id as u32,
         raw.char_shape_id as u32,
-        if (raw.next_style_id as usize) < style_count { raw.next_style_id as u32 } else { 0 },
+        raw.next_style_id as u32,
         if raw.lang_id < 0 { 1042 } else { raw.lang_id as u32 },
         raw.lock_form as u32,
     )
@@ -721,8 +700,10 @@ pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize
 fn font_groups_from_id_mappings<'a>(
     id_mappings: Option<&Hwp5RawIdMappings>,
     fonts: &'a [Hwp5RawFaceName],
-) -> Option<[&'a [Hwp5RawFaceName]; 7]> {
-    let mappings = id_mappings?;
+) -> hwpforge_smithy_hwpx::HwpxResult<Option<[&'a [Hwp5RawFaceName]; 7]>> {
+    let Some(mappings) = id_mappings else {
+        return Ok(None);
+    };
     let counts = [
         mappings.hangul_font_count,
         mappings.english_font_count,
@@ -731,18 +712,28 @@ fn font_groups_from_id_mappings<'a>(
         mappings.other_font_count,
         mappings.symbol_font_count,
         mappings.user_font_count,
-    ]
-    .map(|count| count.max(0) as usize);
+    ];
+    if counts.iter().any(|&count| count < 0) {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: "HWP5 IdMappings negative font group count".into(),
+        });
+    }
+    let counts = counts.map(|count| count as usize);
 
-    let total: usize = counts.iter().sum();
-    if total != fonts.len() {
-        return None;
+    let total: u64 = counts.iter().map(|&count| count as u64).sum();
+    if total != fonts.len() as u64 {
+        return Err(hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+            detail: format!(
+                "HWP5 IdMappings font group total {total} differs from FaceName count {}",
+                fonts.len()
+            ),
+        });
     }
 
     let mut offset = 0usize;
-    Some(counts.map(|count| {
+    Ok(Some(counts.map(|count| {
         let slice = &fonts[offset..offset + count];
         offset += count;
         slice
-    }))
+    })))
 }

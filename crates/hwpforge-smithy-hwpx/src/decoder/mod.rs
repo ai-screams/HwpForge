@@ -12,6 +12,8 @@ pub(crate) mod image_size;
 pub(crate) mod metadata;
 pub(crate) mod package;
 pub(crate) mod package_order;
+#[cfg(test)]
+mod paragraph_measure_tests;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
@@ -183,6 +185,27 @@ impl HwpxDocument {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DecodeWarning {
+    /// An unsupported definition/selection with no active content consumer.
+    /// The omission is reported, but does not make a content edit lossy.
+    InactiveHeaderReference {
+        /// Original package part.
+        part: String,
+        /// Definition or reference field.
+        kind: String,
+        /// Original ID and omission policy.
+        reason: String,
+    },
+    /// Selected paragraph semantics are preserved while wire branches are normalized.
+    ParagraphMeasureNormalized {
+        /// Header definition kind (paraPr or tabPr).
+        definition: &'static str,
+        /// Original definition ID.
+        id: u32,
+        /// Margin field, lineSpacing or tab ordinal.
+        field: String,
+        /// Discrepancy and selected interpretation.
+        reason: String,
+    },
     /// A source start has no end. The original boundary and body are retained;
     /// reading is allowed, while edits touching the remaining flow are refused.
     UnclosedFieldBoundary {
@@ -272,12 +295,14 @@ impl DecodeWarning {
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
+            Self::InactiveHeaderReference { .. } => "INACTIVE_HEADER_REFERENCE",
             Self::UnknownEnumValue { .. } => "UNKNOWN_ENUM_VALUE",
             Self::LayoutCacheDropped { .. } => "LAYOUT_CACHE_DROPPED",
             Self::ContentLost { .. } => "CONTENT_LOST",
             Self::InvalidFieldBoundary { .. } => "INVALID_FIELD_BOUNDARY",
             Self::UnclosedFieldBoundary { .. } => "UNCLOSED_FIELD_BOUNDARY",
             Self::BeginNumRepaired { .. } => "BEGIN_NUM_REPAIRED",
+            Self::ParagraphMeasureNormalized { .. } => "PARAGRAPH_MEASURE_NORMALIZED",
         }
     }
 
@@ -306,9 +331,12 @@ impl DecodeWarning {
         match self {
             Self::UnknownEnumValue { .. } | Self::LayoutCacheDropped { .. } => None,
             Self::ContentLost { part, .. }
+            | Self::InactiveHeaderReference { part, .. }
             | Self::InvalidFieldBoundary { part, .. }
             | Self::UnclosedFieldBoundary { part, .. } => Some(part),
-            Self::BeginNumRepaired { .. } => Some(HEADER_PART),
+            Self::BeginNumRepaired { .. } | Self::ParagraphMeasureNormalized { .. } => {
+                Some(HEADER_PART)
+            }
         }
     }
 
@@ -333,6 +361,7 @@ impl DecodeWarning {
     #[must_use]
     pub fn location(&self) -> Option<String> {
         match self {
+            Self::InactiveHeaderReference { part, kind, .. } => Some(format!("{part}:{kind}")),
             Self::UnknownEnumValue { attribute, .. } => Some((*attribute).to_string()),
             Self::LayoutCacheDropped { path, .. } => Some(path.to_string()),
             Self::ContentLost { part, path, .. } => Some(format!("{part}:{path}")),
@@ -340,6 +369,9 @@ impl DecodeWarning {
                 Some(part.clone())
             }
             Self::BeginNumRepaired { .. } => Some("hh:beginNum".to_string()),
+            Self::ParagraphMeasureNormalized { definition, id, field, .. } => {
+                Some(format!("{definition}[{id}].{field}"))
+            }
         }
     }
 
@@ -367,6 +399,10 @@ impl DecodeWarning {
             Self::UnknownEnumValue { raw, fallback, .. } => {
                 format!("\"{raw}\" unknown — fell back to {fallback}")
             }
+            Self::InactiveHeaderReference { kind, reason, .. } => {
+                format!("inactive {kind}: {reason}")
+            }
+            Self::ParagraphMeasureNormalized { reason, .. } => reason.clone(),
             Self::LayoutCacheDropped { reason, .. } => format!("layout cache dropped: {reason}"),
             Self::ContentLost { kind, reason, .. } => format!("{kind} lost: {reason}"),
             Self::InvalidFieldBoundary { reason, .. }
@@ -404,8 +440,10 @@ impl DecodeWarning {
     #[must_use]
     pub fn is_content_loss(&self) -> bool {
         match self {
-            Self::UnknownEnumValue { .. }
+            Self::InactiveHeaderReference { .. }
+            | Self::UnknownEnumValue { .. }
             | Self::LayoutCacheDropped { .. }
+            | Self::ParagraphMeasureNormalized { .. }
             | Self::BeginNumRepaired { .. }
             | Self::UnclosedFieldBoundary { .. } => false,
             Self::ContentLost { .. } | Self::InvalidFieldBoundary { .. } => true,
@@ -416,6 +454,9 @@ impl DecodeWarning {
 impl std::fmt::Display for DecodeWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InactiveHeaderReference { part, kind, reason } => {
+                write!(f, "inactive {kind} at {part}: {reason}")
+            }
             Self::UnclosedFieldBoundary { part, reason } => {
                 write!(f, "unclosed source field at {part}: {reason}")
             }
@@ -430,6 +471,9 @@ impl std::fmt::Display for DecodeWarning {
             }
             Self::ContentLost { part, path, kind, reason } => {
                 write!(f, "{kind} lost at {part}:{path}: {reason}")
+            }
+            Self::ParagraphMeasureNormalized { definition, id, field, reason } => {
+                write!(f, "{definition}[{id}].{field}: {reason}")
             }
             Self::BeginNumRepaired { axes } => write!(
                 f,
@@ -543,7 +587,18 @@ pub mod warning_samples {
                 kind: "pic".to_string(),
                 reason: "sample".to_string(),
             },
+            DecodeWarning::InactiveHeaderReference {
+                part: "Contents/header.xml".into(),
+                kind: "memoPr".into(),
+                reason: "unused".into(),
+            },
             DecodeWarning::BeginNumRepaired { axes: vec!["page", "pic"] },
+            DecodeWarning::ParagraphMeasureNormalized {
+                definition: "paraPr",
+                id: 7,
+                field: "left".into(),
+                reason: "default differs".into(),
+            },
             DecodeWarning::UnclosedFieldBoundary {
                 part: "Contents/section0.xml".into(),
                 reason: "unpaired source start".into(),
@@ -560,6 +615,8 @@ pub mod warning_samples {
                 DecodeWarning::UnknownEnumValue { .. }
                 | DecodeWarning::LayoutCacheDropped { .. }
                 | DecodeWarning::ContentLost { .. }
+                | DecodeWarning::InactiveHeaderReference { .. }
+                | DecodeWarning::ParagraphMeasureNormalized { .. }
                 | DecodeWarning::BeginNumRepaired { .. }
                 | DecodeWarning::InvalidFieldBoundary { .. }
                 | DecodeWarning::UnclosedFieldBoundary { .. } => {}
@@ -723,6 +780,11 @@ impl HwpxDecoder {
         let header_xml = pkg.read_header_xml()?;
         let header_result = header::parse_header(&header_xml)?;
         let style_store = header_result.style_store;
+        let mut references = crate::header_references::HeaderReferences::build(&style_store)?;
+        references.memos = header_result.memo_ids;
+        references.track_changes = header_result.track_change_ids;
+        references.track_change_authors = header_result.track_change_author_ids;
+        references.validate(&style_store, false)?;
         let begin_num = header_result.begin_num;
 
         // Step 2b (Wave 12o): Parse Contents/content.hpf metadata.
@@ -751,6 +813,7 @@ impl HwpxDecoder {
 
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
+        let mut has_memo = false;
         let section_count = pkg.section_count();
         // Where each master page part parsed so far was first kept (section,
         // position in its master pages) — copies are taken from there, so no
@@ -762,6 +825,7 @@ impl HwpxDecoder {
         let mut named_masterpages = std::collections::BTreeSet::new();
         let mut warnings: Vec<DecodeWarning> = header_begin_num_warnings(begin_num.as_ref());
         warnings.extend(header_result.warnings);
+        warnings.extend(references.validate_auxiliary_xml(&header_xml, "Contents/header.xml")?);
         warnings.extend(pkg.order.problems.iter().map(|reason| DecodeWarning::ContentLost {
             part: "Contents/content.hpf / META-INF/container.xml".into(),
             path: ParagraphPath(Vec::new()),
@@ -777,12 +841,13 @@ impl HwpxDecoder {
         let mut source_maps = Vec::with_capacity(section_count);
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let mut result = section::parse_section_with_images(
+            let mut result = section::parse_section_with_references(
                 &section_xml,
                 i,
                 &pkg.section_paths()[i],
                 &chart_xmls,
                 &image_pixels,
+                Some(&references),
             )?;
             warnings.append(&mut result.warnings);
 
@@ -804,7 +869,7 @@ impl HwpxDecoder {
                 reason,
             };
             let refs = master_page_refs(&section_xml);
-            let mp_cnt = extract_master_page_cnt(&section_xml);
+            let mp_cnt = result.master_page_cnt;
             if refs.is_empty() && mp_cnt > 0 {
                 warnings
                     .push(lost(format!("masterPageCnt {mp_cnt} without a masterPage reference")));
@@ -872,8 +937,15 @@ impl HwpxDecoder {
                             ),
                         })?,
                     None => {
-                        let (master, mut mp_warnings) =
-                            section::parse_master_page(xml, i, number, &image_pixels)?;
+                        let (master, mut mp_warnings, master_has_memo) =
+                            section::parse_master_page_with_references(
+                                xml,
+                                i,
+                                number,
+                                &image_pixels,
+                                Some(&references),
+                            )?;
+                        has_memo |= master_has_memo;
                         warnings.append(&mut mp_warnings);
                         parsed_masterpages.insert(number, (i, owned.len()));
                         master
@@ -881,6 +953,7 @@ impl HwpxDecoder {
                 };
                 owned.push(master);
             }
+            has_memo |= result.has_memo;
             let section_master_pages =
                 if owned.is_empty() { result.master_pages } else { Some(owned) };
 
@@ -934,12 +1007,31 @@ impl HwpxDecoder {
                 reason: "no section references this master page".into(),
             });
         }
+        crate::header_references::HeaderReferences::validate_body_borders(
+            &document,
+            style_store.iter_border_fills().map(|fill| fill.id),
+        )?;
         drop_cell_zones_with_unknown_border_fill(
             &mut document,
             &style_store,
             &mut warnings,
             pkg.section_paths(),
         );
+        // Native files keep a default memo definition even without any memo.
+        // Warn about unused metadata without rejecting unrelated content edits.
+        if !has_memo {
+            for warning in &mut warnings {
+                if let DecodeWarning::ContentLost { part, kind, reason, .. } = warning {
+                    if matches!(kind.as_str(), "memoPr" | "secPr.memoShapeIDRef") {
+                        *warning = DecodeWarning::InactiveHeaderReference {
+                            part: part.clone(),
+                            kind: kind.clone(),
+                            reason: reason.clone(),
+                        };
+                    }
+                }
+            }
+        }
         let origins: Vec<_> = source_maps.iter().flat_map(|m| m.unclosed.iter().cloned()).collect();
         let package: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes);
         hwpforge_core::field_inventory::FieldInventory::recover_shared_source_ranges(
@@ -1084,7 +1176,11 @@ fn drop_cell_zones_with_unknown_border_fill(
     for (i, section) in document.sections_mut().iter_mut().enumerate() {
         section.for_each_table_mut(|table| {
             table.cell_zones.retain(|zone| {
-                let known = style_store.border_fill(zone.border_fill_id).is_ok();
+                let known = crate::header_references::HeaderReferences::border_fill(
+                    style_store,
+                    zone.border_fill_id,
+                )
+                .is_ok();
                 if !known {
                     warnings.push(DecodeWarning::ContentLost {
                         part: section_parts[i].clone(),
@@ -1249,17 +1345,6 @@ fn master_page_refs(section_xml: &str) -> Vec<String> {
 /// The file number of a `Contents/masterpageN.xml` href.
 fn masterpage_number(href: &str) -> Option<usize> {
     href.strip_prefix("Contents/masterpage")?.strip_suffix(".xml")?.parse().ok()
-}
-
-fn extract_master_page_cnt(section_xml: &str) -> usize {
-    let needle = "masterPageCnt=\"";
-    if let Some(pos) = section_xml.find(needle) {
-        let after = &section_xml[pos + needle.len()..];
-        if let Some(end) = after.find('"') {
-            return after[..end].parse().unwrap_or(0);
-        }
-    }
-    0
 }
 
 #[cfg(test)]
@@ -1649,6 +1734,47 @@ mod tests {
     /// references, are lost content (editors refuse the input).
     /// 이것을 실패시키는 것: 미해결 참조 무시 · 참조 없는 바탕쪽 무시.
     #[test]
+    fn fix6_master_page_count_uses_deserialized_value() {
+        // 이것을 실패시키는 것: 원시 masterPageCnt 문자열 검색 복원, count 전달/경고 생략.
+        let base = master_pages_doc(&[None]);
+        for attribute in [
+            r#"masterPageCnt="1""#,
+            "masterPageCnt='1'",
+            r#"masterPageCnt="&#49;""#,
+            r#"masterPageCnt = "1""#,
+            r#"masterPageCnt="0""#,
+        ] {
+            let mut pkg = crate::patch::RawPackage::read(&base).unwrap();
+            let xml = pkg.read_text_entry("Contents/section0.xml").unwrap();
+            assert!(xml.contains(r#"masterPageCnt="0""#));
+            pkg.replace_text_entry(
+                "Contents/section0.xml",
+                xml.replace(r#"masterPageCnt="0""#, attribute),
+            );
+            let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+            let losses: Vec<_> = decoded
+                .warnings
+                .iter()
+                .filter_map(|warning| match warning {
+                    DecodeWarning::ContentLost { part, kind, reason, .. }
+                        if kind == "master_page" =>
+                    {
+                        Some((part, reason))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if attribute == r#"masterPageCnt="0""# {
+                assert!(losses.is_empty());
+            } else {
+                assert_eq!(losses.len(), 1, "{attribute}: {losses:?}");
+                assert_eq!(losses[0].0, "Contents/section0.xml");
+                assert_eq!(losses[0].1, "masterPageCnt 1 without a masterPage reference");
+            }
+        }
+    }
+
+    #[test]
     fn an_unresolved_master_page_reference_is_lost_content() {
         let bytes = with_master_page_refs(&two_master_pages(), &["masterpage0", "nosuch"]);
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
@@ -1674,6 +1800,38 @@ mod tests {
         let lost: Vec<String> =
             decoded.warnings.iter().filter(|w| w.is_content_loss()).map(|w| w.message()).collect();
         assert!(lost.iter().any(|m| m.contains("without a masterPage reference")), "{lost:?}");
+    }
+
+    #[test]
+    fn fix6_later_section_master_page_count_uses_deserialized_value() {
+        // 이것을 실패시키는 것: masterPageCnt 원시 문자열 검색 복원,
+        // 구역 결과의 count 전달 누락, 0에도 누락 경고 생성.
+        for attribute in [
+            r#"masterPageCnt="1""#,
+            "masterPageCnt='1'",
+            r#"masterPageCnt="&#49;""#,
+            r#"masterPageCnt = "1""#,
+            r#"masterPageCnt="0""#,
+        ] {
+            let mut pkg = crate::patch::RawPackage::read(&two_master_pages()).unwrap();
+            let part = "Contents/section1.xml";
+            let xml = pkg.read_text_entry(part).unwrap();
+            assert!(xml.contains(r#"masterPageCnt="1""#));
+            pkg.replace_text_entry(
+                part,
+                xml.replace(r#"<hp:masterPage idRef="masterpage1"/>"#, "")
+                    .replace(r#"masterPageCnt="1""#, attribute),
+            );
+            let decoded = HwpxDecoder::decode(&pkg.write().unwrap()).unwrap();
+            let count = decoded
+                .warnings
+                .iter()
+                .filter(|w| {
+                    w.is_content_loss() && w.message().contains("without a masterPage reference")
+                })
+                .count();
+            assert_eq!(count, usize::from(!attribute.contains('0')), "{attribute}");
+        }
     }
 
     /// Review r2 HIGH: a package whose picture-caption table names a border
@@ -1883,7 +2041,7 @@ mod tests {
                 <fontface lang="HANGUL" fontCnt="1">
                     <font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
                 </fontface>
-            </fontfaces>
+            <fontface lang="LATIN" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface><fontface lang="HANJA" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface><fontface lang="JAPANESE" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface><fontface lang="OTHER" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface><fontface lang="SYMBOL" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface><fontface lang="USER" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF"/></fontface></fontfaces>
             <charProperties itemCnt="1">
                 <charPr id="0" height="1000" textColor="#000000" shadeColor="none"
                         useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
@@ -1894,11 +2052,11 @@ mod tests {
                 <paraPr id="0">
                     <align horizontal="LEFT" vertical="BASELINE"/>
                     <switch><default>
-                        <lineSpacing type="PERCENT" value="160"/>
+                        <lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>
                     </default></switch>
                 </paraPr>
             </paraProperties>
-        </refList>
+        <styles><style id="0" type="PARA" name="base" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0"/></styles></refList>
     </head>"##;
 
     const SECTION_TEXT: &str = r#"<sec>
@@ -1916,6 +2074,429 @@ mod tests {
     </sec>"#;
 
     // ── Full pipeline tests ──────────────────────────────────────
+
+    #[test]
+    fn fix5_memo_loss_is_active_in_body_and_image_caption() {
+        // 이것을 실패시키는 것: Core for_each_paragraph로 메모를 판정해 그림 캡션 누락,
+        // 디코딩 관측/구역 집계 누락, 뒤의 메모 없는 구역으로 존재 사실 덮어쓰기.
+        let header = HEADER.replace(
+            "</refList>",
+            r#"<memoProperties><memoPr id="7"/></memoProperties></refList>"#,
+        );
+        for caption in [false, true] {
+            for active in [false, true] {
+                let field = if active {
+                    r#"<ctrl><fieldBegin id="1" type="MEMO"><parameters><stringParam name="MemoShapeIDRef">65535</stringParam></parameters></fieldBegin></ctrl><t>x</t><ctrl><fieldEnd beginIDRef="1"/></ctrl>"#
+                } else {
+                    "<t>x</t>"
+                };
+                let payload = if caption {
+                    format!(
+                        r#"<pic><sz width="1000" height="1000"/><img binaryItemIDRef="a"/><caption><subList><p><run>{field}</run></p></subList></caption></pic>"#
+                    )
+                } else {
+                    field.into()
+                };
+                let section =
+                    format!(r#"<sec><p><run><secPr memoShapeIDRef="7"/>{payload}</run></p></sec>"#);
+                let decoded =
+                    HwpxDecoder::decode(&make_test_hwpx(&header, &[&section, SECTION_TEXT]))
+                        .unwrap();
+                if caption {
+                    assert!(decoded.document.sections()[0].paragraphs[0]
+                        .runs
+                        .iter()
+                        .any(|r| matches!(&r.content,
+                        hwpforge_core::RunContent::Image(image) if image.caption.is_some())));
+                }
+                for expected in ["memoPr", "secPr.memoShapeIDRef"] {
+                    let warning = decoded
+                        .warnings
+                        .iter()
+                        .find(|w| match w {
+                            DecodeWarning::ContentLost { kind, .. }
+                            | DecodeWarning::InactiveHeaderReference { kind, .. } => {
+                                kind == expected
+                            }
+                            _ => false,
+                        })
+                        .expect(expected);
+                    assert_eq!(warning.is_content_loss(), active, "caption={caption}: {warning:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fix5_master_page_memo_observation_reaches_document() {
+        // 이것을 실패시키는 것: 바탕쪽의 메모 관측을 반환/문서 집계에서 누락.
+        let mut package = crate::patch::RawPackage::read(&two_master_pages()).unwrap();
+        let header = package.read_text_entry("Contents/header.xml").unwrap().replace(
+            "</hh:refList>",
+            r#"<hh:memoProperties><hh:memoPr id="7"/></hh:memoProperties></hh:refList>"#,
+        );
+        package.replace_text_entry("Contents/header.xml", header);
+        let xml = package.read_text_entry("Contents/masterpage0.xml").unwrap()
+            .replace("<hp:t>A</hp:t>", r#"<hp:ctrl><hp:fieldBegin id="1" type="MEMO"/></hp:ctrl><hp:t>A</hp:t><hp:ctrl><hp:fieldEnd beginIDRef="1"/></hp:ctrl>"#);
+        package.replace_text_entry("Contents/masterpage0.xml", xml);
+        let decoded = HwpxDecoder::decode(&package.write().unwrap()).unwrap();
+        assert!(decoded.warnings.iter().any(|w| matches!(w,
+            DecodeWarning::ContentLost { kind, .. } if kind == "memoPr")));
+    }
+
+    #[test]
+    fn fix5_memo_parameter_entities_share_deserialized_validation() {
+        // 이것을 실패시키는 것: name 원시 바이트 비교로 &#82;/&#x52; 우회,
+        // 파라미터 조회/손실 경고 생략, 65535 상속 오거부, 속성 오류 무시.
+        for name in ["MemoShapeIDRef", "MemoShapeID&#82;ef", "MemoShapeID&#x52;ef"] {
+            for (value, expected) in [
+                ("99", "broken memoPr reference ID 99"),
+                ("&#55;", "validated memoPr 7"),
+                ("65535", ""),
+            ] {
+                let header = HEADER.replace(
+                    "</refList>",
+                    r#"<memoProperties><memoPr id="7"/></memoProperties></refList>"#,
+                );
+                let section = format!(
+                    r#"<sec><p><run><ctrl><fieldBegin id="1" type="MEMO"><parameters><stringParam name="Author">tester</stringParam><stringParam name="{name}">{value}</stringParam></parameters></fieldBegin></ctrl><t>x</t><ctrl><fieldEnd beginIDRef="1"/></ctrl></run></p></sec>"#
+                );
+                let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[&section])).unwrap();
+                let reasons: Vec<_> = decoded
+                    .warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        DecodeWarning::ContentLost { kind, reason, .. }
+                            if kind == "MemoShapeIDRef" =>
+                        {
+                            Some(reason)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if expected.is_empty() {
+                    assert!(reasons.is_empty());
+                } else {
+                    assert_eq!(reasons.len(), 1);
+                    assert!(reasons[0].contains(expected), "{reasons:?}");
+                }
+            }
+        }
+        let invalid = r#"<sec><p><run><ctrl><fieldBegin type="MEMO"><parameters><stringParam name="MemoShapeIDRef">invalid</stringParam></parameters></fieldBegin></ctrl></run></p></sec>"#;
+        assert!(HwpxDecoder::decode(&make_test_hwpx(HEADER, &[invalid]))
+            .unwrap_err()
+            .to_string()
+            .contains("MemoShapeIDRef invalid ID"));
+        for attributes in [
+            r#"name="MemoShapeIDRef" name="ignored""#,
+            r#"name="MemoShapeID&unknown;Ref""#,
+            r#"name"#,
+        ] {
+            let section = format!(
+                r#"<sec><p><run><ctrl><fieldBegin type="MEMO"><parameters><stringParam {attributes}>99</stringParam></parameters></fieldBegin></ctrl></run></p></sec>"#
+            );
+            assert!(
+                HwpxDecoder::decode(&make_test_hwpx(HEADER, &[&section])).is_err(),
+                "{attributes}"
+            );
+        }
+    }
+
+    #[test]
+    fn fix4_original_border_ids_and_dutmal_are_checked_in_packages() {
+        // 이것을 실패시키는 것: 문자 2→None, 표/셀/쪽 검증 누락,
+        // 덧말 styleIDRef를 조회 전에 0으로 폐기, 존재하는 희소 ID의 오거부.
+        for id in [2, 4, 99] {
+            let header =
+                HEADER.replace("borderFillIDRef=\"0\"", &format!("borderFillIDRef=\"{id}\""));
+            for definitions in [String::new(), "<borderFills itemCnt=\"1\"><borderFill id=\"7\"><slash/><backSlash/><leftBorder/><rightBorder/><topBorder/><bottomBorder/></borderFill></borderFills>".into()] {
+                let header = header.replace("</refList>", &format!("{definitions}</refList>"));
+                let error = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap_err();
+                assert!(error.to_string().contains("borderFill"), "{error}");
+            }
+        }
+        let header = HEADER.replace("</refList>", "<borderFills itemCnt=\"1\"><borderFill id=\"7\"><slash/><backSlash/><leftBorder/><rightBorder/><topBorder/><bottomBorder/></borderFill></borderFills></refList>")
+            .replace("borderFillIDRef=\"0\"", "borderFillIDRef=\"7\"");
+        let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap();
+        assert_eq!(decoded.style_store.iter_char_shapes().next().unwrap().border_fill_id, Some(7));
+        let bytes = crate::HwpxEncoder::encode(
+            &decoded.document.validate().unwrap(),
+            &decoded.style_store,
+            &decoded.image_store,
+        )
+        .unwrap();
+        assert_eq!(
+            HwpxDecoder::decode(&bytes)
+                .unwrap()
+                .style_store
+                .iter_char_shapes()
+                .next()
+                .unwrap()
+                .border_fill_id,
+            Some(7)
+        );
+        for (kind, payload) in [
+            (
+                "table",
+                r#"<tbl borderFillIDRef="99" rowCnt="1" colCnt="1"><tr><tc><cellAddr colAddr="0" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/><cellSz width="1000" height="1000"/><subList><p><run><t>x</t></run></p></subList></tc></tr></tbl>"#,
+            ),
+            (
+                "cell",
+                r#"<tbl rowCnt="1" colCnt="1"><tr><tc borderFillIDRef="99"><cellAddr colAddr="0" rowAddr="0"/><cellSpan colSpan="1" rowSpan="1"/><cellSz width="1000" height="1000"/><subList><p><run><t>x</t></run></p></subList></tc></tr></tbl>"#,
+            ),
+            ("page", r#"<secPr><pageBorderFill type="BOTH" borderFillIDRef="99"/></secPr>"#),
+            (
+                "style",
+                r#"<dutmal styleIDRef="99"><mainText>x</mainText><subText>y</subText></dutmal>"#,
+            ),
+        ] {
+            let section = format!("<sec><p><run>{payload}</run></p></sec>");
+            let error = HwpxDecoder::decode(&make_test_hwpx(HEADER, &[&section])).unwrap_err();
+            assert!(error.to_string().contains(kind), "{kind}: {error}");
+        }
+    }
+
+    #[test]
+    fn fix4_unsupported_definitions_and_dutmal_loss_are_explicit() {
+        // 이것을 실패시키는 것: 미지원 정의/덧말 스타일의 무음 삭제.
+        for kind in ["memoPr", "trackChange", "trackChangeAuthor"] {
+            let header = HEADER.replace("</refList>", &format!("<{kind} id=\"7\"/></refList>"));
+            let doc = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap();
+            assert!(doc
+                .warnings
+                .iter()
+                .any(|w| matches!(w, DecodeWarning::ContentLost { kind: k, .. } | DecodeWarning::InactiveHeaderReference { kind: k, .. } if k == kind)));
+        }
+        let header = HEADER.replace("</styles>", r#"<style id="7" type="PARA" name="ruby" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0"/></styles>"#);
+        let section = r#"<sec><p><run><dutmal styleIDRef="7"><mainText>x</mainText><subText>y</subText></dutmal></run></p></sec>"#;
+        let doc = HwpxDecoder::decode(&make_test_hwpx(&header, &[section])).unwrap();
+        assert!(doc
+            .warnings
+            .iter()
+            .any(|w| matches!(w, DecodeWarning::ContentLost { kind, reason, .. }
+            if kind == "dutmal.styleIDRef" && reason.contains("7"))));
+    }
+
+    #[test]
+    fn fix4_schema_omitted_references_are_resolved_before_loss() {
+        // 이것을 실패시키는 것: 스키마가 무시하는 secPr/inline/form/메모 참조 조회 및 경고 생략.
+        let validate = |refs: &crate::header_references::HeaderReferences, xml: &str| {
+            if xml.starts_with("<stringParam") {
+                let parameters = xml_from_str(&format!("<parameters>{xml}</parameters>")).unwrap();
+                refs.validate_memo_parameters(&parameters, "section")
+            } else {
+                refs.validate_auxiliary_xml(xml, "section")
+            }
+        };
+        let refs = crate::header_references::HeaderReferences::build(
+            &super::header::parse_header(HEADER).unwrap().style_store,
+        )
+        .unwrap();
+        for (xml, kind, missing) in [
+            (r#"<secPr outlineShapeIDRef="99"/>"#, "outlineShapeIDRef", true),
+            (r#"<secPr memoShapeIDRef="99"/>"#, "memoShapeIDRef", true),
+            (r#"<t charStyleIDRef="0">x</t>"#, "charStyleIDRef", false),
+            (r#"<formCharPr charPrIDRef="0"/>"#, "charPrIDRef", false),
+            (r#"<stringParam name="MemoShapeIDRef">99</stringParam>"#, "MemoShapeIDRef", true),
+        ] {
+            let warnings = validate(&refs, xml).unwrap();
+            assert!(warnings
+                .iter()
+                .any(|w| matches!(w, DecodeWarning::ContentLost { kind: k, reason, .. }
+                if k.contains(kind) && (!missing || reason.contains("broken")))));
+        }
+        for xml in [r#"<t charStyleIDRef="99">x</t>"#, r#"<formCharPr charPrIDRef="99"/>"#] {
+            assert!(refs
+                .validate_auxiliary_xml(xml, "section")
+                .unwrap_err()
+                .to_string()
+                .contains("99"));
+        }
+        let header = HEADER.replace(
+            "</refList>",
+            r#"<memoProperties><memoPr id="7"/></memoProperties></refList>"#,
+        );
+        let parsed = super::header::parse_header(&header).unwrap();
+        assert!(parsed.memo_ids.contains(&7));
+        let mut refs =
+            crate::header_references::HeaderReferences::build(&parsed.style_store).unwrap();
+        refs.memos = parsed.memo_ids;
+        for xml in [
+            r#"<secPr memoShapeIDRef="7"/>"#,
+            r#"<stringParam name="MemoShapeIDRef">7</stringParam>"#,
+        ] {
+            let warnings = validate(&refs, xml).unwrap();
+            assert!(warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 7"))));
+        }
+        for xml in [
+            r#"<secPr outlineShapeIDRef="0" memoShapeIDRef="0"/>"#,
+            r#"<stringParam name="MemoShapeIDRef">65535</stringParam>"#,
+        ] {
+            assert!(validate(&refs, xml).unwrap().is_empty());
+        }
+        let section = r#"<sec><p><run><secPr memoShapeIDRef="7"/><t>x</t></run></p></sec>"#;
+        let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[section])).unwrap();
+        assert!(decoded.warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 7"))));
+        for payload in [r#"<t charStyleIDRef="99">x</t>"#, r#"<formCharPr charPrIDRef="99"/>"#] {
+            let section = format!("<sec><p><run>{payload}</run></p></sec>");
+            assert!(HwpxDecoder::decode(&make_test_hwpx(HEADER, &[&section])).is_err());
+        }
+        let mut store = parsed.style_store;
+        store.push_numbering(hwpforge_core::NumberingDef::default_outline());
+        let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
+        assert!(refs
+            .validate_auxiliary_xml(r#"<secPr outlineShapeIDRef="1"/>"#, "section")
+            .unwrap()
+            .is_empty());
+        store.push_para_shape(crate::HwpxParaShape {
+            heading_type: hwpforge_foundation::HeadingType::Outline,
+            heading_id_ref: 99,
+            ..Default::default()
+        });
+        let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
+        assert!(refs.validate(&store, false).unwrap_err().to_string().contains("numbering"));
+    }
+
+    #[test]
+    fn fix4_change_tracking_references_are_checked_before_loss() {
+        // 이것을 실패시키는 것: IDRef가 아닌 charTcId/paraTcId/authorID/
+        // charshapeID/parashapeID 조회를 생략하거나 header 교차 조회를 빼기.
+        for (owner, field, valid) in [
+            ("trackChange", "authorID", 8),
+            ("trackChange", "charshapeID", 0),
+            ("trackChange", "parashapeID", 0),
+            ("run", "charTcId", 7),
+            ("p", "paraTcId", 7),
+        ] {
+            for id in [valid, 99] {
+                let attr = format!(r#"{field}="{id}""#);
+                let change_attr = if owner == "trackChange" { attr.as_str() } else { "" };
+                let header = HEADER.replace("</refList>", &format!(r#"<trackChanges><trackChange id="7" {change_attr}/></trackChanges><trackChangeAuthors><trackChangeAuthor id="8"/></trackChangeAuthors></refList>"#));
+                let run_attr = if owner == "run" { attr.as_str() } else { "" };
+                let para_attr = if owner == "p" { attr.as_str() } else { "" };
+                let section =
+                    format!(r#"<sec><p {para_attr}><run {run_attr}><t>x</t></run></p></sec>"#);
+                let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[&section])).unwrap();
+                let reason = decoded
+                    .warnings
+                    .iter()
+                    .find_map(|w| match w {
+                        DecodeWarning::ContentLost { kind, reason, .. }
+                            if *kind == format!("{owner}.{field}") =>
+                        {
+                            Some(reason)
+                        }
+                        _ => None,
+                    })
+                    .expect("explicit change tracking reference loss");
+                assert_eq!(
+                    reason.contains("validated"),
+                    id == valid,
+                    "{owner}.{field}={id}: {reason}"
+                );
+                assert!(reason.contains(&id.to_string()));
+            }
+        }
+        let section = r#"<sec><p paraTcId="0"><run charTcId="0"><t>x</t></run></p></sec>"#;
+        let decoded = HwpxDecoder::decode(&make_test_hwpx(HEADER, &[section])).unwrap();
+        assert!(!decoded.warnings.iter().any(
+            |w| matches!(w, DecodeWarning::ContentLost { kind, .. } if kind.ends_with("TcId"))
+        ));
+    }
+
+    #[test]
+    fn fix4_unused_memo_definitions_do_not_block_content_edits() {
+        // 이것을 실패시키는 것: 미사용 기본 정의를 content loss로 취급하거나,
+        // 실제 메모가 있는 문서의 손실까지 비활성 경고로 낮추기.
+        let header = HEADER.replace(
+            "</refList>",
+            r#"<memoProperties><memoPr id="7"/></memoProperties></refList>"#,
+        );
+        for (body, active) in [
+            ("<t>x</t>", false),
+            (
+                r#"<ctrl><fieldBegin id="1" type="MEMO"/></ctrl><t>x</t><ctrl><fieldEnd beginIDRef="1"/></ctrl>"#,
+                true,
+            ),
+        ] {
+            let section =
+                format!(r#"<sec><p><run><secPr memoShapeIDRef="7"/>{body}</run></p></sec>"#);
+            let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[&section])).unwrap();
+            let warning = decoded
+                .warnings
+                .iter()
+                .find(|w| match w {
+                    DecodeWarning::ContentLost { kind, .. }
+                    | DecodeWarning::InactiveHeaderReference { kind, .. } => kind == "memoPr",
+                    _ => false,
+                })
+                .unwrap();
+            assert_eq!(warning.is_content_loss(), active);
+            assert_eq!(warning.part(), Some("Contents/header.xml"));
+            assert!(warning.location().unwrap().contains("Contents/header.xml"));
+            assert!(!warning.message().is_empty());
+            assert!(!warning.to_string().is_empty());
+            if !active {
+                assert_eq!(warning.code(), "INACTIVE_HEADER_REFERENCE");
+            }
+        }
+    }
+
+    #[test]
+    fn fix3_unused_empty_tab_case_survives_package_roundtrip() {
+        // 이것을 실패시키는 것: 미사용 빈 case를 default 내용에 따라 거부/대체하거나 경고 누락.
+        for default in ["", r#"<tabItem pos="2000"/>"#] {
+            let tab = format!(
+                r#"<tabProperties><tabPr id="99"><switch><case required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"/><default>{default}</default></switch></tabPr></tabProperties>"#
+            );
+            let header = HEADER.replace("</refList>", &format!("{tab}</refList>"));
+            let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap();
+            assert!(decoded.style_store.iter_tabs().find(|t| t.id == 99).unwrap().stops.is_empty());
+            assert_eq!(
+                decoded
+                    .warnings
+                    .iter()
+                    .filter(|w| matches!(w,
+                DecodeWarning::ParagraphMeasureNormalized { definition: "tabPr", id: 99, field, .. }
+                if field == "stops"))
+                    .count(),
+                usize::from(!default.is_empty())
+            );
+            let output = crate::HwpxEncoder::encode(
+                &decoded.document.validate().unwrap(),
+                &decoded.style_store,
+                &decoded.image_store,
+            )
+            .unwrap();
+            let after = HwpxDecoder::decode(&output).unwrap();
+            assert!(after.style_store.iter_tabs().find(|t| t.id == 99).unwrap().stops.is_empty());
+        }
+    }
+
+    #[test]
+    fn empty_definitions_zero_decode_gate() {
+        // 이것을 실패시키는 것: 빈 원본 charPr/paraPr 표의 명시적 0 참조를 디코드가 허용함.
+        for kind in ["char", "para", "both"] {
+            let mut header = HEADER.to_string();
+            let start = header.find("<styles>").unwrap();
+            let end = header.find("</styles>").unwrap() + "</styles>".len();
+            header.replace_range(start..end, "");
+            for (name, remove) in
+                [("charProperties", kind != "para"), ("paraProperties", kind != "char")]
+            {
+                if remove {
+                    let start = header.find(&format!("<{name}")).unwrap();
+                    let end_tag = format!("</{name}>");
+                    let end = header.find(&end_tag).unwrap() + end_tag.len();
+                    header.replace_range(start..end, &format!("<{name} itemCnt=\"0\"/>"));
+                }
+            }
+            let error = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap_err();
+            eprintln!("HWPX {kind} empty: REJECTED {error}");
+            let expected = if kind == "char" { "charPr" } else { "paraPr" };
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
 
     #[test]
     fn decode_minimal_hwpx() {
@@ -1936,7 +2517,7 @@ mod tests {
         assert_eq!(section.page_settings.height.as_i32(), 84188);
 
         // Style store
-        assert_eq!(result.style_store.font_count(), 1);
+        assert_eq!(result.style_store.font_count(), 7);
         assert_eq!(result.style_store.char_shape_count(), 1);
         assert_eq!(result.style_store.para_shape_count(), 1);
     }
@@ -2246,8 +2827,10 @@ mod warning_accessor_tests {
             [
                 "BEGIN_NUM_REPAIRED",
                 "CONTENT_LOST",
+                "INACTIVE_HEADER_REFERENCE",
                 "INVALID_FIELD_BOUNDARY",
                 "LAYOUT_CACHE_DROPPED",
+                "PARAGRAPH_MEASURE_NORMALIZED",
                 "UNCLOSED_FIELD_BOUNDARY",
                 "UNKNOWN_ENUM_VALUE"
             ]

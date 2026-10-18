@@ -41,6 +41,15 @@ use hwpforge_foundation::FoundationError;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CoreError {
+    /// Paragraph measures have different units.
+    #[error("paragraph measure unit mismatch")]
+    MeasureUnitMismatch,
+    /// Value exceeds the measure's semantic range.
+    #[error("paragraph measure overflow")]
+    MeasureOverflow,
+    /// Character count is outside the exact 1/500 ch grid.
+    #[error("character count is not on the 1/500 ch grid")]
+    MeasureOffGrid,
     /// Document validation failed.
     #[error("Document validation failed: {0}")]
     Validation(#[from] ValidationError),

@@ -1069,17 +1069,8 @@ fn refuse_unknown_cell_zone_fills(
     document: &Document<Validated>,
     style_store: &HwpxStyleStore,
 ) -> HwpxResult<()> {
-    // An empty store writes the three default border fills (ids 1–3,
-    // `build_border_fills_xml`), so those ids exist then (review r2
-    // MEDIUM-3). 이것을 실패시키는 것: 빈 저장소 기본 id 를 빼기
-    // (`unknown_cell_zone_fill_is_refused` 의 빈 저장소 1–3 성공).
-    let written = |id: u32| {
-        if style_store.border_fill_count() == 0 {
-            (1..=3).contains(&id)
-        } else {
-            style_store.border_fill(id).is_ok()
-        }
-    };
+    let written =
+        |id: u32| crate::header_references::HeaderReferences::border_fill(style_store, id).is_ok();
     // Tables in a memo's anchor runs are not written (the anchor keeps its
     // text only, `build_memo_anchor_xml`), so they are not checked (review r3
     // M3). 이것을 실패시키는 것: 앵커 표 제외 삭제(`unknown_cell_zone_fill_is_refused`
@@ -1421,15 +1412,17 @@ impl HwpxEncoder {
         // W0: ids drawn for objects without a Core id come from this encode's
         // own allocator, which skips every Core id. 이것을 실패시키는 것: 스코프를
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
+        let references = crate::header_references::HeaderReferences::build(style_store)?;
+        references.validate(style_store, true)?;
+        let border_ids = style_store.iter_border_fills().map(|fill| fill.id);
+        crate::header_references::HeaderReferences::validate_body_borders(document, border_ids)?;
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
+        context.references = Some(references);
         // Core already follows the decoder's manifest-resolved spine order.
         // Number output parts from that order; never reconstruct original filenames.
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
-        // Step 1: Encode header
-        let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
-        let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
         context.warnings =
             hwpforge_core::field_inventory::FieldInventory::from_sections(document.sections())
                 .warnings()
@@ -1449,23 +1442,7 @@ impl HwpxEncoder {
                     }
                 })
                 .collect();
-        // #198: a font face loses its forbidden characters (with the other
-        // controls) to `clean_font_name` before serialization, so the part
-        // scan below cannot see them; they are counted here instead.
-        let mut header_sites = Vec::new();
-        let face_removed = style_store
-            .iter_fonts()
-            .map(|f| {
-                f.face_name.chars().filter(|&c| crate::wire_xml::is_xml_forbidden_char(c)).count()
-            })
-            .sum();
-        crate::wire_xml::tally_removed(&mut header_sites, "hh:font@face", face_removed);
-        let (header_xml, scanned) = crate::wire_xml::strip_xml_forbidden_chars(&header_xml);
-        for (location, count) in scanned {
-            crate::wire_xml::tally_removed(&mut header_sites, &location, count);
-        }
-        context.warnings.extend(forbidden_char_warnings("Contents/header.xml", header_sites));
-
+        let section_warning_start = context.warnings.len();
         // All parts share one document asset/diagnostic context.
         let mut section_results = Vec::with_capacity(sections.len());
         // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
@@ -1490,6 +1467,119 @@ impl HwpxEncoder {
             }
             section_results.push(result);
         }
+        // The single output-supplementation boundary: header references, body
+        // borders/zones, and every emitted body ID have now been resolved using
+        // the ORIGINAL tables, with only the font-only new-document char/para 0
+        // exception in HeaderReferences::output_ids. Keep that resolver in context;
+        // generated definitions cannot validate any other explicit reference.
+        // 이것을 실패시키는 것: 보충을 원본 검증 앞으로 이동(fix6_empty_definition_matrix).
+        let mut generated;
+        let style_store = if style_store.char_shape_count() == 0
+            || style_store.para_shape_count() == 0
+            || style_store.font_count() == 0
+        {
+            generated = style_store.clone();
+            if generated.char_shape_count() == 0 {
+                let mut shape = crate::HwpxCharShape::default();
+                let f = &mut shape.font_ref;
+                for (lang, id) in [
+                    ("HANGUL", &mut f.hangul),
+                    ("LATIN", &mut f.latin),
+                    ("HANJA", &mut f.hanja),
+                    ("JAPANESE", &mut f.japanese),
+                    ("OTHER", &mut f.other),
+                    ("SYMBOL", &mut f.symbol),
+                    ("USER", &mut f.user),
+                ] {
+                    // Match build_fontfaces: missing languages copy the first group.
+                    // An empty font table receives HANGUL 0 below.
+                    let fallback = generated.iter_fonts().next().map(|font| font.lang.as_str());
+                    let font_id = generated
+                        .iter_fonts()
+                        .filter(|font| font.lang == lang)
+                        .map(|font| font.id)
+                        .min()
+                        .or_else(|| {
+                            generated
+                                .iter_fonts()
+                                .filter(|font| Some(font.lang.as_str()) == fallback)
+                                .map(|font| font.id)
+                                .min()
+                        })
+                        .unwrap_or(0);
+                    *id = hwpforge_foundation::FontIndex::new(font_id as usize);
+                }
+                generated.push_char_shape(shape);
+            }
+            if generated.para_shape_count() == 0 {
+                generated.push_para_shape(crate::HwpxParaShape::default());
+            }
+            if generated.font_count() == 0 {
+                generated.push_font(crate::HwpxFont::new(0, "함초롬바탕", "HANGUL"));
+            }
+            &generated
+        } else {
+            style_store
+        };
+        // Absent authoring values and the narrowly scoped new-document char/para 0
+        // references request defaults. All other explicit IDs were checked above.
+        let mut needed = std::collections::BTreeSet::new();
+        if document.sections().iter().any(|s| s.page_border_fills.is_none()) {
+            needed.insert(1);
+        }
+        if style_store.iter_char_shapes().any(|c| c.border_fill_id.is_none()) {
+            needed.insert(2);
+        }
+        document.for_each_table(|table| {
+            if table.border_fill_id.is_none() {
+                needed.insert(3);
+            }
+        });
+        needed.retain(|id| style_store.border_fill(*id).is_err());
+        let mut generated_borders;
+        let style_store = if !needed.is_empty() {
+            generated_borders = style_store.clone();
+            for id in needed {
+                let mut fill = if id == 3 {
+                    crate::style_store::HwpxBorderFill::default_table_border()
+                } else if id == 2 {
+                    crate::style_store::HwpxBorderFill::default_char_background()
+                } else {
+                    crate::style_store::HwpxBorderFill::default_page_border()
+                };
+                fill.id = id;
+                generated_borders.push_border_fill(fill);
+            }
+            &generated_borders
+        } else {
+            style_store
+        };
+        // Only now build the output header, including missing font groups.
+        let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
+        let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
+        // #198: a font face loses its forbidden characters (with the other
+        // controls) to `clean_font_name` before serialization, so the part
+        // scan below cannot see them; they are counted here instead.
+        let mut header_sites = Vec::new();
+        let face_removed = style_store
+            .iter_fonts()
+            .map(|f| {
+                f.face_name.chars().filter(|&c| crate::wire_xml::is_xml_forbidden_char(c)).count()
+            })
+            .sum();
+        crate::wire_xml::tally_removed(&mut header_sites, "hh:font@face", face_removed);
+        let (header_xml, scanned) = crate::wire_xml::strip_xml_forbidden_chars(&header_xml);
+        for (location, count) in scanned {
+            crate::wire_xml::tally_removed(&mut header_sites, &location, count);
+        }
+        // Preserve the established header-before-section diagnostic order even
+        // though original body references must be checked before header output.
+        // 이것을 실패시키는 것: extend로 되돌림(each_removal_is_reported_with_its_part_and_location).
+        context.warnings.splice(
+            section_warning_start..section_warning_start,
+            forbidden_char_warnings("Contents/header.xml", header_sites),
+        );
+
         let dropped_caches: Vec<Vec<EncodeWarning>> =
             section_results.iter_mut().map(|r| std::mem::take(&mut r.dropped_caches)).collect();
         // W0: two written objects with one Core id keep it, and are reported
@@ -1612,6 +1702,670 @@ mod tests {
 
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
 
+    #[test]
+    fn fix6_empty_definition_sentinel_matrix() {
+        // 이것을 실패시키는 것: 출력 기본 정의를 원본 검사 전에 보충하기,
+        // 종류별 lookup 생략, 새 문서 char/para 0 예외 제거·확대, 내장/sentinel 거부, 시험 행 누락.
+        use hwpforge_core::section::PageBorderFillEntry;
+        use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
+        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleIndex};
+        const LANGS: [&str; 7] =
+            ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        // Explicit allowlists are field-specific: paragraph/zone border 0 has
+        // no no-border contract; char/table/cell/page 0 does. MAX is not a tab ID.
+        let rows: [(&str, &[u32]); 20] = [
+            ("HANGUL", &[]),
+            ("LATIN", &[]),
+            ("HANJA", &[]),
+            ("JAPANESE", &[]),
+            ("OTHER", &[]),
+            ("SYMBOL", &[]),
+            ("USER", &[]),
+            ("border-char", &[0]),
+            ("border-para", &[]),
+            ("border-table", &[0]),
+            ("border-cell", &[0]),
+            ("border-zone", &[]),
+            ("border-page", &[0]),
+            ("charPr", &[0]),
+            ("paraPr", &[0]),
+            ("tabPr", &[0, 1, 2]),
+            ("numbering", &[0]),
+            ("outline", &[0]),
+            ("bullet", &[0]),
+            ("style", &[]),
+        ];
+        let covered: std::collections::BTreeSet<_> = rows.iter().map(|r| r.0).collect();
+        assert_eq!(
+            covered,
+            [
+                "HANGUL",
+                "LATIN",
+                "HANJA",
+                "JAPANESE",
+                "OTHER",
+                "SYMBOL",
+                "USER",
+                "border-char",
+                "border-para",
+                "border-table",
+                "border-cell",
+                "border-zone",
+                "border-page",
+                "charPr",
+                "paraPr",
+                "tabPr",
+                "numbering",
+                "outline",
+                "bullet",
+                "style"
+            ]
+            .into_iter()
+            .collect()
+        );
+        for (kind, allowed) in rows {
+            for id in [0, 1, 2, 3, u32::MAX] {
+                let mut store = HwpxStyleStore::new();
+                // All other tables are valid. Multiple source fonts expose the
+                // old missing-language clone bug for 0, 1, 2 and 3 alike.
+                for lang in LANGS.into_iter().filter(|lang| *lang != kind) {
+                    for font_id in 0..=3 {
+                        store.push_font(HwpxFont::new(font_id, "바탕", lang));
+                    }
+                }
+                let mut c = HwpxCharShape::default();
+                if let Some(axis) = LANGS.iter().position(|lang| *lang == kind) {
+                    let f = &mut c.font_ref;
+                    let axes = [
+                        &mut f.hangul,
+                        &mut f.latin,
+                        &mut f.hanja,
+                        &mut f.japanese,
+                        &mut f.other,
+                        &mut f.symbol,
+                        &mut f.user,
+                    ];
+                    *axes.into_iter().nth(axis).unwrap() = FontIndex::new(id as usize);
+                }
+                if kind == "border-char" {
+                    c.border_fill_id = Some(id);
+                }
+                if kind != "charPr" {
+                    store.push_char_shape(c);
+                }
+                let mut p = HwpxParaShape::default();
+                match kind {
+                    "border-para" => p.border_fill_id = Some(BorderFillIndex::new(id as usize)),
+                    "tabPr" => p.tab_pr_id_ref = id,
+                    "numbering" | "outline" | "bullet" => {
+                        p.heading_type = match kind {
+                            "numbering" => HeadingType::Number,
+                            "outline" => HeadingType::Outline,
+                            _ => HeadingType::Bullet,
+                        };
+                        p.heading_id_ref = id;
+                    }
+                    _ => {}
+                }
+                if kind != "paraPr" {
+                    store.push_para_shape(p);
+                }
+                let cs = CharShapeIndex::new(if kind == "charPr" { id as usize } else { 0 });
+                let ps = ParaShapeIndex::new(if kind == "paraPr" { id as usize } else { 0 });
+                let text = Paragraph::with_runs(vec![Run::text("x", cs)], ps);
+                let mut cell = TableCell::new(vec![text], HwpUnit::new(1000).unwrap());
+                if kind == "border-cell" {
+                    cell.border_fill_id = Some(id);
+                }
+                let mut table = Table::new(vec![TableRow::new(vec![cell])]);
+                if kind == "border-table" {
+                    table.border_fill_id = Some(id);
+                }
+                if kind == "border-zone" {
+                    // The r5 counterexample must not generate table border 3.
+                    table.border_fill_id = Some(0);
+                    table.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
+                }
+                let mut paragraph = Paragraph::with_runs(vec![Run::table(table, cs)], ps);
+                if kind == "style" {
+                    paragraph.style_id = Some(StyleIndex::new(id as usize));
+                }
+                let mut section = Section::with_paragraphs(vec![paragraph], PageSettings::a4());
+                if kind == "border-page" {
+                    section.page_border_fills = Some(vec![PageBorderFillEntry {
+                        border_fill_id: id,
+                        ..Default::default()
+                    }]);
+                }
+                let mut doc = Document::new();
+                doc.add_section(section);
+                let result =
+                    HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new());
+                assert_eq!(result.is_ok(), allowed.contains(&id), "{kind}/{id}: {result:?}");
+                if let Err(error) = result {
+                    let expected = if kind == "border-zone" {
+                        "cell zone"
+                    } else if kind.starts_with("border-") {
+                        "borderFill"
+                    } else if LANGS.contains(&kind) {
+                        kind
+                    } else if kind == "outline" {
+                        "numbering"
+                    } else {
+                        kind
+                    };
+                    assert!(error.to_string().contains(expected), "{kind}/{id}: {error}");
+                }
+            }
+        }
+        // paraHead has a wire-ID inheritance sentinel even with no charPr
+        // definitions. Test both numbering and bullet owners independently.
+        for owner in ["numbering", "bullet"] {
+            for id in [0, 1, 2, 3, u32::MAX] {
+                let mut store = HwpxStyleStore::new();
+                let mut head = crate::style_store::fidelity::HeadMetrics::generated(0);
+                head.char_pr_id_ref = id;
+                let map = if owner == "numbering" {
+                    &mut store.header_fidelity.numbering
+                } else {
+                    &mut store.header_fidelity.bullet
+                };
+                map.insert(1, [(0, head)].into_iter().collect());
+                let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
+                for output in [false, true] {
+                    assert_eq!(
+                        refs.validate(&store, output).is_ok(),
+                        id == u32::MAX,
+                        "{owner}/{id}/{output}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fix5_memo_anchor_uses_fallible_output_ids() {
+        // 이것을 실패시키는 것: 메모 앵커의 내부 0을 출력 0으로 쓰기,
+        // 없는 인덱스까지 출력해 성공시키기. 희소 단독 ID와 충돌하는 유효 ID 모두 대조.
+        use hwpforge_core::Control;
+        for with_black in [false, true] {
+            for anchor_index in [0, 99] {
+                let mut store = HwpxStyleStore::with_default_fonts("바탕");
+                store.push_char_shape(HwpxCharShape {
+                    source_id: Some(7),
+                    text_color: Color::from_rgb(255, 0, 0),
+                    ..Default::default()
+                });
+                if with_black {
+                    store.push_char_shape(HwpxCharShape {
+                        source_id: Some(0),
+                        ..Default::default()
+                    });
+                }
+                store.push_para_shape(HwpxParaShape::default());
+                let cs = CharShapeIndex::new(0);
+                let ps = ParaShapeIndex::new(0);
+                let memo = Control::memo_with_anchor(
+                    vec![Paragraph::with_runs(vec![Run::text("body", cs)], ps)],
+                    vec![Run::text("anchor", CharShapeIndex::new(anchor_index))],
+                );
+                let mut document = Document::new();
+                document.add_section(Section::with_paragraphs(
+                    vec![Paragraph::with_runs(vec![Run::control(memo, cs)], ps)],
+                    PageSettings::a4(),
+                ));
+                let result =
+                    HwpxEncoder::encode(&document.validate().unwrap(), &store, &ImageStore::new());
+                if anchor_index == 99 {
+                    assert!(result.unwrap_err().to_string().contains("charPr"));
+                    continue;
+                }
+                let bytes = result.unwrap();
+                let xml = crate::PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
+                assert!(
+                    xml.contains(r#"<hp:run charPrIDRef="7"><hp:t>anchor</hp:t></hp:run>"#),
+                    "{xml}"
+                );
+                let decoded = HwpxDecoder::decode(&bytes).unwrap();
+                let control = decoded.document.sections()[0].paragraphs[0]
+                    .runs
+                    .iter()
+                    .find_map(|r| match r.content.as_control() {
+                        Some(Control::Memo { anchor_runs, .. }) => Some(anchor_runs),
+                        _ => None,
+                    })
+                    .expect("folded memo");
+                assert_eq!(
+                    decoded.style_store.char_shape(control[0].char_shape_id).unwrap().text_color,
+                    Color::from_rgb(255, 0, 0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fix6_empty_definition_matrix() {
+        // 이것을 실패시키는 것: 각 정의 조회 생략/출력 기본 정의 선보충, char/para 0 예외 제거, 행 누락.
+        // tabPr 0·1·2는 정의 없이도 유효한 내장 값이다. 일반 tabPr 3과 별도로 확인한다.
+        use hwpforge_core::{BulletDef, NumberingDef, TabDef, Table, TableCell, TableRow};
+        use hwpforge_foundation::{BorderFillIndex, HeadingType, StyleIndex};
+        use std::collections::BTreeSet;
+        let cases = [
+            ("font:HANGUL", 0),
+            ("font:LATIN", 0),
+            ("font:HANJA", 0),
+            ("font:JAPANESE", 0),
+            ("font:OTHER", 0),
+            ("font:SYMBOL", 0),
+            ("font:USER", 0),
+            ("border:char", 2),
+            ("border:para", 1),
+            ("border:table", 3),
+            ("border:cell", 3),
+            ("border:zone", 3),
+            ("border:page", 1),
+            ("charPr", 0),
+            ("paraPr", 0),
+            ("style", 0),
+            ("tabPr", 3),
+            ("numbering", 1),
+            ("bullet", 1),
+        ];
+        // Independent inventory: removing/duplicating any case must fail, including
+        // one language or one border host (not merely the header definition kind).
+        let required: BTreeSet<_> = [
+            "font:HANGUL",
+            "font:LATIN",
+            "font:HANJA",
+            "font:JAPANESE",
+            "font:OTHER",
+            "font:SYMBOL",
+            "font:USER",
+            "border:char",
+            "border:para",
+            "border:table",
+            "border:cell",
+            "border:zone",
+            "border:page",
+            "charPr",
+            "paraPr",
+            "style",
+            "tabPr",
+            "numbering",
+            "bullet",
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(cases.len(), required.len());
+        assert_eq!(cases.iter().map(|(kind, _)| *kind).collect::<BTreeSet<_>>(), required);
+        let mut failures = Vec::new();
+        for (kind, id) in cases {
+            for defined in [false, true] {
+                let mut store = HwpxStyleStore::new();
+                for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+                    if defined || kind.strip_prefix("font:") != Some(lang) {
+                        store.push_font(crate::HwpxFont::new(0, "바탕", lang));
+                    }
+                }
+                let mut char_shape = HwpxCharShape::default();
+                let mut para_shape = HwpxParaShape::default();
+                match kind {
+                    "border:char" => char_shape.border_fill_id = Some(id),
+                    "border:para" => {
+                        para_shape.border_fill_id = Some(BorderFillIndex::new(id as usize))
+                    }
+                    "tabPr" => para_shape.tab_pr_id_ref = id,
+                    "numbering" | "bullet" => {
+                        para_shape.heading_type = if kind == "numbering" {
+                            HeadingType::Number
+                        } else {
+                            HeadingType::Bullet
+                        };
+                        para_shape.heading_id_ref = id;
+                    }
+                    _ => {}
+                }
+                if defined || kind != "charPr" {
+                    store.push_char_shape(char_shape);
+                }
+                if defined || kind != "paraPr" {
+                    store.push_para_shape(para_shape);
+                }
+                if defined {
+                    if kind.starts_with("border:") {
+                        let mut fill = crate::style_store::HwpxBorderFill::default_page_border();
+                        fill.id = id;
+                        store.push_border_fill(fill);
+                    }
+                    match kind {
+                        "style" => {
+                            store.push_style(crate::HwpxStyle::new(
+                                0, "PARA", "base", "base", 0, 0, 0, 1042, 0,
+                            ));
+                        }
+                        "tabPr" => {
+                            store.push_tab(TabDef {
+                                id,
+                                auto_tab_left: false,
+                                auto_tab_right: false,
+                                stops: vec![],
+                            });
+                        }
+                        "numbering" => {
+                            store.push_numbering(NumberingDef::default_outline());
+                        }
+                        "bullet" => {
+                            store.push_bullet(BulletDef {
+                                id,
+                                bullet_char: "•".into(),
+                                checked_char: None,
+                                use_image: false,
+                                para_head: NumberingDef::default_outline().levels.remove(0),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                let cs = CharShapeIndex::new(0);
+                let ps = ParaShapeIndex::new(0);
+                let mut cell = TableCell::new(
+                    vec![Paragraph::with_runs(vec![Run::text("x", cs)], ps)],
+                    HwpUnit::new(1000).unwrap(),
+                );
+                if kind == "border:cell" {
+                    cell.border_fill_id = Some(id);
+                }
+                let mut table = Table::new(vec![TableRow::new(vec![cell])]);
+                if kind == "border:table" {
+                    table.border_fill_id = Some(id);
+                }
+                if kind == "border:zone" {
+                    table.cell_zones.push(hwpforge_core::table::CellZone::new(0, 0, 0, 0, id));
+                }
+                let mut paragraph = Paragraph::with_runs(vec![Run::table(table, cs)], ps);
+                if kind == "style" {
+                    paragraph.style_id = Some(StyleIndex::new(0));
+                }
+                let mut section = Section::with_paragraphs(vec![paragraph], PageSettings::a4());
+                if kind == "border:page" {
+                    section.page_border_fills =
+                        Some(vec![hwpforge_core::section::PageBorderFillEntry {
+                            border_fill_id: id,
+                            ..Default::default()
+                        }]);
+                }
+                let mut doc = Document::new();
+                doc.add_section(section);
+                let output =
+                    HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new());
+                let expected_kind = if kind.starts_with("font:") {
+                    "font"
+                } else if kind == "border:zone" {
+                    "cell zone"
+                } else if kind.starts_with("border:") {
+                    "borderFill"
+                } else {
+                    kind
+                };
+                match (defined || matches!(kind, "charPr" | "paraPr"), output) {
+                    (true, Ok(bytes)) => {
+                        HwpxDecoder::decode(&bytes).unwrap();
+                    }
+                    (false, Err(error)) if error.to_string().contains(expected_kind) => {}
+                    (_, result) => failures
+                        .push(format!("{kind}/{id} defined={defined}: {:?}", result.map(|_| ()))),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        // 이것을 실패시키는 것: tabPr 내장 ID를 일반 참조처럼 거부.
+        for id in [0, 1, 2] {
+            let mut store = HwpxStyleStore::with_default_fonts("바탕");
+            store.push_char_shape(HwpxCharShape::default());
+            store.push_para_shape(HwpxParaShape { tab_pr_id_ref: id, ..Default::default() });
+            let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
+            refs.validate(&store, true).unwrap();
+        }
+    }
+
+    #[test]
+    fn fix6_empty_latin_fonts_cannot_be_repaired_by_output_cloning() {
+        // 이것을 실패시키는 것: validate(output=true)에 복제 글꼴 합치기 또는 font 조회 생략.
+        for id in [1, 2, 3] {
+            for latin_ids in [vec![], vec![0], vec![id]] {
+                let mut store = HwpxStyleStore::new();
+                for lang in ["HANGUL", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+                    for font_id in 0..=3 {
+                        store.push_font(crate::HwpxFont::new(font_id, "바탕", lang));
+                    }
+                }
+                for &font_id in &latin_ids {
+                    store.push_font(crate::HwpxFont::new(font_id, "Latin", "LATIN"));
+                }
+                let mut shape = HwpxCharShape::default();
+                shape.font_ref.latin = hwpforge_foundation::FontIndex::new(id as usize);
+                store.push_char_shape(shape);
+                store.push_para_shape(HwpxParaShape::default());
+                let mut doc = Document::new();
+                doc.add_section(Section::with_paragraphs(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("x", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    PageSettings::a4(),
+                ));
+                let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
+                assert_eq!(refs.validate(&store, true).is_ok(), latin_ids == [id]);
+                let output =
+                    HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new());
+                if latin_ids == [id] {
+                    let decoded = HwpxDecoder::decode(&output.unwrap()).unwrap();
+                    assert_eq!(
+                        decoded.style_store.iter_char_shapes().next().unwrap().font_ref.latin.get(),
+                        id as usize
+                    );
+                } else {
+                    assert!(output.unwrap_err().to_string().contains("font LATIN"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fix5_empty_border_table_rejects_explicit_default_ids() {
+        // 이것을 실패시키는 것: 원본 빈 표를 생성 정의 1·2·3으로 대체해 명시 참조를 통과시킴.
+        use hwpforge_core::section::PageBorderFillEntry;
+        use hwpforge_core::{Table, TableCell, TableRow};
+        for kind in ["table", "cell", "page", "char", "para"] {
+            for id in [1, 2, 3] {
+                let mut store = HwpxStyleStore::with_default_fonts("바탕");
+                let mut char_shape = HwpxCharShape::default();
+                let mut para_shape = HwpxParaShape::default();
+                if kind == "char" {
+                    char_shape.border_fill_id = Some(id);
+                }
+                if kind == "para" {
+                    para_shape.border_fill_id =
+                        Some(hwpforge_foundation::BorderFillIndex::new(id as usize));
+                }
+                store.push_char_shape(char_shape);
+                store.push_para_shape(para_shape);
+                let cs = CharShapeIndex::new(0);
+                let ps = ParaShapeIndex::new(0);
+                let text = Paragraph::with_runs(vec![Run::text("x", cs)], ps);
+                let mut cell = TableCell::new(vec![text], HwpUnit::new(1000).unwrap());
+                if kind == "cell" {
+                    cell.border_fill_id = Some(id);
+                }
+                let mut table = Table::new(vec![TableRow::new(vec![cell])]);
+                if kind == "table" {
+                    table.border_fill_id = Some(id);
+                }
+                let mut section = Section::with_paragraphs(
+                    vec![Paragraph::with_runs(vec![Run::table(table, cs)], ps)],
+                    PageSettings::a4(),
+                );
+                if kind == "page" {
+                    section.page_border_fills = Some(vec![PageBorderFillEntry {
+                        border_fill_id: id,
+                        ..Default::default()
+                    }]);
+                }
+                let mut doc = Document::new();
+                doc.add_section(section);
+                let error =
+                    HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new())
+                        .unwrap_err();
+                assert!(error.to_string().contains("borderFill"), "{kind}/{id}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn fix5_only_absent_values_generate_border_defaults() {
+        // 이것을 실패시키는 것: 빈 표의 None 기본 정의 생성 누락 또는 불필요한 3 생성.
+        for table_needed in [false, true] {
+            let mut store = HwpxStyleStore::with_default_fonts("바탕");
+            store.push_char_shape(HwpxCharShape::default());
+            store.push_para_shape(HwpxParaShape::default());
+            let cs = CharShapeIndex::new(0);
+            let ps = ParaShapeIndex::new(0);
+            let text = Paragraph::with_runs(vec![Run::text("x", cs)], ps);
+            let paragraph = if table_needed {
+                Paragraph::with_runs(
+                    vec![Run::table(
+                        hwpforge_core::Table::new(vec![hwpforge_core::TableRow::new(vec![
+                            hwpforge_core::TableCell::new(vec![text], HwpUnit::new(1000).unwrap()),
+                        ])]),
+                        cs,
+                    )],
+                    ps,
+                )
+            } else {
+                text
+            };
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(vec![paragraph], PageSettings::a4()));
+            let bytes =
+                HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            let ids: Vec<_> = decoded.style_store.iter_border_fills().map(|f| f.id).collect();
+            assert_eq!(ids, if table_needed { vec![1, 2, 3] } else { vec![1, 2] });
+        }
+    }
+
+    #[test]
+    fn fix4_nested_body_borders_and_generated_defaults() {
+        // 이것을 실패시키는 것: encoder 본문 검증 삭제, 중첩 컨테이너 순회 누락,
+        // 원본 오류를 출력 기본값으로 수복, sparse store의 생성 기본 정의 누락.
+        use hwpforge_core::section::{HeaderFooter, MasterPage, PageBorderFillEntry};
+        use hwpforge_core::{Control, Table, TableCell, TableRow};
+        use hwpforge_foundation::ApplyPageType;
+        let cs = CharShapeIndex::new(0);
+        let ps = ParaShapeIndex::new(0);
+        let size = HwpUnit::new(1000).unwrap();
+        let text = || Paragraph::with_runs(vec![Run::text("x", cs)], ps);
+        for site in ["body", "nested", "header", "footer", "master", "textbox", "memo", "caption"] {
+            for (kind, id) in [
+                ("table", 99),
+                ("cell", 99),
+                ("page", 99),
+                ("table", 7),
+                ("table", 0),
+                ("cell", 0),
+                ("page", 0),
+            ] {
+                let mut store = HwpxStyleStore::with_default_fonts("바탕");
+                store.push_char_shape(HwpxCharShape::default());
+                store.push_para_shape(HwpxParaShape::default());
+                let mut fill = crate::style_store::HwpxBorderFill::default_page_border();
+                fill.id = 7;
+                store.push_border_fill(fill);
+                let mut cell = TableCell::new(vec![text()], size);
+                if kind == "cell" {
+                    cell.border_fill_id = Some(id);
+                }
+                let mut table = Table::new(vec![TableRow::new(vec![cell])]);
+                if kind == "table" {
+                    table.border_fill_id = Some(id);
+                }
+                let mut payload = Paragraph::with_runs(vec![Run::table(table, cs)], ps);
+                payload = match site {
+                    "nested" => Paragraph::with_runs(
+                        vec![Run::table(
+                            Table::new(vec![TableRow::new(vec![TableCell::new(
+                                vec![payload],
+                                size,
+                            )])]),
+                            cs,
+                        )],
+                        ps,
+                    ),
+                    "textbox" => Paragraph::with_runs(
+                        vec![Run::control(Control::text_box(vec![payload], size, size), cs)],
+                        ps,
+                    ),
+                    "memo" => Paragraph::with_runs(
+                        vec![Run::control(
+                            Control::memo_with_anchor(vec![payload], vec![Run::text("anchor", cs)]),
+                            cs,
+                        )],
+                        ps,
+                    ),
+                    "caption" => {
+                        let mut image = hwpforge_core::image::Image::new(
+                            "BinData/a.png",
+                            size,
+                            size,
+                            hwpforge_core::image::ImageFormat::Png,
+                        );
+                        image.caption = Some(hwpforge_core::caption::Caption::new(
+                            vec![payload],
+                            hwpforge_core::caption::CaptionSide::Bottom,
+                        ));
+                        Paragraph::with_runs(vec![Run::image(image, cs)], ps)
+                    }
+                    _ => payload,
+                };
+                let mut section = Section::with_paragraphs(vec![text()], PageSettings::a4());
+                match site {
+                    "header" => {
+                        section.headers.push(HeaderFooter::new(vec![payload], ApplyPageType::Both))
+                    }
+                    "footer" => {
+                        section.footers.push(HeaderFooter::new(vec![payload], ApplyPageType::Both))
+                    }
+                    "master" => {
+                        section.master_pages =
+                            Some(vec![MasterPage::new(ApplyPageType::Both, vec![payload])])
+                    }
+                    _ => section.paragraphs.push(payload),
+                }
+                if kind == "page" {
+                    section.page_border_fills = Some(vec![PageBorderFillEntry {
+                        border_fill_id: id,
+                        ..Default::default()
+                    }]);
+                }
+                let mut document = Document::new();
+                document.add_section(section);
+                let mut images = ImageStore::new();
+                images.insert("a.png", vec![0x89, b'P', b'N', b'G']);
+                let result = HwpxEncoder::encode(&document.validate().unwrap(), &store, &images);
+                if id == 99 {
+                    assert!(result.unwrap_err().to_string().contains(kind), "{site}/{kind}");
+                } else {
+                    let decoded = HwpxDecoder::decode(&result.unwrap()).unwrap();
+                    if kind != "page" {
+                        assert!(decoded.style_store.border_fill(1).is_ok());
+                    }
+                    assert!(decoded.style_store.border_fill(2).is_ok());
+                    assert!(decoded.style_store.border_fill(7).is_ok());
+                }
+            }
+        }
+    }
+
     /// Review r1 HIGH-2: encoding refuses a cell zone whose border fill the
     /// store does not have; a known one encodes.
     /// 이것을 실패시키는 것: 사전 검사 삭제.
@@ -1620,7 +2374,7 @@ mod tests {
         use hwpforge_core::caption::{Caption, CaptionSide};
         use hwpforge_core::image::{Image, ImageFormat};
         use hwpforge_core::table::{CellZone, Table, TableCell, TableRow};
-        let encode = |with_7: bool, in_picture_caption: bool, fill: u32| {
+        let encode = |with_7: bool, in_picture_caption: bool, fill: u32, table_fill| {
             let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
             store.push_char_shape(HwpxCharShape::default());
             store.push_para_shape(HwpxParaShape::default());
@@ -1635,11 +2389,12 @@ mod tests {
                     ParaShapeIndex::new(0),
                 )
             };
-            let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            let mut table = Table::new(vec![TableRow::new(vec![TableCell::new(
                 vec![text()],
                 HwpUnit::new(1000).unwrap(),
             )])])
             .with_cell_zones(vec![CellZone::new(0, 0, 0, 0, fill)]);
+            table.border_fill_id = table_fill;
             let run = if in_picture_caption {
                 let mut image = Image::new(
                     "BinData/a.png",
@@ -1668,14 +2423,17 @@ mod tests {
             HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images)
         };
         let refused = |r: HwpxResult<Vec<u8>>| matches!(r, Err(crate::error::HwpxError::InvalidStructure { ref detail }) if detail.contains("cell zone"));
-        assert!(encode(true, false, 7).is_ok());
-        assert!(refused(encode(true, false, 999)));
+        assert!(encode(true, false, 7, None).is_ok());
+        assert!(refused(encode(true, false, 999, None)));
         // Review r2 HIGH: a table in a picture caption is checked too.
-        assert!(encode(true, true, 7).is_ok());
-        assert!(refused(encode(true, true, 999)));
-        // Review r2 MEDIUM-3: an empty store writes the defaults 1–3.
-        assert!(encode(false, false, 3).is_ok());
-        assert!(refused(encode(false, false, 4)));
+        assert!(encode(true, true, 7, None).is_ok());
+        assert!(refused(encode(true, true, 999, None)));
+        // 이것을 실패시키는 것: 빈 표 zone 1·2·3 허용 또는 표 Some(0)일 때 zone 검사 생략.
+        for id in [1, 2, 3] {
+            assert!(refused(encode(false, false, id, None)));
+        }
+        assert!(refused(encode(false, false, 3, Some(0))));
+        assert!(refused(encode(false, false, 4, None)));
         // Review r3 M3: a table in a memo anchor is not written, so its zone
         // is not checked; the same table in the memo body is.
         let memo = |in_anchor: bool| {
@@ -1807,15 +2565,8 @@ mod tests {
 
     /// Creates a minimal validated document + style store for testing.
     fn minimal_doc_and_store() -> (Document<Validated>, HwpxStyleStore) {
-        let mut store = HwpxStyleStore::new();
-        store.push_font(HwpxFont {
-            id: 0,
-            face_name: "함초롬돋움".into(),
-            lang: "HANGUL".into(),
-            font_type: None,
-            substitute: None,
-            type_info: None,
-        });
+        // 이것을 실패시키는 것: 합성 fixture에서 LATIN 등 원본 언어별 글꼴 누락.
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
         store.push_char_shape(HwpxCharShape {
             font_ref: HwpxFontRef::default(),
             height: HwpUnit::new(1000).unwrap(),
@@ -1836,11 +2587,11 @@ mod tests {
         });
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Left,
-            margin_left: HwpUnit::ZERO,
-            margin_right: HwpUnit::ZERO,
-            indent: HwpUnit::ZERO,
-            spacing_before: HwpUnit::ZERO,
-            spacing_after: HwpUnit::ZERO,
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::ZERO),
             line_spacing: 160,
             line_spacing_type: LineSpacingType::Percentage,
             ..Default::default()
@@ -1924,7 +2675,7 @@ mod tests {
         assert_eq!(section.paragraphs.len(), 1);
         assert_eq!(section.paragraphs[0].runs[0].content.as_text(), Some("안녕하세요"),);
 
-        // Style store preserved (fonts expanded to 7 language groups: 1 × 7 = 7)
+        // All seven original language groups are preserved.
         assert_eq!(decoded.style_store.font_count(), 7);
         let font = decoded.style_store.font(FontIndex::new(0)).unwrap();
         assert_eq!(font.face_name, "함초롬돋움");
@@ -2076,10 +2827,14 @@ mod tests {
             substitute: None,
             type_info: None,
         });
+        // 이것을 실패시키는 것: 명시 참조하는 나머지 5언어의 원본 글꼴 누락.
+        for lang in ["HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+            store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        }
         store.push_char_shape(HwpxCharShape {
             font_ref: HwpxFontRef {
                 hangul: FontIndex::new(0),
-                latin: FontIndex::new(1),
+                latin: FontIndex::new(0),
                 ..Default::default()
             },
             height: HwpUnit::new(2400).unwrap(),
@@ -2101,11 +2856,11 @@ mod tests {
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Justify,
-            margin_left: HwpUnit::new(200).unwrap(),
-            margin_right: HwpUnit::new(100).unwrap(),
-            indent: HwpUnit::new(300).unwrap(),
-            spacing_before: HwpUnit::new(150).unwrap(),
-            spacing_after: HwpUnit::new(50).unwrap(),
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap()),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap()),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(300).unwrap()),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(150).unwrap()),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(50).unwrap()),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
             ..Default::default()
@@ -2127,7 +2882,7 @@ mod tests {
         let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
-        // Fonts: expanded to 7 language groups (1+1+1×5 = 7)
+        // All seven original language groups are preserved.
         assert_eq!(decoded.style_store.font_count(), 7);
         assert_eq!(decoded.style_store.font(FontIndex::new(0)).unwrap().face_name, "함초롬돋움");
         assert_eq!(decoded.style_store.font(FontIndex::new(1)).unwrap().face_name, "Arial");
@@ -2143,7 +2898,7 @@ mod tests {
         // Para shape
         let ps = decoded.style_store.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 200);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 200);
         assert_eq!(ps.line_spacing, 200);
     }
 
@@ -2186,7 +2941,7 @@ mod tests {
         assert!(matches!(err, HwpxError::Io(_)));
     }
 
-    // ── 9. Empty style store produces valid output ─────────────
+    // ── 9. Empty style store keeps the new-document defaults ─
 
     #[test]
     fn empty_style_store_encode() {
@@ -2201,9 +2956,92 @@ mod tests {
         ));
         let validated = doc.validate().unwrap();
 
-        // Should still produce a valid ZIP (no style data, but valid structure)
+        // 이것을 실패시키는 것: 새 문서의 빈 char/para 표 + 0 예외 제거.
         let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
-        assert_eq!(&bytes[0..2], b"PK");
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(decoded.document.sections()[0].paragraphs[0].text_content(), "text");
+    }
+
+    #[test]
+    fn quickstart_font_only_document_roundtrips() {
+        // 이것을 실패시키는 것: 빈 charPr 또는 paraPr의 0 예외 제거.
+        let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        assert_eq!(style_store.char_shape_count(), 0);
+        assert_eq!(style_store.para_shape_count(), 0);
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("안녕하세요, HwpForge!", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let bytes = HwpxEncoder::encode(&doc.validate().unwrap(), &style_store, &ImageStore::new())
+            .unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        let paragraph = &decoded.document.sections()[0].paragraphs[0];
+        assert_eq!(paragraph.text_content(), "안녕하세요, HwpForge!");
+        assert_eq!(paragraph.para_shape_id.get(), 0);
+        assert_eq!(paragraph.runs[0].char_shape_id.get(), 0);
+        assert_eq!(decoded.style_store.char_shape_count(), 1);
+        assert_eq!(decoded.style_store.para_shape_count(), 1);
+    }
+
+    #[test]
+    fn synthetic_char_fonts_reference_output_definitions() {
+        // 이것을 실패시키는 것: 합성 fontRef를 0으로 고정, 언어별 최소 ID 대신
+        // 첫 ID 선택, 누락 언어에 첫 그룹 대신 전체 글꼴의 최소 ID 선택.
+        const LANGS: [&str; 7] =
+            ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        let all_seven: Vec<_> = LANGS.iter().map(|&lang| (lang, 7)).collect();
+        let distinct: Vec<_> = LANGS
+            .iter()
+            .enumerate()
+            .flat_map(|(i, &lang)| [(lang, 19 + i as u32), (lang, 7 + i as u32)])
+            .collect();
+        let missing = vec![("LATIN", 19), ("LATIN", 7), ("HANGUL", 2)];
+        for fonts in [all_seven, distinct, missing, vec![]] {
+            let mut store = HwpxStyleStore::new();
+            for (lang, id) in fonts {
+                store.push_font(HwpxFont::new(id, "바탕", lang));
+            }
+            assert_eq!(store.char_shape_count(), 0);
+            assert_eq!(store.para_shape_count(), 0);
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("새 문서", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                PageSettings::a4(),
+            ));
+            let bytes =
+                HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+            let xml = crate::PackageReader::new(&bytes).unwrap().read_header_xml().unwrap();
+            let head: crate::schema::header::HxHead = crate::decoder::xml_from_str(&xml).unwrap();
+            let refs = head.ref_list.unwrap();
+            let groups = refs.fontfaces.unwrap().groups;
+            let chars = refs.char_properties.unwrap().items;
+            assert_eq!(chars.len(), 1);
+            for shape in chars {
+                let f = shape.font_ref.unwrap();
+                for (lang, id) in LANGS
+                    .into_iter()
+                    .zip([f.hangul, f.latin, f.hanja, f.japanese, f.other, f.symbol, f.user])
+                {
+                    let group = groups.iter().find(|group| group.lang == lang).unwrap();
+                    assert!(group.fonts.iter().any(|font| font.id == id), "{lang}: {id}");
+                    assert_eq!(Some(id), group.fonts.iter().map(|font| font.id).min(), "{lang}");
+                }
+            }
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            let paragraph = &decoded.document.sections()[0].paragraphs[0];
+            assert_eq!(paragraph.text_content(), "새 문서");
+            assert_eq!(paragraph.para_shape_id.get(), 0);
+            assert_eq!(paragraph.runs[0].char_shape_id.get(), 0);
+            assert_eq!(decoded.style_store.char_shape_count(), 1);
+            assert_eq!(decoded.style_store.para_shape_count(), 1);
+        }
     }
 
     // ── 10. Encoded output is decodable ────────────────────────
@@ -2254,6 +3092,9 @@ mod attr_control_whitespace_call_site_tests {
 
     fn encode_parts() -> (String, String) {
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        // 이것을 실패시키는 것: 합성 fixture의 명시적 charPr/paraPr 0 정의 누락.
+        store.push_char_shape(crate::HwpxCharShape::default());
+        store.push_para_shape(crate::HwpxParaShape::default());
         store.push_font(HwpxFont::new(7, format!(" 글꼴{RAW} "), "HANGUL"));
         store.push_style(HwpxStyle::new(0, "PARA", RAW, RAW_CRLF, 0, 0, 0, 1042, 0));
         let cs = CharShapeIndex::new(0);
@@ -2415,6 +3256,9 @@ mod attr_control_whitespace_call_site_tests {
     #[test]
     fn normalized_output_decodes_to_spaces() {
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        // 이것을 실패시키는 것: 합성 fixture의 명시적 charPr/paraPr 0 정의 누락.
+        store.push_char_shape(crate::HwpxCharShape::default());
+        store.push_para_shape(crate::HwpxParaShape::default());
         store.push_style(HwpxStyle::new(0, "PARA", RAW, RAW_CRLF, 0, 0, 0, 1042, 0));
         let cs = CharShapeIndex::new(0);
         let mut doc = Document::new();
@@ -2444,7 +3288,10 @@ mod attr_control_whitespace_call_site_tests {
     // 되돌리는 것 — run 이 경고 없이 사라진다.
     #[test]
     fn a_run_holding_only_a_cr_survives_the_round_trip() {
-        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        // 이것을 실패시키는 것: 합성 fixture의 명시적 charPr/paraPr 0 정의 누락.
+        store.push_char_shape(crate::HwpxCharShape::default());
+        store.push_para_shape(crate::HwpxParaShape::default());
         let cs = CharShapeIndex::new(0);
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(
@@ -2473,6 +3320,8 @@ mod attr_control_whitespace_call_site_tests {
         use hwpforge_core::image::Image;
 
         let mut store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        // 이것을 실패시키는 것: 합성 fixture의 명시적 charPr/paraPr 0 정의 누락.
+        store.push_char_shape(crate::HwpxCharShape::default());
         store.push_font(HwpxFont::new(7, "글꼴", format!("LANG{RAW}")));
         store.push_style(HwpxStyle::new(0, format!("TY{RAW}"), "s", "s", 0, 0, 0, 1042, 0));
         store

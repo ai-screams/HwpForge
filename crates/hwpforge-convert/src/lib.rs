@@ -17,9 +17,9 @@ mod warning_utils;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use hwpforge_foundation::{HeadingType, ParaShapeIndex};
+use hwpforge_foundation::HeadingType;
 use hwpforge_smithy_hwp5::schema::border_fill::Hwp5RawBorderFillFill;
-use hwpforge_smithy_hwp5::schema::header::{Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot};
+use hwpforge_smithy_hwp5::schema::header::{Hwp5RawStyle, Hwp5RawTabDef};
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::{decode_hwp5_to_core, Hwp5Error, Hwp5Result, Hwp5Warning};
 use hwpforge_smithy_hwpx::style_store::HwpxBorderFill;
@@ -27,11 +27,11 @@ use hwpforge_smithy_hwpx::{EncodeOptions, HwpxEncoder, HwpxStyleStore};
 
 use crate::style_store_border_fill::{push_hwp5_border_fills, push_required_border_fills};
 use crate::style_store_convert::{
-    hwp5_char_shape_to_hwpx_with_counts_and_warnings,
-    hwp5_para_shape_to_hwpx_with_tab_id_and_warnings, hwp5_style_to_hwpx, hwp5_tab_def_to_hwpx,
-    push_fonts_with_warnings, resolved_font_group_counts,
+    hwp5_char_shape_to_hwpx_with_warnings, hwp5_para_shape_to_hwpx_with_tab_id_and_warnings,
+    hwp5_style_to_hwpx, hwp5_tab_def_to_hwpx, push_fonts_with_warnings,
 };
 use crate::warning_utils::push_projection_fallback;
+use hwpforge_smithy_hwpx::header_references::HeaderReferences;
 use hwpforge_smithy_hwpx::EncodeWarning;
 
 pub use crate::error::{ConvertError, LayoutPatchError};
@@ -228,8 +228,10 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
         .filter(|(_, name)| decoded.image_store.get(name).is_some())
         .map(|(reference, name)| (*reference, manifest_id(name)))
         .collect();
+
     let (hwpx_style_store, style_warnings) =
-        hwp5_style_store_to_hwpx_with_image_ids(&decoded.style_store, Some(&image_ids));
+        hwp5_style_store_to_hwpx_with_image_ids(&decoded.style_store, Some(&image_ids))
+            .map_err(ConvertError::Encode)?;
     // Warning order: decode-phase warnings (intermediate + projection +
     // border-fill supplement) first, then HWPX style-mapping warnings. This
     // differs from the pre-E5 monolith (which interleaved style warnings
@@ -273,7 +275,9 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
 /// each such fill. Use [`hwp5_style_store_to_hwpx_with_bin_data`] with
 /// [`Hwp5Decoded::bin_data_reference_names`](hwpforge_smithy_hwp5::Hwp5Decoded::bin_data_reference_names)
 /// instead.
-pub fn hwp5_style_store_to_hwpx(store: &Hwp5StyleStore) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
+pub fn hwp5_style_store_to_hwpx(
+    store: &Hwp5StyleStore,
+) -> Result<(HwpxStyleStore, Vec<Hwp5Warning>), hwpforge_smithy_hwpx::HwpxError> {
     hwp5_style_store_to_hwpx_with_image_ids(store, None)
 }
 
@@ -297,19 +301,19 @@ pub fn hwp5_style_store_to_hwpx(store: &Hwp5StyleStore) -> (HwpxStyleStore, Vec<
 /// let (store, warnings) = hwp5_style_store_to_hwpx_with_bin_data(
 ///     &decoded.style_store,
 ///     &decoded.bin_data_reference_names,
-/// );
+/// )?;
 /// # let _ = (store, warnings);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn hwp5_style_store_to_hwpx_with_bin_data(
     store: &Hwp5StyleStore,
     bin_data_reference_names: &BTreeMap<u16, String>,
-) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
+) -> Result<(HwpxStyleStore, Vec<Hwp5Warning>), hwpforge_smithy_hwpx::HwpxError> {
     let image_ids: BTreeMap<u16, String> = bin_data_reference_names
         .iter()
         .map(|(reference, name)| (*reference, manifest_id(name)))
         .collect();
-    let (out, mut warnings) = hwp5_style_store_to_hwpx_with_image_ids(store, Some(&image_ids));
+    let (out, mut warnings) = hwp5_style_store_to_hwpx_with_image_ids(store, Some(&image_ids))?;
     // The fill is left out below; on the conversion path the decoder has
     // already said why, but a caller of this function may hand any table,
     // so the omission is reported here.
@@ -328,7 +332,7 @@ pub fn hwp5_style_store_to_hwpx_with_bin_data(
             }
         }
     }
-    (out, warnings)
+    Ok((out, warnings))
 }
 
 /// The manifest id the HWPX encoder writes for image store key `name`: its
@@ -344,46 +348,21 @@ fn manifest_id(name: &str) -> String {
 pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     store: &Hwp5StyleStore,
     image_ids: Option<&BTreeMap<u16, String>>,
-) -> (HwpxStyleStore, Vec<Hwp5Warning>) {
+) -> Result<(HwpxStyleStore, Vec<Hwp5Warning>), hwpforge_smithy_hwpx::HwpxError> {
     let mut out = HwpxStyleStore::new();
     let mut warnings: Vec<Hwp5Warning> = Vec::new();
     let border_fills = store.border_fills();
-    if border_fills.is_empty() {
-        push_required_border_fills(&mut out);
-    } else {
-        push_hwp5_border_fills(&mut out, border_fills, image_ids, &mut warnings);
-    }
-    // A char shape whose border is 0 ("none") or absent (before 5.0.2.1)
-    // points at an empty border fill appended after the document's own
-    // (§19.22 A): the encoder's fallback, slot 2, is a real slot here and
-    // drew a box around the text. Appended only when some char shape needs
-    // it.
-    // 이것을 실패시키는 것: 덧붙이기를 지우기 / 무조건 덧붙이기 / 덧붙인 것에 선
-    // 넣기(`char_shape_without_a_border_points_at_an_empty_border_fill`).
-    let borderless =
-        store.char_shapes.iter().any(|raw| matches!(raw.border_fill_id, None | Some(0))).then(
-            || {
-                let id = out.iter_border_fills().map(|bf| bf.id).max().unwrap_or(0) + 1;
-                let mut empty = HwpxBorderFill::default_page_border();
-                empty.id = id;
-                out.push_border_fill(empty)
-            },
-        );
-    push_fonts_with_warnings(&mut out, store, &mut warnings);
-    let font_group_counts = resolved_font_group_counts(store);
-    let tab_id_map = Hwp5TabIdMap::from_doc_info(&store.tab_defs);
+    push_hwp5_border_fills(&mut out, border_fills, image_ids, &mut warnings);
+    push_fonts_with_warnings(&mut out, store, &mut warnings)?;
 
     // Map character shapes.
     for (raw_id, raw) in store.char_shapes.iter().enumerate() {
-        let mut shape = hwp5_char_shape_to_hwpx_with_counts_and_warnings(
-            raw,
-            font_group_counts,
-            raw_id,
-            &mut warnings,
-        );
-        if matches!(raw.border_fill_id, None | Some(0)) {
-            shape.border_fill_id = borderless;
-        }
+        let mut shape = hwp5_char_shape_to_hwpx_with_warnings(raw, raw_id, &mut warnings);
+        shape.source_id = Some(u32::try_from(raw_id).map_err(|_| {
+            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                detail: "HWP5 definition ID exceeds u32 range".into(),
+            }
+        })?);
         out.push_char_shape(shape);
     }
 
@@ -438,29 +417,28 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
 
     // Map paragraph shapes.
     for (raw_id, raw) in store.para_shapes.iter().enumerate() {
-        let tab_pr_id_ref = tab_id_map.map_para_shape_ref(raw.tab_def_id, &mut warnings);
-        out.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
+        let tab_pr_id_ref = u32::from(raw.tab_def_id);
+        let mut shape = hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
             raw,
             tab_pr_id_ref,
             raw_id,
             &mut warnings,
-        ));
+        )?;
+        shape.source_id = Some(u32::try_from(raw_id).map_err(|_| {
+            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                detail: "HWP5 definition ID exceeds u32 range".into(),
+            }
+        })?);
+        let index = out.push_para_shape(shape);
+        out.set_para_font_line_height(index, u32::from(raw.font_line_height()))?;
     }
-
-    // Wave 12q task #122: HWP5 wire 의 outline level 은 3 bits (cap 6) 만
-    // 표현 가능하지만 한컴 native 는 paragraph Style ("개요 N") 의 N-1 을
-    // 진정한 outline level 로 사용합니다. ParaShape 변환이 끝난 후 Style
-    // 테이블의 "개요 N" / "Outline N" 패턴을 찾아 그 Style 의 para_shape_id
-    // 가 가리키는 paraPr 의 heading_level 을 override 합니다. 한컴이 wire
-    // 에 cap=6 으로 저장한 level 7/8/9 가 제대로 emit 됩니다.
-    apply_outline_style_level_overrides(&mut out, &store.styles, &mut warnings);
 
     append_tab_definition_integrity_warning(store, &mut warnings);
     for slot in &store.tab_defs {
         match slot.tab_def.as_ref() {
             Some(raw) => {
                 append_tab_projection_warnings(slot.raw_id, raw, &mut warnings);
-                out.push_tab(hwp5_tab_def_to_hwpx(slot.raw_id, raw));
+                out.push_tab(hwp5_tab_def_to_hwpx(slot.raw_id, raw)?);
             }
             None => {
                 warnings.push(Hwp5Warning::ParserFallback {
@@ -476,38 +454,65 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     }
 
     for (idx, raw) in store.styles.iter().enumerate() {
-        out.push_style(hwp5_style_to_hwpx(idx as u32, raw, store.styles.len()));
+        out.push_style(hwp5_style_to_hwpx(
+            u32::try_from(idx).map_err(|_| hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
+                detail: "HWP5 style ID exceeds u32 range".into(),
+            })?,
+            raw,
+        ));
     }
 
-    (out, warnings)
-}
-
-#[derive(Debug, Clone)]
-struct Hwp5TabIdMap {
-    known_slots: std::collections::BTreeSet<u32>,
-}
-
-impl Hwp5TabIdMap {
-    fn from_doc_info(tab_defs: &[Hwp5TabDefSlot]) -> Self {
-        let known_slots = tab_defs.iter().map(|slot| slot.raw_id).collect();
-        Self { known_slots }
-    }
-
-    fn map_para_shape_ref(&self, raw_id: u16, warnings: &mut Vec<Hwp5Warning>) -> u32 {
-        let raw_id = raw_id as u32;
-        if hwpforge_core::TabDef::reference_is_known(raw_id, self.known_slots.iter().copied()) {
-            return raw_id;
+    let references = HeaderReferences::build(&out)?;
+    // Resolve source IDs before adding output-only definitions. Otherwise an
+    // absent source border could accidentally resolve to the appended empty fill.
+    references.validate(&out, false)?;
+    for (kind, id, heads) in store
+        .numberings
+        .iter()
+        .filter_map(|s| {
+            s.numbering.as_ref().map(|n| ("numbering", s.id, n.paragraph_heads.as_slice()))
+        })
+        .chain(store.bullets.iter().filter_map(|s| {
+            s.bullet.as_ref().map(|b| ("bullet", s.id, std::slice::from_ref(&b.paragraph_head)))
+        }))
+    {
+        for head in heads {
+            if head.char_shape_id != u32::MAX {
+                references.char_index(head.char_shape_id)?;
+                warnings.push(Hwp5Warning::ParserFallback {
+                    subject: "list_head.charPr",
+                    reason: format!("{kind} {id} level {}: validated charPr {} is not carried by Core; output inherits paragraph text style", head.level, head.char_shape_id),
+                });
+            }
         }
-        push_projection_fallback(
-            warnings,
-            "tab_def.ref",
-            format!(
-                "paragraph references missing tab definition id {}; defaulting to built-in tab definition 0",
-                raw_id
-            ),
-        );
-        0
     }
+    if border_fills.is_empty() {
+        push_required_border_fills(&mut out);
+    }
+    // Source 0/absent means no border, not a definition lookup. Materialize
+    // its output representation only after all actual references are valid.
+    if store.char_shapes.iter().any(|raw| matches!(raw.border_fill_id, None | Some(0))) {
+        let id = out.iter_border_fills().map(|bf| bf.id).max().unwrap_or(0) + 1;
+        let mut empty = HwpxBorderFill::default_page_border();
+        empty.id = id;
+        out.push_border_fill(empty);
+        for raw_id in 0..store.char_shapes.len() {
+            let index = references
+                .char_index(u32::try_from(raw_id).expect("definition ID checked above"))?;
+            let shape = out.char_shape_mut(index)?;
+            if shape.border_fill_id.is_none() {
+                shape.border_fill_id = Some(id);
+            }
+        }
+    }
+    // Wave 12q task #122: HWP5 wire 의 outline level 은 3 bits (cap 6) 만
+    // 표현 가능하지만 한컴 native 는 paragraph Style ("개요 N") 의 N-1 을
+    // 진정한 outline level 로 사용합니다. ParaShape 변환이 끝난 후 Style
+    // 테이블의 "개요 N" / "Outline N" 패턴을 찾아 그 Style 의 para_shape_id
+    // 가 가리키는 paraPr 의 heading_level 을 override 합니다. 한컴이 wire
+    // 에 cap=6 으로 저장한 level 7/8/9 가 제대로 emit 됩니다.
+    apply_outline_style_level_overrides(&mut out, &store.styles, &references)?;
+    Ok((out, warnings))
 }
 
 fn append_tab_definition_integrity_warning(
@@ -572,17 +577,6 @@ fn append_bullet_definition_integrity_warning(
 
 fn append_tab_projection_warnings(id: u32, raw: &Hwp5RawTabDef, warnings: &mut Vec<Hwp5Warning>) {
     for (stop_idx, stop) in raw.tab_stops.iter().enumerate() {
-        if stop.position > hwpforge_foundation::HwpUnit::MAX_VALUE as u32 {
-            push_projection_fallback(
-                warnings,
-                "tab_def.position",
-                format!(
-                    "tab definition {id} stop {stop_idx} uses out-of-range position {}; clamping to {}",
-                    stop.position,
-                    hwpforge_foundation::HwpUnit::MAX_VALUE
-                ),
-            );
-        }
         if !matches!(stop.tab_type, 0..=3) {
             push_projection_fallback(
                 warnings,
@@ -620,14 +614,14 @@ fn empty_placeholder_tab_def(id: u32) -> hwpforge_core::TabDef {
 /// Matching:
 /// - `kind == 0` (paragraph style) 만 대상
 /// - 한국어 "개요 N" (N=1..10) 또는 영문 "Outline N"
-/// - `para_shape_id < store.para_shape_count()` 이어야 함
+/// - 원본 `para_shape_id`는 공통 참조 조회를 통과해야 함
 /// - `heading_type` 이 이미 Outline 인 paraPr 만 override (Number/Bullet/None
 ///   에는 영향 없음 — Codex §5 "순차 ID 신앙 금지" 호환)
 fn apply_outline_style_level_overrides(
     store: &mut HwpxStyleStore,
     styles: &[Hwp5RawStyle],
-    _warnings: &mut Vec<Hwp5Warning>,
-) {
+    references: &HeaderReferences,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
     // The override is intentional, expected, and lossless — it recovers
     // outline level 7~9 that the HWP5 wire (3-bit, cap 6) cannot represent.
     // Emitting a warning here would pollute audit counts (cf. failing test
@@ -644,13 +638,8 @@ fn apply_outline_style_level_overrides(
             continue;
         }
         let level_zero_based = level_one_based - 1;
-        let para_shape_id = style.para_shape_id as usize;
-        if para_shape_id >= store.para_shape_count() {
-            continue;
-        }
-        let Ok(para_shape) = store.para_shape_mut(ParaShapeIndex::new(para_shape_id)) else {
-            continue;
-        };
+        let index = references.para_index(u32::from(style.para_shape_id))?;
+        let para_shape = store.para_shape_mut(index)?;
         // Codex §5: only override outline-kind paraPrs; never repurpose
         // Number/Bullet/None.
         if !matches!(para_shape.heading_type, HeadingType::Outline) {
@@ -660,6 +649,7 @@ fn apply_outline_style_level_overrides(
             para_shape.heading_level = u32::from(level_zero_based);
         }
     }
+    Ok(())
 }
 
 /// Recognise the Hancom outline style names "개요 N" (Korean) and

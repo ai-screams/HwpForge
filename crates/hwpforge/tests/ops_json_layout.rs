@@ -464,16 +464,27 @@ fn assert_section_dropped(out: &hwpforge::ops::FromJsonOutput, section: usize, r
 
 // 이것을 실패시키는 것: 비연속 스타일 ID의 참조 변경을 Null==Null로 통과시키기.
 #[test]
-fn explicit_style_ids_survive_reordering_and_detect_reference_edits() {
+fn explicit_style_ids_survive_reordering_with_conservative_cache_drop() {
     let mut value = export(&simple_base());
     value["styles"]["styles"] = json!([value["styles"]["styles"][0], value["styles"]["styles"][7]]);
     for p in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
-        p["style_id"] = json!(7);
+        p["style_id"] = json!(1); // Core index; the second definition has wire ID 7.
     }
     let base = encode_fixture(&value);
     let mut value = export(&base);
     value["styles"]["styles"].as_array_mut().unwrap().reverse();
-    assert_eq!(flags(&roundtrip(&base, &value).bytes), [true; 5]);
+    for p in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
+        p["style_id"] = json!(0); // Keep referring to wire style 7 after reordering.
+    }
+    let reordered = roundtrip(&base, &value);
+    // W1 resolves Core style indices correctly. The legacy cache guard still
+    // assumes raw IDs and conservatively drops these caches until W2 connects it.
+    assert_section_dropped(&reordered, 0, "intentionally invalidated");
+    assert_eq!(xml(&reordered.bytes).matches("styleIDRef=\"7\"").count(), 5);
+    let decoded = HwpxDecoder::decode(&reordered.bytes).unwrap();
+    for p in &decoded.document.sections()[0].paragraphs {
+        assert_eq!(decoded.style_store.style(p.style_id.unwrap().get()).unwrap().id, 7);
+    }
     for key in ["para_pr_id_ref", "char_pr_id_ref"] {
         let mut edited = value.clone();
         let style = edited["styles"]["styles"]
@@ -489,17 +500,30 @@ fn explicit_style_ids_survive_reordering_and_detect_reference_edits() {
 
 // 이것을 실패시키는 것: 해석할 수 없는 스타일·글꼴을 무편집이라는 이유로 보존하기.
 #[test]
-fn unresolved_and_ambiguous_style_references_drop_with_warning() {
+fn unresolved_and_ambiguous_style_references_are_refused() {
     let base = simple_base();
     for kind in ["styles", "fonts", "tabs", "border_fills"] {
         let mut value = export(&base);
         value["styles"][kind] = json!([]);
-        assert_section_dropped(&roundtrip(&base, &value), 0, "intentionally invalidated");
+        // 이것을 실패시키는 것: 빈 borderFill 표의 명시 참조를 출력 기본 정의로 수복.
+        if matches!(kind, "fonts" | "border_fills") {
+            assert!(from_json(
+                &value.to_string(),
+                &FromJsonOptions::default().with_base(base.as_slice())
+            )
+            .is_err());
+        } else {
+            assert_section_dropped(&roundtrip(&base, &value), 0, "intentionally invalidated");
+        }
     }
     let mut value = export(&base);
     let style = value["styles"]["styles"][0].clone();
     value["styles"]["styles"].as_array_mut().unwrap().push(style);
-    assert_section_dropped(&roundtrip(&base, &value), 0, "intentionally invalidated");
+    assert!(
+        from_json(&value.to_string(), &FromJsonOptions::default().with_base(base.as_slice()))
+            .is_err(),
+        "duplicate IDs are errors even with identical content"
+    );
 }
 
 // 이것을 실패시키는 것: 시작번호 변경의 영향 범위를 현재 구역으로 제한하기.
@@ -811,11 +835,13 @@ fn emitted_floating_chart_insertion_invalidates_preceding_text() {
 fn keep_with_next_and_keep_lines_at_page_bottom_invalidate_preceding_chain() {
     let mut value = export(&simple_base());
     let mut linked = value["styles"]["para_shapes"][0].clone();
+    linked.as_object_mut().unwrap().remove("source_id");
     linked["keep_with_next"] = json!(true);
     linked["widow_orphan"] = json!(false);
     let id = value["styles"]["para_shapes"].as_array().unwrap().len();
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(linked);
     let mut together = value["styles"]["para_shapes"][0].clone();
+    together.as_object_mut().unwrap().remove("source_id");
     together["keep_lines_together"] = json!(true);
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(together);
     for i in 0..2 {
@@ -850,7 +876,9 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
     let mut value = export(&simple_base());
     let shapes = value["styles"]["char_shapes"].as_array_mut().unwrap();
     while shapes.len() < 8 {
-        shapes.push(shapes[0].clone());
+        let mut clone = shapes[0].clone();
+        clone.as_object_mut().unwrap().remove("source_id");
+        shapes.push(clone);
     }
     push_control(
         &mut value,
@@ -879,11 +907,19 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
             }
             _ => value["styles"]["char_shapes"][7]["font_ref"]["hangul"] = json!(9999),
         }
-        let out = roundtrip(&base, &value);
-        let flags = flags(&out.bytes);
-        assert!(flags[1..].iter().all(|&v| !v), "{edit}: {flags:?}");
         if edit == "unresolved" {
-            assert!(flags.iter().all(|&v| !v), "unresolved dependency closes the section");
+            assert!(
+                from_json(
+                    &value.to_string(),
+                    &FromJsonOptions::default().with_base(base.as_slice())
+                )
+                .is_err(),
+                "broken font reference must be refused"
+            );
+        } else {
+            let out = roundtrip(&base, &value);
+            let flags = flags(&out.bytes);
+            assert!(flags[1..].iter().all(|&v| !v), "{edit}: {flags:?}");
         }
     }
 }
@@ -893,6 +929,7 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
 fn master_page_linked_flow_invalidates_its_preceding_paragraph_and_section() {
     let mut value = export(&nested_base());
     let mut linked = value["styles"]["para_shapes"][0].clone();
+    linked.as_object_mut().unwrap().remove("source_id");
     linked["keep_with_next"] = json!(true);
     let id = value["styles"]["para_shapes"].as_array().unwrap().len();
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(linked);
@@ -1421,6 +1458,8 @@ fn analyzer_uses_decoder_spine_indices_for_dependencies() {
     let mut value = two_sections();
     let mut shape = value["styles"]["char_shapes"][0].clone();
     shape["height"] = json!(3333);
+    // A cloned definition is new, so it must not reuse the imported wire ID.
+    shape.as_object_mut().unwrap().remove("source_id");
     let index = value["styles"]["char_shapes"].as_array().unwrap().len();
     value["styles"]["char_shapes"].as_array_mut().unwrap().push(shape);
     value["document"]["sections"][1]["paragraphs"][0]["runs"][0]["char_shape_id"] = json!(index);

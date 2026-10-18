@@ -99,6 +99,8 @@ fn decode_optional_hwp_unit(value: i32, field_name: &str) -> HwpxResult<Option<H
 /// Result of parsing a section XML file.
 #[derive(Debug)]
 pub struct SectionParseResult {
+    pub(crate) master_page_cnt: u32,
+    pub(crate) has_memo: bool,
     pub(crate) source: super::source_map::SourceRecorder,
     /// Paragraphs extracted from the section.
     pub paragraphs: Vec<Paragraph>,
@@ -155,12 +157,24 @@ pub fn parse_section(
 /// `binaryItemIDRef` (the BinData name without extension). A picture with no
 /// `<hp:imgDim>` whose clip is within one pixel of its image's size is the
 /// whole image; without the size its clip is kept as a crop.
+#[cfg(test)]
 pub(crate) fn parse_section_with_images(
     xml: &str,
     section_index: usize,
     part: &str,
     chart_xmls: &HashMap<String, String>,
     image_pixels: &HashMap<String, (u32, u32)>,
+) -> HwpxResult<SectionParseResult> {
+    parse_section_with_references(xml, section_index, part, chart_xmls, image_pixels, None)
+}
+
+pub(crate) fn parse_section_with_references(
+    xml: &str,
+    section_index: usize,
+    part: &str,
+    chart_xmls: &HashMap<String, String>,
+    image_pixels: &HashMap<String, (u32, u32)>,
+    references: Option<&crate::header_references::HeaderReferences>,
 ) -> HwpxResult<SectionParseResult> {
     let (annotated, source) =
         super::source_map::SourceRecorder::read(xml).map_err(|error| match error {
@@ -177,6 +191,10 @@ pub(crate) fn parse_section_with_images(
     let mut headers = Vec::new();
     let mut footers = Vec::new();
     let mut ctx = DecodeCtx::for_section(section_index, part);
+    ctx.references = references.cloned();
+    if let Some(references) = references {
+        ctx.warnings.extend(references.validate_auxiliary_xml(&xml, &ctx.part)?);
+    }
     ctx.source = source;
     ctx.image_pixels = image_pixels.clone();
 
@@ -186,6 +204,7 @@ pub(crate) fn parse_section_with_images(
     let mut page_border_fills = None;
     let mut text_direction = TextDirection::Horizontal;
     let mut begin_num = None;
+    let mut master_page_cnt = 0;
     for hx_para in &section.paragraphs {
         for_each_liftable_ctrl(&hx_para.runs, &mut |ctrl| {
             if ctrl.header.is_some() || ctrl.footer.is_some() {
@@ -213,6 +232,7 @@ pub(crate) fn parse_section_with_images(
             if para_idx == 0 {
                 for hx_run in &hx_para.runs {
                     if let Some(sec_pr) = &hx_run.sec_pr {
+                        master_page_cnt = sec_pr.master_page_cnt;
                         if visibility.is_none() {
                             visibility = extract_visibility(sec_pr);
                         }
@@ -250,7 +270,7 @@ pub(crate) fn parse_section_with_images(
 
                 // Chart runs (from <hp:switch><hp:case><hp:chart>)
                 const MAX_STYLE_INDEX: u32 = 100_000;
-                if hx_run.char_pr_id_ref > MAX_STYLE_INDEX {
+                if ctx.references.is_none() && hx_run.char_pr_id_ref > MAX_STYLE_INDEX {
                     return Err(crate::error::HwpxError::InvalidStructure {
                         detail: format!(
                             "charPrIDRef {} exceeds maximum allowed index {}",
@@ -258,7 +278,7 @@ pub(crate) fn parse_section_with_images(
                         ),
                     });
                 }
-                let char_shape_id = CharShapeIndex::new(hx_run.char_pr_id_ref as usize);
+                let char_shape_id = ctx.char_index(hx_run.char_pr_id_ref)?;
                 for switch in &hx_run.switches {
                     if let Some(case) = &switch.case {
                         if let Some(hx_chart) = &case.chart {
@@ -276,6 +296,8 @@ pub(crate) fn parse_section_with_images(
 
     let page_number = PageNumber::first_in(&paragraphs);
     Ok(SectionParseResult {
+        master_page_cnt,
+        has_memo: ctx.has_memo,
         paragraphs,
         page_settings,
         headers,
@@ -301,6 +323,8 @@ pub(crate) fn parse_section_with_images(
 /// [`enter`]: DecodeCtx::enter
 /// [`leave`]: DecodeCtx::leave
 pub(crate) struct DecodeCtx {
+    has_memo: bool,
+    references: Option<crate::header_references::HeaderReferences>,
     source: super::source_map::SourceRecorder,
     last_origins: Vec<super::source_map::RunOrigin>,
     /// 수집된 비치명 경고 (SectionParseResult.warnings 로 흘러감).
@@ -350,6 +374,25 @@ pub(crate) struct GroupCalls {
 }
 
 impl DecodeCtx {
+    fn char_index(&self, id: u32) -> HwpxResult<CharShapeIndex> {
+        self.references
+            .as_ref()
+            .map_or_else(|| Ok(CharShapeIndex::new(id as usize)), |r| r.char_index(id))
+    }
+    fn para_index(&self, id: u32) -> HwpxResult<ParaShapeIndex> {
+        self.references
+            .as_ref()
+            .map_or_else(|| Ok(ParaShapeIndex::new(id as usize)), |r| r.para_index(id))
+    }
+    fn style_index(&self, id: u32) -> HwpxResult<Option<StyleIndex>> {
+        if let Some(r) = &self.references {
+            let index = r.style_index(id)?;
+            Ok((id != 0).then_some(index))
+        } else {
+            Ok((id != 0).then(|| StyleIndex::new(id as usize)))
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new(section_index: usize) -> Self {
         Self::for_section(section_index, "Contents/section0.xml")
@@ -357,6 +400,8 @@ impl DecodeCtx {
 
     pub(crate) fn for_section(section_index: usize, part: &str) -> Self {
         Self {
+            has_memo: false,
+            references: None,
             source: super::source_map::SourceRecorder::default(),
             last_origins: Vec::new(),
             warnings: Vec::new(),
@@ -378,6 +423,8 @@ impl DecodeCtx {
     /// 용 문맥. `global` 은 패키지 전역 바탕쪽 번호(파일 번호)다.
     pub(crate) fn for_master_page(section_index: usize, global: usize) -> Self {
         Self {
+            has_memo: false,
+            references: None,
             source: super::source_map::SourceRecorder::default(),
             last_origins: Vec::new(),
             warnings: Vec::new(),
@@ -854,7 +901,7 @@ fn convert_paragraph_from(
 ) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
     let hx_runs = hx.runs.get(skip..).unwrap_or_default();
     const MAX_STYLE_INDEX: u32 = 100_000;
-    if hx.para_pr_id_ref > MAX_STYLE_INDEX {
+    if ctx.references.is_none() && hx.para_pr_id_ref > MAX_STYLE_INDEX {
         return Err(crate::error::HwpxError::InvalidStructure {
             detail: format!(
                 "paraPrIDRef {} exceeds maximum allowed index {}",
@@ -862,7 +909,7 @@ fn convert_paragraph_from(
             ),
         });
     }
-    let para_shape_id = ParaShapeIndex::new(hx.para_pr_id_ref as usize);
+    let para_shape_id = ctx.para_index(hx.para_pr_id_ref)?;
     let mut page_settings = None;
 
     // §19.22 D5 (S17): the last run of a paragraph with two or more runs
@@ -874,7 +921,9 @@ fn convert_paragraph_from(
     // The end run's reference is checked like every run's (`convert_run`),
     // which it does not go through (review r1). 이것을 실패시키는 것: 이 검사를
     // 지우기(`end_run_reference_is_bounded`).
-    if let Some(run) = end_mark.filter(|r| r.char_pr_id_ref > MAX_STYLE_INDEX) {
+    if let Some(run) =
+        end_mark.filter(|r| ctx.references.is_none() && r.char_pr_id_ref > MAX_STYLE_INDEX)
+    {
         return Err(crate::error::HwpxError::InvalidStructure {
             detail: format!(
                 "charPrIDRef {} exceeds maximum allowed index {}",
@@ -882,7 +931,7 @@ fn convert_paragraph_from(
             ),
         });
     }
-    let end_char_shape = end_mark.map(|r| CharShapeIndex::new(r.char_pr_id_ref as usize));
+    let end_char_shape = end_mark.map(|r| ctx.char_index(r.char_pr_id_ref)).transpose()?;
     let body_runs = &hx_runs[..hx_runs.len() - usize::from(end_mark.is_some())];
 
     let mut runs = Vec::new();
@@ -936,7 +985,7 @@ fn convert_paragraph_from(
     if runs.is_empty() {
         let char_shape_id = hx_runs
             .first()
-            .map_or(CharShapeIndex::new(0), |r| CharShapeIndex::new(r.char_pr_id_ref as usize));
+            .map_or_else(|| ctx.char_index(0), |r| ctx.char_index(r.char_pr_id_ref))?;
         runs.push(Run::text("", char_shape_id));
         let node = hx_runs.first().map_or(0, |r| r.origin);
         let text = ctx.source.child(node, "t", 0);
@@ -955,8 +1004,7 @@ fn convert_paragraph_from(
     // being the true outline depth from the original document.
     let heading_level = if has_title_mark { Some(1) } else { None };
 
-    let style_id =
-        if hx.style_id_ref == 0 { None } else { Some(StyleIndex::new(hx.style_id_ref as usize)) };
+    let style_id = ctx.style_index(hx.style_id_ref)?;
 
     // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
     //
@@ -1100,7 +1148,7 @@ pub(crate) fn is_end_mark_run(hx: &HxRun) -> bool {
 /// run was left out of the runs (that body is not carried).
 fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec<Run>, bool)> {
     const MAX_STYLE_INDEX: u32 = 100_000;
-    if hx.char_pr_id_ref > MAX_STYLE_INDEX {
+    if ctx.references.is_none() && hx.char_pr_id_ref > MAX_STYLE_INDEX {
         return Err(crate::error::HwpxError::InvalidStructure {
             detail: format!(
                 "charPrIDRef {} exceeds maximum allowed index {}",
@@ -1108,7 +1156,15 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             ),
         });
     }
-    let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
+    let char_shape_id = ctx.char_index(hx.char_pr_id_ref)?;
+    // Observe fields before folding or discarding them, in every decoded run
+    // (including image captions). Do not depend on Core's paragraph walker.
+    for field in hx.ctrls.iter().filter_map(|ctrl| ctrl.field_begin.as_ref()) {
+        ctx.has_memo |= field.field_type == "MEMO";
+        if let (Some(references), Some(parameters)) = (&ctx.references, &field.parameters) {
+            ctx.warnings.extend(references.validate_memo_parameters(parameters, &ctx.part)?);
+        }
+    }
     let mut runs = Vec::new();
     let mut origins = Vec::new();
     let mut body_sources = Vec::new();
@@ -1246,9 +1302,22 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
                 runs.push(decode_equation(&hx.equations[idx], char_shape_id)?);
             }
             HxRunChildKind::Dutmal => {
+                let id = hx.dutmals[idx].style_id_ref;
+                ctx.style_index(id)?;
+                if id != 0 {
+                    ctx.content_lost(
+                        "dutmal.styleIDRef",
+                        format!("validated style {id} is not carried; output uses default style 0"),
+                    );
+                }
                 runs.push(decode_dutmal(&hx.dutmals[idx], char_shape_id));
             }
             HxRunChildKind::Compose => {
+                for cp in &hx.composes[idx].char_prs {
+                    if cp.pr_id_ref != u32::MAX {
+                        ctx.char_index(cp.pr_id_ref)?;
+                    }
+                }
                 runs.push(decode_compose(&hx.composes[idx], char_shape_id));
             }
             // secPr/titleMark 는 구역·문단 수준에서 소비, switch 는 차트
@@ -1748,11 +1817,19 @@ fn convert_table_cell(
         }
         out
     } else {
-        vec![Paragraph::new(ParaShapeIndex::new(0))]
+        vec![Paragraph::new(ctx.para_index(0)?)]
     };
 
-    let (col_span, row_span) =
-        hx.cell_span.as_ref().map(|cs| (cs.col_span as u16, cs.row_span as u16)).unwrap_or((1, 1));
+    let (col_span, row_span) = if let Some(cs) = &hx.cell_span {
+        let span = |value| {
+            u16::try_from(value).map_err(|_| HwpxError::InvalidStructure {
+                detail: format!("table cell span {value} exceeds u16 range"),
+            })
+        };
+        (span(cs.col_span)?, span(cs.row_span)?)
+    } else {
+        (1, 1)
+    };
 
     let width =
         hx.cell_sz.as_ref().and_then(|sz| HwpUnit::new(sz.width).ok()).unwrap_or(HwpUnit::ZERO);
@@ -3201,12 +3278,24 @@ fn convert_header_footer(
 ///
 /// [`HwpxError::XmlParse`] naming the part when it is not well-formed or
 /// does not match the master page shape, and paragraph decode failures.
+#[cfg(test)]
 pub(crate) fn parse_master_page(
     xml: &str,
     section_index: usize,
     global: usize,
     image_pixels: &HashMap<String, (u32, u32)>,
 ) -> HwpxResult<(hwpforge_core::section::MasterPage, Vec<super::DecodeWarning>)> {
+    parse_master_page_with_references(xml, section_index, global, image_pixels, None)
+        .map(|(master, warnings, _)| (master, warnings))
+}
+
+pub(crate) fn parse_master_page_with_references(
+    xml: &str,
+    section_index: usize,
+    global: usize,
+    image_pixels: &HashMap<String, (u32, u32)>,
+    references: Option<&crate::header_references::HeaderReferences>,
+) -> HwpxResult<(hwpforge_core::section::MasterPage, Vec<super::DecodeWarning>, bool)> {
     use hwpforge_core::section::{MasterPage, MasterPageSpecial};
 
     let file = format!("Contents/masterpage{global}.xml");
@@ -3217,6 +3306,10 @@ pub(crate) fn parse_master_page(
     let hx: crate::schema::section::HxMasterPage = xml_from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file, detail: xml_error_detail(&e) })?;
     let mut ctx = DecodeCtx::for_master_page(section_index, global);
+    ctx.references = references.cloned();
+    if let Some(references) = references {
+        ctx.warnings.extend(references.validate_auxiliary_xml(&xml, &ctx.part)?);
+    }
     ctx.image_pixels = image_pixels.clone();
 
     // xs:nonNegativeInteger; 결측 = 0. 해석 불가는 아래에서 손실로 보고한다.
@@ -3312,7 +3405,7 @@ pub(crate) fn parse_master_page(
     master.special = special;
     master.page_duplicate = page_duplicate;
     master.page_front = page_front;
-    Ok((master, ctx.warnings))
+    Ok((master, ctx.warnings, ctx.has_memo))
 }
 
 /// Reads an `xs:boolean` master page attribute (`0`/`1`/`false`/`true`,
@@ -4294,6 +4387,18 @@ mod tests {
                 assert_eq!(cell3.paragraphs[0].runs[0].content.as_text(), Some("Cell3"),);
             }
             _ => panic!("expected Table content"),
+        }
+    }
+
+    #[test]
+    fn fix2_cell_spans_cannot_wrap_to_one() {
+        // 이것을 실패시키는 것: u32 span 65537을 u16 1로 잘라 수용.
+        for (col, row) in [(65537, 1), (1, 65537)] {
+            let xml = format!(
+                r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><tbl rowCnt="1" colCnt="1"><tr><tc><cellSpan colSpan="{col}" rowSpan="{row}"/></tc></tr></tbl></run></p></sec>"#
+            );
+            let err = parse_section(&xml, 0, &HashMap::new()).unwrap_err().to_string();
+            assert!(err.contains("span 65537"), "{err}");
         }
     }
 

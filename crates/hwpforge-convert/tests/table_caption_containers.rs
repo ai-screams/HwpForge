@@ -102,8 +102,8 @@ fn compressed(streams: &BTreeMap<String, Vec<u8>>) -> bool {
     streams["/FileHeader"][36] & 1 != 0
 }
 
-fn section_records(streams: &BTreeMap<String, Vec<u8>>) -> Vec<Record> {
-    let raw = &streams["/BodyText/Section0"];
+fn stream_records(streams: &BTreeMap<String, Vec<u8>>, path: &str) -> Vec<Record> {
+    let raw = &streams[path];
     if compressed(streams) {
         let mut out = Vec::new();
         flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut out).expect("inflate");
@@ -113,7 +113,7 @@ fn section_records(streams: &BTreeMap<String, Vec<u8>>) -> Vec<Record> {
     }
 }
 
-fn set_section(streams: &mut BTreeMap<String, Vec<u8>>, records: &[Record]) {
+fn set_records(streams: &mut BTreeMap<String, Vec<u8>>, path: &str, records: &[Record]) {
     let data = write_records(records);
     let data = if compressed(streams) {
         let mut encoder =
@@ -123,7 +123,7 @@ fn set_section(streams: &mut BTreeMap<String, Vec<u8>>, records: &[Record]) {
     } else {
         data
     };
-    streams.insert("/BodyText/Section0".to_string(), data);
+    streams.insert(path.to_string(), data);
 }
 
 fn ctrl_id(record: &Record) -> Option<[u8; 4]> {
@@ -134,8 +134,8 @@ fn ctrl_id(record: &Record) -> Option<[u8; 4]> {
 /// `host` with the donor's first table moved into the first paragraph that
 /// follows the first control `container` (a four-byte control id).
 fn with_a_captioned_table(host: &str, container: [u8; 4]) -> Vec<u8> {
-    let donor =
-        section_records(&read_streams(&fixture("user_samples/sample-table-caption-fullsz.hwp")));
+    let donor_streams = read_streams(&fixture("user_samples/sample-table-caption-fullsz.hwp"));
+    let donor = stream_records(&donor_streams, "/BodyText/Section0");
     let table_at = donor.iter().position(|r| ctrl_id(r) == Some(*b"tbl ")).expect("donor table");
     let table_level = donor[table_at].level;
     let table_end = donor[table_at + 1..]
@@ -148,7 +148,17 @@ fn with_a_captioned_table(host: &str, container: [u8; 4]) -> Vec<u8> {
     let table_control = host_text.data[..16].to_vec();
 
     let mut streams = read_streams(&fixture(host));
-    let mut records = section_records(&streams);
+    // The transplanted table also needs its source border definitions. The
+    // old helper relied on the encoder inventing missing borderFill 3.
+    let donor_header = stream_records(&donor_streams, "/DocInfo");
+    let mut header = stream_records(&streams, "/DocInfo");
+    let existing = header.iter().filter(|r| r.tag == 0x14).count();
+    header.extend(donor_header.into_iter().filter(|r| r.tag == 0x14).skip(existing));
+    let count = header.iter().filter(|r| r.tag == 0x14).count() as u32;
+    let mappings = header.iter_mut().find(|r| r.tag == 0x11).expect("IdMappings");
+    mappings.data[32..36].copy_from_slice(&count.to_le_bytes());
+    set_records(&mut streams, "/DocInfo", &header);
+    let mut records = stream_records(&streams, "/BodyText/Section0");
     let ctrl_at = records.iter().position(|r| ctrl_id(r) == Some(container)).expect("container");
     let para_at = ctrl_at
         + records[ctrl_at..].iter().position(|r| r.tag == TAG_PARA_HEADER).expect("container para");
@@ -176,7 +186,7 @@ fn with_a_captioned_table(host: &str, container: [u8; 4]) -> Vec<u8> {
         .map(|r| Record { tag: r.tag, level: r.level + shift, data: r.data.clone() })
         .collect();
     records.splice(para_end..para_end, moved);
-    set_section(&mut streams, &records);
+    set_records(&mut streams, "/BodyText/Section0", &records);
     write_streams(&streams)
 }
 

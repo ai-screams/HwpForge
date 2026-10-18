@@ -54,8 +54,11 @@ fn build_style_store() -> HwpxStyleStore {
     let mut store: HwpxStyleStore = HwpxStyleStore::new();
 
     // Fonts
-    store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
-    store.push_font(HwpxFont::new(1, "Arial", "LATIN"));
+    // 이것을 실패시키는 것: 언어별 원본 글꼴 등록을 HANGUL/LATIN 일부로 되돌리기(실제 example 실행).
+    for lang in ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+        store.push_font(HwpxFont::new(1, "Arial", lang));
+    }
 
     // CharShape 0: Normal (10pt, black)
     let cs0: HwpxCharShape = HwpxCharShape::default();
@@ -93,10 +96,10 @@ fn build_style_store() -> HwpxStyleStore {
     // ParaShape 2: Justify with indent
     let mut ps2: HwpxParaShape = HwpxParaShape::default();
     ps2.alignment = Alignment::Justify;
-    ps2.indent = HwpUnit::new(400).unwrap();
+    ps2.indent = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(400).unwrap());
     ps2.line_spacing = 180;
     ps2.line_spacing_type = LineSpacingType::Percentage;
-    ps2.spacing_after = HwpUnit::new(200).unwrap();
+    ps2.spacing_after = hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap());
     store.push_para_shape(ps2);
 
     store

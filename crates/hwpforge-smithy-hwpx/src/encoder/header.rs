@@ -6,7 +6,7 @@
 
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
-    Alignment, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType, HwpUnit,
+    Alignment, BreakType, CharShadow, Color, EmbossType, EmphasisType, EngraveType,
     LineSpacingType, NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
     VerticalPosition, WordBreakType,
 };
@@ -43,6 +43,8 @@ pub(crate) fn encode_header(
     sec_cnt: u32,
     begin_num: Option<&hwpforge_core::section::BeginNum>,
 ) -> HwpxResult<String> {
+    crate::paragraph_measure::validate_measure_output(store)?;
+    crate::header_references::HeaderReferences::build(store)?;
     let head = build_head(store, sec_cnt);
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
@@ -119,27 +121,9 @@ fn build_begin_num_xml(begin_num: Option<&hwpforge_core::section::BeginNum>) -> 
 
 /// Generates the `<hh:borderFills>` XML dynamically from the store's border fills.
 ///
-/// `borderFillIDRef="1"` is referenced by `<hp:pageBorderFill>` in secPr.
-/// `borderFillIDRef="2"` is referenced by every `<hh:charPr>`.
-/// `borderFillIDRef="3"` is referenced by table cells (`<hp:tbl>` / `<hp:tc>`).
-///
-/// If the store has no border fills (e.g. a manually constructed store that
-/// did not go through `from_registry`), the 3 standard defaults are emitted
-/// to maintain backward compatibility with 한글.
+/// Output-only defaults have already been added by the document encoder,
+/// after all explicit references were checked against the original store.
 fn build_border_fills_xml(store: &HwpxStyleStore) -> String {
-    if store.border_fill_count() == 0 {
-        let page = HwpxBorderFill::default_page_border();
-        let char_bg = HwpxBorderFill::default_char_background();
-        let table = HwpxBorderFill::default_table_border();
-        let count = 3u32;
-        let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
-        for bf in [&page, &char_bg, &table] {
-            xml.push_str(&build_border_fill_xml(bf));
-        }
-        xml.push_str("</hh:borderFills>");
-        return xml;
-    }
-
     let count = store.border_fill_count();
     let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
     for bf in store.iter_border_fills() {
@@ -541,6 +525,8 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
 fn build_fontfaces(store: &HwpxStyleStore) -> HxFontFaces {
     let mut groups = group_fonts_by_lang(store);
 
+    // The document encoder reaches this output-only supplementation only after
+    // validating explicit font references against original language tables.
     // 한글 requires all 7 language groups to be present.
     // If any are missing, fill them with the first font as fallback.
     const REQUIRED_LANGS: &[&str] =
@@ -635,10 +621,12 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
 
 /// Builds the `HxCharProperties` list from all char shapes in the store.
 fn build_char_properties(store: &HwpxStyleStore) -> HxCharProperties {
+    let refs =
+        crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
     let items: Vec<HxCharPr> = store
         .iter_char_shapes()
         .enumerate()
-        .map(|(idx, cs)| build_char_pr(idx as u32, cs))
+        .map(|(idx, cs)| build_char_pr(refs.char_ids[idx], cs))
         .collect();
     let item_cnt = items.len() as u32;
     HxCharProperties { item_cnt, items }
@@ -752,13 +740,18 @@ fn default_type_info() -> HxTypeInfo {
 
 /// Builds the `HxParaProperties` list from all para shapes in the store.
 fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
+    let refs =
+        crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
     let items: Vec<HxParaPr> = store
         .iter_para_shapes()
         .enumerate()
         .map(|(idx, ps)| {
-            let mut para = build_para_pr(idx as u32, ps);
-            para.font_line_height =
-                store.header_fidelity.font_line_height.get(&idx).copied().unwrap_or(0);
+            let mut para = build_para_pr(refs.para_ids[idx], ps);
+            para.font_line_height = ps
+                .source_id
+                .and_then(|id| store.header_fidelity.font_line_height.get(&(id as usize)))
+                .copied()
+                .unwrap_or(0);
             para
         })
         .collect();
@@ -809,6 +802,8 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             line_wrap: ps.line_wrap.clone(),
         }),
         auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
+        margin: None,
+        line_spacing: None,
         switches: vec![build_margin_switch(ps)],
         border,
     }
@@ -816,16 +811,15 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
 
 /// Builds the `<hp:switch>` block with both `<hp:case>` and `<hp:default>`.
 ///
-/// Hancom emits the `HwpUnitChar` case branch using half-scale values while
-/// the default branch keeps the regular HWP unit magnitudes. Mirroring that
-/// wire shape keeps paragraph layout stable when 한글 prefers the case branch.
+/// The case carries semantic values and units; default carries `2 * value + bit`.
+/// Physical line spacing uses its separate legacy ×2 contract.
 fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
     HxSwitch {
-        case: Some(HxSwitchCase {
+        cases: vec![HxSwitchCase {
             required_namespace: "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar".into(),
             margin: Some(build_margin_case(ps)),
             line_spacing: Some(build_line_spacing_case(ps)),
-        }),
+        }],
         default: Some(HxSwitchDefault {
             margin: Some(build_margin(ps)),
             line_spacing: Some(build_line_spacing(ps)),
@@ -861,7 +855,9 @@ fn build_margin_case(ps: &HwpxParaShape) -> HxMargin {
 fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     HxLineSpacing {
         spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
-        value: ps.line_spacing.max(0) as u32,
+        value: crate::paragraph_measure::encode_line_spacing(ps.line_spacing, ps.line_spacing_type)
+            .expect("preflight validated line spacing")
+            .1,
         unit: "HWPUNIT".into(),
     }
 }
@@ -870,10 +866,10 @@ fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
 ///
 /// Hancom stores these values at half the default HWP unit scale.
 fn build_line_spacing_case(ps: &HwpxParaShape) -> HxLineSpacing {
-    let value = match ps.line_spacing_type {
-        LineSpacingType::Percentage => ps.line_spacing.max(0) as u32,
-        _ => (ps.line_spacing.max(0) / 2) as u32,
-    };
+    let value =
+        crate::paragraph_measure::encode_line_spacing(ps.line_spacing, ps.line_spacing_type)
+            .expect("preflight validated line spacing")
+            .0;
     HxLineSpacing {
         spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
         value,
@@ -882,12 +878,18 @@ fn build_line_spacing_case(ps: &HwpxParaShape) -> HxLineSpacing {
 }
 
 /// Creates an `HxUnitValue` from an `HwpUnit`.
-fn hwpunit_value(u: HwpUnit) -> HxUnitValue {
-    HxUnitValue { value: u.as_i32(), unit: "HWPUNIT".into() }
+fn hwpunit_value(u: hwpforge_core::ParagraphMeasure) -> HxUnitValue {
+    HxUnitValue {
+        value: i64::from(
+            crate::paragraph_measure::pack_margin(u).expect("preflight validated margin"),
+        ),
+        unit: "HWPUNIT".into(),
+    }
 }
 
-fn hwpunit_char_case_value(u: HwpUnit) -> HxUnitValue {
-    HxUnitValue { value: u.as_i32() / 2, unit: "HWPUNIT".into() }
+fn hwpunit_char_case_value(u: hwpforge_core::ParagraphMeasure) -> HxUnitValue {
+    let (value, unit) = crate::paragraph_measure::parts(u);
+    HxUnitValue { value: i64::from(value), unit: unit.into() }
 }
 
 // ── Color / alignment helpers ───────────────────────────────────
@@ -1033,13 +1035,15 @@ fn build_styles(store: &HwpxStyleStore) -> HxStyles {
 
     // 한글 requires at least the "바탕글" (Normal) base style
     if items.is_empty() {
+        let refs =
+            crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
         items.push(HxStyle {
             id: 0,
             style_type: "PARA".into(),
             name: "바탕글".into(),
             eng_name: "Normal".into(),
-            para_pr_id_ref: 0,
-            char_pr_id_ref: 0,
+            para_pr_id_ref: refs.para_ids.first().copied().unwrap_or(0),
+            char_pr_id_ref: refs.char_ids.first().copied().unwrap_or(0),
             next_style_id_ref: 0,
             lang_id: 1042,
             lock_form: 0,
@@ -1071,6 +1075,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
 mod tests {
     use super::*;
     use crate::style_store::HwpxFill;
+    use hwpforge_foundation::HwpUnit;
     use hwpforge_foundation::{
         CharShapeIndex, EmbossType, EngraveType, FontIndex, ParaShapeIndex, VerticalPosition,
     };
@@ -1260,11 +1265,11 @@ mod tests {
     fn test_margin_switch_structure() {
         let ps = HwpxParaShape {
             alignment: Alignment::Justify,
-            margin_left: HwpUnit::new(100).unwrap(),
-            margin_right: HwpUnit::new(50).unwrap(),
-            indent: HwpUnit::new(200).unwrap(),
-            spacing_before: HwpUnit::new(300).unwrap(),
-            spacing_after: HwpUnit::new(150).unwrap(),
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap()),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(50).unwrap()),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap()),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(300).unwrap()),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(150).unwrap()),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
             ..Default::default()
@@ -1273,14 +1278,14 @@ mod tests {
         let switch = build_margin_switch(&ps);
 
         // Case must be present
-        let case = switch.case.as_ref().expect("case must be present");
+        let case = switch.cases.first().expect("case must be present");
         assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
         let case_margin = case.margin.as_ref().unwrap();
-        assert_eq!(case_margin.left.as_ref().unwrap().value, 50);
-        assert_eq!(case_margin.right.as_ref().unwrap().value, 25);
-        assert_eq!(case_margin.indent.as_ref().unwrap().value, 100);
-        assert_eq!(case_margin.prev.as_ref().unwrap().value, 150);
-        assert_eq!(case_margin.next.as_ref().unwrap().value, 75);
+        assert_eq!(case_margin.left.as_ref().unwrap().value, 100);
+        assert_eq!(case_margin.right.as_ref().unwrap().value, 50);
+        assert_eq!(case_margin.indent.as_ref().unwrap().value, 200);
+        assert_eq!(case_margin.prev.as_ref().unwrap().value, 300);
+        assert_eq!(case_margin.next.as_ref().unwrap().value, 150);
         let case_ls = case.line_spacing.as_ref().unwrap();
         assert_eq!(case_ls.value, 200);
         assert_eq!(case_ls.spacing_type, "PERCENT");
@@ -1288,8 +1293,8 @@ mod tests {
         // Default must keep the full HWP-unit values.
         let default = switch.default.as_ref().expect("default must be present");
         let def_margin = default.margin.as_ref().unwrap();
-        assert_eq!(def_margin.left.as_ref().unwrap().value, 100);
-        assert_eq!(def_margin.indent.as_ref().unwrap().value, 200);
+        assert_eq!(def_margin.left.as_ref().unwrap().value, 200);
+        assert_eq!(def_margin.indent.as_ref().unwrap().value, 400);
         let def_ls = default.line_spacing.as_ref().unwrap();
         assert_eq!(def_ls.value, 200);
     }
@@ -1303,7 +1308,7 @@ mod tests {
         };
 
         let switch = build_margin_switch(&ps);
-        let case_ls = switch.case.as_ref().unwrap().line_spacing.as_ref().unwrap();
+        let case_ls = switch.cases.first().unwrap().line_spacing.as_ref().unwrap();
         let def_ls = switch.default.as_ref().unwrap().line_spacing.as_ref().unwrap();
 
         assert_eq!(case_ls.spacing_type, "FIXED");
@@ -1507,11 +1512,11 @@ mod tests {
         // Justified para with margins
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Justify,
-            margin_left: HwpUnit::new(100).unwrap(),
-            margin_right: HwpUnit::new(50).unwrap(),
-            indent: HwpUnit::new(200).unwrap(),
-            spacing_before: HwpUnit::new(300).unwrap(),
-            spacing_after: HwpUnit::new(150).unwrap(),
+            margin_left: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(100).unwrap()),
+            margin_right: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(50).unwrap()),
+            indent: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(200).unwrap()),
+            spacing_before: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(300).unwrap()),
+            spacing_after: hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(150).unwrap()),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
             snap_to_grid: false,
@@ -1547,11 +1552,11 @@ mod tests {
         // Para shape
         let ps = decoded.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
-        assert_eq!(ps.margin_left.as_i32(), 100);
-        assert_eq!(ps.margin_right.as_i32(), 50);
-        assert_eq!(ps.indent.as_i32(), 200);
-        assert_eq!(ps.spacing_before.as_i32(), 300);
-        assert_eq!(ps.spacing_after.as_i32(), 150);
+        assert_eq!(ps.margin_left.as_hwp_unit().unwrap().as_i32(), 100);
+        assert_eq!(ps.margin_right.as_hwp_unit().unwrap().as_i32(), 50);
+        assert_eq!(ps.indent.as_hwp_unit().unwrap().as_i32(), 200);
+        assert_eq!(ps.spacing_before.as_hwp_unit().unwrap().as_i32(), 300);
+        assert_eq!(ps.spacing_after.as_hwp_unit().unwrap().as_i32(), 150);
         assert_eq!(ps.line_spacing, 200);
         assert!(!ps.snap_to_grid);
         assert_eq!(ps.line_wrap, "SQUEEZE");
@@ -1763,14 +1768,10 @@ mod tests {
     }
 
     #[test]
-    fn build_border_fills_xml_empty_store_emits_defaults() {
-        // An empty store (no fills) still emits 3 standard defaults for backward compat.
-        let store = HwpxStyleStore::new();
-        let xml = build_border_fills_xml(&store);
-        assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
-        assert!(xml.contains(r##"<hh:borderFill id="1""##));
-        assert!(xml.contains(r##"<hh:borderFill id="2""##));
-        assert!(xml.contains(r##"<hh:borderFill id="3""##));
+    fn fix5_border_writer_does_not_invent_definitions() {
+        // 이것을 실패시키는 것: header writer가 빈 표에 기본 정의 1·2·3을 몰래 추가.
+        let xml = build_border_fills_xml(&HwpxStyleStore::new());
+        assert_eq!(xml, r#"<hh:borderFills itemCnt="0"></hh:borderFills>"#);
     }
 
     #[test]

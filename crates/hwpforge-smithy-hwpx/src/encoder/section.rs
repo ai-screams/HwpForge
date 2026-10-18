@@ -210,6 +210,7 @@ pub(crate) struct SectionEncodeResult {
 /// One context per document, shared by every body and nested encoder.
 /// Part/path scopes change; asset collections and allocators never reset.
 pub(crate) struct DocumentEncodeContext {
+    pub(crate) references: Option<crate::header_references::HeaderReferences>,
     pub(crate) charts: Vec<(String, String)>,
     pub(crate) embedded_oles: Vec<(String, Vec<u8>)>,
     pub(crate) images: Vec<(String, Vec<u8>)>,
@@ -233,8 +234,13 @@ pub(crate) struct DocumentEncodeContext {
 }
 
 impl DocumentEncodeContext {
+    fn output_id(&self, kind: &str, index: usize) -> HwpxResult<u32> {
+        self.references.as_ref().map_or_else(|| Ok(index as u32), |r| r.output_ids(kind, index))
+    }
+
     pub(crate) fn new(section_index: usize) -> Self {
         Self {
+            references: None,
             charts: Vec::new(),
             embedded_oles: Vec::new(),
             images: Vec::new(),
@@ -903,7 +909,10 @@ fn build_section(
         if idx > 0 && anchored[idx] > 0 {
             // titleMark 처리(build_paragraph 안) 뒤에 넣는다 — 앞에 있으면
             // titleMark 가 이 자리표시 run 에 붙어 치환 키가 깨진다.
-            let char_pr_id_ref = built.runs.first().map_or(0, |r| r.char_pr_id_ref);
+            let char_pr_id_ref = built
+                .runs
+                .first()
+                .map_or_else(|| sink.output_id("charPr", 0), |r| Ok(r.char_pr_id_ref))?;
             let marker = next_marker("HWPHF", idx);
             let mut run = note_head_run(char_pr_id_ref, HxCtrl::default());
             run.ctrls.clear();
@@ -1131,7 +1140,7 @@ fn build_paragraph(
     // run, as Hancom writes it. 이것을 실패시키는 것: 이 run 을 쓰지 않기
     // (`end_mark_run_round_trips`).
     if let Some(end) = para.end_char_shape {
-        let mut end_run = note_head_run(end.get() as u32, HxCtrl::default());
+        let mut end_run = note_head_run(sink.output_id("charPr", end.get())?, HxCtrl::default());
         end_run.ctrls.clear();
         runs.push(end_run);
     }
@@ -1140,8 +1149,18 @@ fn build_paragraph(
         origin: super::origins::record(&sink.path),
         source_origin: 0,
         id: format!("{para_idx}"),
-        para_pr_id_ref: para.para_shape_id.get() as u32,
-        style_id_ref: para.style_id.map_or(0, |s| s.get() as u32),
+        para_pr_id_ref: sink.output_id("paraPr", para.para_shape_id.get())?,
+        style_id_ref: if let Some(style) = para.style_id {
+            sink.output_id("style", style.get())?
+        } else {
+            if let Some(refs) = &sink.references {
+                // An empty table emits the existing generated style 0.
+                if !refs.style_ids.is_empty() {
+                    refs.style_index(0)?;
+                }
+            }
+            0
+        },
         page_break: u32::from(para.page_break),
         column_break: u32::from(para.column_break),
         merged: 0,
@@ -1189,7 +1208,7 @@ fn build_runs(
                 ledger.sec_pr();
                 result.push(HxRun {
                     origin: 0,
-                    char_pr_id_ref: 0,
+                    char_pr_id_ref: sink.output_id("charPr", 0)?,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
                     tables: Vec::new(),
@@ -1222,7 +1241,7 @@ fn build_runs(
             ledger.sec_pr();
         }
 
-        let char_pr_id_ref = run.char_shape_id.get() as u32;
+        let char_pr_id_ref = sink.output_id("charPr", run.char_shape_id.get())?;
 
         let mut texts = Vec::new();
         let mut tables = Vec::new();
@@ -1494,6 +1513,11 @@ fn build_runs(
                         char_pr_ids,
                     } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Other);
+                        if let Some(refs) = &sink.references {
+                            for id in char_pr_ids.iter().take(10).filter(|id| **id != u32::MAX) {
+                                refs.char_index(*id)?;
+                            }
+                        }
                         composes.push(encode_compose_to_hx(
                             compose_text,
                             circle_type,
@@ -1835,7 +1859,7 @@ fn build_runs(
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =
                             encode_memo_sublist(content, depth, hyperlink_entries, options, sink)?;
-                        let anchor_xml = build_memo_anchor_xml(anchor_runs);
+                        let anchor_xml = build_memo_anchor_xml(anchor_runs, sink)?;
                         let real_xml = build_memo_run_xml(
                             &sublist_xml,
                             &anchor_xml,
@@ -1967,7 +1991,7 @@ fn build_runs(
         if let Some(first) = runs.first() {
             result.push(HxRun {
                 origin: 0,
-                char_pr_id_ref: first.char_shape_id.get() as u32,
+                char_pr_id_ref: sink.output_id("charPr", first.char_shape_id.get())?,
                 sec_pr: None,
                 texts: Vec::new(),
                 tables: Vec::new(),
@@ -1999,7 +2023,7 @@ fn build_runs(
                 0,
                 HxRun {
                     origin: 0,
-                    char_pr_id_ref: 0,
+                    char_pr_id_ref: sink.output_id("charPr", 0)?,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
                     tables: Vec::new(),

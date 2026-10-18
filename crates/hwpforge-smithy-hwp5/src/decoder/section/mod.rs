@@ -13,8 +13,8 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
-    Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
+    Hwp5CharShapeRun, Hwp5ComposeControl, Hwp5EqEdit, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg,
+    Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
     Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
     Hwp5ShapeTextArt, TextSegment,
 };
@@ -1043,6 +1043,61 @@ pub(crate) fn parse_body_text(data: &[u8], _version: &HwpVersion) -> Hwp5Result<
         parser.handle_record(record);
     }
     Ok(parser.finish())
+}
+
+/// Validate original wire references before projection can omit any container or style 0.
+/// Record levels do not restrict this check: nested tables, captions, notes, shapes,
+/// groups and memo lists all use the same paragraph records.
+/// 이것을 실패시키는 것: 종류별 lookup 생략/인덱스 무시/중첩 깊이 필터링
+/// (`body_style_references_check_original_definitions_in_every_container`).
+pub(super) fn validate_body_style_references(
+    data: &[u8],
+    definitions: &super::header::DocInfoResult,
+) -> Hwp5Result<()> {
+    use hwpforge_core::style_lookup::lookup;
+    for record in Record::parse_stream(&mut Cursor::new(data))? {
+        match TagId::from(record.header.tag_id) {
+            TagId::ParaHeader => {
+                // Preserve the parser's warning/fallback contract for malformed payloads.
+                // 이것을 실패시키는 것: 잘린 payload를 새 hard error로 바꾸기(같은 회귀 시험).
+                if let Ok(header) = Hwp5ParaHeader::parse(&record.data) {
+                    lookup(
+                        definitions.para_shapes.get(usize::from(header.para_shape_id)),
+                        "paraPr",
+                        header.para_shape_id,
+                    )?;
+                    lookup(
+                        definitions.styles.get(usize::from(header.style_id)),
+                        "style",
+                        header.style_id,
+                    )?;
+                }
+            }
+            TagId::ParaCharShape => {
+                if let Ok(runs) = Hwp5CharShapeRun::parse_all(&record.data) {
+                    for run in runs {
+                        lookup(
+                            definitions.char_shapes.get(run.char_shape_id as usize),
+                            "charPr",
+                            run.char_shape_id,
+                        )?;
+                    }
+                }
+            }
+            TagId::CtrlHeader if parse_ctrl_id(&record.data) == CTRL_ID_COMPOSE => {
+                // 이것을 실패시키는 것: compose charPr 검사 생략 또는 MAX 상속값 거부.
+                if let Some(compose) = Hwp5ComposeControl::parse(CTRL_ID_COMPOSE, &record.data) {
+                    for id in compose.char_pr_ids {
+                        if id != u32::MAX {
+                            lookup(definitions.char_shapes.get(id as usize), "compose charPr", id)?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -2106,6 +2161,15 @@ impl BodyTextParserState {
                     record.data[6],
                     record.data[7],
                 ]));
+                if let Some(bytes) = record.data.get(18..20) {
+                    let id = u16::from_le_bytes([bytes[0], bytes[1]]);
+                    if id > 1 {
+                        self.warnings.push(Hwp5Warning::ParserFallback {
+                            subject: "section.outlineShapeIDRef",
+                            reason: format!("original numbering {id}: section outline selection is not carried; HWPX output selects 1"),
+                        });
+                    }
+                }
                 // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — F1 실측 §1.2).
                 // all-or-none: 28바이트 미만이면 캡처하지 않는다 (부분값을
                 // 기본값과 섞어 날조 금지 — 계획 W1 fail-safe).
@@ -3182,6 +3246,23 @@ mod tests {
             }
         }
         buf
+    }
+
+    #[test]
+    fn fix4_section_outline_selection_loss_is_explicit() {
+        // 이것을 실패시키는 것: 미지원 구역 numbering 선택을 경고 없이 1로 대체.
+        for id in [0u16, 1, 7, 99] {
+            let mut ctrl = secd_ctrl_data(0, Some((1, 1, 1, 1)));
+            ctrl[18..20].copy_from_slice(&id.to_le_bytes());
+            let stream = [
+                make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)),
+                make_record(TagId::CtrlHeader, 0, &ctrl),
+            ]
+            .concat();
+            let result = parse_body_text(&stream, &version()).unwrap();
+            assert_eq!(result.warnings.iter().any(|w| matches!(w,
+                Hwp5Warning::ParserFallback { subject: "section.outlineShapeIDRef", reason } if reason.contains(&id.to_string()))), id > 1);
+        }
     }
 
     #[test]

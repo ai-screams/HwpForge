@@ -79,8 +79,8 @@ pub struct DocInfoResult {
 ///
 /// # Errors
 ///
-/// Returns an error only if the raw byte stream cannot be parsed as a valid
-/// sequence of HWP5 records (i.e., the byte layout is corrupt).
+/// Returns an error if the record stream or an IdMappings declaration is
+/// malformed, or if multiple IdMappings declarations are present.
 pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<DocInfoResult> {
     let records = Record::parse_stream(&mut std::io::Cursor::new(data))?;
 
@@ -100,30 +100,51 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
     for record in &records {
         let tag = TagId::from(record.header.tag_id);
         match tag {
-            TagId::IdMappings => match Hwp5RawIdMappings::parse(&record.data) {
-                Ok(m) => result.id_mappings = Some(m),
-                Err(_) => result
-                    .warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::FaceName => match Hwp5RawFaceName::parse(&record.data) {
-                Ok(f) => result.fonts.push(f),
-                Err(_) => result
-                    .warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::CharShape => match Hwp5RawCharShape::parse(&record.data) {
-                Ok(cs) => result.char_shapes.push(cs),
-                Err(_) => result
-                    .warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
-            TagId::ParaShape => match Hwp5RawParaShape::parse(&record.data) {
-                Ok(ps) => result.para_shapes.push(ps),
-                Err(_) => result
-                    .warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
+            TagId::IdMappings => {
+                if result.id_mappings.is_some() {
+                    return Err(crate::error::Hwp5Error::RecordParse {
+                        offset: 0,
+                        detail: "duplicate IdMappings declaration".into(),
+                    });
+                }
+                result.id_mappings = Some(Hwp5RawIdMappings::parse(&record.data)?);
+            }
+            TagId::FaceName => {
+                let slot = result.fonts.len();
+                let value = Hwp5RawFaceName::parse(&record.data).unwrap_or_else(|err| {
+                    // 이것을 실패시키는 것: 실패한 정의를 건너뛰어 뒤 슬롯 당기기.
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "fonts.slot",
+                        reason: format!("FaceName slot {slot} failed to parse: {err}; references to this slot use an empty placeholder, later IDs are unchanged"),
+                    });
+                    Hwp5RawFaceName::default()
+                });
+                result.fonts.push(value);
+            }
+            TagId::CharShape => {
+                let slot = result.char_shapes.len();
+                let value = Hwp5RawCharShape::parse(&record.data).unwrap_or_else(|err| {
+                    // 이것을 실패시키는 것: 실패한 정의를 건너뛰어 뒤 슬롯 당기기.
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "char_shapes.slot",
+                        reason: format!("CharShape slot {slot} failed to parse: {err}; references to this slot use an empty placeholder, later IDs are unchanged"),
+                    });
+                    Hwp5RawCharShape::default()
+                });
+                result.char_shapes.push(value);
+            }
+            TagId::ParaShape => {
+                let slot = result.para_shapes.len();
+                let value = Hwp5RawParaShape::parse(&record.data).unwrap_or_else(|err| {
+                    // 이것을 실패시키는 것: 실패한 정의를 건너뛰어 뒤 슬롯 당기기.
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "para_shapes.slot",
+                        reason: format!("ParaShape slot {slot} failed to parse: {err}; references to this slot use an empty placeholder, later IDs are unchanged"),
+                    });
+                    Hwp5RawParaShape::default()
+                });
+                result.para_shapes.push(value);
+            }
             TagId::NumberingDef => match Hwp5RawNumberingDef::parse(&record.data, _version) {
                 Ok(numbering) => {
                     let id = (result.numberings.len() as u32) + 1;
@@ -169,12 +190,18 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                     });
                 }
             },
-            TagId::Style => match Hwp5RawStyle::parse(&record.data) {
-                Ok(s) => result.styles.push(s),
-                Err(_) => result
-                    .warnings
-                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
-            },
+            TagId::Style => {
+                let slot = result.styles.len();
+                let value = Hwp5RawStyle::parse(&record.data).unwrap_or_else(|err| {
+                    // 이것을 실패시키는 것: 실패한 정의를 건너뛰어 뒤 슬롯 당기기.
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "styles.slot",
+                        reason: format!("Style slot {slot} failed to parse: {err}; references to this slot use an empty placeholder, later IDs are unchanged"),
+                    });
+                    Hwp5RawStyle::default()
+                });
+                result.styles.push(value);
+            }
             TagId::BorderFill => {
                 let id = (result.border_fills.len() as u32) + 1;
                 match Hwp5RawBorderFill::parse(&record.data) {
@@ -190,6 +217,12 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                     }
                 }
             }
+            TagId::MemoShape | TagId::TrackChangeContent | TagId::TrackChangeAuthor => {
+                result.warnings.push(Hwp5Warning::ParserFallback {
+                    subject: "header.unsupported_definition",
+                    reason: format!("{tag:?} definition and its references are not projected; original record counted for IdMappings"),
+                });
+            }
             TagId::Unknown(id) => {
                 result.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
@@ -198,12 +231,105 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
         }
     }
 
+    if let Some(m) = &result.id_mappings {
+        // Count raw records, including malformed slots and unsupported definitions.
+        // A mismatch never turns a present declaration into an absent one.
+        for (kind, declared, tag) in [
+            ("BinData", Some(i64::from(m.bin_data_count)), TagId::BinData),
+            (
+                "FaceName",
+                Some(
+                    i64::from(m.hangul_font_count)
+                        + i64::from(m.english_font_count)
+                        + i64::from(m.hanja_font_count)
+                        + i64::from(m.japanese_font_count)
+                        + i64::from(m.other_font_count)
+                        + i64::from(m.symbol_font_count)
+                        + i64::from(m.user_font_count),
+                ),
+                TagId::FaceName,
+            ),
+            ("borderFill", Some(i64::from(m.border_fill_count)), TagId::BorderFill),
+            ("charPr", Some(i64::from(m.char_shape_count)), TagId::CharShape),
+            ("tabPr", Some(i64::from(m.tab_def_count)), TagId::TabDef),
+            ("numbering", Some(i64::from(m.numbering_def_count)), TagId::NumberingDef),
+            ("bullet", Some(i64::from(m.bullet_def_count)), TagId::Bullet),
+            ("paraPr", Some(i64::from(m.para_shape_count)), TagId::ParaShape),
+            ("style", Some(i64::from(m.style_count)), TagId::Style),
+            ("memoShape", m.memo_shape_count.map(i64::from), TagId::MemoShape),
+            ("trackChange", m.change_tracking_count.map(i64::from), TagId::TrackChangeContent),
+            (
+                "trackChangeAuthor",
+                m.change_tracking_author_count.map(i64::from),
+                TagId::TrackChangeAuthor,
+            ),
+        ] {
+            if let Some(declared) = declared {
+                let actual = records.iter().filter(|r| TagId::from(r.header.tag_id) == tag).count();
+                if usize::try_from(declared).ok() != Some(actual) {
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "IdMappings.count",
+                        reason: format!("IdMappings {kind}: declared {declared}, actual {actual}; preserving raw definition slots and declaration"),
+                    });
+                }
+            }
+        }
+    }
     Ok(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fix4_id_mappings_damage_and_every_count_are_visible() {
+        // 이것을 실패시키는 것: 손상 선언을 None으로 대체, optional 꼬리 절단 허용,
+        // 중복 선언 덮어쓰기, 어느 정의 종류든 카운터 불일치 경고 생략.
+        let version = HwpVersion::new(5, 0, 3, 2);
+        for len in [59, 61, 62, 63, 65, 66, 67, 69, 70, 71] {
+            let bytes = make_record_bytes(0x11, &vec![0; len]);
+            assert!(parse_doc_info(&bytes, &version).is_err(), "len {len}");
+        }
+        let declaration = make_record_bytes(0x11, &[0; 72]);
+        assert!(parse_doc_info(&[declaration.clone(), declaration].concat(), &version).is_err());
+        assert!(parse_doc_info(&[], &version).unwrap().id_mappings.is_none());
+        for slot in 0..18 {
+            for declared in [-1i32, 1] {
+                let mut data = [0; 72];
+                data[slot * 4..slot * 4 + 4].copy_from_slice(&declared.to_le_bytes());
+                let result = parse_doc_info(&make_record_bytes(0x11, &data), &version).unwrap();
+                assert!(result.id_mappings.is_some());
+                assert!(
+                    result.warnings.iter().any(|w| matches!(w,
+                        Hwp5Warning::ParserFallback { subject: "IdMappings.count", reason }
+                        if reason.contains(&format!("declared {declared}, actual 0"))
+                    )),
+                    "slot {slot}: {:?}",
+                    result.warnings
+                );
+            }
+        }
+        // A failed definition still occupies its original slot.
+        let mut data = [0; 72];
+        data[36..40].copy_from_slice(&1i32.to_le_bytes());
+        let result = parse_doc_info(
+            &[make_record_bytes(0x11, &data), make_record_bytes(0x15, &[])].concat(),
+            &version,
+        )
+        .unwrap();
+        assert!(!result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::ParserFallback { subject: "IdMappings.count", .. })));
+        for tag in [0x5c, 0x60, 0x61] {
+            let result = parse_doc_info(&make_record_bytes(tag, &[0; 8]), &version).unwrap();
+            assert!(result.warnings.iter().any(|w| matches!(
+                w,
+                Hwp5Warning::ParserFallback { subject: "header.unsupported_definition", .. }
+            )));
+        }
+    }
 
     /// Build raw bytes for a single record (4-byte header + data).
     fn make_record_bytes(tag_id: u16, data: &[u8]) -> Vec<u8> {
@@ -289,6 +415,49 @@ mod tests {
             data.extend_from_slice(&0u16.to_le_bytes());
         }
         data
+    }
+
+    #[test]
+    fn fix2_failed_definitions_keep_slots_and_warn() {
+        // 이것을 실패시키는 것: 실패 슬롯 압축 / 경고 삭제 / 뒤 정의를 빈 자리에 복사.
+        let mut stream = Vec::new();
+        let mut para = make_para_shape_data();
+        para[4..8].copy_from_slice(&2468i32.to_le_bytes());
+        for (tag, payload) in [
+            (0x13, make_face_name_data("C")),
+            (0x15, make_char_shape_data()),
+            (0x19, para),
+            (0x1a, make_style_data("C", "C")),
+        ] {
+            stream.extend(make_record_bytes(tag, &payload));
+            stream.extend(make_record_bytes(tag, &[]));
+            stream.extend(make_record_bytes(tag, &payload));
+        }
+        let result = parse_doc_info(&stream, &HwpVersion::new(5, 0, 2, 5)).unwrap();
+        assert_eq!(
+            [
+                result.fonts.len(),
+                result.char_shapes.len(),
+                result.para_shapes.len(),
+                result.styles.len()
+            ],
+            [3; 4]
+        );
+        assert_eq!(result.fonts[1].face_name, "");
+        assert_eq!(result.fonts[2].face_name, "C");
+        assert_eq!(result.char_shapes[1].height, 0);
+        assert_eq!(result.char_shapes[2].height, 1000);
+        assert_eq!(result.para_shapes[1].left_margin, 0);
+        assert_eq!(result.para_shapes[2].left_margin, 2468);
+        assert_eq!(result.styles[1].name, "");
+        assert_eq!(result.styles[2].name, "C");
+        for subject in ["fonts.slot", "char_shapes.slot", "para_shapes.slot", "styles.slot"] {
+            assert!(result.warnings.iter().any(|w| matches!(w,
+                Hwp5Warning::ParserFallback { subject: s, reason } if *s == subject && reason.contains("slot 1") && reason.contains("references to this slot"))), "{subject}: {:?}", result.warnings);
+        }
+        let store = crate::style_store::Hwp5StyleStore::from_doc_info(&result);
+        assert_eq!(store.char_shapes[2].height, 1000);
+        assert_eq!(store.para_shapes[2].left_margin, 2468);
     }
 
     #[test]

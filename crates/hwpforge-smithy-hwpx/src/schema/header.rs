@@ -529,6 +529,18 @@ pub struct HxParaPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub border: Option<HxBorder>,
+    #[serde(
+        rename(serialize = "hh:margin", deserialize = "margin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub margin: Option<HxMargin>,
+    #[serde(
+        rename(serialize = "hh:lineSpacing", deserialize = "lineSpacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_spacing: Option<HxLineSpacing>,
 }
 
 /// `<hh:align horizontal="LEFT" vertical="BASELINE"/>`.
@@ -612,9 +624,9 @@ pub struct HxSwitch {
     #[serde(
         rename(serialize = "hp:case", deserialize = "case"),
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Vec::is_empty"
     )]
-    pub case: Option<HxSwitchCase>,
+    pub cases: Vec<HxSwitchCase>,
     #[serde(
         rename(serialize = "hp:default", deserialize = "default"),
         default,
@@ -698,11 +710,13 @@ pub struct HxMargin {
     pub next: Option<HxUnitValue>,
 }
 
-/// `<hc:left value="0" unit="HWPUNIT"/>` — generic value+unit pair.
+/// `<hc:left value="0" unit="HWPUNIT"/>` — paragraph margin value+unit pair.
+/// Keep the XML integer wide until the selected branch checks its signed range;
+/// unlike raw object attributes, a margin is not an unsigned bit representation.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxUnitValue {
-    #[serde(rename = "@value", default, deserialize_with = "deser_i32_or_u32")]
-    pub value: i32,
+    #[serde(rename = "@value")]
+    pub value: i64,
     #[serde(rename = "@unit", default)]
     pub unit: String,
 }
@@ -712,7 +726,7 @@ pub struct HxUnitValue {
 pub struct HxLineSpacing {
     #[serde(rename = "@type", default)]
     pub spacing_type: String,
-    #[serde(rename = "@value", default)]
+    #[serde(rename = "@value")]
     pub value: u32,
     #[serde(rename = "@unit", default)]
     pub unit: String,
@@ -1148,17 +1162,17 @@ pub struct HxTabPr {
 /// `<hh:tabItem pos="8000" type="LEFT" leader="NONE" unit="HWPUNIT"/>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTabItem {
-    /// Tab stop position.
+    /// Signed HWPUNIT or unsigned CHAR wire value; checked at the decode boundary.
     #[serde(rename = "@pos")]
-    pub pos: u32,
+    pub pos: i64,
     /// Alignment type (`LEFT`, `RIGHT`, `CENTER`, `DECIMAL`).
     #[serde(rename = "@type", default)]
     pub tab_type: String,
     /// Leader line type.
     #[serde(rename = "@leader", default)]
     pub leader: String,
-    /// Position unit (`HWPUNIT` in practice).
-    #[serde(rename = "@unit", default = "default_hwpunit")]
+    /// Case position unit (`HWPUNIT` or `CHAR`); packed default may omit it.
+    #[serde(rename = "@unit", default)]
     pub unit: String,
 }
 
@@ -1168,9 +1182,9 @@ pub struct HxTabSwitch {
     #[serde(
         rename(serialize = "hp:case", deserialize = "case"),
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Vec::is_empty"
     )]
-    pub case: Option<HxTabSwitchCase>,
+    pub cases: Vec<HxTabSwitchCase>,
     #[serde(
         rename(serialize = "hp:default", deserialize = "default"),
         default,
@@ -1423,14 +1437,14 @@ mod tests {
         assert_eq!(tab_pr.switches.len(), 1);
 
         let switch = &tab_pr.switches[0];
-        let case = switch.case.as_ref().unwrap();
+        let case = switch.cases.first().unwrap();
         assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
         assert_eq!(case.items[0].pos, 15000);
         assert_eq!(case.items[0].unit, "HWPUNIT");
 
         let default = switch.default.as_ref().unwrap();
         assert_eq!(default.items[0].pos, 30000);
-        assert_eq!(default.items[0].unit, "HWPUNIT");
+        assert_eq!(default.items[0].unit, "");
     }
 
     #[test]

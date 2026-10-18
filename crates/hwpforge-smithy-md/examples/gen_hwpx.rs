@@ -128,7 +128,8 @@ date: "2026-02-17"
     let hwpx_bytes =
         HwpxEncoder::encode(&validated, bridge.style_store(), &images).expect("HWPX encode failed");
 
-    let out_path = "/Users/soeburi/Works/AiScream/HwpForge/Phase4_1_Improvements_Test.hwpx";
+    // 이것을 실패시키는 것: 다른 개발자의 절대 경로 복원(실제 example 실행).
+    let out_path = "Phase4_1_Improvements_Test.hwpx";
     std::fs::write(out_path, &hwpx_bytes).expect("file write failed");
     println!("✅ Generated: {}", out_path);
     println!("   Size: {} bytes", hwpx_bytes.len());

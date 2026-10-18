@@ -299,17 +299,21 @@ match HwpxDecoder::decode_file("missing.hwpx") {
 `Document`는 최소 1개의 섹션이 있어야 `validate()`를 통과합니다.
 
 ```rust,no_run
-use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
-use hwpforge::foundation::ParaShapeIndex;
+use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Run, Section};
+use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
 
 let mut doc = Document::<Draft>::new();
 
 // ❌ 빈 문서 — validate() 실패
 // let validated = doc.validate();  // Err: 섹션 없음
 
-// ✅ 빈 문단이라도 하나 추가
+// ✅ 빈 텍스트 런을 포함한 문단 추가
+// 이것을 실패시키는 것: 런 없는 Paragraph::new로 되돌리기(validate 실패).
 doc.add_section(Section::with_paragraphs(
-    vec![Paragraph::new(ParaShapeIndex::new(0))],
+    vec![Paragraph::with_runs(
+        vec![Run::text("", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )],
     PageSettings::a4(),
 ));
 let validated = doc.validate().unwrap();  // OK
