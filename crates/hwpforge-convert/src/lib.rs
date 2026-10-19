@@ -357,21 +357,21 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
 
     // Map character shapes.
     for (raw_id, raw) in store.char_shapes.iter().enumerate() {
-        let mut shape = hwp5_char_shape_to_hwpx_with_warnings(raw, raw_id, &mut warnings);
-        shape.source_id = Some(u32::try_from(raw_id).map_err(|_| {
-            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
-                detail: "HWP5 definition ID exceeds u32 range".into(),
-            }
-        })?);
+        let shape = hwp5_char_shape_to_hwpx_with_warnings(raw, raw_id, &mut warnings);
         out.push_char_shape(shape);
     }
 
     // Map numbering definitions before paragraph shapes so references are stable.
     append_numbering_definition_integrity_warning(store, &mut warnings);
+    let mut numbering_positions = Vec::with_capacity(store.numberings.len());
     for slot in &store.numberings {
         match slot.numbering.as_ref() {
-            Some(raw) => out.push_numbering(raw.to_core_numbering_def(slot.id)),
+            Some(raw) => {
+                out.push_numbering(raw.to_core_numbering_def(slot.id));
+                numbering_positions.push(Some(out.numbering_count() as u32));
+            }
             None => {
+                numbering_positions.push(None);
                 warnings.push(Hwp5Warning::ParserFallback {
                     subject: "numbering.slot",
                     reason: format!(
@@ -386,6 +386,7 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     // Map bullet definitions before paragraph shapes so bullet references
     // can resolve to stable shared ids.
     append_bullet_definition_integrity_warning(store, &mut warnings);
+    let mut bullet_positions = Vec::with_capacity(store.bullets.len());
     for slot in &store.bullets {
         match slot.bullet.as_ref() {
             Some(raw) => {
@@ -402,8 +403,10 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
                     );
                 }
                 out.push_bullet(raw.to_core_bullet_def(slot.id));
+                bullet_positions.push(Some(out.bullet_count() as u32));
             }
             None => {
+                bullet_positions.push(None);
                 warnings.push(Hwp5Warning::ParserFallback {
                     subject: "bullet.slot",
                     reason: format!(
@@ -424,11 +427,25 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
             raw_id,
             &mut warnings,
         )?;
-        shape.source_id = Some(u32::try_from(raw_id).map_err(|_| {
-            hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
-                detail: "HWP5 definition ID exceeds u32 range".into(),
+        // Failed list slots are omitted, so rebind source positions once here.
+        // Zero remains the inherited/inactive sentinel; a failed slot is an error.
+        let list = match shape.heading_type {
+            HeadingType::Number | HeadingType::Outline => Some(("numbering", &numbering_positions)),
+            HeadingType::Bullet => Some(("bullet", &bullet_positions)),
+            _ => None,
+        };
+        if let Some((kind, positions)) = list {
+            if let Some(index) = shape.heading_id_ref.checked_sub(1) {
+                shape.heading_id_ref = hwpforge_core::style_lookup::lookup(
+                    positions.get(index as usize).copied().flatten(),
+                    kind,
+                    shape.heading_id_ref,
+                )
+                .map_err(|error| {
+                    hwpforge_smithy_hwpx::HwpxError::InvalidStructure { detail: error.to_string() }
+                })?;
             }
-        })?);
+        }
         let index = out.push_para_shape(shape);
         out.set_para_font_line_height(index, u32::from(raw.font_line_height()))?;
     }

@@ -1414,7 +1414,7 @@ impl HwpxEncoder {
         // 열지 않기(전 인코드 panic) · 예약 생략(`drawn_ids_skip_core_ids`).
         let references = crate::header_references::HeaderReferences::build(style_store)?;
         references.validate(style_store, true)?;
-        let border_ids = style_store.iter_border_fills().map(|fill| fill.id);
+        let border_ids = 1..=style_store.border_fill_count() as u32;
         crate::header_references::HeaderReferences::validate_body_borders(document, border_ids)?;
         let mut context = section::DocumentEncodeContext::for_document(document, image_store);
         context.references = Some(references);
@@ -1480,35 +1480,9 @@ impl HwpxEncoder {
         {
             generated = style_store.clone();
             if generated.char_shape_count() == 0 {
-                let mut shape = crate::HwpxCharShape::default();
-                let f = &mut shape.font_ref;
-                for (lang, id) in [
-                    ("HANGUL", &mut f.hangul),
-                    ("LATIN", &mut f.latin),
-                    ("HANJA", &mut f.hanja),
-                    ("JAPANESE", &mut f.japanese),
-                    ("OTHER", &mut f.other),
-                    ("SYMBOL", &mut f.symbol),
-                    ("USER", &mut f.user),
-                ] {
-                    // Match build_fontfaces: missing languages copy the first group.
-                    // An empty font table receives HANGUL 0 below.
-                    let fallback = generated.iter_fonts().next().map(|font| font.lang.as_str());
-                    let font_id = generated
-                        .iter_fonts()
-                        .filter(|font| font.lang == lang)
-                        .map(|font| font.id)
-                        .min()
-                        .or_else(|| {
-                            generated
-                                .iter_fonts()
-                                .filter(|font| Some(font.lang.as_str()) == fallback)
-                                .map(|font| font.id)
-                                .min()
-                        })
-                        .unwrap_or(0);
-                    *id = hwpforge_foundation::FontIndex::new(font_id as usize);
-                }
+                // Font references are group-local positions; the first is 0,
+                // regardless of the public definition's decorative id label.
+                let shape = crate::HwpxCharShape::default();
                 generated.push_char_shape(shape);
             }
             if generated.para_shape_count() == 0 {
@@ -1535,11 +1509,13 @@ impl HwpxEncoder {
                 needed.insert(3);
             }
         });
-        needed.retain(|id| style_store.border_fill(*id).is_err());
+        needed.retain(|id| *id as usize > style_store.border_fill_count());
         let mut generated_borders;
         let style_store = if !needed.is_empty() {
             generated_borders = style_store.clone();
-            for id in needed {
+            // Fill every intervening position, never emit sparse default labels.
+            let last = *needed.last().expect("nonempty needed borders");
+            for id in style_store.border_fill_count() as u32 + 1..=last {
                 let mut fill = if id == 3 {
                     crate::style_store::HwpxBorderFill::default_table_border()
                 } else if id == 2 {
@@ -1892,15 +1868,11 @@ mod tests {
             for anchor_index in [0, 99] {
                 let mut store = HwpxStyleStore::with_default_fonts("바탕");
                 store.push_char_shape(HwpxCharShape {
-                    source_id: Some(7),
                     text_color: Color::from_rgb(255, 0, 0),
                     ..Default::default()
                 });
                 if with_black {
-                    store.push_char_shape(HwpxCharShape {
-                        source_id: Some(0),
-                        ..Default::default()
-                    });
+                    store.push_char_shape(HwpxCharShape { ..Default::default() });
                 }
                 store.push_para_shape(HwpxParaShape::default());
                 let cs = CharShapeIndex::new(0);
@@ -1923,7 +1895,7 @@ mod tests {
                 let bytes = result.unwrap();
                 let xml = crate::PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
                 assert!(
-                    xml.contains(r#"<hp:run charPrIDRef="7"><hp:t>anchor</hp:t></hp:run>"#),
+                    xml.contains(r#"<hp:run charPrIDRef="0"><hp:t>anchor</hp:t></hp:run>"#),
                     "{xml}"
                 );
                 let decoded = HwpxDecoder::decode(&bytes).unwrap();
@@ -2035,7 +2007,9 @@ mod tests {
                     if kind.starts_with("border:") {
                         let mut fill = crate::style_store::HwpxBorderFill::default_page_border();
                         fill.id = id;
-                        store.push_border_fill(fill);
+                        for _ in 0..id {
+                            store.push_border_fill(fill.clone());
+                        }
                     }
                     match kind {
                         "style" => {
@@ -2044,6 +2018,9 @@ mod tests {
                             ));
                         }
                         "tabPr" => {
+                            for tab in TabDef::defaults() {
+                                store.push_tab(tab);
+                            }
                             store.push_tab(TabDef {
                                 id,
                                 auto_tab_left: false,
@@ -2155,10 +2132,10 @@ mod tests {
                     PageSettings::a4(),
                 ));
                 let refs = crate::header_references::HeaderReferences::build(&store).unwrap();
-                assert_eq!(refs.validate(&store, true).is_ok(), latin_ids == [id]);
+                assert_eq!(refs.validate(&store, true).is_ok(), (id as usize) < latin_ids.len());
                 let output =
                     HwpxEncoder::encode(&doc.validate().unwrap(), &store, &ImageStore::new());
-                if latin_ids == [id] {
+                if (id as usize) < latin_ids.len() {
                     let decoded = HwpxDecoder::decode(&output.unwrap()).unwrap();
                     assert_eq!(
                         decoded.style_store.iter_char_shapes().next().unwrap().font_ref.latin.get(),
@@ -2270,7 +2247,7 @@ mod tests {
                 ("table", 99),
                 ("cell", 99),
                 ("page", 99),
-                ("table", 7),
+                ("table", 1),
                 ("table", 0),
                 ("cell", 0),
                 ("page", 0),
@@ -2360,7 +2337,7 @@ mod tests {
                         assert!(decoded.style_store.border_fill(1).is_ok());
                     }
                     assert!(decoded.style_store.border_fill(2).is_ok());
-                    assert!(decoded.style_store.border_fill(7).is_ok());
+                    assert!(decoded.style_store.border_fill(1).is_ok());
                 }
             }
         }
@@ -2423,10 +2400,10 @@ mod tests {
             HwpxEncoder::encode(&doc.validate().unwrap(), &store, &images)
         };
         let refused = |r: HwpxResult<Vec<u8>>| matches!(r, Err(crate::error::HwpxError::InvalidStructure { ref detail }) if detail.contains("cell zone"));
-        assert!(encode(true, false, 7, None).is_ok());
+        assert!(encode(true, false, 1, None).is_ok());
         assert!(refused(encode(true, false, 999, None)));
         // Review r2 HIGH: a table in a picture caption is checked too.
-        assert!(encode(true, true, 7, None).is_ok());
+        assert!(encode(true, true, 1, None).is_ok());
         assert!(refused(encode(true, true, 999, None)));
         // 이것을 실패시키는 것: 빈 표 zone 1·2·3 허용 또는 표 Some(0)일 때 zone 검사 생략.
         for id in [1, 2, 3] {

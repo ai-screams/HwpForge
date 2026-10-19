@@ -45,6 +45,8 @@ pub(crate) fn encode_header(
 ) -> HwpxResult<String> {
     crate::paragraph_measure::validate_measure_output(store)?;
     crate::header_references::HeaderReferences::build(store)?;
+    let numbered = store.numbered_for_output();
+    let store = &numbered;
     let head = build_head(store, sec_cnt);
     #[allow(clippy::disallowed_methods)] // normalized on the next line
     let head_xml = quick_xml::se::to_string(&head)
@@ -251,7 +253,7 @@ fn build_numberings_xml(store: &HwpxStyleStore) -> String {
 
     let count = numberings.len();
     let mut xml = format!(r#"<hh:numberings itemCnt="{count}">"#);
-    for ndef in &numberings {
+    for (index, ndef) in numberings.iter().enumerate() {
         xml.push_str(&format!(r#"<hh:numbering id="{}" start="{}">"#, ndef.id, ndef.start));
         for lvl in &ndef.levels {
             let num_format = number_format_to_hwpx(lvl.num_format);
@@ -260,7 +262,7 @@ fn build_numberings_xml(store: &HwpxStyleStore) -> String {
             let metrics = store
                 .header_fidelity
                 .numbering
-                .get(&ndef.id)
+                .get(&(index as u32 + 1))
                 .and_then(|levels| levels.get(&lvl.level))
                 .unwrap_or(&defaults);
             xml.push_str(&format!(
@@ -291,13 +293,14 @@ fn build_bullets_xml(store: &HwpxStyleStore) -> String {
 
     let items: Vec<HxBullet> = store
         .iter_bullets()
-        .map(|def| {
+        .enumerate()
+        .map(|(index, def)| {
             let mut bullet = bullet_def_to_hwpx(def);
             for head in &mut bullet.para_heads {
                 if let Some(metrics) = store
                     .header_fidelity
                     .bullet
-                    .get(&def.id)
+                    .get(&(index as u32 + 1))
                     .and_then(|levels| levels.get(&head.level))
                 {
                     metrics.apply(head);
@@ -621,12 +624,10 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
 
 /// Builds the `HxCharProperties` list from all char shapes in the store.
 fn build_char_properties(store: &HwpxStyleStore) -> HxCharProperties {
-    let refs =
-        crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
     let items: Vec<HxCharPr> = store
         .iter_char_shapes()
         .enumerate()
-        .map(|(idx, cs)| build_char_pr(refs.char_ids[idx], cs))
+        .map(|(idx, cs)| build_char_pr(idx as u32, cs))
         .collect();
     let item_cnt = items.len() as u32;
     HxCharProperties { item_cnt, items }
@@ -740,12 +741,10 @@ fn default_type_info() -> HxTypeInfo {
 
 /// Builds the `HxParaProperties` list from all para shapes in the store.
 fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
-    let refs =
-        crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
     let items: Vec<HxParaPr> = store
         .iter_para_shapes()
         .enumerate()
-        .map(|(idx, ps)| build_para_pr(refs.para_ids[idx], ps))
+        .map(|(idx, ps)| build_para_pr(idx as u32, ps))
         .collect();
     let item_cnt = items.len() as u32;
     HxParaProperties { item_cnt, items }
@@ -1027,15 +1026,13 @@ fn build_styles(store: &HwpxStyleStore) -> HxStyles {
 
     // 한글 requires at least the "바탕글" (Normal) base style
     if items.is_empty() {
-        let refs =
-            crate::header_references::HeaderReferences::build(store).expect("validated header IDs");
         items.push(HxStyle {
             id: 0,
             style_type: "PARA".into(),
             name: "바탕글".into(),
             eng_name: "Normal".into(),
-            para_pr_id_ref: refs.para_ids.first().copied().unwrap_or(0),
-            char_pr_id_ref: refs.char_ids.first().copied().unwrap_or(0),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
             next_style_id_ref: 0,
             lang_id: 1042,
             lock_form: 0,
@@ -1386,7 +1383,7 @@ mod tests {
         assert!(xml.contains(r#"X&amp;Y&lt;&quot;Z&quot;"#));
 
         let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
-        let numbering = decoded.iter_numberings().find(|numbering| numbering.id == 9).unwrap();
+        let numbering = decoded.iter_numberings().find(|numbering| numbering.id == 1).unwrap();
         assert_eq!(numbering.levels[0].text, r#"A&B<"C""#);
 
         let bullet = decoded.iter_bullets().next().unwrap();

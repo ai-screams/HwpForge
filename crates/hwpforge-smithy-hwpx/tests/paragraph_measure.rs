@@ -1,4 +1,5 @@
-//! #242 original fixtures, sparse IDs and semantic re-encoding.
+//! #242 fixtures and positional references: W3 Hancom measurements override W1 ID lookup.
+//! 이것을 실패시키는 것: 정의의 원본 id로 조회/출력하여 실제 한컴 선택과 달라지는 것.
 use hwpforge_core::ParagraphMeasure;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxDocument, HwpxEncoder, PackageReader};
 use std::io::{Cursor, Read, Write};
@@ -32,12 +33,9 @@ fn signature(d: &HwpxDocument) -> Vec<(u32, Vec<u32>, Option<u32>)> {
     let mut out = Vec::new();
     d.document.for_each_paragraph(|p| {
         out.push((
-            d.style_store.para_shape(p.para_shape_id).unwrap().source_id.unwrap(),
-            p.runs
-                .iter()
-                .map(|r| d.style_store.char_shape(r.char_shape_id).unwrap().source_id.unwrap())
-                .collect(),
-            p.end_char_shape.map(|i| d.style_store.char_shape(i).unwrap().source_id.unwrap()),
+            p.para_shape_id.get() as u32,
+            p.runs.iter().map(|r| r.char_shape_id.get() as u32).collect(),
+            p.end_char_shape.map(|i| i.get() as u32),
         ));
     });
     out
@@ -45,9 +43,10 @@ fn signature(d: &HwpxDocument) -> Vec<(u32, Vec<u32>, Option<u32>)> {
 fn measures(d: &HwpxDocument) -> Vec<(u32, [ParagraphMeasure; 5], i32)> {
     d.style_store
         .iter_para_shapes()
-        .map(|p| {
+        .enumerate()
+        .map(|(index, p)| {
             (
-                p.source_id.unwrap(),
+                index as u32,
                 [p.margin_left, p.margin_right, p.indent, p.spacing_before, p.spacing_after],
                 p.line_spacing,
             )
@@ -83,7 +82,7 @@ fn w1_original_fixtures_preserve_units_values_and_ids() {
     }
 }
 #[test]
-fn w1_reordered_char7_and_sparse_para_keep_nested_references() {
+fn w3_reordered_char7_changes_the_selected_definition() {
     for name in ["para-margins-char", "field-mix", "line-height-mixed"] {
         let bytes = fixture(name);
         let original = HwpxDecoder::decode(&bytes).unwrap();
@@ -97,9 +96,11 @@ fn w1_reordered_char7_and_sparse_para_keep_nested_references() {
         let first = xml.find("<hh:charPr ").unwrap();
         xml.insert_str(first, &char7);
         let reordered = HwpxDecoder::decode(&replace_header(&bytes, &xml)).unwrap();
+        // 한컴 실측: 첫 위치를 옮기면 ref 0의 정의도 바뀐다.
+        // 이것을 실패시키는 것: 원본 id 키로 같은 정의를 계속 고르는 것.
         assert_eq!(
-            reordered.style_store.iter_char_shapes().next().unwrap().source_id,
-            Some(moved_id)
+            reordered.style_store.iter_char_shapes().next().unwrap(),
+            original.style_store.iter_char_shapes().nth(moved_id as usize).unwrap()
         );
         assert_eq!(signature(&original), signature(&reordered), "{name}");
         let expected = signature(&reordered);
@@ -112,7 +113,7 @@ fn w1_reordered_char7_and_sparse_para_keep_nested_references() {
         let decoded = HwpxDecoder::decode(&out).unwrap();
         assert_eq!(signature(&decoded), expected, "{name}");
         let out_xml = PackageReader::new(&out).unwrap().read_header_xml().unwrap();
-        assert!(out_xml.find(&moved_tag).unwrap() < out_xml.find("<hh:charPr id=\"0\"").unwrap());
+        assert!(out_xml.find("<hh:charPr id=\"0\"").unwrap() < out_xml.find(&moved_tag).unwrap());
     }
 }
 #[test]
@@ -120,9 +121,7 @@ fn w1_duplicate_and_broken_wire_ids_are_errors() {
     let bytes = fixture("para-margins-char");
     let xml = PackageReader::new(&bytes).unwrap().read_header_xml().unwrap();
     for broken in [
-        xml.replacen("<hh:charPr id=\"7\"", "<hh:charPr id=\"0\"", 1),
         xml.replacen("charPrIDRef=\"0\"", "charPrIDRef=\"999999\"", 1),
-        xml.replacen("nextStyleIDRef=\"0\"", "nextStyleIDRef=\"999999\"", 1),
         xml.replacen("tabPrIDRef=\"0\"", "tabPrIDRef=\"999999\"", 1),
         xml.replacen("borderFillIDRef=\"2\"", "borderFillIDRef=\"999999\"", 1),
     ] {
@@ -137,11 +136,9 @@ fn w1_sparse_para_and_style_ids_preserve_font_line_height_and_cycles() {
     let mut pkg = PackageReader::new(&bytes).unwrap();
     let header = pkg.read_header_xml().unwrap();
     let section = pkg.read_section_xml(0).unwrap();
-    // Rename para 0 to 900 in both definitions and actual references.
-    let header = header
-        .replace("<hh:paraPr id=\"0\"", "<hh:paraPr id=\"900\"")
-        .replace("paraPrIDRef=\"0\"", "paraPrIDRef=\"900\"");
-    let section = section.replace("paraPrIDRef=\"0\"", "paraPrIDRef=\"900\"");
+    // 한컴 실측: 정의 label만 900으로 바꿔도 위치 0을 계속 참조한다.
+    let header = header.replace("<hh:paraPr id=\"0\"", "<hh:paraPr id=\"900\"");
+    // References remain positions; only the ignored label changes.
     let changed = replace_part(&replace_header(&bytes, &header), "Contents/section0.xml", &section);
     let decoded = HwpxDecoder::decode(&changed).unwrap();
     let expected = signature(&decoded);
@@ -159,7 +156,7 @@ fn w1_sparse_para_and_style_ids_preserve_font_line_height_and_cycles() {
         .unwrap()
         .read_header_xml()
         .unwrap()
-        .contains("<hh:paraPr id=\"900\""));
+        .contains("<hh:paraPr id=\"0\""));
 }
 
 #[test]
@@ -168,13 +165,9 @@ fn w1_sparse_char_without_zero_and_measure_lookup_keep_units() {
     use hwpforge_smithy_hwpx::HwpxStyleLookup;
     let bytes = fixture("field-mix");
     let mut package = PackageReader::new(&bytes).unwrap();
-    let header = package
-        .read_header_xml()
-        .unwrap()
-        .replace("<hh:charPr id=\"0\"", "<hh:charPr id=\"900\"")
-        .replace("charPrIDRef=\"0\"", "charPrIDRef=\"900\"");
-    let section =
-        package.read_section_xml(0).unwrap().replace("charPrIDRef=\"0\"", "charPrIDRef=\"900\"");
+    let header =
+        package.read_header_xml().unwrap().replace("<hh:charPr id=\"0\"", "<hh:charPr id=\"900\"");
+    let section = package.read_section_xml(0).unwrap();
     let changed = replace_part(&replace_header(&bytes, &header), "Contents/section0.xml", &section);
     let mut decoded = HwpxDecoder::decode(&changed).unwrap();
     let expected = signature(&decoded);
@@ -201,7 +194,7 @@ fn w1_readme_answers_are_exact() {
     use hwpforge_core::CharCount;
     let char_value = |v| ParagraphMeasure::from_char_count(CharCount::from_ticks(v));
     let e21 = HwpxDecoder::decode(&fixture("para-margins-char")).unwrap();
-    let p = |id| e21.style_store.iter_para_shapes().find(|p| p.source_id == Some(id)).unwrap();
+    let p = |id| e21.style_store.para_shape(hwpforge_foundation::ParaShapeIndex::new(id)).unwrap();
     assert_eq!(p(37).margin_left, char_value(1000));
     assert_eq!(p(38).indent, char_value(500));
     assert_eq!(p(39).spacing_before, char_value(500));
@@ -213,7 +206,7 @@ fn w1_readme_answers_are_exact() {
         char_value(1000)
     );
     let e25 = HwpxDecoder::decode(&fixture("line-height-mixed")).unwrap();
-    let p = e25.style_store.iter_para_shapes().find(|p| p.source_id == Some(21)).unwrap();
+    let p = e25.style_store.para_shape(hwpforge_foundation::ParaShapeIndex::new(21)).unwrap();
     assert_eq!(p.margin_left.as_hwp_unit().unwrap().as_i32(), 1000);
     assert_eq!(p.indent, char_value(1000));
 }

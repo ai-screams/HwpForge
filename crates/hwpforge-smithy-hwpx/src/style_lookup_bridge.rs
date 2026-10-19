@@ -151,7 +151,7 @@ mod tests {
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 7,
+            heading_id_ref: 1,
             checked: true,
             ..Default::default()
         });

@@ -37,7 +37,8 @@ use crate::error::{HwpxError, HwpxResult};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxFont {
-    /// Original `id` attribute from XML.
+    /// Descriptive label; decoding/encoding normalizes it to the zero-based
+    /// position within its language group.
     pub id: u32,
     /// Face name (e.g. `"함초롬돋움"`, `"Times New Roman"`).
     pub face_name: String,
@@ -145,8 +146,8 @@ impl HwpxFontTypeInfo {
 
 /// Per-language font index references from `<hh:fontRef>`.
 ///
-/// Each [`FontIndex`] carries a language-local wire ID, resolved by
-/// `(language, font.id)`, never a position in the combined font vector.
+/// Each [`FontIndex`] carries a language-local position, resolved within
+/// its language group, never in the combined font vector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
@@ -191,9 +192,6 @@ impl Default for HwpxFontRef {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxCharShape {
-    /// Original wire definition ID; absent for newly created definitions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<u32>,
     /// Per-language font references.
     pub font_ref: HwpxFontRef,
     /// Font height in HwpUnit (height attribute × 1, already HWPUNIT).
@@ -254,7 +252,6 @@ pub struct HwpxCharShape {
 impl Default for HwpxCharShape {
     fn default() -> Self {
         Self {
-            source_id: None,
             font_ref: HwpxFontRef::default(),
             height: HwpUnit::new(1000).unwrap(), // 10pt default (한글 compatible)
             text_color: Color::BLACK,
@@ -294,7 +291,8 @@ impl Default for HwpxCharShape {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxStyle {
-    /// Style ID (from `id` attribute).
+    /// Descriptive label; decoding/encoding normalizes it to the zero-based
+    /// definition position.
     pub id: u32,
     /// Style type (e.g. `"PARA"`, `"CHAR"`).
     pub style_type: String,
@@ -303,12 +301,12 @@ pub struct HwpxStyle {
     /// English style name (e.g. `"Normal"`).
     pub eng_name: String,
     /// Reference to paragraph properties (from `paraPrIDRef`).
-    /// Wire ID (inactive for CHAR styles), never a vector index.
+    /// Zero-based paragraph definition position (inactive for CHAR styles).
     pub para_pr_id_ref: u32,
     /// Reference to character properties (from `charPrIDRef`).
-    /// Wire ID, resolved through the header definition table.
+    /// Zero-based character definition position.
     pub char_pr_id_ref: u32,
-    /// Wire ID of the next style (from `nextStyleIDRef`), never a vector index.
+    /// Zero-based position of the next style (from `nextStyleIDRef`).
     pub next_style_id_ref: u32,
     /// Language ID (from `langID`).
     pub lang_id: u32,
@@ -351,11 +349,8 @@ impl HwpxStyle {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxParaShape {
-    /// Original wire definition ID; absent for newly created definitions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<u32>,
     // Header fidelity belongs to the definition: Clone and JSON must carry it
-    // even when a duplicate clears source_id for fresh output ID assignment.
+    // including clones appended at a new position.
     #[serde(default)]
     pub(crate) font_line_height: u32,
     /// Horizontal alignment.
@@ -448,7 +443,6 @@ fn all_zero(offsets: &[HwpUnit; 4]) -> bool {
 impl Default for HwpxParaShape {
     fn default() -> Self {
         Self {
-            source_id: None,
             font_line_height: 0,
             alignment: Alignment::Left,
             margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
@@ -491,7 +485,8 @@ impl Default for HwpxParaShape {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct HwpxBorderFill {
-    /// Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).
+    /// Descriptive ID label. References use the 1-based definition position;
+    /// encoding replaces this label with that position.
     pub id: u32,
     /// Whether 3D border effect is enabled.
     pub three_d: bool,
@@ -918,7 +913,6 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
     };
 
     let base = HwpxCharShape {
-        source_id: None,
         font_ref: batang_ref,
         height: HwpUnit::new(1000).unwrap(), // 10pt
         text_color: Color::BLACK,
@@ -979,7 +973,6 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 
     // Base: JUSTIFY, no margins/indent, 160% line spacing, no widow/orphan
     let base = HwpxParaShape {
-        source_id: None,
         alignment: justify,
         margin_left: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
         margin_right: ParagraphMeasure::from_hwp_unit(HwpUnit::ZERO),
@@ -1206,6 +1199,33 @@ pub(crate) struct RegistryStoreBuild {
 }
 
 impl HwpxStyleStore {
+    /// Output labels are dense; all references in the store and Core are positions.
+    /// Keep public definition id fields for 0.16 compatibility, but never emit gaps.
+    pub(crate) fn numbered_for_output(&self) -> Self {
+        let mut out = self.clone();
+        let mut fonts = std::collections::BTreeMap::<String, u32>::new();
+        for font in &mut out.fonts {
+            let position = fonts.entry(font.lang.clone()).or_default();
+            font.id = *position;
+            *position += 1;
+        }
+        macro_rules! renumber {
+            ($defs:expr, $base:expr) => {
+                for (index, def) in $defs.iter_mut().enumerate() {
+                    def.id = index as u32 + $base;
+                }
+            };
+        }
+        renumber!(out.border_fills, 1);
+        renumber!(out.numberings, 1);
+        renumber!(out.bullets, 1);
+        renumber!(out.styles, 0);
+        // Built-in 0/1/2 remain available to existing authoring callers.
+        out.tabs.extend(TabDef::defaults().into_iter().skip(out.tabs.len()));
+        renumber!(out.tabs, 0);
+        out
+    }
+
     /// Retains the HWP5 font-line-height flag for an imported paragraph definition.
     pub fn set_para_font_line_height(
         &mut self,
@@ -1295,14 +1315,17 @@ impl HwpxStyleStore {
 
     // ── Fonts ────────────────────────────────────────────────────
 
-    /// Adds a font and returns its index.
+    /// Appends a font and returns its zero-based position in the complete font
+    /// vector, as used by [`Self::font`]. HWPX `fontRef` fields instead use
+    /// positions within each language group. The supplied `id` is ignored
+    /// for lookup and renumbered within its language group when encoding.
     pub fn push_font(&mut self, font: HwpxFont) -> FontIndex {
         let idx = FontIndex::new(self.fonts.len());
         self.fonts.push(font);
         idx
     }
 
-    /// Returns the font at `index`.
+    /// Returns the font at the zero-based position in the complete font vector.
     pub fn font(&self, index: FontIndex) -> HwpxResult<&HwpxFont> {
         self.fonts.get(index.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
             kind: "font",
@@ -1345,7 +1368,7 @@ impl HwpxStyleStore {
 
     // ── Character Shapes ─────────────────────────────────────────
 
-    /// Adds a char shape and returns its index.
+    /// Appends a char shape and returns its zero-based position.
     pub fn push_char_shape(&mut self, shape: HwpxCharShape) -> CharShapeIndex {
         let idx = CharShapeIndex::new(self.char_shapes.len());
         self.char_shapes.push(shape);
@@ -1382,7 +1405,7 @@ impl HwpxStyleStore {
 
     // ── Paragraph Shapes ─────────────────────────────────────────
 
-    /// Adds a para shape and returns its index.
+    /// Appends a para shape and returns its zero-based position.
     pub fn push_para_shape(&mut self, shape: HwpxParaShape) -> ParaShapeIndex {
         let idx = ParaShapeIndex::new(self.para_shapes.len());
         self.para_shapes.push(shape);
@@ -1436,12 +1459,13 @@ impl HwpxStyleStore {
 
     // ── Styles ───────────────────────────────────────────────────
 
-    /// Adds a style definition.
+    /// Appends a style at the next zero-based position. The supplied `id` is
+    /// ignored for lookup and renumbered when encoding.
     pub fn push_style(&mut self, style: HwpxStyle) {
         self.styles.push(style);
     }
 
-    /// Returns the style at `index`.
+    /// Returns the style at the zero-based position `index`, ignoring its `id`.
     pub fn style(&self, index: usize) -> HwpxResult<&HwpxStyle> {
         self.styles.get(index).ok_or(HwpxError::IndexOutOfBounds {
             kind: "style",
@@ -1462,26 +1486,27 @@ impl HwpxStyleStore {
 
     // ── Border Fills ─────────────────────────────────────────────
 
-    /// Adds a border fill to the store and returns its 1-based ID.
-    ///
-    /// Border fill IDs in HWPX are 1-based (unlike other indices which are 0-based).
+    /// Appends a border fill and returns its 1-based position, usable directly
+    /// in body references. The supplied `id` is ignored for lookup and is
+    /// renumbered to the position when encoding.
     pub fn push_border_fill(&mut self, bf: HwpxBorderFill) -> u32 {
-        let id = bf.id;
         self.border_fills.push(bf);
-        id
+        self.border_fills.len() as u32
     }
 
-    /// Returns the border fill with the given 1-based ID.
+    /// Returns the `id`-th border fill (1-based position, not its public `id` label).
     ///
     /// # Errors
     ///
-    /// Returns [`HwpxError::IndexOutOfBounds`] if no border fill with that ID exists.
+    /// Returns [`HwpxError::IndexOutOfBounds`] if the position is zero or out of range.
     pub fn border_fill(&self, id: u32) -> HwpxResult<&HwpxBorderFill> {
-        self.border_fills.iter().find(|bf| bf.id == id).ok_or(HwpxError::IndexOutOfBounds {
-            kind: "border_fill",
-            index: id,
-            max: self.border_fills.len() as u32,
-        })
+        id.checked_sub(1).and_then(|index| self.border_fills.get(index as usize)).ok_or(
+            HwpxError::IndexOutOfBounds {
+                kind: "border_fill",
+                index: id,
+                max: self.border_fills.len() as u32,
+            },
+        )
     }
 
     /// Returns the number of border fills in the store.
@@ -1494,17 +1519,23 @@ impl HwpxStyleStore {
         self.border_fills.iter()
     }
 
-    /// Adds a numbering definition to the store.
+    /// Appends a numbering definition at the next one-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_numbering(&mut self, ndef: NumberingDef) {
         self.numberings.push(ndef);
     }
 
-    /// Adds a bullet definition to the store.
+    /// Appends a bullet definition at the next one-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_bullet(&mut self, bullet: BulletDef) {
         self.bullets.push(bullet);
     }
 
-    /// Adds a tab property definition to the store.
+    /// Appends a tab property definition at the next zero-based position.
+    /// References use this position; the supplied `id` is ignored and
+    /// renumbered when encoding.
     pub fn push_tab(&mut self, tab: TabDef) {
         self.tabs.push(tab);
     }
@@ -1615,7 +1646,6 @@ fn build_store_from_registry_with(
             user: font_idx,
         };
         char_shape_map.push(store.push_char_shape(HwpxCharShape {
-            source_id: None,
             font_ref,
             height: cs.size,
             text_color: cs.color,
@@ -1650,11 +1680,11 @@ fn build_store_from_registry_with(
         store.push_bullet(bullet.clone());
     }
 
+    let tabs = TabDef::merged_with_defaults(registry.tabs.iter());
     let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());
     for ps in &registry.para_shapes {
         let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
-            source_id: None,
             alignment: ps.alignment,
             margin_left: ParagraphMeasure::from_hwp_unit(ps.indent_left),
             margin_right: ParagraphMeasure::from_hwp_unit(ps.indent_right),
@@ -1676,14 +1706,22 @@ fn build_store_from_registry_with(
             heading_id_ref: wire_parts.id_ref,
             heading_level: wire_parts.level,
             checked: wire_parts.checked,
-            tab_pr_id_ref: ps.tab_def_id,
+            // Blueprint tab ids are authoring keys; HWPX uses emitted positions.
+            tab_pr_id_ref: tabs.iter().position(|tab| tab.id == ps.tab_def_id).ok_or(
+                HwpxError::IndexOutOfBounds {
+                    kind: "tab definition",
+                    index: ps.tab_def_id,
+                    max: tabs.len() as u32,
+                },
+            )? as u32,
             condense: 0,
             ..HwpxParaShape::default()
         }));
     }
 
-    for tab in &registry.tabs {
-        store.push_tab(tab.clone());
+    for (index, mut tab) in tabs.into_iter().enumerate() {
+        tab.id = index as u32;
+        store.push_tab(tab);
     }
 
     store.push_border_fill(HwpxBorderFill::default_page_border());
@@ -1826,14 +1864,13 @@ impl StyleLookup for HwpxStyleStore {
 
     fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
         let cs = self.char_shapes.get(id.get())?;
-        let font = self.fonts.iter().find(|f| {
-            f.lang == "HANGUL" && usize::try_from(f.id).ok() == Some(cs.font_ref.hangul.get())
-        })?;
+        let font =
+            self.fonts.iter().filter(|f| f.lang == "HANGUL").nth(cs.font_ref.hangul.get())?;
         Some(font.face_name.as_str())
     }
 
     fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str> {
-        // fontRef 인덱스는 언어 그룹-로컬 — (lang, id) 쌍으로 정확 조회한다
+        // fontRef 인덱스는 언어 그룹-로컬 — (lang, position)으로 조회한다
         // hangul 축을 먼저 넣어 [0] 이 char_font_name 과
         // 일치하게 한다 (양쪽 다 해석될 때).
         let Some(cs) = self.char_shapes.get(id.get()) else {
@@ -1850,8 +1887,7 @@ impl StyleLookup for HwpxStyleStore {
         ];
         let mut out: Vec<&str> = Vec::new();
         for (lang, idx) in axes {
-            let Some(font) = self.fonts.iter().find(|f| f.lang == lang && f.id as usize == idx)
-            else {
+            let Some(font) = self.fonts.iter().filter(|f| f.lang == lang).nth(idx) else {
                 continue; // 그룹 미존재/미등록 축은 판정에서 제외 (거짓 불일치 방지)
             };
             if !out.contains(&font.face_name.as_str()) {
@@ -1896,7 +1932,7 @@ impl StyleLookup for HwpxStyleStore {
         if ps.heading_type != HeadingType::Bullet {
             return None;
         }
-        let bullet = self.iter_bullets().find(|bullet| bullet.id == ps.heading_id_ref)?;
+        let bullet = self.iter_bullets().nth(ps.heading_id_ref.checked_sub(1)? as usize)?;
         bullet.is_checkable().then_some(ps.checked)
     }
 
@@ -2709,11 +2745,11 @@ mod tests {
         assert_eq!(hwpx_ps.tab_pr_id_ref, 3);
 
         let tabs: Vec<_> = store.iter_tabs().cloned().collect();
-        assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].id, 3);
-        assert_eq!(tabs[0].stops.len(), 1);
+        assert_eq!(tabs.len(), 4);
+        assert_eq!(tabs[3].id, 3);
+        assert_eq!(tabs[3].stops.len(), 1);
         assert_eq!(
-            tabs[0].stops[0].position,
+            tabs[3].stops[0].position,
             hwpforge_core::ParagraphMeasure::HwpUnit(HwpUnit::new(15000).unwrap())
         );
     }
@@ -2745,7 +2781,7 @@ mod tests {
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
         assert_eq!(hwpx_ps.heading_type, HeadingType::Number);
-        assert_eq!(hwpx_ps.heading_id_ref, 42);
+        assert_eq!(hwpx_ps.heading_id_ref, 1);
         assert_eq!(hwpx_ps.heading_level, 2);
     }
 
@@ -3076,6 +3112,7 @@ mod tests {
 
     #[test]
     fn push_user_border_fill() {
+        // 이것을 실패시키는 것: push/get이 위치 1 대신 공개 label 4를 사용.
         let mut store = HwpxStyleStore::new();
         let bf = HwpxBorderFill {
             id: 4,
@@ -3101,9 +3138,9 @@ mod tests {
             image_fill: None,
         };
         let returned_id = store.push_border_fill(bf);
-        assert_eq!(returned_id, 4);
+        assert_eq!(returned_id, 1);
         assert_eq!(store.border_fill_count(), 1);
-        let fetched = store.border_fill(4).unwrap();
+        let fetched = store.border_fill(returned_id).unwrap();
         assert_eq!(fetched.left.line_type, "DASH");
         assert_eq!(fetched.left.width, "0.2 mm");
     }
@@ -3606,13 +3643,13 @@ mod tests {
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 7,
+            heading_id_ref: 1,
             checked: true,
             ..Default::default()
         });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Bullet,
-            heading_id_ref: 8,
+            heading_id_ref: 2,
             checked: true,
             ..Default::default()
         });

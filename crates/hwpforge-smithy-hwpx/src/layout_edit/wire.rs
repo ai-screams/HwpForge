@@ -318,21 +318,70 @@ struct Definitions {
 
 impl Definitions {
     fn new(header: &Node) -> Self {
-        fn index(n: &Node, language: &str, into: &mut HashMap<Key, Option<Node>>) {
+        fn index(
+            n: &Node,
+            language: &str,
+            into: &mut HashMap<Key, Option<Node>>,
+            counts: &mut HashMap<String, u32>,
+        ) {
             let language = if n.name == "fontface" { n.attr("lang") } else { language };
             if n.attrs.contains_key("id") {
                 let kind =
                     if n.name == "font" { format!("font:{language}") } else { n.name.clone() };
-                into.entry((kind, n.attr("id").into()))
-                    .and_modify(|v| *v = None)
-                    .or_insert_with(|| Some(n.clone()));
+                // Hancom W3: definition labels do not select the definition.
+                let id = if matches!(
+                    n.name.as_str(),
+                    "font"
+                        | "charPr"
+                        | "paraPr"
+                        | "style"
+                        | "tabPr"
+                        | "borderFill"
+                        | "numbering"
+                        | "bullet"
+                        | "memoPr"
+                        | "trackChange"
+                        | "trackChangeAuthor"
+                ) {
+                    let base = u32::from(matches!(
+                        n.name.as_str(),
+                        "borderFill"
+                            | "numbering"
+                            | "bullet"
+                            | "memoPr"
+                            | "trackChange"
+                            | "trackChangeAuthor"
+                    ));
+                    let position = counts.entry(kind.clone()).or_insert(base);
+                    let id = position.to_string();
+                    *position += 1;
+                    id
+                } else {
+                    n.attr("id").into()
+                };
+                into.entry((kind, id)).and_modify(|v| *v = None).or_insert_with(|| Some(n.clone()));
             }
             for child in &n.children {
-                index(child, language, into);
+                index(child, language, into, counts);
             }
         }
         let mut nodes = HashMap::new();
-        index(header, "", &mut nodes);
+        index(header, "", &mut nodes, &mut HashMap::new());
+        let style_count = nodes.keys().filter(|(kind, _)| kind == "style").count();
+        for ((kind, position), node) in &mut nodes {
+            if kind == "style" {
+                if let Some(node) = node {
+                    if node
+                        .attr("nextStyleIDRef")
+                        .parse::<usize>()
+                        .is_ok_and(|id| id >= style_count)
+                    {
+                        // Same explicit decoder recovery for Hancom's stale nextStyleIDRef.
+                        node.attrs.insert("nextStyleIDRef".into(), position.clone());
+                    }
+                }
+            }
+        }
         let (components, order) = components(&nodes);
         let mut definitions = Self {
             nodes,
@@ -1144,8 +1193,8 @@ mod tests {
     // 이것을 실패시키는 것: 참조 속성 대신 Core 이름 목록으로만 의존성을 구성하기.
     #[test]
     fn emitted_reference_graph_covers_transitive_and_unknown_references() {
-        let h = "<head><style id='7' charPrIDRef='3'/><charPr id='3' borderFillIDRef='5'><fontRef latin='2'/></charPr><fontface lang='LATIN'><font id='2' face='Font'/></fontface><borderFill id='5'/></head>";
-        let body = "<p styleIDRef='7'><compose><charPr prIDRef='3'/><charPr prIDRef='4294967295'/></compose></p>";
+        let h = "<head><style id='7' charPrIDRef='0'/><charPr id='3' borderFillIDRef='1'><fontRef latin='0'/></charPr><fontface lang='LATIN'><font id='2' face='Font'/></fontface><borderFill id='5'/></head>";
+        let body = "<p styleIDRef='0'><compose><charPr prIDRef='0'/><charPr prIDRef='4294967295'/></compose></p>";
         let (base, _) = fingerprint(h, body);
         assert!(base.resolved);
         for changed in [
@@ -1161,7 +1210,7 @@ mod tests {
     // 이것을 실패시키는 것: nextStyle 순환을 누락하거나 모든 순환을 미해결로 버리기.
     #[test]
     fn cyclic_definitions_include_every_member_and_external_dependency() {
-        let h = "<head><style id='0' nextStyleIDRef='1'/><style id='1' nextStyleIDRef='0' charPrIDRef='2'/><charPr id='2' height='1000'/></head>";
+        let h = "<head><style id='0' nextStyleIDRef='1'/><style id='1' nextStyleIDRef='0' charPrIDRef='0'/><charPr id='2' height='1000'/></head>";
         let changed = h.replace("1000", "2000");
         for id in [0, 1] {
             let body = format!("<p styleIDRef='{id}'/>");
@@ -1171,19 +1220,17 @@ mod tests {
         }
     }
 
-    // 이것을 실패시키는 것: 글꼴 언어·명시적 ID를 무시하거나 중복 정의를 허용하기.
+    // 이것을 실패시키는 것: 글꼴 언어별 위치를 무시하거나 id 중복으로 유효 위치를 거부하기(한컴 실측).
     #[test]
-    fn emitted_ids_fonts_and_duplicates_are_resolved_by_wire_identity() {
+    fn emitted_ids_fonts_and_duplicates_are_resolved_by_position() {
         let h = "<head><charPr id='7'><fontRef latin='0'/></charPr><fontface lang='HANGUL'><font id='0' face='K'/></fontface><fontface lang='LATIN'><font id='0' face='L'/></fontface></head>";
-        let body = "<run charPrIDRef='7'/>";
+        let body = "<run charPrIDRef='0'/>";
         let base = fingerprint(h, body).0;
         assert!(base.resolved);
         assert_eq!(base.hash, fingerprint(&h.replace("face='K'", "face='Changed'"), body).0.hash);
         assert_ne!(base.hash, fingerprint(&h.replace("face='L'", "face='Changed'"), body).0.hash);
-        assert!(
-            !fingerprint(&h.replace("face='L'/>", "face='L'/><font id='0'/>"), body).0.resolved
-        );
-        assert!(!fingerprint(&h.replace("id='7'", "id='8'"), body).0.resolved);
+        assert!(fingerprint(&h.replace("face='L'/>", "face='L'/><font id='0'/>"), body).0.resolved);
+        assert_eq!(base.hash, fingerprint(&h.replace("id='7'", "id='8'"), body).0.hash);
     }
 
     // 이것을 실패시키는 것: run마다 정의 또는 글꼴 지문을 재계산하기.
@@ -1194,7 +1241,7 @@ mod tests {
         let memo = defs.memo.clone();
         let evaluated = defs.evaluated;
         for _ in 0..10000 {
-            assert!(defs.stamp(&node("<run charPrIDRef='7'/>"), false).0.resolved);
+            assert!(defs.stamp(&node("<run charPrIDRef='0'/>"), false).0.resolved);
         }
         assert_eq!(memo.len(), 2);
         assert_eq!(defs.memo.len(), memo.len());
@@ -1234,7 +1281,7 @@ mod tests {
     #[test]
     fn numbering_resolves_explicit_implicit_and_unresolved_style_dependencies() {
         for kind in ["OUTLINE", "NUMBER"] {
-            let h = format!("<head><style id='0' paraPrIDRef='7'/><paraPr id='7'><heading type='{kind}' idRef='1'/></paraPr><numbering id='1'/></head>");
+            let h = format!("<head><style id='0' paraPrIDRef='0'/><paraPr id='7'><heading type='{kind}' idRef='1'/></paraPr><numbering id='1'/></head>");
             let result = fingerprint(&h, "<p styleIDRef='0'/>");
             assert!(result.0.resolved && result.1.numbering);
             assert!(!fingerprint(&h, "<p styleIDRef='999'/>").0.resolved);
@@ -1289,21 +1336,19 @@ mod canonical_tests {
     // 이것을 실패시키는 것: 원시 ID 또는 SCC 정렬 순서를 해시에 포함하거나 순환의 진입점을 합치기.
     #[test]
     fn canonical_definition_renumbering_preserves_rooted_reference_relationships() {
-        let a = "<head><style id='1' nextStyleIDRef='2' name='A'/><style id='2' nextStyleIDRef='1' name='B'/><charPr id='3' height='1000'/></head>";
-        let b = "<head><style id='90' nextStyleIDRef='4' name='A'/><style id='4' nextStyleIDRef='90' name='B'/><charPr id='20' height='1000'/></head>";
-        let original = stamp(a, "<p styleIDRef='1'><run charPrIDRef='3'/></p>");
+        // 한컴 실측: 정의 id만 바꾸면 의미 동일, 참조는 항상 위치다.
+        let a = "<head><style id='1' nextStyleIDRef='1' name='A'/><style id='2' nextStyleIDRef='0' name='B'/><charPr id='3' height='1000'/></head>";
+        let b = "<head><style id='90' nextStyleIDRef='1' name='A'/><style id='4' nextStyleIDRef='0' name='B'/><charPr id='20' height='1000'/></head>";
+        let body = "<p styleIDRef='0'><run charPrIDRef='0'/></p>";
+        let original = stamp(a, body);
         assert!(original.resolved);
-        assert_eq!(original.hash, stamp(b, "<p styleIDRef='90'><run charPrIDRef='20'/></p>").hash);
-        assert_ne!(original.hash, stamp(b, "<p styleIDRef='4'><run charPrIDRef='20'/></p>").hash);
+        assert_eq!(original.hash, stamp(b, body).hash);
+        assert_ne!(original.hash, stamp(b, "<p styleIDRef='1'><run charPrIDRef='0'/></p>").hash);
         assert_ne!(
             original.hash,
-            stamp(
-                &b.replace("nextStyleIDRef='90'", "nextStyleIDRef='4'"),
-                "<p styleIDRef='90'><run charPrIDRef='20'/></p>"
-            )
-            .hash
+            stamp(&b.replace("nextStyleIDRef='0'", "nextStyleIDRef='1'"), body).hash
         );
-        assert!(!stamp(b, "<p styleIDRef='1'/>").resolved);
+        assert!(!stamp(b, "<p styleIDRef='90'/>").resolved);
     }
 
     // 이것을 실패시키는 것: 문서 입력 감지를 IDRef 접미사에만 의존하기.

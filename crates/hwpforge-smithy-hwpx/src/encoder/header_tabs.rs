@@ -1,6 +1,6 @@
 //! Tab property XML helpers for `header.xml`.
 
-use hwpforge_core::{TabDef, TabStop};
+use hwpforge_core::TabStop;
 
 use crate::error::HwpxResult;
 use crate::schema::header::HxTabItem;
@@ -8,10 +8,9 @@ use crate::style_store::HwpxStyleStore;
 
 /// Builds `<hh:tabProperties>` XML from the store's effective tab definitions.
 ///
-/// The emitted list always includes the 3 built-in Hancom definitions
-/// (`id=0..=2`) and merges any explicit overrides/custom tabs from the store.
+/// The header boundary has already numbered and supplemented these positions.
 pub(super) fn build_tab_properties_xml(store: &HwpxStyleStore) -> HwpxResult<String> {
-    let tabs = TabDef::merged_with_defaults(store.iter_tabs());
+    let tabs: Vec<_> = store.iter_tabs().collect();
 
     let count = tabs.len();
     let mut xml = format!(r#"<hh:tabProperties itemCnt="{count}">"#);
@@ -83,11 +82,15 @@ mod tests {
     use super::*;
     use hwpforge_blueprint::registry::StyleRegistry;
     use hwpforge_blueprint::template::Template;
+    use hwpforge_core::TabDef;
     use hwpforge_foundation::{HwpUnit, TabAlign, TabLeader};
 
     #[test]
     fn build_tab_properties_xml_merges_defaults_and_explicit_switch_items() {
         let mut store = HwpxStyleStore::new();
+        for tab in TabDef::defaults() {
+            store.push_tab(tab);
+        }
         store.push_tab(TabDef {
             id: 3,
             auto_tab_left: false,
@@ -153,6 +156,9 @@ tabs:
     #[test]
     fn fix1_build_tab_properties_xml_preserves_negative_hwpunit() {
         let mut store = HwpxStyleStore::new();
+        for tab in TabDef::defaults() {
+            store.push_tab(tab);
+        }
         store.push_tab(TabDef {
             id: 3,
             auto_tab_left: false,

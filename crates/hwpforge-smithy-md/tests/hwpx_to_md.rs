@@ -282,7 +282,7 @@ fn heading_detection_uses_outline_para_shape_even_for_custom_style_names() {
 fn numbered_para_shape_beats_heading_like_style_name() {
     let char_prs = vec![char_pr_xml(0, 1000)];
     let para_prs = vec![
-        para_pr_xml(0, Some(r#"<heading type="NUMBER" idRef="2" level="0"/>"#)),
+        para_pr_xml(0, Some(r#"<heading type="NUMBER" idRef="1" level="0"/>"#)),
         para_pr_xml(1, None),
     ];
     let styles =

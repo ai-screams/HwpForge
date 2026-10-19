@@ -422,6 +422,7 @@ impl HwpxStructuralEditor {
             let out = splice_paragraphs(&xml, map, &indices, None)?;
             package.replace_text_entry(&path, out);
         }
+        normalize_header_for_edit(&mut package, &d0)?;
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
@@ -755,6 +756,7 @@ impl HwpxStructuralEditor {
         let out =
             splice_paragraphs(&xml, map, &[], Some((insert_index, texts.len(), &new_para_bytes)))?;
         package.replace_text_entry(&path, out);
+        normalize_header_for_edit(&mut package, &d0)?;
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify ──
@@ -770,6 +772,25 @@ impl HwpxStructuralEditor {
 
         Ok(crate::diagnostics::WithCodecWarnings::new(bytes, decode_warnings, encode_warnings))
     }
+}
+
+// Admission has already validated the original definitions and proved the
+// header round-trips. Body splicing keeps positional references unchanged.
+fn normalize_header_for_edit(
+    package: &mut RawPackage,
+    decoded: &HwpxDocument,
+) -> Result<(), StructuralEditError> {
+    if decoded.requires_header_normalization() {
+        let sections = decoded.document.sections();
+        let header = crate::encoder::header::encode_header(
+            &decoded.style_store,
+            sections.len() as u32,
+            sections.first().and_then(|s| s.begin_num.as_ref()),
+        )
+        .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        package.replace_text_entry("Contents/header.xml", header);
+    }
+    Ok(())
 }
 
 /// New encoder output only. Original-document positions come exclusively from

@@ -15,7 +15,7 @@ fn margin(value: i32, unit: &str) -> String {
 }
 fn head(payload: &str) -> String {
     format!(
-        r#"<head><refList><paraProperties><paraPr id="7">{payload}</paraPr></paraProperties></refList></head>"#
+        r#"<head><refList><paraProperties><paraPr id="0">{payload}</paraPr></paraProperties></refList></head>"#
     )
 }
 fn branch(payload: &str) -> String {
@@ -147,7 +147,7 @@ fn w1_line_spacing_separate_scale_and_odd_output_error() {
     .is_err());
 }
 #[test]
-fn w1_output_packs_both_units_and_preserves_source_id() {
+fn w3_output_packs_both_units_and_numbers_positions() {
     // 이것을 실패시키는 것: 변이 7 — default=case 방출.
     for (value, unit, raw) in
         [(1000, "CHAR", 2001), (-750, "CHAR", -1499), (1000, "HWPUNIT", 2000), (0, "CHAR", 1)]
@@ -158,7 +158,7 @@ fn w1_output_packs_both_units_and_preserves_source_id() {
         let output = crate::encoder::header::encode_header(&store, 1, None).unwrap();
         assert!(output.contains(&format!(r#"value="{raw}" unit="HWPUNIT""#)), "{output}");
         assert!(output.contains(&format!(r#"value="{value}" unit="{unit}""#)), "{output}");
-        assert!(output.contains(r#"paraPr id="7""#));
+        assert!(output.contains(r#"paraPr id="0""#));
     }
     assert!(crate::paragraph_measure::encode_line_spacing(3, LineSpacingType::Fixed).is_err());
 }
@@ -234,7 +234,7 @@ fn fix2_margin_xml_cannot_wrap_into_another_valid_value() {
                 payload,
             ] {
                 let err = parse_header(&head(&xml)).unwrap_err().to_string();
-                assert!(err.contains("paraPr 7.left"), "{xml}: {err}");
+                assert!(err.contains("paraPr 0.left"), "{xml}: {err}");
                 assert!(err.contains("range"), "{err}");
             }
         }
@@ -247,12 +247,12 @@ fn fix2_margin_xml_cannot_wrap_into_another_valid_value() {
 fn fix2_case_only_tabs_warn_with_definition_and_field() {
     // 이것을 실패시키는 것: case-only 탭 default 생성 경고 삭제.
     let xml = format!(
-        r#"<head><refList><tabProperties><tabPr id="19"><switch>{}</switch></tabPr></tabProperties></refList></head>"#,
+        r#"<head><refList><tabProperties><tabPr id="0"><switch>{}</switch></tabPr></tabProperties></refList></head>"#,
         branch(r#"<tabItem pos="1000" type="LEFT" leader="NONE" unit="CHAR"/>"#)
     );
     let parsed = parse_header(&xml).unwrap();
     assert!(parsed.warnings.iter().any(|w| matches!(w,
-        super::DecodeWarning::ParagraphMeasureNormalized { definition: "tabPr", id: 19, field, reason }
+        super::DecodeWarning::ParagraphMeasureNormalized { definition: "tabPr", id: 0, field, reason }
         if field == "stops" && reason.contains("case-only"))));
     assert_eq!(
         parsed.style_store.iter_tabs().next().unwrap().stops[0]
@@ -270,7 +270,7 @@ fn fix2_direct_line_spacing_warns_with_definition_and_field() {
     let parsed =
         parse_header(&head(r#"<lineSpacing type="FIXED" value="2000" unit="HWPUNIT"/>"#)).unwrap();
     assert!(parsed.warnings.iter().any(|w| matches!(w,
-        super::DecodeWarning::ParagraphMeasureNormalized { definition: "paraPr", id: 7, field, reason }
+        super::DecodeWarning::ParagraphMeasureNormalized { definition: "paraPr", id: 0, field, reason }
         if field == "lineSpacing" && reason.contains("direct"))));
     assert_eq!(parsed.style_store.para_shape(ParaShapeIndex::new(0)).unwrap().line_spacing, 2000);
 }
@@ -280,37 +280,36 @@ fn fix3_empty_supported_tab_case_is_authoritative() {
     // 이것을 실패시키는 것: 빈 case 거부, default 우선, 개수 차이 경고 삭제.
     for default in ["", r#"<tabItem pos="2000"/>"#, r#"<tabItem pos="1" unit="INVALID"/>"#] {
         let xml = format!(
-            r#"<head><refList><tabProperties><tabPr id="99"><switch>{}<default>{default}</default></switch></tabPr></tabProperties></refList></head>"#,
+            r#"<head><refList><tabProperties><tabPr id="0"><switch>{}<default>{default}</default></switch></tabPr></tabProperties></refList></head>"#,
             branch("")
         );
         let parsed = parse_header(&xml).unwrap();
         let tab = parsed.style_store.iter_tabs().next().unwrap();
-        assert_eq!(tab.id, 99);
+        assert_eq!(tab.id, 0);
         assert!(tab.stops.is_empty());
         assert_eq!(parsed.warnings.len(), usize::from(!default.is_empty()));
         if !default.is_empty() {
             assert!(
                 matches!(&parsed.warnings[0], super::DecodeWarning::ParagraphMeasureNormalized {
-                definition: "tabPr", id: 99, field, reason,
+                definition: "tabPr", id: 0, field, reason,
             } if field == "stops" && reason.contains("default stop count differs"))
             );
         }
         let output = crate::encoder::header::encode_header(&parsed.style_store, 1, None).unwrap();
         let after = parse_header(&output).unwrap();
-        let tab = after.style_store.iter_tabs().find(|t| t.id == 99).unwrap();
+        let tab = after.style_store.iter_tabs().find(|t| t.id == 0).unwrap();
         assert!(tab.stops.is_empty());
     }
 }
 
-// 이것을 실패시키는 것: HeaderFidelity를 source_id/배열 위치로 조회하거나,
+// 이것을 실패시키는 것: HeaderFidelity를 원본 ID/배열 위치로 별도 조회하거나,
 // setter·Clone·JSON 중 한 경로에서 fontLineHeight를 버리는 것.
 #[test]
-fn w2fix1_font_line_height_rust_clone_without_source_id() {
+fn w3_font_line_height_rust_clone_at_new_position() {
     let mut store = HwpxStyleStore::new();
     let original = store.push_para_shape(HwpxParaShape::default());
     store.set_para_font_line_height(original, 1).unwrap();
-    let mut copy = store.para_shape(original).unwrap().clone();
-    copy.source_id = None;
+    let copy = store.para_shape(original).unwrap().clone();
     let clone = store.push_para_shape(copy);
     store.set_para_font_line_height(original, 0).unwrap();
     let json = serde_json::to_string(&store).unwrap();
@@ -329,7 +328,7 @@ fn w2fix1_measure_normalization_compares_encoder_payloads() {
     let mut store = HwpxStyleStore::new();
     store.push_para_shape(HwpxParaShape::default());
     let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
-    assert!(!parse_header(&xml).unwrap().requires_measure_normalization);
+    assert!(!parse_header(&xml).unwrap().requires_header_normalization);
     for change in [
         "direct-margin",
         "direct-line",
@@ -405,7 +404,7 @@ fn w2fix1_measure_normalization_compares_encoder_payloads() {
         let xml = crate::wire_xml::normalize_attr_control_whitespace(&xml);
         let parsed = parse_header(&xml).unwrap();
         assert_eq!(
-            parsed.requires_measure_normalization,
+            parsed.requires_header_normalization,
             !matches!(change, "split" | "unrelated"),
             "{change}"
         );
@@ -429,10 +428,11 @@ fn w2fix1_tab_normalization_compares_encoder_payloads() {
         }],
     });
     let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
-    assert!(!parse_header(&xml).unwrap().requires_measure_normalization);
+    assert!(!parse_header(&xml).unwrap().requires_header_normalization);
     for change in ["direct", "empty", "case-only", "default-only", "value", "unit", "count"] {
         let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
-        let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[3];
+        // W3: the sole explicit definition occupies position 0, irrespective of id=3.
+        let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[0];
         let sw = &mut tab.switches[0];
         match change {
             "direct" => {
@@ -454,6 +454,6 @@ fn w2fix1_tab_normalization_compares_encoder_payloads() {
         let xml = quick_xml::se::to_string(&head).unwrap();
         let parsed =
             parse_header(&crate::wire_xml::normalize_attr_control_whitespace(&xml)).unwrap();
-        assert!(parsed.requires_measure_normalization, "{change}");
+        assert!(parsed.requires_header_normalization, "{change}");
     }
 }

@@ -53,16 +53,8 @@ impl<'a> Index<'a> {
             let mut items = HashMap::new();
             for (i, value) in store[kind].as_array().into_iter().flatten().enumerate() {
                 work.charge();
-                // Core char/para/style references are branded positions.
-                let id = if matches!(kind, "char_shapes" | "para_shapes" | "styles") {
-                    Some(i as u64)
-                } else {
-                    value["id"].as_u64()
-                };
-                if let Some(id) = id {
-                    // Duplicate IDs are ambiguous even when definitions match.
-                    items.entry(id).and_modify(|v| *v = None).or_insert(Some(value));
-                }
+                let base = u64::from(matches!(kind, "border_fills" | "numberings" | "bullets"));
+                items.insert(i as u64 + base, Some(value));
             }
             definitions.insert(kind, items);
         }
@@ -70,14 +62,10 @@ impl<'a> Index<'a> {
         let mut first_language = None;
         for font in store["fonts"].as_array().into_iter().flatten() {
             work.charge();
-            if let (Some(lang), Some(id)) = (font["lang"].as_str(), font["id"].as_u64()) {
+            if let Some(lang) = font["lang"].as_str() {
                 first_language.get_or_insert(lang);
-                fonts
-                    .entry(lang)
-                    .or_default()
-                    .entry(id)
-                    .and_modify(|v| *v = None)
-                    .or_insert(Some(font));
+                let group = fonts.entry(lang).or_default();
+                group.insert(group.len() as u64, Some(font));
             }
         }
         Self { definitions, fonts, first_language }
@@ -291,7 +279,9 @@ mod tests {
         let a = store();
         let mut b = a.clone();
         b["fonts"].as_array_mut().unwrap().reverse();
-        assert!(Styles::new(&a, &b).same("char_shapes", 0));
+        // 한컴 실측: 언어 내부 순서를 뒤집으면 같은 위치가 다른 글꼴이다.
+        assert!(!Styles::new(&a, &b).same("char_shapes", 0));
+        b = a.clone();
         let font_id = a["char_shapes"][0]["font_ref"]["latin"].clone();
         let fonts = b["fonts"].as_array_mut().unwrap();
         let font = fonts.iter_mut().find(|f| f["lang"] == "LATIN" && f["id"] == font_id).unwrap();
@@ -301,7 +291,8 @@ mod tests {
         let duplicate =
             fonts.iter().find(|f| f["lang"] == "LATIN" && f["id"] == font_id).unwrap().clone();
         fonts.push(duplicate);
-        assert!(!Styles::new(&b, &b).same("char_shapes", 0));
+        // 한컴 실측: 중복 id는 새 위치일 뿐 기존 참조를 모호하게 하지 않는다.
+        assert!(Styles::new(&b, &b).same("char_shapes", 0));
         b["fonts"] = json!([]);
         assert!(!Styles::new(&b, &b).same("char_shapes", 0));
     }

@@ -1,50 +1,28 @@
-//! Wire IDs are registered before any references are resolved.
+//! Header references are zero/one-based list positions (Hancom W3 probes).
 use crate::paragraph_measure::invalid;
 use crate::{HwpxResult, HwpxStyleStore};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, StyleIndex};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
-/// Registered wire IDs and the shared strict reference resolver.
+/// Registered positions and the shared strict reference resolver.
 #[doc(hidden)]
 pub struct HeaderReferences {
-    chars: BTreeMap<u32, usize>,
-    paras: BTreeMap<u32, usize>,
-    styles: BTreeMap<u32, usize>,
-    numberings: BTreeSet<u32>,
-    pub(crate) memos: BTreeSet<u32>,
-    pub(crate) track_changes: BTreeSet<u32>,
-    pub(crate) track_change_authors: BTreeSet<u32>,
-    pub(crate) char_ids: Vec<u32>,
-    pub(crate) para_ids: Vec<u32>,
-    pub(crate) style_ids: Vec<u32>,
+    chars: usize,
+    paras: usize,
+    pub(crate) styles: usize,
+    numberings: usize,
+    pub(crate) memos: usize,
+    pub(crate) track_changes: usize,
+    pub(crate) track_change_authors: usize,
 }
 
-fn ids(kind: &str, source: impl Iterator<Item = Option<u32>>) -> HwpxResult<Vec<u32>> {
-    let source: Vec<_> = source.collect();
-    let mut used = BTreeSet::new();
-    for id in source.iter().flatten() {
-        if *id == u32::MAX || !used.insert(*id) {
-            return Err(invalid(format!("{kind} duplicate/reserved definition ID {id}")));
-        }
-    }
-    let mut next = 0;
-    source
-        .into_iter()
-        .map(|id| {
-            if let Some(id) = id {
-                return Ok(id);
-            }
-            while used.contains(&next) {
-                next = next.checked_add(1).ok_or_else(|| invalid("ID space exhausted"))?;
-            }
-            if next == u32::MAX {
-                return Err(invalid("ID space exhausted"));
-            }
-            used.insert(next);
-            Ok(next)
-        })
-        .collect()
+fn position(index: usize, count: usize, kind: &str) -> HwpxResult<usize> {
+    lookup((index < count).then_some(index), kind, index)
+}
+
+fn one_based(id: usize, count: usize, kind: &str) -> HwpxResult<()> {
+    lookup((id != 0 && id <= count).then_some(()), kind, id)
 }
 
 fn lookup<T>(value: Option<T>, kind: &str, id: impl std::fmt::Display) -> HwpxResult<T> {
@@ -54,38 +32,34 @@ fn lookup<T>(value: Option<T>, kind: &str, id: impl std::fmt::Display) -> HwpxRe
 impl HeaderReferences {
     /// Register definitions before resolving forward references.
     pub fn build(store: &HwpxStyleStore) -> HwpxResult<Self> {
-        let char_ids = ids("charPr", store.iter_char_shapes().map(|s| s.source_id))?;
-        let para_ids = ids("paraPr", store.iter_para_shapes().map(|s| s.source_id))?;
-        let style_ids = ids("style", store.iter_styles().map(|s| Some(s.id)))?;
-        Ok(Self {
-            chars: char_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect(),
-            paras: para_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect(),
-            styles: style_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect(),
-            numberings: store.iter_numberings().map(|n| n.id).collect(),
-            memos: BTreeSet::new(),
-            track_changes: BTreeSet::new(),
-            track_change_authors: BTreeSet::new(),
-            char_ids,
-            para_ids,
-            style_ids,
-        })
+        let refs = Self {
+            chars: store.char_shape_count(),
+            paras: store.para_shape_count(),
+            styles: store.style_count(),
+            numberings: store.numbering_count(),
+            ..Self::default()
+        };
+        for count in [refs.chars, refs.paras, refs.styles, refs.numberings] {
+            u32::try_from(count).map_err(|_| invalid("definition position exceeds u32"))?;
+        }
+        Ok(refs)
     }
-    /// Resolve an original character definition ID without substitution.
+    /// Resolve an original character definition position without substitution.
     pub fn char_index(&self, id: u32) -> HwpxResult<CharShapeIndex> {
-        lookup(self.chars.get(&id).copied(), "charPr", id).map(CharShapeIndex::new)
+        position(id as usize, self.chars, "charPr").map(CharShapeIndex::new)
     }
-    /// Resolve an original paragraph definition ID without substitution.
+    /// Resolve an original paragraph definition position without substitution.
     pub fn para_index(&self, id: u32) -> HwpxResult<ParaShapeIndex> {
-        lookup(self.paras.get(&id).copied(), "paraPr", id).map(ParaShapeIndex::new)
+        position(id as usize, self.paras, "paraPr").map(ParaShapeIndex::new)
     }
     pub(crate) fn style_index(&self, id: u32) -> HwpxResult<StyleIndex> {
-        lookup(self.styles.get(&id).copied(), "style", id).map(StyleIndex::new)
+        position(id as usize, self.styles, "style").map(StyleIndex::new)
     }
     pub(crate) fn output_ids(&self, kind: &str, index: usize) -> HwpxResult<u32> {
-        let ids = match kind {
-            "charPr" => &self.char_ids,
-            "paraPr" => &self.para_ids,
-            "style" => &self.style_ids,
+        let count = match kind {
+            "charPr" => self.chars,
+            "paraPr" => self.paras,
+            "style" => self.styles,
             _ => unreachable!(),
         };
         // 0.16 public new-document examples register fonts only and use char/para 0.
@@ -94,13 +68,13 @@ impl HeaderReferences {
         // `implicit_zero_decode_gate`, and
         // `body_style_references_check_original_definitions_in_every_container`.
         // 이것을 실패시키는 것: 예외 삭제, 빈 표/0/char·para 한정 조건 각각 제거.
-        if ids.is_empty() && index == 0 && matches!(kind, "charPr" | "paraPr") {
+        if count == 0 && index == 0 && matches!(kind, "charPr" | "paraPr") {
             return Ok(0);
         }
-        lookup(ids.get(index).copied(), kind, index)
+        position(index, count, kind).map(|position| position as u32)
     }
     pub(crate) fn border_fill(store: &HwpxStyleStore, id: u32) -> HwpxResult<()> {
-        lookup(store.border_fill(id).ok(), "cell zone borderFill", id).map(|_| ())
+        one_based(id as usize, store.border_fill_count(), "cell zone borderFill")
     }
 
     /// Check original body border IDs before generating output definitions.
@@ -156,13 +130,16 @@ impl HeaderReferences {
                             continue;
                         }
                         let found = match field {
-                            "authorID" => {
-                                lookup(self.track_change_authors.get(&id), "trackChangeAuthor", id)
-                                    .map(|_| ())
-                            }
+                            "authorID" => one_based(
+                                id as usize,
+                                self.track_change_authors,
+                                "trackChangeAuthor",
+                            )
+                            .map(|_| ()),
                             "charshapeID" => self.char_index(id).map(|_| ()),
                             "parashapeID" => self.para_index(id).map(|_| ()),
-                            _ => lookup(self.track_changes.get(&id), "trackChange", id).map(|_| ()),
+                            _ => one_based(id as usize, self.track_changes, "trackChange")
+                                .map(|_| ()),
                         };
                         format!(
                             "{}; change tracking and its reference are not carried",
@@ -177,7 +154,7 @@ impl HeaderReferences {
                         if id == 0 {
                             continue;
                         }
-                        let found = lookup(self.numberings.get(&id), "section numbering", id);
+                        let found = one_based(id as usize, self.numberings, "section numbering");
                         if id == 1 && found.is_ok() {
                             continue;
                         }
@@ -193,7 +170,7 @@ impl HeaderReferences {
                         if id == 0 {
                             continue;
                         }
-                        let found = lookup(self.memos.get(&id), "memoPr", id);
+                        let found = one_based(id as usize, self.memos, "memoPr");
                         format!(
                             "{}; memo shape is unsupported; output selects 0",
                             found.err().map_or_else(
@@ -238,7 +215,7 @@ impl HeaderReferences {
             let id: u32 =
                 value.parse().map_err(|_| invalid(format!("MemoShapeIDRef invalid ID {value}")))?;
             if id != 65535 {
-                let found = lookup(self.memos.get(&id), "memoPr", id);
+                let found = one_based(id as usize, self.memos, "memoPr");
                 warnings.push(crate::DecodeWarning::ContentLost {
                     part: part.into(),
                     path: crate::decoder::ParagraphPath::default(),
@@ -266,23 +243,12 @@ impl HeaderReferences {
             // values here. Preserve it as a wire ID, never use it as an index.
             self.style_index(style.next_style_id_ref)?;
         }
-        let mut fonts = BTreeSet::new();
+        let mut font_counts = BTreeMap::<&str, usize>::new();
         for f in store.iter_fonts() {
-            if !fonts.insert((f.lang.as_str(), f.id)) {
-                return Err(invalid(format!("duplicate font {} ID {}", f.lang, f.id)));
-            }
+            *font_counts.entry(&f.lang).or_default() += 1;
         }
-        // Both decode and output resolve explicit references only in the original
-        // tables. Output supplementation belongs after this validation.
-        let borders: BTreeSet<_> =
-            ids("borderFill", store.iter_border_fills().map(|x| Some(x.id)))?.into_iter().collect();
-        let tabs: BTreeSet<_> =
-            ids("tabPr", store.iter_tabs().map(|x| Some(x.id)))?.into_iter().collect();
-        let numbering: BTreeSet<_> =
-            ids("numbering", store.iter_numberings().map(|x| Some(x.id)))?.into_iter().collect();
-        let bullets: BTreeSet<_> =
-            ids("bullet", store.iter_bullets().map(|x| Some(x.id)))?.into_iter().collect();
-        for c in store.iter_char_shapes() {
+        // Explicit references are checked before output supplementation.
+        for (index, c) in store.iter_char_shapes().enumerate() {
             let f = &c.font_ref;
             for (lang, id) in [
                 ("HANGUL", f.hangul),
@@ -293,41 +259,45 @@ impl HeaderReferences {
                 ("SYMBOL", f.symbol),
                 ("USER", f.user),
             ] {
-                lookup(
-                    u32::try_from(id.get()).ok().and_then(|id| fonts.get(&(lang, id))),
-                    &format!("charPr {:?} font {lang}", c.source_id),
+                position(
                     id.get(),
+                    font_counts.get(lang).copied().unwrap_or(0),
+                    &format!("charPr {:?} font {lang}", index),
                 )?;
             }
             if let Some(b) = c.border_fill_id {
                 if b != 0 {
-                    lookup(borders.get(&b), &format!("charPr {:?} borderFill", c.source_id), b)?;
+                    one_based(
+                        b as usize,
+                        store.border_fill_count(),
+                        &format!("charPr {:?} borderFill", index),
+                    )?;
                 }
             }
         }
-        for p in store.iter_para_shapes() {
+        for (index, p) in store.iter_para_shapes().enumerate() {
             if !hwpforge_core::TabDef::is_builtin_id(p.tab_pr_id_ref) {
-                lookup(
-                    tabs.get(&p.tab_pr_id_ref),
-                    &format!("paraPr {:?} tabPr", p.source_id),
-                    p.tab_pr_id_ref,
+                position(
+                    p.tab_pr_id_ref as usize,
+                    store.tab_count(),
+                    &format!("paraPr {:?} tabPr", index),
                 )?;
             }
             if let Some(b) = p.border_fill_id {
-                lookup(
-                    u32::try_from(b.get()).ok().and_then(|id| borders.get(&id)),
-                    &format!("paraPr {:?} borderFill", p.source_id),
+                one_based(
                     b.get(),
+                    store.border_fill_count(),
+                    &format!("paraPr {:?} borderFill", index),
                 )?;
             }
             use hwpforge_foundation::HeadingType;
             if p.heading_id_ref != 0 {
                 match p.heading_type {
                     HeadingType::Number | HeadingType::Outline => {
-                        lookup(numbering.get(&p.heading_id_ref), "numbering", p.heading_id_ref)?;
+                        one_based(p.heading_id_ref as usize, self.numberings, "numbering")?;
                     }
                     HeadingType::Bullet => {
-                        lookup(bullets.get(&p.heading_id_ref), "bullet", p.heading_id_ref)?;
+                        one_based(p.heading_id_ref as usize, store.bullet_count(), "bullet")?;
                     }
                     _ => {}
                 }
@@ -351,16 +321,35 @@ mod tests {
     use super::*;
     use crate::{HwpxCharShape, HwpxParaShape, HwpxStyle};
     #[test]
+    fn fix8b_position_ranges_preserve_boundaries() {
+        // 이것을 실패시키는 것: 0/1 시작 혼동, 상한 포함/제외 뒤집기, usize 절삭.
+        for count in [0, 1, 3] {
+            for id in [0, 1, 2, 3, 4, usize::MAX] {
+                assert_eq!(position(id, count, "charPr").is_ok(), id < count);
+                assert_eq!(one_based(id, count, "numbering").is_ok(), id > 0 && id <= count);
+            }
+        }
+        let refs = HeaderReferences::build(&HwpxStyleStore::new()).unwrap();
+        for kind in ["charPr", "paraPr"] {
+            assert_eq!(refs.output_ids(kind, 0).unwrap(), 0);
+            assert!(refs.output_ids(kind, 1).is_err());
+        }
+        assert!(refs.output_ids("style", 0).is_err());
+        assert!(refs.char_index(0).is_err());
+        assert!(refs.para_index(0).is_err());
+    }
+
+    #[test]
     fn new_document_zero_exception_does_not_replace_original_ids() {
         // 이것을 실패시키는 것: 예외의 빈 표 조건 제거 또는 원본 lookup까지 0 허용.
         let mut store = HwpxStyleStore::with_default_fonts("바탕");
-        store.push_char_shape(crate::HwpxCharShape { source_id: Some(7), ..Default::default() });
-        store.push_para_shape(crate::HwpxParaShape { source_id: Some(9), ..Default::default() });
+        store.push_char_shape(crate::HwpxCharShape::default());
+        store.push_para_shape(crate::HwpxParaShape::default());
         let refs = HeaderReferences::build(&store).unwrap();
-        assert!(refs.char_index(0).is_err());
-        assert!(refs.para_index(0).is_err());
-        assert_eq!(refs.output_ids("charPr", 0).unwrap(), 7);
-        assert_eq!(refs.output_ids("paraPr", 0).unwrap(), 9);
+        assert_eq!(refs.char_index(0).unwrap().get(), 0);
+        assert_eq!(refs.para_index(0).unwrap().get(), 0);
+        assert_eq!(refs.output_ids("charPr", 0).unwrap(), 0);
+        assert_eq!(refs.output_ids("paraPr", 0).unwrap(), 0);
         for kind in ["charPr", "paraPr"] {
             for index in [1, 2, 3] {
                 assert!(refs.output_ids(kind, index).is_err());
@@ -389,34 +378,23 @@ mod tests {
     }
 
     #[test]
-    fn w1_sparse_reordered_forward_references_and_new_ids() {
+    fn w3_positions_ignore_style_labels_and_reject_out_of_range() {
+        // 이것을 실패시키는 것: 한컴 실측과 반대로 id로 조회/원본 id 출력.
         let mut store = HwpxStyleStore::new();
-        for id in [7, 3, 0] {
-            store.push_char_shape(HwpxCharShape { source_id: Some(id), ..Default::default() });
+        for _ in 0..4 {
+            store.push_char_shape(HwpxCharShape::default());
         }
-        store.push_char_shape(HwpxCharShape::default());
-        store.push_para_shape(HwpxParaShape { source_id: Some(31), ..Default::default() });
-        store.push_style(HwpxStyle::new(0, "PARA", "base", "base", 0, 0, 1, 1042, 0));
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_style(HwpxStyle::new(9, "PARA", "base", "base", 0, 0, 1, 1042, 0));
         store.push_style(HwpxStyle::new(9, "PARA", "next", "next", 0, 1, 0, 1042, 0));
         let refs = HeaderReferences::build(&store).unwrap();
-        assert_eq!(refs.char_index(7).unwrap().get(), 0);
-        assert_eq!(refs.char_index(0).unwrap().get(), 2);
-        assert_eq!(refs.para_index(31).unwrap().get(), 0);
-        assert_eq!(refs.style_index(9).unwrap().get(), 1);
-        assert_eq!(refs.char_ids, [7, 3, 0, 1]);
-        assert_eq!(refs.output_ids("charPr", 0).unwrap(), 7);
-        assert!(refs.char_index(1_000_000).is_err());
-        assert!(refs.para_index(0).is_err());
-        store.push_char_shape(HwpxCharShape { source_id: Some(7), ..Default::default() });
-        assert!(HeaderReferences::build(&store).is_err());
-    }
-    #[test]
-    fn w1_duplicate_and_reserved_ids_are_not_deduplicated() {
-        assert!(ids("charPr", [Some(7), Some(7)].into_iter()).is_err());
-        assert!(ids("charPr", [Some(u32::MAX)].into_iter()).is_err());
-        assert_eq!(
-            ids("paraPr", [Some(5), None, Some(0), None].into_iter()).unwrap(),
-            [5, 1, 0, 2]
-        );
+        assert_eq!(refs.char_index(3).unwrap().get(), 3);
+        assert_eq!(refs.para_index(0).unwrap().get(), 0);
+        assert_eq!(refs.style_index(1).unwrap().get(), 1);
+        assert_eq!(refs.output_ids("charPr", 3).unwrap(), 3);
+        assert_eq!(refs.output_ids("style", 0).unwrap(), 0);
+        assert!(refs.style_index(9).is_err());
+        assert!(refs.char_index(4).is_err());
+        assert!(refs.para_index(1).is_err());
     }
 }

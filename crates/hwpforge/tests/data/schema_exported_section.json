@@ -5441,7 +5441,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Original `id` attribute from XML.",
+          "description": "Descriptive label; decoding/encoding normalizes it to the zero-based\nposition within its language group.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -5562,15 +5562,6 @@
       "description": "Resolved character properties from `<hh:charPr>`.\n\nAll raw XML strings have been converted to Foundation types.",
       "type": "object",
       "properties": {
-        "source_id": {
-          "description": "Original wire definition ID; absent for newly created definitions.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
         "font_ref": {
           "description": "Per-language font references.",
           "$ref": "#/$defs/HwpxFontRef"
@@ -5722,7 +5713,7 @@
       ]
     },
     "HwpxFontRef": {
-      "description": "Per-language font index references from `<hh:fontRef>`.\n\nEach [`FontIndex`] carries a language-local wire ID, resolved by\n`(language, font.id)`, never a position in the combined font vector.",
+      "description": "Per-language font index references from `<hh:fontRef>`.\n\nEach [`FontIndex`] carries a language-local position, resolved within\nits language group, never in the combined font vector.",
       "type": "object",
       "properties": {
         "hangul": {
@@ -5845,15 +5836,6 @@
       "description": "Resolved paragraph properties from `<hh:paraPr>`.",
       "type": "object",
       "properties": {
-        "source_id": {
-          "description": "Original wire definition ID; absent for newly created definitions.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
         "font_line_height": {
           "type": "integer",
           "format": "uint32",
@@ -6084,7 +6066,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Style ID (from `id` attribute).",
+          "description": "Descriptive label; decoding/encoding normalizes it to the zero-based\ndefinition position.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -6102,19 +6084,19 @@
           "type": "string"
         },
         "para_pr_id_ref": {
-          "description": "Reference to paragraph properties (from `paraPrIDRef`).\nWire ID (inactive for CHAR styles), never a vector index.",
+          "description": "Reference to paragraph properties (from `paraPrIDRef`).\nZero-based paragraph definition position (inactive for CHAR styles).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "char_pr_id_ref": {
-          "description": "Reference to character properties (from `charPrIDRef`).\nWire ID, resolved through the header definition table.",
+          "description": "Reference to character properties (from `charPrIDRef`).\nZero-based character definition position.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
         },
         "next_style_id_ref": {
-          "description": "Wire ID of the next style (from `nextStyleIDRef`), never a vector index.",
+          "description": "Zero-based position of the next style (from `nextStyleIDRef`).",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -6149,7 +6131,7 @@
       "type": "object",
       "properties": {
         "id": {
-          "description": "Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).",
+          "description": "Descriptive ID label. References use the 1-based definition position;\nencoding replaces this label with that position.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0
@@ -6626,6 +6608,7 @@
       "type": "object",
       "properties": {
         "numbering": {
+          "description": "One-based definition position -> head level -> metrics.",
           "type": "object",
           "additionalProperties": false,
           "patternProperties": {
@@ -6641,6 +6624,7 @@
           }
         },
         "bullet": {
+          "description": "One-based definition position -> head level -> metrics.",
           "type": "object",
           "additionalProperties": false,
           "patternProperties": {

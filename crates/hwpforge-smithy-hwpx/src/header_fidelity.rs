@@ -11,8 +11,10 @@ use crate::schema::header::{HxBulletParaHead, HxRefList};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub(crate) struct HeaderFidelity {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// One-based definition position -> head level -> metrics.
     pub numbering: BTreeMap<u32, BTreeMap<u32, HeadMetrics>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// One-based definition position -> head level -> metrics.
     pub bullet: BTreeMap<u32, BTreeMap<u32, HeadMetrics>>,
 }
 
@@ -58,12 +60,12 @@ impl HeaderFidelity {
     }
 
     pub fn capture(&mut self, refs: &HxRefList) {
-        // Keys follow explicit numbering/bullet ids and wire level, not list
-        // order, so callers may reorder definitions without moving metrics.
+        // Keys are one-based definition positions, independent of public id labels.
+        // JSON editors that move/delete definitions must move/delete these entries too.
         macro_rules! capture_heads {
             ($defs:expr, $target:expr, $default:expr) => {
                 if let Some(defs) = $defs {
-                    for def in &defs.items {
+                    for (index, def) in defs.items.iter().enumerate() {
                         for head in &def.para_heads {
                             let metrics = HeadMetrics {
                                 align: head.align.clone(),
@@ -75,7 +77,10 @@ impl HeaderFidelity {
                                 char_pr_id_ref: head.char_pr_id_ref,
                             };
                             if metrics != HeadMetrics::generated($default) {
-                                $target.entry(def.id).or_default().insert(head.level, metrics);
+                                $target
+                                    .entry(index as u32 + 1)
+                                    .or_default()
+                                    .insert(head.level, metrics);
                             }
                         }
                     }

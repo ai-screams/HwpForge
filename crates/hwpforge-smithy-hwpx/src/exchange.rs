@@ -217,23 +217,13 @@ pub fn migrate_legacy_exchange(
                 }
             }
         }
-        // Old style references were array positions. Pin that identity before edits.
-        for kind in ["char_shapes", "para_shapes"] {
-            if let Some(defs) = styles.get_mut(kind).and_then(Value::as_array_mut) {
-                for (i, def) in defs.iter_mut().enumerate() {
-                    if def.get("source_id").is_none_or(Value::is_null) {
-                        def["source_id"] = json!(i);
-                    }
-                }
-            }
-        }
     }
     migrated["format_version"] = json!(FORMAT_VERSION);
     // Validate unit objects and ranges before publishing the migration.
     read_exchange_v2(&mut migrated)?;
     *value = migrated;
     Ok(vec![WarningInfo::new("LEGACY_PARAGRAPH_MEASURES", format!(
-        "버전 없는 JSON의 문단 여백 {}개를 unpack했습니다. 이미 사라진 direct 여백·case 단위는 복구할 수 없습니다. source_id가 없는 정의는 옛 배열 위치이며 원본 ID 복원이 아닙니다. 원본 기반 캐시 보존을 허용하지 않습니다. 원본 HWPX/HWP5에서 to-json을 다시 실행하십시오. 경로: {}",
+        "버전 없는 JSON의 문단 여백 {}개를 unpack했습니다. 이미 사라진 direct 여백·case 단위는 복구할 수 없습니다. 정의 참조는 배열 위치입니다. 원본 기반 캐시 보존을 허용하지 않습니다. 원본 HWPX/HWP5에서 to-json을 다시 실행하십시오. 경로: {}",
         paths.len(), paths.join(", ")
     ))])
 }

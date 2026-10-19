@@ -187,7 +187,7 @@ pub(crate) fn unchanged(
     images: &hwpforge_core::image::ImageStore,
 ) -> HwpxResult<bool> {
     crate::paragraph_measure::validate_measure_output(styles)?;
-    if base.requires_measure_normalization() {
+    if base.requires_header_normalization() {
         return Ok(false);
     }
     if crate::header_references::HeaderReferences::build(styles)?.style_index(0).is_err() {

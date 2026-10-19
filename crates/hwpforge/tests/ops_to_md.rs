@@ -38,9 +38,10 @@ fn w2_all_modes_report_margin_units_and_char_tab_loss() {
     for field in ["margin_left", "margin_right", "indent", "spacing_before", "spacing_after"] {
         value["styles"]["para_shapes"][index][field] = json!({"unit":"char", "value":0});
     }
-    value["styles"]["para_shapes"][index]["tab_pr_id_ref"] = json!(77);
+    let tab_position = value["styles"]["tabs"].as_array().unwrap().len();
+    value["styles"]["para_shapes"][index]["tab_pr_id_ref"] = json!(tab_position);
     value["styles"]["tabs"].as_array_mut().unwrap().push(json!({
-        "id":77, "auto_tab_left":false, "auto_tab_right":false,
+        "id":tab_position, "auto_tab_left":false, "auto_tab_right":false,
         "stops":[{"position":{"unit":"char", "value":250},"align":"Left","leader":"NONE"}]
     }));
     let bytes = from_json(&value.to_string(), &FromJsonOptions::default()).unwrap().bytes;
@@ -59,7 +60,7 @@ fn w2_all_modes_report_margin_units_and_char_tab_loss() {
             "indent",
             "spacing_before",
             "spacing_after",
-            "tabs[77].stops[0].position",
+            &format!("tabs[{tab_position}].stops[0].position"),
         ] {
             assert!(warnings.iter().any(|w| w.message.contains(field)), "{field}: {warnings:?}");
         }

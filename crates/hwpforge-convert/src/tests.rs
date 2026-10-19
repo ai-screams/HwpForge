@@ -3849,7 +3849,7 @@ mod lib_unit_tests {
 
         // 이것을 실패시키는 것: 없는 탭 99를 0으로 바꿔 성공 반환.
         let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
-        assert!(error.contains("paraPr Some(0)") && error.contains("ID 99"), "{error}");
+        assert!(error.contains("paraPr 0") && error.contains("ID 99"), "{error}");
     }
 
     /// Korean "개요 N" style name triggers outline-level override on matching paraPr
@@ -4711,7 +4711,7 @@ fn r5_nested_header_footer_discard_hints_in_final_conversion() {
 
 #[test]
 fn fix2_failed_shape_slots_keep_body_references_through_hwpx() {
-    // 이것을 실패시키는 것: 실패 char/para/style/font 슬롯 압축, source_id 재번호,
+    // 이것을 실패시키는 것: 실패 char/para/style/font 슬롯 압축,
     // 파싱 경고 전파 누락, 실패 슬롯 참조가 뒤 정상 정의로 이동.
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
     use std::io::{Cursor, Read, Write};
@@ -4771,14 +4771,6 @@ fn fix2_failed_shape_slots_keep_body_references_through_hwpx() {
         assert_eq!(para.para_shape_id.get(), id);
         assert_eq!(para.runs[0].char_shape_id.get(), id);
         assert_eq!(para.style_id.unwrap().get(), id);
-        assert_eq!(
-            store.char_shape(CharShapeIndex::new(id)).unwrap().source_id,
-            Some(u32::try_from(id).unwrap())
-        );
-        assert_eq!(
-            store.para_shape(ParaShapeIndex::new(id)).unwrap().source_id,
-            Some(u32::try_from(id).unwrap())
-        );
     }
     assert_eq!(store.char_shape(CharShapeIndex::new(1)).unwrap().height.as_i32(), 0);
     assert_eq!(store.char_shape(CharShapeIndex::new(2)).unwrap().height.as_i32(), 3000);
@@ -4936,4 +4928,82 @@ fn fix4_public_conversion_rejects_damaged_declarations_and_body_borders() {
             assert!(error.contains(expected), "{kind} {id}: {error}");
         }
     }
+}
+
+#[test]
+fn fix8b_empty_unused_numbering_record_preserves_later_numbering_selection() {
+    // 이것을 실패시키는 것: 원본 1번 실패 슬롯 뒤의 heading을 압축 위치로 변환하지 않음.
+    use hwpforge_smithy_hwp5::schema::record::{Record, TagId};
+    use std::io::{Cursor, Read, Write};
+    let original =
+        std::fs::read(fixture_path("user_samples/sample-numbered-list-custom-formats.hwp"))
+            .unwrap();
+    let before = hwpforge_smithy_hwp5::decode_hwp5_to_core(&original).unwrap();
+    assert!(before.style_store.para_shapes.iter().all(|p| p.numbering_bullet_id != 1));
+    let mut file = cfb::CompoundFile::open(Cursor::new(original)).unwrap();
+    let mut header = Vec::new();
+    file.open_stream("/FileHeader").unwrap().read_to_end(&mut header).unwrap();
+    let compressed = header[36] & 1 != 0;
+    let mut info = Vec::new();
+    file.open_stream("/DocInfo").unwrap().read_to_end(&mut info).unwrap();
+    if compressed {
+        let mut data = Vec::new();
+        flate2::read::DeflateDecoder::new(info.as_slice()).read_to_end(&mut data).unwrap();
+        info = data;
+    }
+    let records = Record::parse_stream(&mut info.as_slice()).unwrap();
+    let mut changed = false;
+    let mut info = Vec::new();
+    for record in records {
+        let data = if record.header.tag_id == u16::from(TagId::NumberingDef) && !changed {
+            changed = true;
+            &[][..]
+        } else {
+            &record.data
+        };
+        info.extend(r5_record(u32::from(record.header.tag_id), record.header.level as u32, data));
+    }
+    assert!(changed);
+    if compressed {
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&info).unwrap();
+        info = encoder.finish().unwrap();
+    }
+    file.create_stream("/DocInfo").unwrap().write_all(&info).unwrap();
+    let input = file.into_inner().into_inner();
+    let decoded = hwpforge_smithy_hwp5::decode_hwp5_to_core(&input).unwrap();
+    assert!(decoded.style_store.numberings[0].numbering.is_none());
+    let (bytes, warnings) = hwp5_to_hwpx_bytes(&input).unwrap();
+    assert!(warnings.iter().any(|w| matches!(
+        w,
+        ConvertWarning::Hwp5(Hwp5Warning::ParserFallback { subject: "numbering.slot", .. })
+    )));
+    let output = HwpxDecoder::decode(&bytes).unwrap();
+    let mut checked = 0;
+    for (raw, para) in
+        before.style_store.para_shapes.iter().zip(output.style_store.iter_para_shapes())
+    {
+        if matches!(para.heading_type, HeadingType::Number | HeadingType::Outline)
+            && raw.numbering_bullet_id > 0
+        {
+            assert_eq!(para.heading_id_ref, u32::from(raw.numbering_bullet_id) - 1);
+            let source = before.style_store.numberings[raw.numbering_bullet_id as usize - 1]
+                .numbering
+                .as_ref()
+                .unwrap()
+                .to_core_numbering_def(para.heading_id_ref);
+            assert_eq!(
+                output
+                    .style_store
+                    .iter_numberings()
+                    .nth(para.heading_id_ref as usize - 1)
+                    .unwrap()
+                    .levels,
+                source.levels
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 4);
 }

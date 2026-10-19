@@ -213,9 +213,7 @@ pub fn to_md(hwpx: &[u8], opts: &MdExportOptions) -> Result<MdExportOutput, OpsE
                     ));
                 }
             }
-            if let Some(tab) =
-                decoded.style_store.iter_tabs().find(|tab| tab.id == para.tab_pr_id_ref)
-            {
+            if let Some(tab) = decoded.style_store.iter_tabs().nth(para.tab_pr_id_ref as usize) {
                 for (stop_index, stop) in tab.stops.iter().enumerate() {
                     if stop.position.as_char_count().is_some() {
                         warnings.push(OpsWarning::Md(

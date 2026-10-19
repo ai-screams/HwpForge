@@ -1559,7 +1559,7 @@ fn to_hwpx_style_store_rejects_missing_custom_tab_def() {
 
     // 이것을 실패시키는 것: 없는 탭 참조를 built-in 0으로 대체.
     let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
-    assert!(error.contains("paraPr Some(0)"), "{error}");
+    assert!(error.contains("paraPr 0"), "{error}");
     assert!(error.contains("tabPr reference ID 9"), "{error}");
 }
 
@@ -1575,7 +1575,13 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
         para_shapes: vec![para],
         numberings: vec![],
         bullets: vec![],
-        tab_defs: vec![invalid_tab_slot(3)],
+        // W3: a native slot 3 has preceding slots 0..2; IDs cannot stand in for holes.
+        tab_defs: vec![
+            parsed_tab_slot(0, Hwp5RawTabDef { property: 0, tab_stops: vec![] }),
+            parsed_tab_slot(1, Hwp5RawTabDef { property: 0, tab_stops: vec![] }),
+            parsed_tab_slot(2, Hwp5RawTabDef { property: 0, tab_stops: vec![] }),
+            invalid_tab_slot(3),
+        ],
         styles: vec![],
         border_fills: vec![],
     };
@@ -1583,9 +1589,9 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
     let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
     assert_eq!(hwpx_store.para_shape(ParaShapeIndex::new(0)).unwrap().tab_pr_id_ref, 3);
     let tabs: Vec<_> = hwpx_store.iter_tabs().cloned().collect();
-    assert_eq!(tabs.len(), 1);
-    assert_eq!(tabs[0].id, 3);
-    assert!(tabs[0].stops.is_empty());
+    assert_eq!(tabs.len(), 4);
+    assert_eq!(tabs[3].id, 3);
+    assert!(tabs[3].stops.is_empty());
     assert!(warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ParserFallback { subject, reason }
@@ -1932,6 +1938,7 @@ fn to_hwpx_style_store_materializes_pattern_fill_hatch_style() {
 
 #[test]
 fn to_hwpx_style_store_materializes_gradient_fill() {
+    // 이것을 실패시키는 것: 공개 border 조회를 위치 대신 label로 수행.
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
@@ -1972,7 +1979,7 @@ fn to_hwpx_style_store_materializes_gradient_fill() {
 
     let hwpx_store = crate::hwp5_style_store_to_hwpx(&store).unwrap().0;
     assert!(matches!(
-        hwpx_store.border_fill(4).unwrap().gradient_fill,
+        hwpx_store.border_fill(1).unwrap().gradient_fill,
         Some(ref fill)
             if fill.gradient_type == GradientType::Linear
                 && fill.angle == 90
@@ -1983,7 +1990,7 @@ fn to_hwpx_style_store_materializes_gradient_fill() {
                 && fill.alpha == 0
                 && fill.colors == vec![Color::from_raw(0x00FF0000), Color::from_raw(0x0000FF00)]
     ));
-    assert!(hwpx_store.border_fill(4).unwrap().fill.is_none());
+    assert!(hwpx_store.border_fill(1).unwrap().fill.is_none());
 }
 
 /// G: the gradation's `blur` is HWPX `step` — 0-255 carried, above 255
@@ -2089,7 +2096,7 @@ fn to_hwpx_style_store_image_fill_round_trips_correctly() {
 
     let hwpx_store = crate::hwp5_style_store_to_hwpx(&store).unwrap().0;
     assert!(matches!(
-        hwpx_store.border_fill(4).unwrap().image_fill,
+        hwpx_store.border_fill(1).unwrap().image_fill,
         Some(ref fill)
             if fill.mode == "TILE"
                 && fill.binary_item_id_ref == "BIN0001"
@@ -2098,14 +2105,15 @@ fn to_hwpx_style_store_image_fill_round_trips_correctly() {
                 && fill.effect == "REAL_PIC"
                 && fill.alpha == 0
     ));
-    assert!(hwpx_store.border_fill(4).unwrap().fill.is_none());
+    assert!(hwpx_store.border_fill(1).unwrap().fill.is_none());
     // NOTE: border_fill_image_binary_ids() is pub(crate) in hwpforge-smithy-hwp5
     // and cannot be called from hwpforge-convert tests without adding a new pub item.
     // The assertion is preserved here as a comment for documentation:
     // assert_eq!(store.border_fill_image_binary_ids().into_iter().collect::<Vec<_>>(), vec![1]);
 }
 
-/// A store with one border fill (id 4) whose image fill names `BIN0001`.
+/// A store with one border fill (label 4, position 1) whose image fill names `BIN0001`.
+/// fix8b: public accessors select position 1 even when the descriptive label is 4.
 fn image_fill_store() -> Hwp5StyleStore {
     Hwp5StyleStore {
         id_mappings: None,
@@ -2158,14 +2166,14 @@ fn image_fill_without_its_asset_is_left_out() {
 
     let (without, _) =
         crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&BTreeMap::new())).unwrap();
-    let fill = without.border_fill(4).unwrap();
+    let fill = without.border_fill(1).unwrap();
     assert!(fill.image_fill.is_none(), "{fill:?}");
     assert!(fill.fill.is_none() && fill.gradient_fill.is_none(), "{fill:?}");
 
     let ids: BTreeMap<u16, String> = [(1, "BIN0006".to_string())].into();
     let (with, _) = crate::hwp5_style_store_to_hwpx_with_image_ids(&store, Some(&ids)).unwrap();
     assert_eq!(
-        with.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        with.border_fill(1).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
         Some("BIN0006")
     );
 }
@@ -2179,7 +2187,7 @@ fn image_fill_without_its_asset_is_left_out() {
 fn public_style_mapping_keeps_every_image_fill() {
     let (store, warnings) = crate::hwp5_style_store_to_hwpx(&image_fill_store()).unwrap();
     assert_eq!(
-        store.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        store.border_fill(1).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
         Some("BIN0001")
     );
     let reference_warnings: Vec<&String> = warnings
@@ -2212,7 +2220,7 @@ fn bin_data_style_mapping_writes_the_resolved_image() {
     let (store, warnings) =
         crate::hwp5_style_store_to_hwpx_with_bin_data(&image_fill_store(), &names).unwrap();
     assert_eq!(
-        store.border_fill(4).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
+        store.border_fill(1).unwrap().image_fill.as_ref().map(|f| f.binary_item_id_ref.as_str()),
         Some("BIN0006")
     );
     assert!(
@@ -2226,7 +2234,7 @@ fn bin_data_style_mapping_writes_the_resolved_image() {
     let (unnamed, warnings) =
         crate::hwp5_style_store_to_hwpx_with_bin_data(&image_fill_store(), &BTreeMap::new())
             .unwrap();
-    assert!(unnamed.border_fill(4).unwrap().image_fill.is_none());
+    assert!(unnamed.border_fill(1).unwrap().image_fill.is_none());
     let reasons: Vec<&String> = warnings
         .iter()
         .filter_map(|w| match w {
@@ -2962,9 +2970,10 @@ fn w1_native_twins_preserve_measures_and_font_line_height() {
             .unwrap();
         let measures = |s: &hwpforge_smithy_hwpx::HwpxStyleStore| {
             s.iter_para_shapes()
-                .map(|p| {
+                .enumerate()
+                .map(|(index, p)| {
                     (
-                        p.source_id,
+                        index,
                         [
                             p.margin_left,
                             p.margin_right,
@@ -3006,7 +3015,7 @@ fn fix2_missing_font_reference_is_not_clamped() {
                 store.char_shapes[17].font_ids[lang] = missing;
                 let err = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
                 assert!(
-                    err.contains("charPr Some(17)") && err.contains(&format!("ID {missing}")),
+                    err.contains("charPr 17") && err.contains(&format!("ID {missing}")),
                     "{err}"
                 );
                 store.char_shapes[17].font_ids[lang] = 0;
@@ -3118,6 +3127,66 @@ fn fix4_list_head_char_reference_survives_parsing_until_lookup() {
                     id != u32::MAX
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn fix8b_failed_list_slots_rebind_later_references_and_reject_failed_slot() {
+    // 이것을 실패시키는 것: 실패 슬롯 압축 후 참조 유지, 실패 슬롯을 뒤 정의로 대체,
+    // 0 sentinel 재결합, NUMBER/BULLET 재결합 누락 또는 OUTLINE 상속 계약 변경.
+    for heading in [HeadingType::Number, HeadingType::Outline, HeadingType::Bullet] {
+        let mut store = Hwp5StyleStore::from_doc_info(&empty_doc_info());
+        store.char_shapes.push(default_char_shape());
+        store.para_shapes.push(default_para_shape());
+        let mut raw = Hwp5RawBulletDef::parse(&make_bullet_def_bytes(false)).unwrap();
+        raw.paragraph_head.text = "survivor".into();
+        store.numberings = vec![
+            Hwp5DocInfoNumberingSlot { id: 1, numbering: None },
+            numbering_slot(
+                2,
+                Hwp5RawNumberingDef { start: 7, paragraph_heads: vec![raw.paragraph_head.clone()] },
+            ),
+            Hwp5DocInfoNumberingSlot { id: 3, numbering: None },
+            numbering_slot(
+                4,
+                Hwp5RawNumberingDef { start: 9, paragraph_heads: vec![raw.paragraph_head.clone()] },
+            ),
+        ];
+        store.bullets = vec![
+            Hwp5DocInfoBulletSlot { id: 1, bullet: None },
+            bullet_slot(2, raw.clone()),
+            Hwp5DocInfoBulletSlot { id: 3, bullet: None },
+            bullet_slot(4, raw),
+        ];
+        store.para_shapes[0].property1 = match heading {
+            HeadingType::Outline => 1,
+            HeadingType::Number => 2,
+            _ => 3,
+        } << 23;
+        for (source, expected) in [(0, 0), (2, 1), (4, 2)] {
+            store.para_shapes[0].numbering_bullet_id = source;
+            let (out, warnings) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
+            let expected = if heading == HeadingType::Outline { 0 } else { expected };
+            assert_eq!(out.para_shape(ParaShapeIndex::new(0)).unwrap().heading_id_ref, expected);
+            assert!(warnings.iter().any(|w| matches!(
+                w,
+                Hwp5Warning::ParserFallback { subject: "numbering.slot", .. }
+            )));
+            assert!(warnings
+                .iter()
+                .any(|w| matches!(w, Hwp5Warning::ParserFallback { subject: "bullet.slot", .. })));
+        }
+        for source in [1, 3, 5] {
+            store.para_shapes[0].numbering_bullet_id = source;
+            // Existing HWP5 OUTLINE projection always inherits section numbering (0).
+            if heading == HeadingType::Outline {
+                let (out, _) = crate::hwp5_style_store_to_hwpx(&store).unwrap();
+                assert_eq!(out.para_shape(ParaShapeIndex::new(0)).unwrap().heading_id_ref, 0);
+                continue;
+            }
+            let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
+            assert!(error.contains(&format!("ID {source}")), "{error}");
         }
     }
 }

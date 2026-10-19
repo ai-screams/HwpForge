@@ -141,8 +141,8 @@ impl HwpxEditBase {
 }
 
 impl HwpxDocument {
-    pub(crate) fn requires_measure_normalization(&self) -> bool {
-        self.source_basis.as_ref().is_none_or(|basis| basis.requires_measure_normalization)
+    pub(crate) fn requires_header_normalization(&self) -> bool {
+        self.source_basis.as_ref().is_none_or(|basis| basis.requires_header_normalization)
     }
 
     /// Decoder-owned original locations for a section's Core nodes.
@@ -724,7 +724,7 @@ pub struct HwpxDecoder;
 #[derive(Debug)]
 pub(crate) struct SourceBasis {
     // Header-read fact belongs to the original package, not editable JSON styles.
-    requires_measure_normalization: bool,
+    requires_header_normalization: bool,
     package: std::sync::Arc<[u8]>,
     origins: std::collections::HashMap<
         hwpforge_core::node_path::CorePath,
@@ -787,9 +787,9 @@ impl HwpxDecoder {
         let header_result = header::parse_header(&header_xml)?;
         let style_store = header_result.style_store;
         let mut references = crate::header_references::HeaderReferences::build(&style_store)?;
-        references.memos = header_result.memo_ids;
-        references.track_changes = header_result.track_change_ids;
-        references.track_change_authors = header_result.track_change_author_ids;
+        references.memos = header_result.memo_count;
+        references.track_changes = header_result.track_change_count;
+        references.track_change_authors = header_result.track_change_author_count;
         references.validate(&style_store, false)?;
         let begin_num = header_result.begin_num;
 
@@ -1015,7 +1015,7 @@ impl HwpxDecoder {
         }
         crate::header_references::HeaderReferences::validate_body_borders(
             &document,
-            style_store.iter_border_fills().map(|fill| fill.id),
+            1..=style_store.border_fill_count() as u32,
         )?;
         drop_cell_zones_with_unknown_border_fill(
             &mut document,
@@ -1046,7 +1046,7 @@ impl HwpxDecoder {
             package.clone(),
         );
         let source_basis = std::sync::Arc::new(SourceBasis {
-            requires_measure_normalization: header_result.requires_measure_normalization,
+            requires_header_normalization: header_result.requires_header_normalization,
             package,
             origins: origins.into_iter().map(|origin| (origin.path().clone(), origin)).collect(),
         });
@@ -1399,7 +1399,7 @@ mod tests {
             let stale = Arc::new(SourceBasis {
                 package,
                 origins: basis.origins.clone(),
-                requires_measure_normalization: basis.requires_measure_normalization,
+                requires_header_normalization: basis.requires_header_normalization,
             });
             base.source_basis = Some(stale.clone());
             let mut submitted = base.document.clone();
@@ -1929,7 +1929,15 @@ mod tests {
             out.write_all(&data).unwrap();
         }
         let renamed = out.finish().unwrap().into_inner();
-        assert_eq!(caption_zones(&renamed), (0, 1));
+        // 한컴 실측: id label changes do not change position 7.
+        assert_eq!(caption_zones(&renamed), (1, 0));
+        let mut package = crate::patch::RawPackage::read(&bytes).unwrap();
+        let section = package
+            .read_text_entry("Contents/section0.xml")
+            .unwrap()
+            .replace("borderFillIDRef=\"7\"", "borderFillIDRef=\"99\"");
+        package.replace_text_entry("Contents/section0.xml", section);
+        assert_eq!(caption_zones(&package.write().unwrap()), (0, 1));
     }
 
     /// Review r1 HIGH-2: a cell zone naming a border fill the header does
@@ -1950,7 +1958,7 @@ mod tests {
             bf.id = id;
             store.push_border_fill(bf);
         }
-        let zones = vec![CellZone::new(0, 0, 0, 0, 5), CellZone::new(0, 0, 0, 0, 3)];
+        let zones = vec![CellZone::new(0, 0, 0, 0, 1), CellZone::new(0, 0, 0, 0, 3)];
         let text = || {
             Paragraph::with_runs(
                 vec![Run::text("x", CharShapeIndex::new(0))],
@@ -1983,11 +1991,11 @@ mod tests {
         let RunContent::Table(outer) = &document.sections()[0].paragraphs[0].runs[0].content else {
             panic!()
         };
-        assert_eq!(outer.cell_zones, [CellZone::new(0, 0, 0, 0, 5)]);
+        assert_eq!(outer.cell_zones, [CellZone::new(0, 0, 0, 0, 1)]);
         let RunContent::Table(inner) = &outer.rows[0].cells[0].paragraphs[0].runs[0].content else {
             panic!()
         };
-        assert_eq!(inner.cell_zones, [CellZone::new(0, 0, 0, 0, 5)]);
+        assert_eq!(inner.cell_zones, [CellZone::new(0, 0, 0, 0, 1)]);
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(warnings.iter().all(|w| w.is_content_loss()));
     }
@@ -2162,7 +2170,7 @@ mod tests {
         for name in ["MemoShapeIDRef", "MemoShapeID&#82;ef", "MemoShapeID&#x52;ef"] {
             for (value, expected) in [
                 ("99", "broken memoPr reference ID 99"),
-                ("&#55;", "validated memoPr 7"),
+                ("&#49;", "validated memoPr 1"),
                 ("65535", ""),
             ] {
                 let header = HEADER.replace(
@@ -2216,7 +2224,7 @@ mod tests {
     #[test]
     fn fix4_original_border_ids_and_dutmal_are_checked_in_packages() {
         // 이것을 실패시키는 것: 문자 2→None, 표/셀/쪽 검증 누락,
-        // 덧말 styleIDRef를 조회 전에 0으로 폐기, 존재하는 희소 ID의 오거부.
+        // 덧말 styleIDRef를 조회 전에 0으로 폐기, 첫 위치 1의 오거부(한컴 실측).
         for id in [2, 4, 99] {
             let header =
                 HEADER.replace("borderFillIDRef=\"0\"", &format!("borderFillIDRef=\"{id}\""));
@@ -2227,9 +2235,9 @@ mod tests {
             }
         }
         let header = HEADER.replace("</refList>", "<borderFills itemCnt=\"1\"><borderFill id=\"7\"><slash/><backSlash/><leftBorder/><rightBorder/><topBorder/><bottomBorder/></borderFill></borderFills></refList>")
-            .replace("borderFillIDRef=\"0\"", "borderFillIDRef=\"7\"");
+            .replace("borderFillIDRef=\"0\"", "borderFillIDRef=\"1\"");
         let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap();
-        assert_eq!(decoded.style_store.iter_char_shapes().next().unwrap().border_fill_id, Some(7));
+        assert_eq!(decoded.style_store.iter_char_shapes().next().unwrap().border_fill_id, Some(1));
         let bytes = crate::HwpxEncoder::encode(
             &decoded.document.validate().unwrap(),
             &decoded.style_store,
@@ -2244,7 +2252,7 @@ mod tests {
                 .next()
                 .unwrap()
                 .border_fill_id,
-            Some(7)
+            Some(1)
         );
         for (kind, payload) in [
             (
@@ -2279,13 +2287,13 @@ mod tests {
                 .any(|w| matches!(w, DecodeWarning::ContentLost { kind: k, .. } | DecodeWarning::InactiveHeaderReference { kind: k, .. } if k == kind)));
         }
         let header = HEADER.replace("</styles>", r#"<style id="7" type="PARA" name="ruby" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0"/></styles>"#);
-        let section = r#"<sec><p><run><dutmal styleIDRef="7"><mainText>x</mainText><subText>y</subText></dutmal></run></p></sec>"#;
+        let section = r#"<sec><p><run><dutmal styleIDRef="1"><mainText>x</mainText><subText>y</subText></dutmal></run></p></sec>"#;
         let doc = HwpxDecoder::decode(&make_test_hwpx(&header, &[section])).unwrap();
         assert!(doc
             .warnings
             .iter()
             .any(|w| matches!(w, DecodeWarning::ContentLost { kind, reason, .. }
-            if kind == "dutmal.styleIDRef" && reason.contains("7"))));
+            if kind == "dutmal.styleIDRef" && reason.contains("1"))));
     }
 
     #[test]
@@ -2328,16 +2336,16 @@ mod tests {
             r#"<memoProperties><memoPr id="7"/></memoProperties></refList>"#,
         );
         let parsed = super::header::parse_header(&header).unwrap();
-        assert!(parsed.memo_ids.contains(&7));
+        assert_eq!(parsed.memo_count, 1);
         let mut refs =
             crate::header_references::HeaderReferences::build(&parsed.style_store).unwrap();
-        refs.memos = parsed.memo_ids;
+        refs.memos = parsed.memo_count;
         for xml in [
-            r#"<secPr memoShapeIDRef="7"/>"#,
-            r#"<stringParam name="MemoShapeIDRef">7</stringParam>"#,
+            r#"<secPr memoShapeIDRef="1"/>"#,
+            r#"<stringParam name="MemoShapeIDRef">1</stringParam>"#,
         ] {
             let warnings = validate(&refs, xml).unwrap();
-            assert!(warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 7"))));
+            assert!(warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 1"))));
         }
         for xml in [
             r#"<secPr outlineShapeIDRef="0" memoShapeIDRef="0"/>"#,
@@ -2345,9 +2353,9 @@ mod tests {
         ] {
             assert!(validate(&refs, xml).unwrap().is_empty());
         }
-        let section = r#"<sec><p><run><secPr memoShapeIDRef="7"/><t>x</t></run></p></sec>"#;
+        let section = r#"<sec><p><run><secPr memoShapeIDRef="1"/><t>x</t></run></p></sec>"#;
         let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[section])).unwrap();
-        assert!(decoded.warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 7"))));
+        assert!(decoded.warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { reason, .. } | DecodeWarning::InactiveHeaderReference { reason, .. } if reason.contains("validated memoPr 1"))));
         for payload in [r#"<t charStyleIDRef="99">x</t>"#, r#"<formCharPr charPrIDRef="99"/>"#] {
             let section = format!("<sec><p><run>{payload}</run></p></sec>");
             assert!(HwpxDecoder::decode(&make_test_hwpx(HEADER, &[&section])).is_err());
@@ -2373,11 +2381,11 @@ mod tests {
         // 이것을 실패시키는 것: IDRef가 아닌 charTcId/paraTcId/authorID/
         // charshapeID/parashapeID 조회를 생략하거나 header 교차 조회를 빼기.
         for (owner, field, valid) in [
-            ("trackChange", "authorID", 8),
+            ("trackChange", "authorID", 1),
             ("trackChange", "charshapeID", 0),
             ("trackChange", "parashapeID", 0),
-            ("run", "charTcId", 7),
-            ("p", "paraTcId", 7),
+            ("run", "charTcId", 1),
+            ("p", "paraTcId", 1),
         ] {
             for id in [valid, 99] {
                 let attr = format!(r#"{field}="{id}""#);
@@ -2462,13 +2470,13 @@ mod tests {
             );
             let header = HEADER.replace("</refList>", &format!("{tab}</refList>"));
             let decoded = HwpxDecoder::decode(&make_test_hwpx(&header, &[SECTION_TEXT])).unwrap();
-            assert!(decoded.style_store.iter_tabs().find(|t| t.id == 99).unwrap().stops.is_empty());
+            assert!(decoded.style_store.iter_tabs().find(|t| t.id == 0).unwrap().stops.is_empty());
             assert_eq!(
                 decoded
                     .warnings
                     .iter()
                     .filter(|w| matches!(w,
-                DecodeWarning::ParagraphMeasureNormalized { definition: "tabPr", id: 99, field, .. }
+                DecodeWarning::ParagraphMeasureNormalized { definition: "tabPr", id: 0, field, .. }
                 if field == "stops"))
                     .count(),
                 usize::from(!default.is_empty())
@@ -2480,7 +2488,7 @@ mod tests {
             )
             .unwrap();
             let after = HwpxDecoder::decode(&output).unwrap();
-            assert!(after.style_store.iter_tabs().find(|t| t.id == 99).unwrap().stops.is_empty());
+            assert!(after.style_store.iter_tabs().find(|t| t.id == 0).unwrap().stops.is_empty());
         }
     }
 

@@ -255,14 +255,16 @@ fn replay_with_zone_fill(
         hatch_color: "#000000".into(),
         alpha: "0".into(),
     });
-    decoded.style_store.push_border_fill(blue);
+    let blue_id = decoded.style_store.push_border_fill(blue);
+    // Positions are dense: an unregistered zone must be beyond the blue fill.
+    let zone_id = if register { id } else { blue_id + 1 };
     let mut zoned = false;
     decoded.document.for_each_paragraph_mut(|p| {
         for run in &mut p.runs {
             if let RunContent::Table(t) = &mut run.content {
                 if !zoned {
-                    t.cell_zones = vec![CellZone::new(0, 0, 0, 0, id)];
-                    t.rows[0].cells[0].border_fill_id = Some(id + 1);
+                    t.cell_zones = vec![CellZone::new(0, 0, 0, 0, zone_id)];
+                    t.rows[0].cells[0].border_fill_id = Some(blue_id);
                     zoned = true;
                 }
             }

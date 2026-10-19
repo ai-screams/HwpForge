@@ -206,7 +206,7 @@ impl HwpxPatcher {
 
         let mut decoded = HwpxDecoder::decode(base_bytes)?;
         crate::paragraph_measure::validate_measure_output(&decoded.style_store)?;
-        let normalize_measures = decoded.requires_measure_normalization();
+        let normalize_measures = decoded.requires_header_normalization();
         let decode_warnings = decoded.warnings.clone();
         let mut replacement = replacement.clone();
         let mut authored = decoded.document.sections().to_vec();

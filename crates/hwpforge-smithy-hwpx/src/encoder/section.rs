@@ -1155,7 +1155,7 @@ fn build_paragraph(
         } else {
             if let Some(refs) = &sink.references {
                 // An empty table emits the existing generated style 0.
-                if !refs.style_ids.is_empty() {
+                if refs.styles != 0 {
                     refs.style_index(0)?;
                 }
             }

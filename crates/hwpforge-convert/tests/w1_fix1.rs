@@ -66,9 +66,9 @@ fn tab_positions(bytes: &[u8], id: u32) -> (Vec<i64>, Vec<i64>) {
 fn fix1_native_39_tab_positions_match_hancom_case_and_default() {
     // 이것을 실패시키는 것: HWP5 unsigned 해석, 음수 clamp/삭제, default unsigned 출력.
     for (index, source_id, twin, twin_id, first) in [
-        (74, 2, "fsc.hwpx", 2, -130144),
-        (32, 3, "moe.hwpx", 3, -130144),
-        (226, 7, "mss.hwpx", 9, -130208),
+        (74, 2, "fsc.hwpx", 0, -130144),
+        (32, 3, "moe.hwpx", 0, -130144),
+        (226, 7, "mss.hwpx", 0, -130208),
     ] {
         let twin_bytes = fixture(twin);
         let expected = tab_positions(&twin_bytes, twin_id);
@@ -163,7 +163,7 @@ fn fix1_six_short_bullets_keep_slots_and_two_dash_paragraphs() {
             after.document.for_each_paragraph(|p| {
                 let shape = after.style_store.para_shape(p.para_shape_id).unwrap();
                 if shape.heading_type == HeadingType::Bullet && shape.heading_id_ref == 1 {
-                    assert_eq!(shape.source_id, Some(60));
+                    // HWP5 slot 60 remains position 60; no redundant source_id.
                     paragraphs.push(p.text_content());
                 }
             });

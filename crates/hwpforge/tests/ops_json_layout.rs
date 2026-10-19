@@ -467,23 +467,27 @@ fn assert_section_dropped(out: &hwpforge::ops::FromJsonOutput, section: usize, r
 fn explicit_style_ids_survive_reordering_with_conservative_cache_drop() {
     let mut value = export(&simple_base());
     value["styles"]["styles"] = json!([value["styles"]["styles"][0], value["styles"]["styles"][7]]);
+    value["styles"]["styles"][1]["next_style_id_ref"] = json!(1);
     for p in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
-        p["style_id"] = json!(1); // Core index; the second definition has wire ID 7.
+        p["style_id"] = json!(1); // 한컴 실측: 두 번째 정의는 출력 위치 1.
     }
     let base = encode_fixture(&value);
     let mut value = export(&base);
     value["styles"]["styles"].as_array_mut().unwrap().reverse();
+    for style in value["styles"]["styles"].as_array_mut().unwrap() {
+        style["next_style_id_ref"] = json!(1 - style["next_style_id_ref"].as_u64().unwrap());
+    }
     for p in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
-        p["style_id"] = json!(0); // Keep referring to wire style 7 after reordering.
+        p["style_id"] = json!(0); // 이동한 정의의 새 위치 0.
     }
     let reordered = roundtrip(&base, &value);
-    // W1 resolves Core style indices correctly. The legacy cache guard still
-    // assumes raw IDs and conservatively drops these caches until W2 connects it.
+    // 한컴 실측: 정의와 참조를 새 위치로 묶고 출력은 0부터 재번호한다.
+    // 기존 편집 캐시 정책은 위치 재배열을 보수적으로 무효화한다.
     assert_section_dropped(&reordered, 0, "intentionally invalidated");
-    assert_eq!(xml(&reordered.bytes).matches("styleIDRef=\"7\"").count(), 5);
+    assert_eq!(xml(&reordered.bytes).matches("styleIDRef=\"0\"").count(), 5);
     let decoded = HwpxDecoder::decode(&reordered.bytes).unwrap();
     for p in &decoded.document.sections()[0].paragraphs {
-        assert_eq!(decoded.style_store.style(p.style_id.unwrap().get()).unwrap().id, 7);
+        assert_eq!(decoded.style_store.style(p.style_id.map_or(0, |id| id.get())).unwrap().id, 0);
     }
     for key in ["para_pr_id_ref", "char_pr_id_ref"] {
         let mut edited = value.clone();
@@ -491,7 +495,7 @@ fn explicit_style_ids_survive_reordering_with_conservative_cache_drop() {
             .as_array_mut()
             .unwrap()
             .iter_mut()
-            .find(|v| v["id"] == 7)
+            .find(|v| v["id"] == 1)
             .unwrap();
         style[key] = json!(if style[key] == 0 { 1 } else { 0 });
         assert_section_dropped(&roundtrip(&base, &edited), 0, "intentionally invalidated");
@@ -521,8 +525,8 @@ fn unresolved_and_ambiguous_style_references_are_refused() {
     value["styles"]["styles"].as_array_mut().unwrap().push(style);
     assert!(
         from_json(&value.to_string(), &FromJsonOptions::default().with_base(base.as_slice()))
-            .is_err(),
-        "duplicate IDs are errors even with identical content"
+            .is_ok(),
+        "Hancom ignores duplicate labels; positions remain unambiguous"
     );
 }
 
@@ -835,13 +839,11 @@ fn emitted_floating_chart_insertion_invalidates_preceding_text() {
 fn keep_with_next_and_keep_lines_at_page_bottom_invalidate_preceding_chain() {
     let mut value = export(&simple_base());
     let mut linked = value["styles"]["para_shapes"][0].clone();
-    linked.as_object_mut().unwrap().remove("source_id");
     linked["keep_with_next"] = json!(true);
     linked["widow_orphan"] = json!(false);
     let id = value["styles"]["para_shapes"].as_array().unwrap().len();
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(linked);
     let mut together = value["styles"]["para_shapes"][0].clone();
-    together.as_object_mut().unwrap().remove("source_id");
     together["keep_lines_together"] = json!(true);
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(together);
     for i in 0..2 {
@@ -876,8 +878,7 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
     let mut value = export(&simple_base());
     let shapes = value["styles"]["char_shapes"].as_array_mut().unwrap();
     while shapes.len() < 8 {
-        let mut clone = shapes[0].clone();
-        clone.as_object_mut().unwrap().remove("source_id");
+        let clone = shapes[0].clone();
         shapes.push(clone);
     }
     push_control(
@@ -900,10 +901,16 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
             "ratio" => value["styles"]["char_shapes"][7]["ratio"] = json!(150),
             "font" => {
                 let mut font = value["styles"]["fonts"][0].clone();
-                font["id"] = json!(777);
+                let position = value["styles"]["fonts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|f| f["lang"] == "HANGUL")
+                    .count();
+                font["id"] = json!(position);
                 font["face_name"] = json!("Compose 전용 변경 글꼴");
                 value["styles"]["fonts"].as_array_mut().unwrap().push(font);
-                value["styles"]["char_shapes"][7]["font_ref"]["hangul"] = json!(777);
+                value["styles"]["char_shapes"][7]["font_ref"]["hangul"] = json!(position);
             }
             _ => value["styles"]["char_shapes"][7]["font_ref"]["hangul"] = json!(9999),
         }
@@ -929,7 +936,6 @@ fn compose_only_char_style_reference_changes_invalidate_host_and_tail() {
 fn master_page_linked_flow_invalidates_its_preceding_paragraph_and_section() {
     let mut value = export(&nested_base());
     let mut linked = value["styles"]["para_shapes"][0].clone();
-    linked.as_object_mut().unwrap().remove("source_id");
     linked["keep_with_next"] = json!(true);
     let id = value["styles"]["para_shapes"].as_array().unwrap().len();
     value["styles"]["para_shapes"].as_array_mut().unwrap().push(linked);
@@ -1458,8 +1464,7 @@ fn analyzer_uses_decoder_spine_indices_for_dependencies() {
     let mut value = two_sections();
     let mut shape = value["styles"]["char_shapes"][0].clone();
     shape["height"] = json!(3333);
-    // A cloned definition is new, so it must not reuse the imported wire ID.
-    shape.as_object_mut().unwrap().remove("source_id");
+    // The cloned definition gets its appended position.
     let index = value["styles"]["char_shapes"].as_array().unwrap().len();
     value["styles"]["char_shapes"].as_array_mut().unwrap().push(shape);
     value["document"]["sections"][1]["paragraphs"][0]["runs"][0]["char_shape_id"] = json!(index);
@@ -1562,10 +1567,10 @@ fn metadata_layout_cache_user_data_edits_and_deletion_survive_public_json() {
 fn w2_style_zero_height_invalidates_other_style_char_margins_and_tabs() {
     for tab in [false, true] {
         let mut value = export(&simple_base());
-        let mut default_char = value["styles"]["char_shapes"][0].clone();
-        default_char["source_id"] = json!(777);
+        let default_char = value["styles"]["char_shapes"][0].clone();
+        let default_position = value["styles"]["char_shapes"].as_array().unwrap().len();
         value["styles"]["char_shapes"].as_array_mut().unwrap().push(default_char);
-        value["styles"]["styles"][0]["char_pr_id_ref"] = json!(777);
+        value["styles"]["styles"][0]["char_pr_id_ref"] = json!(default_position);
         for para in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
             para["style_id"] = json!(7);
         }
@@ -1581,8 +1586,7 @@ fn w2_style_zero_height_invalidates_other_style_char_margins_and_tabs() {
         let def = edited["styles"]["char_shapes"]
             .as_array_mut()
             .unwrap()
-            .iter_mut()
-            .find(|v| v["source_id"] == 777)
+            .get_mut(default_position)
             .unwrap();
         def["height"] = json!(2000);
         let out = roundtrip(&base, &edited);
@@ -1681,7 +1685,7 @@ fn w2_direct_margin_noop_normalizes_instead_of_returning_original_zip() {
 }
 
 #[test]
-fn w2_font_line_height_follows_source_id_through_json_reorder() {
+fn w3_font_line_height_follows_definition_through_json_reorder() {
     let base = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/line-height-mixed.hwpx"
@@ -1690,7 +1694,7 @@ fn w2_font_line_height_follows_source_id_through_json_reorder() {
     let mut value = export(&base);
     let len = value["styles"]["para_shapes"].as_array().unwrap().len();
     value["styles"]["para_shapes"].as_array_mut().unwrap().reverse();
-    // Core references are branded indices; wire style references remain original IDs.
+    // 한컴 실측: Core와 헤더 교차 참조 모두 위치를 다시 묶는다.
     fn rebind(value: &mut Value, len: usize) {
         match value {
             Value::Object(fields) => {
@@ -1710,13 +1714,19 @@ fn w2_font_line_height_follows_source_id_through_json_reorder() {
         }
     }
     rebind(&mut value["document"], len);
+    for style in value["styles"]["styles"].as_array_mut().unwrap() {
+        if style["style_type"] == "PARA" {
+            style["para_pr_id_ref"] =
+                json!(len - 1 - style["para_pr_id_ref"].as_u64().unwrap() as usize);
+        }
+    }
     let out = roundtrip(&base, &value);
     let reread = export(&out.bytes);
     assert_eq!(reread["styles"]["header_fidelity"], value["styles"]["header_fidelity"]);
     assert_eq!(reread["styles"]["para_shapes"], value["styles"]["para_shapes"]);
 }
 
-// 이것을 실패시키는 것: source_id 없는 복제본의 fontLineHeight를 0으로 출력하거나,
+// 이것을 실패시키는 것: 새 위치에 둔 복제본의 fontLineHeight를 0으로 출력하거나,
 // JSON에서 보존값을 누락하거나, 재배열 뒤 다른 정의의 값을 사용하는 것.
 #[test]
 fn w2fix1_font_line_height_clone_reorder_json_and_output_id() {
@@ -1729,22 +1739,19 @@ fn w2fix1_font_line_height_clone_reorder_json_and_output_id() {
         let mut value = export(&base);
         assert!(value["styles"]["header_fidelity"].get("font_line_height").is_none());
         let shapes = value["styles"]["para_shapes"].as_array_mut().unwrap();
-        let mut cloned = shapes.iter().find(|p| p["font_line_height"] == flag).unwrap().clone();
-        if flag == 1 {
-            assert_eq!(cloned["source_id"], 20);
-        }
-        cloned["source_id"] = Value::Null;
+        let cloned = shapes.iter().find(|p| p["font_line_height"] == flag).unwrap().clone();
+        assert!(cloned.get("source_id").is_none());
         shapes.push(cloned);
         shapes.reverse();
-        // Use the clone, now at index 0, in a real paragraph. Existing style
-        // references remain wire IDs and are resolved independently of order.
+        // Use the clone, now at position 0, in a real paragraph. Header
+        // references also use positions (Hancom W3).
         value["document"]["sections"][0]["paragraphs"][0]["para_shape_id"] = json!(0);
         let output = roundtrip(&base, &value);
         let reread = export(&output.bytes);
         let clone = &reread["styles"]["para_shapes"][0];
         assert_eq!(clone["font_line_height"], flag);
-        let id = clone["source_id"].as_u64().unwrap();
-        assert_eq!(id, 22);
+        let id = 0; // 한컴 실측: 첫 위치는 원본 id와 무관하게 항상 0.
+        assert!(clone.get("source_id").is_none());
         let header = package_header(&output.bytes);
         let start = header.find(&format!("<hh:paraPr id=\"{id}\"")).unwrap();
         let tag = &header[start..start + header[start..].find('>').unwrap()];
@@ -1807,14 +1814,15 @@ fn assert_measure_normalization(base: &[u8], canonical: &[u8], reported: bool) {
 #[test]
 fn w2fix1_case_only_char_tab_normalizes_both_save_paths() {
     let mut value = export(&simple_base());
+    let tab_position = value["styles"]["tabs"].as_array().unwrap().len();
     value["styles"]["tabs"].as_array_mut().unwrap().push(json!({
         "id": 99, "auto_tab_left": false, "auto_tab_right": false,
         "stops": [{"position": {"unit":"char", "value":1000}, "align":"Left", "leader":"NONE"}]
     }));
-    value["styles"]["para_shapes"][0]["tab_pr_id_ref"] = json!(99);
+    value["styles"]["para_shapes"][0]["tab_pr_id_ref"] = json!(tab_position);
     let canonical = encode_fixture(&value);
     let base = edit_package(&canonical, "Contents/header.xml", |header| {
-        let start = header.find("<hh:tabPr id=\"99\"").unwrap();
+        let start = header.find(&format!("<hh:tabPr id=\"{tab_position}\"")).unwrap();
         let default = start + header[start..].find("<hp:default>").unwrap();
         let end =
             default + header[default..].find("</hp:default>").unwrap() + "</hp:default>".len();
@@ -1900,17 +1908,17 @@ fn w2_field_inventory_and_protection_survive_measure_edit() {
 }
 
 #[test]
-fn w2_missing_default_style_cannot_authorize_cache_reuse() {
+fn w3_first_style_position_is_default_regardless_of_label() {
     let mut value = export(&simple_base());
     value["styles"]["styles"] = json!([value["styles"]["styles"][7]]);
-    value["styles"]["styles"][0]["next_style_id_ref"] = json!(7);
+    value["styles"]["styles"][0]["next_style_id_ref"] = json!(0);
     for paragraph in value["document"]["sections"][0]["paragraphs"].as_array_mut().unwrap() {
-        paragraph["style_id"] = json!(0); // Branded index 0 now resolves to wire style 7.
+        paragraph["style_id"] = json!(0); // 한컴 실측: 원본 label 7도 첫 위치는 style 0.
     }
     let base = encode_fixture(&value);
     let out = roundtrip(&base, &export(&base));
-    assert_eq!(flags(&out.bytes), [false; 5]);
-    assert!(out.warnings.iter().any(|w| w.info().code == "LAYOUT_CACHE_DROPPED"));
+    assert_eq!(flags(&out.bytes), [true; 5]);
+    assert_eq!(out.bytes, base);
 }
 
 #[test]
@@ -1924,10 +1932,6 @@ fn w2_legacy_margin_migration_does_not_claim_base_cache_identity() {
             let raw = measure["value"].as_i64().unwrap() * 2 + i64::from(measure["unit"] == "char");
             para[key] = json!(raw);
         }
-        para.as_object_mut().unwrap().remove("source_id");
-    }
-    for shape in legacy["styles"]["char_shapes"].as_array_mut().unwrap() {
-        shape.as_object_mut().unwrap().remove("source_id");
     }
     let out = roundtrip(&base, &legacy);
     assert_eq!(flags(&out.bytes), [false; 5]);

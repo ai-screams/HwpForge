@@ -32,16 +32,16 @@ use hwpforge_core::ParagraphMeasure;
 /// Result of parsing `header.xml`.
 #[derive(Debug)]
 pub struct HeaderParseResult {
-    pub(crate) requires_measure_normalization: bool,
+    pub(crate) requires_header_normalization: bool,
     /// Style information parsed from `header.xml`.
     pub style_store: HwpxStyleStore,
     /// Starting auto-numbering values from `<hh:beginNum>`, if present.
     pub begin_num: Option<BeginNum>,
     /// What the style store could not hold (per-language character scalars).
     pub warnings: Vec<super::DecodeWarning>,
-    pub(crate) memo_ids: std::collections::BTreeSet<u32>,
-    pub(crate) track_change_ids: std::collections::BTreeSet<u32>,
-    pub(crate) track_change_author_ids: std::collections::BTreeSet<u32>,
+    pub(crate) memo_count: usize,
+    pub(crate) track_change_count: usize,
+    pub(crate) track_change_author_count: usize,
 }
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`] and optional [`BeginNum`].
@@ -59,7 +59,7 @@ pub struct HeaderParseResult {
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
-    let head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
+    let mut head: HxHead = xml_from_str(xml).map_err(|e| HwpxError::XmlParse {
         file: "header.xml".into(),
         detail: xml_error_detail(&e),
     })?;
@@ -67,9 +67,10 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
 
     let mut store = HwpxStyleStore::new();
     let mut warnings = Vec::new();
-    let mut memo_ids = std::collections::BTreeSet::new();
-    let mut track_change_ids = std::collections::BTreeSet::new();
-    let mut track_change_author_ids = std::collections::BTreeSet::new();
+    let mut memo_count = 0usize;
+    let mut track_change_count = 0usize;
+    let mut track_change_author_count = 0usize;
+    let mut order_mismatches = std::collections::BTreeMap::<String, Vec<String>>::new();
     let mut reader = quick_xml::Reader::from_str(xml);
     loop {
         match reader.read_event().map_err(|e| invalid(e.to_string()))? {
@@ -85,19 +86,26 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
                         let value = attr
                             .normalized_value(quick_xml::XmlVersion::Explicit1_0)
                             .map_err(|e| invalid(e.to_string()))?;
-                        let id = value.parse().map_err(|_| {
+                        let id: u32 = value.parse().map_err(|_| {
                             invalid(format!("{} invalid ID {value}", e.local_name().as_ref()))
                         })?;
-                        match e.local_name().as_ref() {
-                            "memoPr" => {
-                                memo_ids.insert(id);
-                            }
-                            "trackChange" => {
-                                track_change_ids.insert(id);
-                            }
-                            _ => {
-                                track_change_author_ids.insert(id);
-                            }
+                        let kind = e.local_name();
+                        let kind = kind.as_ref();
+                        let count = match kind {
+                            "memoPr" => &mut memo_count,
+                            "trackChange" => &mut track_change_count,
+                            _ => &mut track_change_author_count,
+                        };
+                        // These unsupported kinds are not yet Hancom-probed; use
+                        // one-based positions (native corpus convention), retaining loss policy.
+                        *count += 1;
+                        let position = u32::try_from(*count)
+                            .map_err(|_| invalid("definition position exceeds u32"))?;
+                        if id != position {
+                            order_mismatches
+                                .entry(kind.to_string())
+                                .or_default()
+                                .push(format!("id {id} -> position {position}"));
                         }
                     }
                 }
@@ -113,11 +121,15 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
             _ => {}
         }
     }
+    for (kind, mismatches) in order_mismatches {
+        warn_definition_order(&kind, mismatches, &mut warnings);
+    }
     let mut normalize_measures = false;
-    if let Some(ref_list) = &head.ref_list {
+    if let Some(ref_list) = &mut head.ref_list {
+        let renumbered = normalize_definition_ids(ref_list, &mut warnings);
         populate_store_from_ref_list(&mut store, ref_list, &mut warnings)?;
         store.header_fidelity.capture(ref_list);
-        normalize_measures = requires_measure_normalization(ref_list, &store);
+        normalize_measures = renumbered || requires_header_normalization(ref_list, &store);
         warnings.extend(per_language_scalar_losses(ref_list));
         warnings.extend(border_offset_losses(ref_list));
         warnings.extend(char_shadow_losses(ref_list));
@@ -129,18 +141,94 @@ pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
         style_store: store,
         begin_num,
         warnings,
-        memo_ids,
-        track_change_ids,
-        track_change_author_ids,
-        requires_measure_normalization: normalize_measures,
+        memo_count,
+        track_change_count,
+        track_change_author_count,
+        requires_header_normalization: normalize_measures,
     })
+}
+
+/// Hancom reads header references by list position, ignoring id and itemCnt.
+/// Normalize only definition labels; references already contain the positions.
+fn normalize_definition_ids(
+    refs: &mut HxRefList,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> bool {
+    let mut changed = false;
+    macro_rules! renumber {
+        ($items:expr, $kind:expr, $base:expr) => {{
+            let mut mismatches = Vec::new();
+            for (index, def) in $items.iter_mut().enumerate() {
+                let position = index as u32 + $base;
+                if def.id != position {
+                    changed = true;
+                    mismatches.push(format!("id {} -> position {position}", def.id));
+                }
+                def.id = position;
+            }
+            warn_definition_order($kind, mismatches, warnings);
+        }};
+    }
+    if let Some(fonts) = &mut refs.fontfaces {
+        for group in &mut fonts.groups {
+            renumber!(group.fonts, &format!("font {}", group.lang), 0);
+        }
+    }
+    macro_rules! table {
+        ($field:ident, $kind:literal, $base:literal) => {
+            if let Some(defs) = &mut refs.$field {
+                renumber!(defs.items, $kind, $base);
+            }
+        };
+    }
+    table!(char_properties, "charPr", 0);
+    table!(para_properties, "paraPr", 0);
+    table!(tab_properties, "tabPr", 0);
+    table!(styles, "style", 0);
+    table!(border_fills, "borderFill", 1);
+    table!(numberings, "numbering", 1);
+    table!(bullets, "bullet", 1);
+    if let Some(styles) = &mut refs.styles {
+        let count = styles.items.len();
+        for style in &mut styles.items {
+            if style.next_style_id_ref as usize >= count {
+                changed = true;
+                // Hancom opens a Hancom-saved public document and even its
+                // resave retains old nextStyleIDRef 58..60 beyond 57 styles.
+                // This recovery applies ONLY to nextStyleIDRef, with explicit loss.
+                warnings.push(super::DecodeWarning::ContentLost {
+                    part: "Contents/header.xml".into(),
+                    path: super::ParagraphPath::default(),
+                    kind: "style.nextStyleIDRef".into(),
+                    reason: format!("style position {}: nextStyleIDRef {} out of range {count}; replaced with self {}", style.id, style.next_style_id_ref, style.id),
+                });
+                style.next_style_id_ref = style.id;
+            }
+        }
+    }
+    changed
+}
+
+fn warn_definition_order(
+    kind: &str,
+    mismatches: Vec<String>,
+    warnings: &mut Vec<super::DecodeWarning>,
+) {
+    if !mismatches.is_empty() {
+        // Definition labels are inactive metadata: positional selection is lossless.
+        warnings.push(super::DecodeWarning::InactiveHeaderReference {
+            part: "Contents/header.xml".into(),
+            kind: format!("definition_order:{kind}"),
+            reason: format!("definition IDs ignored; {}", mismatches.join(", ")),
+        });
+    }
 }
 
 /// Compare the parsed measure payloads with the ordinary encoder's payloads.
 /// Diagnostics are deliberately not an input: the decision rests on the payloads,
 /// so it holds whether or not a form was reported. Output-invalid
 /// values (e.g. odd physical line spacing) remain readable; save preflight rejects them.
-fn requires_measure_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bool {
+fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bool {
     if crate::paragraph_measure::validate_measure_output(store).is_err() {
         return true;
     }
@@ -788,7 +876,6 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         i32::try_from(cp.height).ok().and_then(|h| HwpUnit::new(h).ok()).unwrap_or(HwpUnit::ZERO);
 
     let mut shape = HwpxCharShape::default();
-    shape.source_id = Some(cp.id);
     shape.font_ref = font_ref;
     shape.height = height;
     shape.text_color = parse_hex_color(&cp.text_color);
@@ -964,7 +1051,6 @@ fn convert_para_pr(
     let border_ignore_margin = pp.border.as_ref().is_some_and(|b| b.ignore_margin != 0);
 
     Ok(HwpxParaShape {
-        source_id: Some(pp.id),
         font_line_height: pp.font_line_height,
         alignment,
         margin_left,
@@ -1538,7 +1624,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(border_fill.fill, Some(HwpxFill::WinBrush { .. })));
         assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
     }
@@ -1606,7 +1692,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(
             border_fill.gradient_fill,
             Some(ref fill)
@@ -1644,7 +1730,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert!(matches!(
             border_fill.image_fill,
             Some(ref fill)
@@ -1677,7 +1763,7 @@ mod tests {
         </head>"##;
 
         let store = parse_header(xml).unwrap().style_store;
-        let border_fill = store.border_fill(4).unwrap();
+        let border_fill = store.border_fill(1).unwrap();
         assert_eq!(border_fill.slash.border_type, "CENTER_BELOW");
         assert!(border_fill.slash.crooked);
         assert!(!border_fill.slash.is_counter);

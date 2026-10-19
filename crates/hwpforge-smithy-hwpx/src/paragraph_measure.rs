@@ -123,13 +123,10 @@ pub(crate) fn validate_measure_output(store: &crate::HwpxStyleStore) -> HwpxResu
             ("prev", p.spacing_before),
             ("next", p.spacing_after),
         ] {
-            pack_margin(m).map_err(|e| {
-                invalid(format!("paraPr {:?} (index {index}).{field}: {e}", p.source_id))
-            })?;
+            pack_margin(m).map_err(|e| invalid(format!("paraPr position {index}.{field}: {e}")))?;
         }
-        encode_line_spacing(p.line_spacing, p.line_spacing_type).map_err(|e| {
-            invalid(format!("paraPr {:?} (index {index}).lineSpacing: {e}", p.source_id))
-        })?;
+        encode_line_spacing(p.line_spacing, p.line_spacing_type)
+            .map_err(|e| invalid(format!("paraPr position {index}.lineSpacing: {e}")))?;
     }
     for tab in store.iter_tabs() {
         for (i, stop) in tab.stops.iter().enumerate() {
