@@ -1068,3 +1068,50 @@ When a new wave discovers wire-level behavior:
 
 The goal is that future me / future contributors can grep this file before
 re-running probes.
+
+## 24. Master-Page Lists (section-owned `LIST_HEADER`)
+
+Source: `src/decoder/section/master.rs` (`intercept_master_record`,
+`dispatch_master_record`, `Hwp5MasterPage::core_metadata`). Fixtures:
+`tests/fixtures/master_pages/f5a`–`f5f` with Hancom HWPX companions.
+
+A section's master pages are `LIST_HEADER` lists owned by the section, not
+paragraphs of the body. Before 0.17.0 the parser read them as body content:
+master text overwrote the first body paragraph and master shapes were drawn
+in the body.
+
+**Where the lists are.**
+
+| Kind                                | Position                                                                       | Count                         |
+| ----------------------------------- | ------------------------------------------------------------------------------ | ----------------------------- |
+| Ordinary (both / even / odd)        | `LIST_HEADER` one level below the section-owned `secd` `CtrlHeader`            | from the `secd` scope bits    |
+| Extended (last page, optional page) | `LIST_HEADER` at section level + 1, after the body, outside tables and objects | `secd` payload u16 at byte 30 |
+
+Only a `secd` directly under the section owns master lists; a `secd` inside a
+cell or shape is left to its nested parser. A list ends at the first record
+whose level is lower than the `LIST_HEADER`, or equal to it and not a
+`PARA_HEADER`. Memo lists at the end of the section are not master lists.
+
+**`LIST_HEADER` payload (34 bytes or more).**
+
+| Offset       | Field                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| u32 @4       | bits 5–6 vertical alignment (0 top, 1 centre, 2 bottom)                                              |
+| u32 @8 / @12 | text width / height (HwpUnit)                                                                        |
+| u32 @18      | selector: 0 for ordinary lists; extended 3 = last page, 5 / 6 = optional page 2 / 3 (`selector - 3`) |
+| u32 @22      | bit 0 = `pageDuplicate` (overlap the previous master), bit 1 = `pageFront` (print on top)            |
+
+**Ordinary scope.** `secd` property bits 29–31 = 1 with one list → BOTH;
+= 6 with two lists → EVEN (first list) then ODD (second). Other combinations
+(single EVEN or ODD, other optional page numbers, unknown selectors) are not
+confirmed against Hancom output yet: they are reported as
+`ProjectionFallback` and never widened to BOTH. A `secd` that declares lists
+but whose lists are missing is reported with the declaration's record index
+and raw payload.
+
+**Notes inside master pages.** Hancom for macOS greys out footnote and
+endnote insertion in master-page editing. A footnote, endnote or
+footnote/endnote `NewNumber` found in a master list (directly or through a
+memo whose content is attached later) is kept and reported as
+`master_page.note_numbering`, because the HWPX note planner numbers master
+pages after the body.
