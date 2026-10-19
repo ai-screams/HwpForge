@@ -926,40 +926,8 @@ impl Hwp5ShapeRender {
         let properties = cur.read_u32::<LittleEndian>().ok()?;
         let _outline = cur.read_u8().ok()?;
         let fill_kind = cur.read_u32::<LittleEndian>().ok()?;
-        let block_start = cur.position() as usize;
-        let fill = super::border_fill::parse_fill_payload(fill_kind, &mut cur)
-            .map_err(|e| e.to_string())
-            .or_else(|e| {
-                // Some writers end a shape's colour fill right after the
-                // hatch kind with four zero bytes and nothing more (no alpha
-                // byte, no extra-data length): the colours and hatch are all
-                // there, so read them rather than drop the fill. Only that
-                // exact form — 16 bytes to the end of the record, the last
-                // four zero — is read this way (corpus: all 12 colour fills
-                // on this path that fail the full layout have that form;
-                // review r2: a damaged block with alpha 128 must not come
-                // out as an opaque fill).
-                // 이것을 실패시키는 것: 이 대체 읽기를 지우기
-                // (`shape_look_reads_a_colour_fill_without_its_alpha_byte`) /
-                // 끝 네 바이트·종류 조건을 지우기
-                // (`only_the_short_colour_fill_form_is_read_past_its_error`).
-                let block = tail
-                    .get(block_start..)
-                    .filter(|b| fill_kind == 1 && b.get(12..) == Some(&[0u8; 4][..]));
-                block
-                    .map(|b| {
-                        let word =
-                            |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
-                        super::border_fill::Hwp5RawBorderFillFill::Color(
-                            super::border_fill::Hwp5RawColorFill::from_short_block(
-                                word(0),
-                                word(4),
-                                word(8) as i32,
-                            ),
-                        )
-                    })
-                    .ok_or(e)
-            });
+        let fill =
+            super::border_fill::parse_fill_payload(fill_kind, &mut cur).map_err(|e| e.to_string());
         Some(Hwp5ShapeLook {
             corner_ratio: 0,
             line: Hwp5ShapeLine { color, thickness, properties },

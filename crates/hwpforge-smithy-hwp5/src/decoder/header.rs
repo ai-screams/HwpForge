@@ -6,7 +6,7 @@
 
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
-use crate::schema::border_fill::Hwp5RawBorderFill;
+use crate::schema::border_fill::{Hwp5RawBorderFill, Hwp5RawBorderFillFill};
 use crate::schema::header::{
     Hwp5RawBulletDef, Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawNumberingDef,
     Hwp5RawParaShape, Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot, HwpVersion,
@@ -204,15 +204,35 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
             }
             TagId::BorderFill => {
                 let id = (result.border_fills.len() as u32) + 1;
+                let kind = record
+                    .data
+                    .get(32..36)
+                    .map(|b| format!("0x{:08X}", u32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+                let context = format!(
+                    "border_fill_id={id}, fill_kind={}, payload={} bytes",
+                    kind.as_deref().unwrap_or("missing"),
+                    record.data.len()
+                );
                 match Hwp5RawBorderFill::parse(&record.data) {
                     Ok(fill) => {
-                        result.border_fills.push(Hwp5DocInfoBorderFillSlot { id, fill: Some(fill) })
+                        if let Hwp5RawBorderFillFill::Unknown { raw_data, .. } = &fill.fill {
+                            result.warnings.push(Hwp5Warning::ParserFallback {
+                                subject: "border_fill.parse",
+                                reason: format!(
+                                    "{context}: unsupported fill flags (bits 0/1/2 = color/image/gradation; combinations are not modeled); {} fill bytes retained raw; borders preserved, fill omitted from projection",
+                                    raw_data.len()
+                                ),
+                            });
+                        }
+                        result
+                            .border_fills
+                            .push(Hwp5DocInfoBorderFillSlot { id, fill: Some(fill) });
                     }
-                    Err(_) => {
+                    Err(err) => {
                         result.border_fills.push(Hwp5DocInfoBorderFillSlot { id, fill: None });
-                        result.warnings.push(Hwp5Warning::UnsupportedTag {
-                            tag_id: record.header.tag_id,
-                            offset: 0,
+                        result.warnings.push(Hwp5Warning::ParserFallback {
+                            subject: "border_fill.parse",
+                            reason: format!("{context}: {err}; definition uses a placeholder, later IDs are unchanged"),
                         });
                     }
                 }
@@ -281,6 +301,75 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn border_fill_r3_doc_info_keeps_ids_without_warnings() {
+        // 이것을 실패시키는 것: 레거시 채우기 placeholder 대체 또는 ID 재배열.
+        let bytes = include_bytes!("../../tests/fixtures/border_fill/r3-border-fills.bin");
+        for version in [HwpVersion::new(5, 0, 1, 7), HwpVersion::new(5, 1, 0, 0)] {
+            let result = parse_doc_info(bytes, &version).unwrap();
+            assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+            assert_eq!(result.border_fills.len(), 41);
+            for (index, slot) in result.border_fills.iter().enumerate() {
+                assert_eq!(slot.id as usize, index + 1);
+                assert!(slot.fill.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn border_fill_fallback_identifies_definition_format_size_and_reason() {
+        // 이것을 실패시키는 것: Err 이유 버리기, 복합 플래그 무경고 통과,
+        // 미지원 fill 때문에 이미 읽은 테두리까지 삭제, 뒤 ID 당기기.
+        let mut data = vec![0; 60];
+        data[2] = 1; // left solid
+        data[32..36].copy_from_slice(&3u32.to_le_bytes());
+        let mut stream = make_record_bytes(20, &data);
+        data[32..36].copy_from_slice(&1u32.to_le_bytes());
+        stream.extend(make_record_bytes(20, &data[..51]));
+        stream.extend(make_record_bytes(20, &[0; 8]));
+        let result = parse_doc_info(&stream, &HwpVersion::new(5, 0, 1, 7)).unwrap();
+        assert_eq!(result.border_fills.len(), 3);
+        assert!(result.border_fills[1].fill.is_none());
+        assert!(result.border_fills[2].fill.is_none());
+        let fill = result.border_fills[0].fill.as_ref().unwrap();
+        assert_eq!(fill.left.kind, crate::schema::border_fill::Hwp5BorderLineKind::Solid);
+        assert!(
+            matches!(&fill.fill, Hwp5RawBorderFillFill::Unknown { kind: 3, raw_data } if raw_data.len() == 24)
+        );
+        assert_eq!(result.warnings.len(), 3);
+        for (warning, expected) in result.warnings.iter().zip([
+            [
+                "border_fill_id=1",
+                "0x00000003",
+                "payload=60 bytes",
+                "24 fill bytes",
+                "unsupported fill flags",
+            ],
+            [
+                "border_fill_id=2",
+                "0x00000001",
+                "payload=51 bytes",
+                "BorderFill",
+                "failed to fill whole buffer",
+            ],
+            [
+                "border_fill_id=3",
+                "fill_kind=missing",
+                "payload=8 bytes",
+                "BorderFill too short",
+                "expected >= 36",
+            ],
+        ]) {
+            let Hwp5Warning::ParserFallback { subject: "border_fill.parse", reason } = warning
+            else {
+                panic!("specific fallback expected: {warning:?}")
+            };
+            for text in expected {
+                assert!(reason.contains(text), "missing {text}: {reason}");
+            }
+        }
+    }
 
     #[test]
     fn fix4_id_mappings_damage_and_every_count_are_visible() {

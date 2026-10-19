@@ -828,30 +828,31 @@ Source: `layout_hint_patch.rs::write_linesegarray`.
 
 ## 21. Wave 12 Series Provenance
 
-| Wave    | Discovery                                                                                                         |
-| ------- | ----------------------------------------------------------------------------------------------------------------- |
-| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                                     |
-| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                          |
-| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                                                           |
-| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                           |
-| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                      |
-| 12h     | Memo 7-parameter `<hp:parameters>` carry                                                                          |
-| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                                                    |
-| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                                 |
-| #74     | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant       |
-| #75     | IndexMark split-leader splits surrogate pairs (high in header, low leads body); trailer stays a constant sentinel |
-| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                            |
-| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                                 |
-| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                              |
-| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                       |
-| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                                  |
-| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                                  |
-| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                               |
-| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                                                       |
-| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
-| 12p#124 | SUMMERY `editable` per-FieldType                                                                                  |
-| 12q     | Style "개요 N" override for outline levels 7~9                                                                    |
-| audit-1 | 옵션 전수조사: 번호 형식 / 쪽번호 형식 / 이미지 채우기 / 대각선 enum 정렬 (§22)                                   |
+| Wave     | Discovery                                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| 12a      | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                                     |
+| 12b      | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                          |
+| 12d      | `eqed` + `EQEDIT` (0x58) script pairing                                                                           |
+| 12e      | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                           |
+| 12f      | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                      |
+| 12h      | Memo 7-parameter `<hp:parameters>` carry                                                                          |
+| 12i      | Dutmal `tdut` split-leader BSTR + `option_raw`                                                                    |
+| #73      | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                                 |
+| #74      | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant       |
+| #75      | IndexMark split-leader splits surrogate pairs (high in header, low leads body); trailer stays a constant sentinel |
+| 12j      | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                            |
+| 12k      | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                                 |
+| 12l      | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                              |
+| 12m      | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                       |
+| 12n      | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                                  |
+| 12o      | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                                  |
+| 12p      | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                               |
+| 12p#121  | ParaShape bits 25-27 are zero-based ordinal                                                                       |
+| 12p#123  | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
+| 12p#124  | SUMMERY `editable` per-FieldType                                                                                  |
+| 12q      | Style "개요 N" override for outline levels 7~9                                                                    |
+| bf-color | BORDER_FILL alpha-less color trailer, shared parser, contextual diagnostics (§22.6)                               |
+| audit-1  | 옵션 전수조사: 번호 형식 / 쪽번호 형식 / 이미지 채우기 / 대각선 enum 정렬 (§22)                                   |
 
 ---
 
@@ -981,6 +982,78 @@ hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
 
 두 fixture 모두 native `.hwp` 디코드 == companion `.hwpx` 디코드 (전-축
 parity, `crates/hwpforge-convert/src/tests.rs`).
+
+---
+
+### 22.6 DocInfo BORDER_FILL trailer variants (2026-10-19)
+
+`schema/border_fill.rs::{Hwp5RawBorderFill::parse, parse_fill_payload}` is the
+shared parser for DocInfo and shape fills. The fixed DocInfo prefix is property
+u16 `[0..2]`, five line slots (kind u8, width u8, COLORREF u32) `[2..32]`, then
+fill flags u32 `[32..36]`. Bits 0/1/2 mean color/image/gradation; they are flags,
+not mutually exclusive enum ordinals (§19.5). All numbers below are payload
+lengths, excluding the TLV header.
+
+Raw scans: the full source corpus directory has 2,247 `.hwp` paths, of which
+2,231 are CFB files with 92,576 BORDER_FILL records. Excluded: 14 ZIP files
+and two non-CFB files with `SCDS` magic.
+The 2026-10-16 stratified HWP5 sample has 258 CFB files / 10,725 records plus one
+ZIP/HWPX file. Repository `tests/fixtures` and crate test fixtures add 186 files /
+905 records. Full-corpus counts are by path, without SHA deduplication; these
+three sets overlap. Counts below are definitions (files), and file counts overlap
+between rows.
+
+| Flags | Payload bytes | Wire payload after flags                                                                 |    Full corpus |      Sample | Test fixtures |
+| ----- | ------------- | ---------------------------------------------------------------------------------------- | -------------: | ----------: | ------------: |
+| 0     | 40            | zero u32 extra length                                                                    | 59,569 (2,231) | 6,907 (258) |     537 (186) |
+| 1     | 52            | background u32, pattern color u32, hatch i32, **four zero bytes; no alpha byte**         |     1,095 (78) |     187 (8) |             0 |
+| 1     | 53            | same 12 color bytes, five zero trailer bytes                                             | 30,522 (2,153) | 3,446 (250) |     359 (181) |
+| 2     | 47            | mode u8, brightness i8, contrast i8, effect u8, BinData ID u16, five zero trailer bytes  |      611 (169) |     92 (24) |         4 (4) |
+| 3     | 60            | 12 color bytes + 6 image bytes + six zero trailer bytes                                  |         11 (7) |       3 (1) |             0 |
+| 4     | 70            | type u8, angle u32, center x/y i32, blur u32, count u32=2, two COLORREFs, u32=1, byte=50 |        30 (15) |       6 (2) |             0 |
+| 4     | 71            | same gradation fields, variable blur-center byte, then zero byte                         |      738 (398) |     84 (51) |         5 (5) |
+
+The full-corpus 71-byte gradations have blur-center values 15, 20, 47, 48, 49,
+50, 51, 80, 85, 90, 99 or 100; the existing parser carries this byte. All 768
+full-corpus gradients have two colors. No additional length/flag pair appeared
+outside the stratified sample. The 1,095 alpha-less color records all have the
+exact zero trailer and version 5.0.1.7; only the 187 sample definitions were
+reconverted and compared in the A/B check.
+
+This exhausts the observed `(flags, payload length)` pairs, not every possible
+HWP5 file. Flags 5/6/7 and unknown high bits were not observed. The combination
+3 remains `Unknown { kind, raw_data }`: its borders are preserved, its fill is
+omitted, and `decoder/header.rs::parse_doc_info` emits `ParserFallback` with
+1-based definition ID, flags, full payload length and unparsed byte count.
+
+The 52-byte color form is recognized **only** by flags=1 and exactly four
+remaining zero bytes after the colors/hatch. The zero word is consumed as extra
+length; missing alpha means opaque (`alpha=0`, the existing shape-fill contract).
+All 1,095 full-corpus definitions have this exact trailer (version 5.0.1.7); version
+is not used to select a layout. The former shape-only rescue path is removed:
+both callers use `parse_fill_payload` directly.
+
+For the longer color form, preserve the existing parser contract: alpha u8,
+extra length u32, declared extra bytes. The all-zero observed trailers cannot
+independently establish alpha/length ordering for nonzero extensions; do not
+infer a new ordering from them. Synthetic tests preserve nonzero alpha and
+extra-data behavior. A 52-byte prefix of an opaque 53-byte record is identical
+to the valid short form and cannot be distinguished using wire bytes alone.
+Other truncations/nonzero short trailers still fail; no catch-all EOF fallback.
+
+Image's six-byte base block and remaining `extra_data`, and gradation's named
+fields, colors, optional `shape` u32 / `blur_center` u8 and `extra_data`, retain
+their existing parser contract. The observed final zero byte is optional (r3's
+five gradients are 70 bytes). No nonzero transparency or multi-stop (>2) gradient
+was observed here; these observations do not establish new semantics for opaque
+extensions. This patch does not change image/gradation projection or public types.
+
+`tests/fixtures/border_fill/r3-border-fills.bin` contains only r3's 41 original
+BORDER_FILL TLVs (2,086 bytes), with portable provenance in `manifest.json`.
+Tests cover all raw colors/five line slots, 52/53-byte color boundaries,
+nonzero alpha, declared extra lengths, image/gradient fixed-length boundaries,
+and diagnostic context. Parse failures preserve the original placeholder/ID
+policy but use `ParserFallback` rather than `UnsupportedTag { offset: 0 }`.
 
 ---
 

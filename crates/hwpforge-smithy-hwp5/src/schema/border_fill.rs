@@ -147,24 +147,6 @@ pub struct Hwp5RawColorFill {
     pub extra_data: Vec<u8>,
 }
 
-impl Hwp5RawColorFill {
-    /// A colour fill read from a block that stops after the hatch kind (no
-    /// alpha byte, no extra data) — as some shape components write it.
-    pub(crate) fn from_short_block(
-        background_color: u32,
-        pattern_color: u32,
-        pattern: i32,
-    ) -> Self {
-        Self {
-            background_color,
-            pattern_color,
-            pattern_kind: Hwp5FillPatternKind::from_raw(pattern),
-            alpha: 0,
-            extra_data: Vec::new(),
-        }
-    }
-}
-
 /// Parsed image fill payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5RawImageFill {
@@ -432,7 +414,11 @@ impl Hwp5RawBorderFill {
         let bottom = Hwp5RawBorderLine::parse(&mut cur)?;
         let diagonal = Hwp5RawBorderLine::parse(&mut cur)?;
         let fill_kind = cur.read_u32::<LittleEndian>()?;
-        let fill = parse_fill_payload(fill_kind, &mut cur)?;
+        let fill =
+            parse_fill_payload(fill_kind, &mut cur).map_err(|err| Hwp5Error::RecordParse {
+                offset: cur.position() as usize,
+                detail: format!("BorderFill fill_kind=0x{fill_kind:08X}: {err}"),
+            })?;
 
         Ok(Self {
             property,
@@ -495,7 +481,15 @@ pub(crate) fn parse_fill_payload(
             let background_color = cur.read_u32::<LittleEndian>()?;
             let pattern_color = cur.read_u32::<LittleEndian>()?;
             let pattern_kind = Hwp5FillPatternKind::from_raw(cur.read_i32::<LittleEndian>()?);
-            let alpha = cur.read_u8()?;
+            // The alpha-less form ends with exactly one zero extra-length
+            // word (DocInfo: 52 bytes; also written by shape components).
+            // Do not infer a version cutoff or accept arbitrary EOF: a short
+            // modern trailer with nonzero alpha/length must remain an error.
+            let alpha = if cur.get_ref().get(cur.position() as usize..) == Some(&[0; 4][..]) {
+                0
+            } else {
+                cur.read_u8()?
+            };
             let extra_len = cur.read_u32::<LittleEndian>()?;
             let extra_len = checked_len(cur, u64::from(extra_len), 1, "extra data")?;
             let mut extra_data = vec![0u8; extra_len];
@@ -580,6 +574,147 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn r3_records() -> Vec<crate::schema::record::Record> {
+        crate::schema::record::Record::parse_stream(&mut Cursor::new(include_bytes!(
+            "../../tests/fixtures/border_fill/r3-border-fills.bin"
+        )))
+        .unwrap()
+    }
+
+    #[test]
+    fn border_fill_r3_wire_values_survive_all_41_definitions() {
+        // 이것을 실패시키는 것: 52바이트 alpha 강제 읽기, 색/선 순서 변경,
+        // 그러데이션 70바이트 꼬리에 alpha 강제 읽기.
+        let records = r3_records();
+        assert_eq!(records.len(), 41);
+        let mut color_ids = Vec::new();
+        let mut gradient_count = 0;
+        for (index, record) in records.iter().enumerate() {
+            let data = &record.data;
+            let word = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+            let fill = Hwp5RawBorderFill::parse(data).unwrap();
+            assert_eq!(fill.property, u16::from_le_bytes([data[0], data[1]]));
+            for (slot, line) in
+                [fill.left, fill.right, fill.top, fill.bottom, fill.diagonal].iter().enumerate()
+            {
+                let at = 2 + slot * 6;
+                assert_eq!(line.kind, Hwp5BorderLineKind::from_raw(data[at]));
+                assert_eq!(line.width, data[at + 1]);
+                assert_eq!(line.color, word(at + 2));
+            }
+            match fill.fill {
+                Hwp5RawBorderFillFill::Color(color) => {
+                    assert_eq!(data.len(), 52);
+                    color_ids.push(index + 1);
+                    assert_eq!(color.background_color, word(36));
+                    assert_eq!(color.pattern_color, word(40));
+                    assert_eq!(color.pattern_kind, Hwp5FillPatternKind::None);
+                    assert_eq!(color.alpha, 0);
+                    assert!(color.extra_data.is_empty());
+                }
+                Hwp5RawBorderFillFill::Gradation(gradient) => {
+                    gradient_count += 1;
+                    assert_eq!(data.len(), 70);
+                    assert_eq!(gradient.colors, vec![word(57), word(61)]);
+                    assert_eq!(gradient.angle, word(37));
+                    assert_eq!(gradient.center_x, word(41) as i32);
+                    assert_eq!(gradient.center_y, word(45) as i32);
+                    assert_eq!(gradient.blur, word(49));
+                    assert_eq!(gradient.shape, Some(1));
+                    assert_eq!(gradient.blur_center, Some(50));
+                    assert!(gradient.extra_data.is_empty());
+                }
+                Hwp5RawBorderFillFill::None => assert_eq!(data.len(), 40),
+                other => panic!("unexpected r3 fill: {other:?}"),
+            }
+        }
+        assert_eq!(color_ids, [1, 6, 7, 11, 12, 25, 26, 27, 39, 40, 41]);
+        assert_eq!(gradient_count, 5);
+    }
+
+    #[test]
+    fn border_fill_color_alpha_and_length_boundaries() {
+        // 이것을 실패시키는 것: 길이만 보고 임의 절단 수용, 네 zero 조건 삭제,
+        // 현대 alpha 무시, 선언한 extra 길이 검사 제거.
+        let legacy = r3_records()[5].data.clone();
+        for len in 0..52 {
+            assert!(Hwp5RawBorderFill::parse(&legacy[..len]).is_err(), "length {len}");
+        }
+        for at in 48..52 {
+            let mut damaged = legacy.clone();
+            damaged[at] = 1;
+            assert!(Hwp5RawBorderFill::parse(&damaged).is_err(), "nonzero byte {at}");
+        }
+        for alpha in [0, 1, 128, 255] {
+            let mut modern = legacy[..48].to_vec();
+            modern.push(alpha);
+            modern.extend_from_slice(&0u32.to_le_bytes());
+            let Hwp5RawBorderFillFill::Color(color) =
+                Hwp5RawBorderFill::parse(&modern).unwrap().fill
+            else {
+                panic!("color expected")
+            };
+            assert_eq!(color.alpha, alpha);
+            assert_eq!(color.background_color, 0x00CC_FFFF);
+            assert!(color.extra_data.is_empty());
+            // With alpha=0, a 52-byte prefix is byte-identical to the valid
+            // legacy form; length/flags cannot distinguish its provenance.
+            assert_eq!(Hwp5RawBorderFill::parse(&modern[..52]).is_ok(), alpha == 0);
+            modern[49..53].copy_from_slice(&2u32.to_le_bytes());
+            assert!(Hwp5RawBorderFill::parse(&modern).is_err());
+            modern.push(0xAB);
+            assert!(Hwp5RawBorderFill::parse(&modern).is_err());
+            modern.push(0xCD);
+            let Hwp5RawBorderFillFill::Color(color) =
+                Hwp5RawBorderFill::parse(&modern).unwrap().fill
+            else {
+                panic!("color expected")
+            };
+            assert_eq!(color.alpha, alpha);
+            assert_eq!(color.extra_data, [0xAB, 0xCD]);
+        }
+    }
+
+    #[test]
+    fn border_fill_gradient_and_image_layout_boundaries() {
+        // 이것을 실패시키는 것: color 전용 짧은 형식을 다른 플래그에 적용,
+        // 이미지 ID/효과 위치 변경, gradient 색 개수 길이 검사 제거.
+        let gradient = r3_records()[13].data.clone();
+        assert_eq!(gradient.len(), 70);
+        for len in 36..65 {
+            assert!(Hwp5RawBorderFill::parse(&gradient[..len]).is_err(), "gradient {len}");
+        }
+        for alpha_tail in [vec![], vec![0], vec![128]] {
+            let mut data = gradient.clone();
+            data.extend_from_slice(&alpha_tail);
+            let Hwp5RawBorderFillFill::Gradation(fill) =
+                Hwp5RawBorderFill::parse(&data).unwrap().fill
+            else {
+                panic!("gradation expected")
+            };
+            assert_eq!(fill.shape, Some(1));
+            assert_eq!(fill.blur_center, Some(50));
+            assert_eq!(fill.extra_data, alpha_tail);
+        }
+        let mut image = vec![0; 32];
+        image.extend_from_slice(&2u32.to_le_bytes());
+        image.extend_from_slice(&[5, 0xF6, 20, 1, 0x34, 0x12]);
+        for len in 36..42 {
+            assert!(Hwp5RawBorderFill::parse(&image[..len]).is_err(), "image {len}");
+        }
+        image.extend_from_slice(&[0; 5]);
+        let Hwp5RawBorderFillFill::Image(fill) = Hwp5RawBorderFill::parse(&image).unwrap().fill
+        else {
+            panic!("image expected")
+        };
+        assert_eq!(fill.mode, Hwp5FillImageMode::Resize);
+        assert_eq!(fill.brightness, -10);
+        assert_eq!(fill.contrast, 20);
+        assert_eq!(fill.effect, Hwp5FillImageEffect::GrayScale);
+        assert_eq!(fill.bindata_id, 0x1234);
+        assert_eq!(fill.extra_data, [0; 5]);
+    }
 
     /// A fill whose length word claims more than the record holds is
     /// refused before anything is allocated: an empty fill's or a colour
