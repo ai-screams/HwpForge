@@ -20,6 +20,7 @@ use crate::schema::section::{
 };
 
 mod gso;
+mod master;
 mod model;
 
 use gso::*;
@@ -268,6 +269,7 @@ fn split_end_mark_shape(
 /// ```
 struct MemoContentCapture {
     memo_id: u32,
+    note_sources: Vec<master::NoteNumberingSource>,
     saw_list_header: bool,
     parser: Box<BodyTextParserState>,
 }
@@ -1102,6 +1104,13 @@ pub(super) fn validate_body_style_references(
 
 #[derive(Default)]
 struct BodyTextParserState {
+    master_pages: Vec<Hwp5MasterPage>,
+    master_capture: Option<master::MasterCapture>,
+    secd_level: Option<u16>,
+    secd_declaration: Option<(usize, u16, Vec<u8>)>,
+    extended_master_count: u16,
+    ordinary_master_count: usize,
+    record_index: usize,
     wire_sequence: std::rc::Rc<std::cell::Cell<usize>>,
     /// Absolute paragraph level; records and their payloads stay borrowed.
     base_level: u16,
@@ -1150,6 +1159,7 @@ struct BodyTextParserState {
     /// consumed in `finish` to merge into the matching `Hwp5Control::Memo`
     /// placeholders.
     memo_contents: HashMap<u32, Vec<Hwp5Paragraph>>,
+    memo_note_sources: std::collections::BTreeMap<u32, Vec<master::NoteNumberingSource>>,
     /// Active capture state for the memo-content cluster currently being
     /// absorbed. `Some` while inside a `HWPTAG_MEMO_LIST` region.
     memo_content_capture: Option<MemoContentCapture>,
@@ -1159,12 +1169,16 @@ impl BodyTextParserState {
     fn handle_record(&mut self, record: &Record) {
         let tag = TagId::from(record.header.tag_id);
         let level = record.header.level;
+        self.record_index += 1;
 
         #[cfg(test)]
         {
             self.work.set(self.work.get() + 1);
             let expected = self.record_identity.get();
             assert!(expected.is_null() || std::ptr::eq(expected, record), "record was cloned");
+        }
+        if self.dispatch_master_record(record, tag, level) {
+            return;
         }
         if let Some(skipped) = self.skipped_control {
             if level > skipped {
@@ -1183,6 +1197,9 @@ impl BodyTextParserState {
             return;
         }
         self.prepare_for_record(level);
+        if self.intercept_master_record(record, tag, level) {
+            return;
+        }
 
         if self.handle_active_table_record(record, tag, level) {
             return;
@@ -1929,6 +1946,7 @@ impl BodyTextParserState {
                 self.flush_memo_content_capture();
                 self.memo_content_capture = Some(MemoContentCapture {
                     memo_id,
+                    note_sources: Vec::new(),
                     saw_list_header: false,
                     parser: Box::new(Self {
                         base_level: level,
@@ -2261,6 +2279,11 @@ impl BodyTextParserState {
         if tag == TagId::ListHeader && level == 1 {
             capture.saw_list_header = true;
         } else if capture.saw_list_header {
+            if let Some(source) =
+                master::NoteNumberingSource::from_record(record, self.record_index - 1)
+            {
+                capture.note_sources.push(source);
+            }
             capture.parser.handle_record(record);
         }
         true
@@ -2314,12 +2337,16 @@ impl BodyTextParserState {
     /// surfaced); zero-content clusters insert an empty entry so the
     /// matching placeholder still resolves cleanly.
     fn flush_memo_content_capture(&mut self) {
-        if let Some(capture) = self.memo_content_capture.take() {
+        if let Some(mut capture) = self.memo_content_capture.take() {
             let memo_id = capture.memo_id;
+            let note_sources = std::mem::take(&mut capture.note_sources);
             let paragraphs = capture.into_paragraphs(&mut self.warnings);
             match self.memo_contents.entry(memo_id) {
                 Entry::Vacant(slot) => {
                     slot.insert(paragraphs);
+                    if !note_sources.is_empty() {
+                        self.memo_note_sources.insert(memo_id, note_sources);
+                    }
                 }
                 Entry::Occupied(_) => {
                     self.warnings.push(Hwp5Warning::DroppedControl {
@@ -2341,6 +2368,26 @@ impl BodyTextParserState {
             &mut self.warnings,
             self.budget,
         );
+        // The join removes each cluster exactly once. Discard body-owned
+        // sources first, then diagnose only clusters consumed by each master.
+        self.memo_note_sources.retain(|id, _| self.memo_contents.contains_key(id));
+        for master in &mut self.master_pages {
+            fill_memo_placeholders(
+                &mut master.paragraphs,
+                &mut self.memo_contents,
+                &mut self.warnings,
+                self.budget.enter(false, false).expect("section master budget"),
+            );
+            self.memo_note_sources.retain(|id, sources| {
+                if self.memo_contents.contains_key(id) {
+                    return true;
+                }
+                for source in sources {
+                    self.warnings.push(source.warning(&master.location(), Some(*id)));
+                }
+                false
+            });
+        }
         for orphan_id in self.memo_contents.keys() {
             self.warnings.push(Hwp5Warning::DroppedControl {
                 control: "memo_content_cluster",
@@ -2353,6 +2400,10 @@ impl BodyTextParserState {
     }
 
     fn finish(mut self) -> SectionResult {
+        self.close_master();
+        if !self.nested && self.secd_declaration.is_some() {
+            self.check_master_counts();
+        }
         self.close_nested_control();
         // Drain any orphan `%clk` whose `0x57` name sub-record was
         // missing or replaced by another top-level record (Wave 12l).
@@ -2387,6 +2438,7 @@ impl BodyTextParserState {
 
         self.warn_nested_section_state();
         SectionResult {
+            master_pages: self.master_pages,
             paragraphs: self.paragraphs,
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
@@ -3567,7 +3619,7 @@ mod tests {
         assert_eq!(result.paragraphs[1].text, "hello");
     }
 
-    fn one_cell_table(stream: &mut Vec<u8>, paragraphs: u32) {
+    pub(super) fn one_cell_table(stream: &mut Vec<u8>, paragraphs: u32) {
         stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
         stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
         stream.extend(make_record(

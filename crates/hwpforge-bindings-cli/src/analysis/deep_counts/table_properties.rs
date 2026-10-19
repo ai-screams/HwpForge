@@ -259,10 +259,20 @@ pub(crate) fn summarize_hwp5_table_properties(
     let mut next_table_ordinal: usize = 0;
 
     for (section_index, section) in document.sections.iter().enumerate() {
-        for table_payload in section.controls.iter().filter_map(|control| match &control.payload {
-            Hwp5SemanticControlPayload::Table(payload) => Some(payload),
-            _ => None,
-        }) {
+        for table_payload in section
+            .controls
+            .iter()
+            .filter(|control| {
+                !matches!(
+                    control.container.segments.first(),
+                    Some(hwpforge_smithy_hwp5::Hwp5SemanticContainerKind::MasterPageSubList(_))
+                )
+            })
+            .filter_map(|control| match &control.payload {
+                Hwp5SemanticControlPayload::Table(payload) => Some(payload),
+                _ => None,
+            })
+        {
             match table_payload.page_break {
                 Hwp5SemanticTablePageBreak::None => {
                     summary.increment_page_break(TablePageBreak::None)

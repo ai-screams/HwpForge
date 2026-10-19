@@ -45,6 +45,29 @@ pub(crate) fn collect_section_path_inventory(
     Ok(path_inventory)
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct MasterPartInventory {
+    pub section_index: usize,
+    pub index: usize,
+    pub part: String,
+    pub occurrences: Vec<HwpxPathOccurrence>,
+}
+
+pub(crate) fn collect_master_path_inventory(
+    pkg: &mut PackageReader<'_>,
+) -> HwpxResult<Vec<MasterPartInventory>> {
+    let paths = hwpforge_smithy_hwpx::master_page_part_paths(pkg)?;
+    let mut out = Vec::new();
+    for (section_index, parts) in paths.into_iter().enumerate() {
+        for (index, part) in parts.into_iter().enumerate() {
+            let xml = pkg.read_text_entry(&part)?;
+            let occurrences = scan_section_xml(section_index, &part, &xml)?;
+            out.push(MasterPartInventory { section_index, index, part, occurrences });
+        }
+    }
+    Ok(out)
+}
+
 pub(crate) fn scan_section_xml(
     section_index: usize,
     part: &str,

@@ -6624,3 +6624,60 @@ fn w2_legacy_json_tabs_share_code_reason_and_remedy() {
     assert!(text.contains("원본 HWPX/HWP5에서 새 버전의 to-json을 다시 실행한 뒤 편집하십시오."));
     assert!(!output.exists());
 }
+
+// 이것을 실패시키는 것: 검증한 masterpage00.xml 경로를 masterpage0.xml로 재구성하기.
+#[test]
+fn master_part_leading_zero_is_shared_by_decoder_audit_census_and_raw_counts() {
+    let source = fixture("master_pages/f5b-optional-page3.hwp");
+    let original = std::fs::read(fixture("master_pages/f5b-optional-page3.hwpx")).unwrap();
+    let mut archive = ZipArchive::new(std::io::Cursor::new(&original)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().unwrap().to_string();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        let renamed = name.replace("masterpage0.xml", "masterpage00.xml");
+        if name == "Contents/content.hpf" {
+            data = String::from_utf8(data)
+                .unwrap()
+                .replace("masterpage0.xml", "masterpage00.xml")
+                .into_bytes();
+        }
+        writer.start_file(renamed, zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(&data).unwrap();
+    }
+    let bytes = writer.finish().unwrap().into_inner();
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).unwrap();
+    let reference = hwpforge_smithy_hwpx::HwpxDecoder::decode(&original).unwrap();
+    assert_eq!(decoded.document.sections(), reference.document.sections());
+    let mut pkg = hwpforge_smithy_hwpx::PackageReader::new(&bytes).unwrap();
+    assert_eq!(
+        hwpforge_smithy_hwpx::master_page_part_paths(&mut pkg).unwrap(),
+        vec![vec!["Contents/masterpage00.xml".to_string()]]
+    );
+    let path = test_tmp().join("leading-zero.hwpx");
+    std::fs::write(&path, bytes).unwrap();
+    // audit invokes both master evidence and raw_counts::compare; compare all
+    // metrics with the unchanged companion so neither consumer can be skipped.
+    let companion = fixture("master_pages/f5b-optional-page3.hwpx");
+    let (before, _, before_code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+    let (after, stderr, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), path.to_str().unwrap()]);
+    assert_eq!(code, before_code, "{stderr}");
+    assert_eq!(code, 0, "{after}");
+    assert_eq!(after["comparisons"], before["comparisons"]);
+    assert!(after["comparisons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|metric| metric["field"] == "raw.sections[0].para_text_chars"));
+    let (census, stderr, code) =
+        run_json(&["census-hwp5", source.to_str().unwrap(), "--companion", path.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        census["companion"]["master_path_inventory"].to_string().contains("masterpage00.xml"),
+        "{census}"
+    );
+}

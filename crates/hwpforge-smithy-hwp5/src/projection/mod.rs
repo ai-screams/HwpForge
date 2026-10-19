@@ -30,7 +30,7 @@ use hwpforge_core::placement::{
     HorzAlign, ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap, VertAlign,
 };
 use hwpforge_core::run::{Run, RunContent};
-use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
+use hwpforge_core::section::{HeaderFooter, MasterPage, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{CellLineWrap, CellZone, Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::ObjectId;
@@ -48,9 +48,9 @@ use crate::ctrl_ids::{
 use crate::decoder::chart_ole::{extract_chart_payload_from_inflated, ChartOleError};
 use crate::decoder::package::{DecompressBudget, MAX_TOTAL_DECOMPRESSED};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5EquationControl, Hwp5ImageControl, Hwp5MemoControl, Hwp5NestedSubtree,
-    Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5Table, Hwp5TableCell,
-    Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
+    Hwp5Control, Hwp5EquationControl, Hwp5ImageControl, Hwp5MasterPage, Hwp5MemoControl,
+    Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5Table,
+    Hwp5TableCell, Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::{Hwp5Error, Hwp5Result};
@@ -107,7 +107,7 @@ struct UnknownControlHeader<'a> {
 #[derive(Debug)]
 struct ParagraphProjectionQueues<'a> {
     marker_headers: VecDeque<UnknownControlHeader<'a>>,
-    object_controls: VecDeque<&'a Hwp5Control>,
+    object_controls: VecDeque<ProjectionControl<'a>>,
     /// Pending memo placeholders in document order. Consumed by
     /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
     /// any leftovers are drained at end-of-paragraph as a safety net.
@@ -374,12 +374,17 @@ fn project_to_core_internal(
         }
         // All hosts use project_control_run, including section-scoped controls.
         // Nested headers/footers inherit the owning top-level paragraph anchor.
-        for hwp_para in section_result.paragraphs {
+        let mut masters = section_result.master_pages.as_slice();
+        for (index, hwp_para) in section_result.paragraphs.iter().enumerate() {
+            let count = masters.partition_point(|master| master.body_paragraph_index == index);
+            let (host_masters, remaining) = masters.split_at(count);
+            masters = remaining;
             projection_images.section_anchor = section.paragraphs.len();
-            let projected = project_paragraph_with_images(
-                &hwp_para,
+            let projected = project_paragraph_with_masters(
+                hwp_para,
                 &mut projection_images,
                 ImageProjectionContext::Flow,
+                host_masters,
             );
             section.add_paragraph(projected.paragraph);
         }
@@ -405,6 +410,10 @@ fn project_to_core_internal(
             ));
         }
 
+        let masters = std::mem::take(&mut projection_images.master_pages);
+        if !masters.is_empty() {
+            section.master_pages = Some(masters);
+        }
         doc.add_section(section);
     }
 
@@ -471,6 +480,8 @@ fn ctrl_id_ascii(ctrl_id: u32) -> String {
 struct ProjectionImageState<'a> {
     /// Section effects are emitted by the same control projection as inline runs.
     section_anchor: usize,
+    in_master: bool,
+    master_pages: Vec<MasterPage>,
     headers: Vec<(usize, HeaderFooter)>,
     footers: Vec<(usize, HeaderFooter)>,
     image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
@@ -514,6 +525,8 @@ impl<'a> ProjectionImageState<'a> {
     ) -> Self {
         Self {
             section_anchor: 0,
+            in_master: false,
+            master_pages: Vec::new(),
             headers: Vec::new(),
             footers: Vec::new(),
             image_assets,
@@ -1363,16 +1376,31 @@ fn project_paragraph_with_images(
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
 ) -> ProjectedParagraph {
+    project_paragraph_with_masters(hwp_para, projection_images, image_context, &[])
+}
+
+fn project_paragraph_with_masters(
+    hwp_para: &Hwp5Paragraph,
+    projection_images: &mut ProjectionImageState<'_>,
+    image_context: ImageProjectionContext,
+    masters: &[Hwp5MasterPage],
+) -> ProjectedParagraph {
     let mut projected = if !paragraph_needs_structural_projection(hwp_para) {
         ProjectedParagraph {
             paragraph: project_paragraph_with_images_flat(
                 hwp_para,
                 projection_images,
                 image_context,
+                masters,
             ),
         }
     } else {
-        project_paragraph_with_images_structural(hwp_para, projection_images, image_context)
+        project_paragraph_with_images_structural(
+            hwp_para,
+            projection_images,
+            image_context,
+            masters,
+        )
     };
 
     // Carry inline `<hp:tab>` attributes (width / leader / type) by
@@ -1500,6 +1528,7 @@ fn project_paragraph_with_images_flat(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
+    masters: &[Hwp5MasterPage],
 ) -> Paragraph {
     let mut runs: Vec<Run> = Vec::new();
     // Marker-header controls (secd / cold / %bmk / %hlk / %xrf / bokm) are consumed by `SectionColumnDef` / `FieldBegin` text
@@ -1510,10 +1539,10 @@ fn project_paragraph_with_images_flat(
     // them out here so the FFFC iterator only sees object controls.
     // See `.docs/algorithms/2026-06-01_dutmal_carry.md` (companion-fix
     // section) for the full root-cause + rationale.
-    let mut control_iter = hwp_para.controls.iter().filter(|control| {
+    let mut control_iter = projection_controls(hwp_para, masters).filter(|entry| {
         !matches!(
-            control,
-            Hwp5Control::Unknown {
+            entry,
+            ProjectionControl::Control(Hwp5Control::Unknown {
                 ctrl_id: CTRL_ID_SECD
                     | CTRL_ID_COLUMN_DEF
                     | CTRL_ID_BOOKMARK_SPAN
@@ -1521,7 +1550,7 @@ fn project_paragraph_with_images_flat(
                     | CTRL_ID_FIELD_CROSSREF
                     | CTRL_ID_BOOKMARK_POINT,
                 ..
-            }
+            })
         )
     });
     let mut segment_start_utf16: u32 = 0;
@@ -1537,7 +1566,7 @@ fn project_paragraph_with_images_flat(
                 current_utf16,
             ));
 
-            if let Some(control) = control_iter.next() {
+            if let Some(control) = next_projection_control(&mut control_iter, projection_images) {
                 if let Some(run) = project_control_run(
                     control,
                     projection_images,
@@ -1563,7 +1592,7 @@ fn project_paragraph_with_images_flat(
         current_utf16,
     ));
 
-    for control in control_iter {
+    while let Some(control) = next_projection_control(&mut control_iter, projection_images) {
         if let Some(run) = project_control_run(
             control,
             projection_images,
@@ -2037,8 +2066,9 @@ fn project_paragraph_with_images_structural(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
+    masters: &[Hwp5MasterPage],
 ) -> ProjectedParagraph {
-    let mut queues = build_paragraph_projection_queues(hwp_para, projection_images);
+    let mut queues = build_paragraph_projection_queues(hwp_para, projection_images, masters);
     let mut runs: Vec<Run> = Vec::new();
     let mut visible_utf16: u32 = 0;
     let mut active_field: Option<ActiveField> = None;
@@ -2124,7 +2154,11 @@ fn project_paragraph_with_images_structural(
                         )
                     })
                 } else {
-                    queues.object_controls.pop_front().and_then(|control| {
+                    next_projection_control(
+                        &mut std::iter::from_fn(|| queues.object_controls.pop_front()),
+                        projection_images,
+                    )
+                    .and_then(|control| {
                         project_control_run(
                             control,
                             projection_images,
@@ -2520,7 +2554,7 @@ fn start_field_from_marker(
 /// `FieldBegin %unk MEMO` anchor was missing; emitting preserves the
 /// body rather than silently dropping it.
 fn drain_unconsumed_paragraph_queues(
-    queues: ParagraphProjectionQueues<'_>,
+    mut queues: ParagraphProjectionQueues<'_>,
     hwp_para: &Hwp5Paragraph,
     visible_utf16: u32,
     runs: &mut Vec<Run>,
@@ -2542,7 +2576,10 @@ fn drain_unconsumed_paragraph_queues(
         ));
     }
 
-    for control in queues.object_controls {
+    while let Some(control) = next_projection_control(
+        &mut std::iter::from_fn(|| queues.object_controls.pop_front()),
+        projection_images,
+    ) {
         if let Some(run) = project_control_run(
             control,
             projection_images,
@@ -2654,9 +2691,75 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
         })
 }
 
+// Master lists have no inline ControlRef. Merge their saved host positions
+// into the existing object traversal, sharing every projection counter. A list
+// is drained before the next object without consuming that object's marker.
+#[derive(Debug)]
+enum ProjectionControl<'a> {
+    Control(&'a Hwp5Control),
+    Master(&'a Hwp5MasterPage),
+}
+
+fn projection_controls<'a>(
+    paragraph: &'a Hwp5Paragraph,
+    masters: &'a [Hwp5MasterPage],
+) -> impl Iterator<Item = ProjectionControl<'a>> {
+    let mut masters = masters.iter().peekable();
+    let mut index = 0;
+    std::iter::from_fn(move || {
+        if masters.peek().is_some_and(|master| master.body_control_index == index) {
+            return masters.next().map(ProjectionControl::Master);
+        }
+        let control = paragraph.controls.get(index)?;
+        index += 1;
+        Some(ProjectionControl::Control(control))
+    })
+}
+
+fn next_projection_control<'a>(
+    controls: &mut impl Iterator<Item = ProjectionControl<'a>>,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<&'a Hwp5Control> {
+    for entry in controls.by_ref() {
+        match entry {
+            ProjectionControl::Control(control) => return Some(control),
+            ProjectionControl::Master(master) => project_master(master, projection_images),
+        }
+    }
+    None
+}
+
+fn project_master(wire: &Hwp5MasterPage, projection_images: &mut ProjectionImageState<'_>) {
+    let mut master = match wire.core_metadata() {
+        Ok(master) => master,
+        Err(reason) => {
+            projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                control: "master_page",
+                reason: format!("{}: {reason}; scope not widened", wire.location()),
+            });
+            return;
+        }
+    };
+    if wire.unsupported_properties() {
+        projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "master_page.properties",
+                    reason: format!("{}: non-default direction, wrapping, reference bitmap or unknown flags/tail cannot be represented; retaining confirmed fields", wire.location()),
+                });
+    }
+    projection_images.in_master = true;
+    master.paragraphs = project_nested_paragraphs(
+        &wire.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    projection_images.in_master = false;
+    projection_images.master_pages.push(master);
+}
+
 fn build_paragraph_projection_queues<'a>(
     hwp_para: &'a Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
+    masters: &'a [Hwp5MasterPage],
 ) -> ParagraphProjectionQueues<'a> {
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
@@ -2668,7 +2771,11 @@ fn build_paragraph_projection_queues<'a>(
     let mut crossref_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
 
-    for control in &hwp_para.controls {
+    for entry in projection_controls(hwp_para, masters) {
+        let ProjectionControl::Control(control) = entry else {
+            object_controls.push_back(entry);
+            continue;
+        };
         // Memos consume a dedicated queue so the `FieldBegin %unk MEMO`
         // inline segment can pull the matching placeholder without
         // entangling object/marker dispatch.
@@ -2717,7 +2824,7 @@ fn build_paragraph_projection_queues<'a>(
         // `object_controls` entry and routes typed
         // `Hwp5Control::InlinePageNumber` through `project_control_run`.
         let Some(unknown) = unknown_control_header(control) else {
-            object_controls.push_back(control);
+            object_controls.push_back(ProjectionControl::Control(control));
             continue;
         };
 
@@ -2725,7 +2832,7 @@ fn build_paragraph_projection_queues<'a>(
             CTRL_ID_SECD | CTRL_ID_COLUMN_DEF | CTRL_ID_BOOKMARK_SPAN | CTRL_ID_HYPERLINK => {
                 marker_headers.push_back(unknown)
             }
-            CTRL_ID_PAGE_NUMBER => object_controls.push_back(control),
+            CTRL_ID_PAGE_NUMBER => object_controls.push_back(ProjectionControl::Control(control)),
             CTRL_ID_BOOKMARK_POINT => {
                 point_bookmark_names.push_back(unknown.bookmark_name.map(str::to_string));
                 if unknown.bookmark_name.is_none() {
@@ -2736,7 +2843,7 @@ fn build_paragraph_projection_queues<'a>(
                     });
                 }
             }
-            _ => object_controls.push_back(control),
+            _ => object_controls.push_back(ProjectionControl::Control(control)),
         }
     }
 
@@ -3697,6 +3804,13 @@ fn project_control_run(
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         Hwp5Control::Header(subtree) | Hwp5Control::Footer(subtree) => {
+            if projection_images.in_master {
+                projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "master_page.header_footer",
+                    reason: "header/footer inside a master list has no independent section anchor; omitted".into(),
+                });
+                return None;
+            }
             // Reserve before recursion to preserve control order even when a
             // header itself contains another header. No separate tree scan.
             let is_header = matches!(control, Hwp5Control::Header(_));
@@ -5266,6 +5380,7 @@ mod tests {
                     &para,
                     &mut state,
                     ImageProjectionContext::Flow,
+                    &[],
                 );
                 assert_eq!(FIELD_TEXT_VISITS.with(|n| n.get()), expected);
                 eprintln!("N={n} filled={filled} segment+character visits={}", index.visits);
@@ -5422,6 +5537,7 @@ mod tests {
         page_def: Option<Hwp5PageDef>,
     ) -> SectionResult {
         SectionResult {
+            master_pages: Vec::new(),
             paragraphs,
             page_def,
             section_def_properties: None,
@@ -5689,6 +5805,7 @@ mod tests {
     fn warnings_are_collected() {
         let warn = Hwp5Warning::UnsupportedTag { tag_id: 0xAB, offset: 0 };
         let section = SectionResult {
+            master_pages: Vec::new(),
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
             section_def_properties: None,

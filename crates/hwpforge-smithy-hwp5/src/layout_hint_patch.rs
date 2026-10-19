@@ -64,6 +64,41 @@ pub(crate) fn capture_layout_hints(
     sections.iter().map(|section| collect_section_layout_hints(section, warnings)).collect()
 }
 
+/// Master hints follow emitted master order, excluding unrepresentable scopes.
+pub(crate) fn capture_master_layout_hints(
+    sections: &[SectionResult],
+    warnings: &mut Vec<crate::Hwp5Warning>,
+) -> Vec<Vec<SectionLayoutHints>> {
+    sections
+        .iter()
+        .map(|section| {
+            section
+                .master_pages
+                .iter()
+                .filter(|master| master.core_metadata().is_ok())
+                .map(|master| {
+                    let mut hints = ScopeLayoutHints::default();
+                    collect_scope_paragraphs(&master.paragraphs, &mut hints);
+                    if let Some(reason) = hints.uncertain {
+                        warnings.push(crate::Hwp5Warning::ProjectionFallback {
+                            subject: "layout_hints.discarded",
+                            reason: format!(
+                                "{}: {reason}; master layout hints discarded",
+                                master.location()
+                            ),
+                        });
+                        return SectionLayoutHints {
+                            paragraphs: VecDeque::new(),
+                            tables: VecDeque::new(),
+                        };
+                    }
+                    SectionLayoutHints { paragraphs: hints.paragraphs, tables: hints.tables }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 impl SectionLayoutHints {
     /// Whether this section carries any actionable layout hint.
     pub fn has_payload(&self) -> bool {
@@ -666,6 +701,7 @@ mod tests {
     #[test]
     fn collect_section_layout_hints_orders_body_before_header_and_footer() {
         let section = SectionResult {
+            master_pages: Vec::new(),
             paragraphs: vec![
                 paragraph(
                     "body-a",

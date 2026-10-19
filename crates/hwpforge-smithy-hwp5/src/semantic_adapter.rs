@@ -165,7 +165,48 @@ fn adapt_section(
         );
     }
 
+    let master_pages = section
+        .master_pages
+        .iter()
+        .map(|master| {
+            let paragraph_start = build.paragraphs.len();
+            let control_start = build.controls.len();
+            for paragraph in &master.paragraphs {
+                adapt_paragraph(
+                    paragraph,
+                    Hwp5SemanticContainerPath::new(vec![
+                        Hwp5SemanticContainerKind::MasterPageSubList(master.index),
+                    ]),
+                    None,
+                    &mut build,
+                    support,
+                    ids,
+                );
+            }
+            // Legacy nested paths name their terminal host only. Preserve
+            // that JSON for Body; qualify every newly adapted master descendant
+            // with its list identity, including nested tables/notes/shape text.
+            let root = Hwp5SemanticContainerKind::MasterPageSubList(master.index);
+            for path in build.paragraphs[paragraph_start..]
+                .iter_mut()
+                .map(|p| &mut p.container)
+                .chain(build.controls[control_start..].iter_mut().map(|c| &mut c.container))
+            {
+                if path.segments.first() != Some(&root) {
+                    path.segments.insert(0, root.clone());
+                }
+            }
+            crate::semantic::Hwp5SemanticMasterPage {
+                index: master.index,
+                extended: master.extended,
+                record_index: master.record_index,
+                raw: master.raw.clone(),
+                scope: master.core_metadata().ok().as_ref().map(Into::into),
+            }
+        })
+        .collect();
     Hwp5SemanticSection {
+        master_pages,
         section_id,
         index,
         page_def: section.page_def.as_ref().map(adapt_page_def),
@@ -1381,6 +1422,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1601,6 +1643,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info,
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: Vec::new(),
                 page_def: None,
                 section_def_properties: None,
@@ -1633,6 +1676,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1681,6 +1725,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1735,6 +1780,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1828,6 +1874,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1907,6 +1954,7 @@ mod tests {
             }],
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),
@@ -1991,6 +2039,7 @@ mod tests {
             bin_data_streams: Vec::new(),
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
+                master_pages: Vec::new(),
                 paragraphs: vec![Hwp5Paragraph {
                     end_char_shape: None,
                     silent_wires: Vec::new(),

@@ -89,7 +89,9 @@ pub use cell_edit::{
     HwpxCellEditor, SetCellOutcome, SetCellResult,
 };
 pub use decoder::package::{PackageEntryInfo, PackageReader};
-pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg};
+pub use decoder::{
+    master_page_part_paths, DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg,
+};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diagnostics::{WithCodecWarnings, WithDecodeWarnings, WithEncodeWarnings};
 pub use diff::{

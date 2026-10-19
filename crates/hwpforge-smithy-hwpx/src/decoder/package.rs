@@ -155,6 +155,12 @@ impl<'a> PackageReader<'a> {
     /// Returns a map from masterpage index to XML content.
     /// E.g., `{0: "<masterPage>...</masterPage>"}` for `Contents/masterpage0.xml`.
     pub fn read_masterpage_xmls(&mut self) -> HwpxResult<std::collections::HashMap<usize, String>> {
+        Ok(self.read_masterpage_parts()?.into_iter().map(|(n, (_, xml))| (n, xml)).collect())
+    }
+
+    pub(crate) fn read_masterpage_parts(
+        &mut self,
+    ) -> HwpxResult<std::collections::BTreeMap<usize, (String, String)>> {
         let mp_paths: Vec<(usize, String)> = self
             .paths
             .iter()
@@ -166,10 +172,10 @@ impl<'a> PackageReader<'a> {
             })
             .collect();
 
-        let mut result = std::collections::HashMap::new();
+        let mut result = std::collections::BTreeMap::new();
         for (idx, path) in mp_paths {
             let xml = self.read_entry(&path)?;
-            result.insert(idx, xml);
+            result.insert(idx, (path, xml));
         }
         Ok(result)
     }

@@ -824,6 +824,8 @@ pub(crate) struct Hwp5NestedSubtree {
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct SectionResult {
+    /// Independent section master-page lists, in wire order.
+    pub master_pages: Vec<Hwp5MasterPage>,
     /// Decoded paragraphs in document order.
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// Page definition, if a PageDef record was found.
@@ -847,6 +849,22 @@ pub(crate) struct SectionResult {
     pub column_def: Option<Hwp5ColumnDef>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// Wire provenance of a master list; never a body paragraph or control.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5MasterPage {
+    /// Wire position among the body host's controls (for first-wins asset lookup).
+    pub body_paragraph_index: usize,
+    pub body_control_index: usize,
+    pub raw: Vec<u8>,
+    pub extended: bool,
+    pub index: usize,
+    pub ordinary_index: usize,
+    pub record_index: usize,
+    pub level: u16,
+    pub section_properties: u32,
+    pub paragraphs: Vec<Hwp5Paragraph>,
 }
 
 /// `secd` ctrl 의 시작번호 묶음 (payload `[20..28]`, 각 u16 LE).

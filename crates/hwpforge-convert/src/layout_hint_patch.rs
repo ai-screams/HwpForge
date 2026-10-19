@@ -44,9 +44,18 @@ struct RawPackageEntry {
     compression: CompressionMethod,
 }
 
+#[cfg(test)]
 pub(crate) fn patch_hwpx_layout_hints(
     hwpx_bytes: &[u8],
     sections: &[SectionLayoutHints],
+) -> LayoutPatchResult<Vec<u8>> {
+    patch_hwpx_part_layout_hints(hwpx_bytes, sections, &[])
+}
+
+pub(crate) fn patch_hwpx_part_layout_hints(
+    hwpx_bytes: &[u8],
+    sections: &[SectionLayoutHints],
+    masters: &[Vec<SectionLayoutHints>],
 ) -> LayoutPatchResult<Vec<u8>> {
     let mut package = RawPackage::read(hwpx_bytes)?;
     for (section_idx, section) in sections.iter().enumerate() {
@@ -57,6 +66,15 @@ pub(crate) fn patch_hwpx_layout_hints(
         let path = format!("Contents/section{section_idx}.xml");
         let xml = package.read_text_entry(&path)?;
         let patched = patch_section_xml(&xml, section.clone())?;
+        package.replace_text_entry(&path, patched);
+    }
+    for (index, master) in masters.iter().flatten().enumerate() {
+        if !master.has_payload() {
+            continue;
+        }
+        let path = format!("Contents/masterpage{index}.xml");
+        let xml = package.read_text_entry(&path)?;
+        let patched = patch_section_xml(&xml, master.clone())?;
         package.replace_text_entry(&path, patched);
     }
     package.write()
@@ -926,5 +944,35 @@ mod tests {
             !patched.contains("hp:lineseg"),
             "lineseg must NOT be emitted even with non-empty line_segments: {patched}"
         );
+    }
+    // 이것을 실패시키는 것: master 글로벌 번호를 구역마다 초기화 / section과 master 표 큐 혼합 / 빈 hint에서 번호 미소비.
+    #[test]
+    fn master_table_hints_are_part_local_across_sections() {
+        let xml = br#"<hm:masterPage><hp:p><hp:run><hp:tbl><hp:sz height="1"/></hp:tbl></hp:run></hp:p></hm:masterPage>"#;
+        let zip = make_zip(&[
+            ("Contents/section0.xml", xml),
+            ("Contents/masterpage0.xml", b"<master/>"),
+            ("Contents/masterpage1.xml", xml),
+            ("Contents/masterpage2.xml", xml),
+        ]);
+        let hints = |height| SectionLayoutHints {
+            paragraphs: VecDeque::from([ParagraphLayoutHint { line_segments: vec![] }]),
+            tables: VecDeque::from([TableLayoutHint { height: Some(height) }]),
+        };
+        let empty = SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+        let bytes = patch_hwpx_part_layout_hints(
+            &zip,
+            &[hints(111)],
+            &[vec![empty, hints(222)], vec![hints(333)]],
+        )
+        .unwrap();
+        let package = RawPackage::read(&bytes).unwrap();
+        for (part, height) in [("section0", 111), ("masterpage1", 222), ("masterpage2", 333)] {
+            assert!(package
+                .read_text_entry(&format!("Contents/{part}.xml"))
+                .unwrap()
+                .contains(&format!("height=\"{height}\"")));
+        }
+        assert_eq!(package.read_text_entry("Contents/masterpage0.xml").unwrap(), "<master/>");
     }
 }

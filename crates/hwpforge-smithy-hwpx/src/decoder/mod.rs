@@ -810,8 +810,7 @@ impl HwpxDecoder {
         // through `content.hpf`, branch review C2).
         // Ordered by file number, so the unreferenced-part warnings come in a
         // fixed order.
-        let masterpage_xmls: std::collections::BTreeMap<usize, String> =
-            pkg.read_masterpage_xmls()?.into_iter().collect();
+        let masterpage_xmls = pkg.read_masterpage_parts()?;
         let manifest = pkg
             .read_text_entry("Contents/content.hpf")
             .map(|xml| manifest_hrefs(&xml))
@@ -882,28 +881,15 @@ impl HwpxDecoder {
             }
             let mut owned: Vec<MasterPage> = Vec::with_capacity(refs.len());
             for id in &refs {
-                let href = match manifest.get(id.as_str()) {
-                    Some(Some(href)) => href,
-                    Some(None) => {
-                        warnings.push(lost(format!(
-                            "masterPage idRef {id:?} names more than one manifest item"
-                        )));
-                        continue;
-                    }
-                    None => {
-                        warnings.push(lost(format!(
-                            "masterPage idRef {id:?} names no master page part"
-                        )));
+                let (number, _part) = match resolve_master_page_ref(id, &manifest, &masterpage_xmls)
+                {
+                    Ok(number) => number,
+                    Err(reason) => {
+                        warnings.push(lost(reason));
                         continue;
                     }
                 };
-                let part = masterpage_number(href)
-                    .and_then(|n| masterpage_xmls.get(&n).map(|xml| (n, xml)));
-                let Some((number, xml)) = part else {
-                    warnings
-                        .push(lost(format!("masterPage idRef {id:?} names no master page part")));
-                    continue;
-                };
+                let xml = &masterpage_xmls[&number].1;
                 // A part is parsed once; every reference to it (sections may
                 // share a master page: `masterPage@idRef` has no owner) keeps
                 // a master page, first and copies alike charged the part's XML
@@ -1283,6 +1269,56 @@ impl CopyBudget {
             _ => false,
         }
     }
+}
+
+/// Resolves each section's master parts through the same manifest lookup used
+/// by the decoder. Section and list order are preserved; shared parts may recur.
+/// Analysis fails on unresolved references instead of guessing file order.
+///
+/// # Errors
+/// Returns an error if the package cannot be read or a master reference is
+/// missing, ambiguous, or names a missing part.
+pub fn master_page_part_paths(
+    pkg: &mut package::PackageReader<'_>,
+) -> HwpxResult<Vec<Vec<String>>> {
+    let parts = pkg.read_masterpage_parts()?;
+    let manifest = pkg
+        .read_text_entry("Contents/content.hpf")
+        .map(|xml| manifest_hrefs(&xml))
+        .unwrap_or_default();
+    (0..pkg.section_count())
+        .map(|index| {
+            let xml = pkg.read_section_xml(index)?;
+            master_page_refs(&xml)
+                .iter()
+                .map(|id| {
+                    resolve_master_page_ref(id, &manifest, &parts)
+                        .map(|(_, path)| path.to_owned())
+                        .map_err(|detail| crate::HwpxError::XmlParse {
+                            file: pkg.section_paths()[index].clone(),
+                            detail,
+                        })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn resolve_master_page_ref<'a>(
+    id: &str,
+    manifest: &std::collections::HashMap<String, Option<String>>,
+    parts: &'a std::collections::BTreeMap<usize, (String, String)>,
+) -> Result<(usize, &'a str), String> {
+    let href = match manifest.get(id) {
+        Some(Some(href)) => href,
+        Some(None) => {
+            return Err(format!("masterPage idRef {id:?} names more than one manifest item"))
+        }
+        None => return Err(format!("masterPage idRef {id:?} names no master page part")),
+    };
+    masterpage_number(href)
+        .and_then(|n| parts.get(&n).map(|(path, _)| (n, path.as_str())))
+        .ok_or_else(|| format!("masterPage idRef {id:?} names no master page part"))
 }
 
 /// `id → href` of every `<opf:item>` in a `content.hpf` manifest.

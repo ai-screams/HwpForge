@@ -878,3 +878,33 @@ fn ole_reference_ambiguity_is_linear_in_the_records() {
     let count = u16::MAX;
     assert!(visits_for(count) <= 2 * u64::from(count), "{} visits", visits_for(count));
 }
+
+// 이것을 실패시키는 것: master geometry 누락 / 본문→master 단순 연결로 first-wins 순서 변경.
+#[test]
+fn master_image_geometry_keeps_wire_first_wins() {
+    use crate::decoder::section::Hwp5Control;
+    let bytes = std::fs::read(fixture_path("master_pages/f5f-shapes.hwp")).unwrap();
+    let mut decoded = crate::decoder::decode_intermediate(&bytes).unwrap();
+    let section = &mut decoded.sections[0];
+    let master = &mut section.master_pages[0];
+    let image = master
+        .paragraphs
+        .iter()
+        .flat_map(|p| &p.controls)
+        .find_map(|c| if let Hwp5Control::Image(image) = c { Some(image.clone()) } else { None })
+        .unwrap();
+    let mut body_image = image.clone();
+    body_image.geometry.width = image.geometry.width + 100;
+    section.paragraphs[0].controls = vec![Hwp5Control::Image(body_image.clone())];
+    master.body_paragraph_index = 0;
+    master.body_control_index = 0;
+    assert_eq!(
+        collect_image_geometry_hints(&decoded.sections)[&image.binary_data_id].width_hwp,
+        image.geometry.width as i32
+    );
+    decoded.sections[0].master_pages[0].body_control_index = 1;
+    assert_eq!(
+        collect_image_geometry_hints(&decoded.sections)[&image.binary_data_id].width_hwp,
+        body_image.geometry.width as i32
+    );
+}

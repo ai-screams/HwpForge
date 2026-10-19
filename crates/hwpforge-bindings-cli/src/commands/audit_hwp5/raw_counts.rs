@@ -45,12 +45,19 @@ pub(super) fn compare(
     mismatch: &mut bool,
 ) -> HwpxResult<()> {
     let mut package = PackageReader::new(bytes)?;
+    let masters = hwpforge_smithy_hwpx::master_page_part_paths(&mut package)?;
     for section in &source.sections {
-        let output = if section.index < package.section_count() {
+        let mut output = if section.index < package.section_count() {
             scan(&package.read_section_xml(section.index)?)
         } else {
             Counts::default()
         };
+        for part in masters.get(section.index).into_iter().flatten() {
+            let master = scan(&package.read_text_entry(part)?);
+            output.tables += master.tables;
+            output.compose += master.compose;
+            output.chars += master.chars;
+        }
         let controls = |id: &str| {
             section
                 .ctrl_ids

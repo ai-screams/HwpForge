@@ -6,7 +6,8 @@ use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
 use hwpforge_smithy_hwp5::{
     Hwp5SemanticConfidence, Hwp5SemanticContainerKind, Hwp5SemanticControlId,
-    Hwp5SemanticControlKind, Hwp5SemanticDocument, Hwp5SemanticParagraph, Hwp5SemanticSection,
+    Hwp5SemanticControlKind, Hwp5SemanticControlNode, Hwp5SemanticDocument, Hwp5SemanticParagraph,
+    Hwp5SemanticSection,
 };
 use hwpforge_smithy_hwpx::{HwpxDocument, HwpxResult, PackageReader};
 
@@ -28,7 +29,7 @@ pub(crate) struct DeepDocumentSummary {
     pub table_properties: DeepTablePropertiesSummary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct DeepSectionSummary {
     pub index: usize,
     pub paragraphs: usize,
@@ -162,6 +163,10 @@ pub(crate) fn summarize_hwp5_semantic(document: &Hwp5SemanticDocument) -> DeepDo
         .flat_map(|section| section.controls.iter())
         .filter(|control| {
             matches!(control.kind, Hwp5SemanticControlKind::OleObject)
+                && !matches!(
+                    control.container.segments.first(),
+                    Some(Hwp5SemanticContainerKind::MasterPageSubList(_))
+                )
                 && matches!(control.confidence, Hwp5SemanticConfidence::High)
         })
         .count();
@@ -180,7 +185,7 @@ pub(crate) fn summarize_hwp5_semantic(document: &Hwp5SemanticDocument) -> DeepDo
     DeepDocumentSummary { sections, notes, table_properties }
 }
 
-fn summarize_hwpx_section(
+pub(crate) fn summarize_hwpx_section(
     index: usize,
     section: &Section,
     occurrences: &[&HwpxPathOccurrence],
@@ -234,16 +239,55 @@ fn summarize_hwpx_section(
 }
 
 fn summarize_hwp5_semantic_section(section: &Hwp5SemanticSection) -> DeepSectionSummary {
+    summarize_hwp5_semantic_scopes(section).remove(0)
+}
+
+/// Slot zero is the existing body/HF scope; subsequent slots are master lists.
+/// Borrow each item once. Descendants retain their original ownership paths.
+pub(crate) fn summarize_hwp5_semantic_scopes(
+    section: &Hwp5SemanticSection,
+) -> Vec<DeepSectionSummary> {
+    let mut paragraphs = vec![Vec::new(); section.master_pages.len() + 1];
+    let mut controls = vec![Vec::new(); section.master_pages.len() + 1];
+    let slot = |path: &hwpforge_smithy_hwp5::Hwp5SemanticContainerPath| match path.segments.first()
+    {
+        Some(Hwp5SemanticContainerKind::MasterPageSubList(index)) => index + 1,
+        _ => 0,
+    };
+    for paragraph in &section.paragraphs {
+        paragraphs[slot(&paragraph.container)].push(paragraph);
+    }
+    for control in &section.controls {
+        controls[slot(&control.container)].push(control);
+    }
+    paragraphs
+        .into_iter()
+        .zip(controls)
+        .enumerate()
+        .map(|(index, (paragraphs, controls))| {
+            let root = if index == 0 {
+                Hwp5SemanticContainerKind::Body
+            } else {
+                Hwp5SemanticContainerKind::MasterPageSubList(index - 1)
+            };
+            summarize_semantic_contents(section, &root, &paragraphs, &controls)
+        })
+        .collect()
+}
+
+fn summarize_semantic_contents(
+    section: &Hwp5SemanticSection,
+    root: &Hwp5SemanticContainerKind,
+    scoped_paragraphs: &[&Hwp5SemanticParagraph],
+    controls: &[&Hwp5SemanticControlNode],
+) -> DeepSectionSummary {
     let owned_paragraphs_by_control_id: BTreeMap<
         Hwp5SemanticControlId,
         Vec<&Hwp5SemanticParagraph>,
-    > = build_semantic_owned_paragraph_map(section);
-    let body_paragraphs: Vec<_> = section
-        .paragraphs
+    > = build_semantic_owned_paragraph_map(scoped_paragraphs);
+    let body_paragraphs: Vec<_> = scoped_paragraphs
         .iter()
-        .filter(|paragraph| {
-            matches!(paragraph.container.terminal_kind(), Hwp5SemanticContainerKind::Body)
-        })
+        .filter(|paragraph| paragraph.container.terminal_kind() == root)
         .collect();
 
     let paragraphs: usize = body_paragraphs.len();
@@ -253,42 +297,35 @@ fn summarize_hwp5_semantic_section(section: &Hwp5SemanticSection) -> DeepSection
             semantic_paragraph_has_visible_text_deep(paragraph, &owned_paragraphs_by_control_id)
         })
         .count();
-    let deep_paragraphs: usize = section.paragraphs.len();
-    let deep_non_empty_paragraphs: usize = section
-        .paragraphs
+    let deep_paragraphs: usize = scoped_paragraphs.len();
+    let deep_non_empty_paragraphs: usize = scoped_paragraphs
         .iter()
         .filter(|paragraph| {
             semantic_paragraph_has_visible_text_deep(paragraph, &owned_paragraphs_by_control_id)
         })
         .count();
 
-    let tables: usize = count_semantic_controls(section, Hwp5SemanticControlKind::Table);
-    let images: usize = count_semantic_controls(section, Hwp5SemanticControlKind::Image);
-    let charts: usize = count_semantic_controls(section, Hwp5SemanticControlKind::Chart);
-    let ole_objects: usize = count_semantic_controls(section, Hwp5SemanticControlKind::OleObject);
-    let text_boxes: usize = count_semantic_controls(section, Hwp5SemanticControlKind::TextBox);
-    let mut line_count: usize = count_semantic_controls(section, Hwp5SemanticControlKind::Line);
+    let tables: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::Table);
+    let images: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::Image);
+    let charts: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::Chart);
+    let ole_objects: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::OleObject);
+    let text_boxes: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::TextBox);
+    let mut line_count: usize = count_semantic_controls(controls, Hwp5SemanticControlKind::Line);
     let mut rectangle_count: usize =
-        count_semantic_controls(section, Hwp5SemanticControlKind::Rect);
+        count_semantic_controls(controls, Hwp5SemanticControlKind::Rect);
     let mut polygon_count: usize =
-        count_semantic_controls(section, Hwp5SemanticControlKind::Polygon);
-    let has_header: bool = section
-        .controls
-        .iter()
-        .any(|control| matches!(control.kind, Hwp5SemanticControlKind::Header));
-    let has_footer: bool = section
-        .controls
-        .iter()
-        .any(|control| matches!(control.kind, Hwp5SemanticControlKind::Footer));
-    let has_page_number: bool = section
-        .controls
-        .iter()
-        .any(|control| matches!(control.kind, Hwp5SemanticControlKind::PageNumber));
+        count_semantic_controls(controls, Hwp5SemanticControlKind::Polygon);
+    let has_header: bool =
+        controls.iter().any(|control| matches!(control.kind, Hwp5SemanticControlKind::Header));
+    let has_footer: bool =
+        controls.iter().any(|control| matches!(control.kind, Hwp5SemanticControlKind::Footer));
+    let has_page_number: bool =
+        controls.iter().any(|control| matches!(control.kind, Hwp5SemanticControlKind::PageNumber));
     let first_non_empty_text: Option<String> = body_paragraphs.iter().find_map(|paragraph| {
         first_visible_text_in_semantic_paragraph(paragraph, &owned_paragraphs_by_control_id)
     });
 
-    for control in &section.controls {
+    for control in controls {
         if let Hwp5SemanticControlKind::Unknown(tag) = &control.kind {
             if tag.contains("line") {
                 line_count += 1;
@@ -392,14 +429,14 @@ fn normalized_semantic_text(text: &str) -> String {
         .to_string()
 }
 
-fn build_semantic_owned_paragraph_map(
-    section: &Hwp5SemanticSection,
-) -> BTreeMap<Hwp5SemanticControlId, Vec<&Hwp5SemanticParagraph>> {
+fn build_semantic_owned_paragraph_map<'a>(
+    paragraphs: &[&'a Hwp5SemanticParagraph],
+) -> BTreeMap<Hwp5SemanticControlId, Vec<&'a Hwp5SemanticParagraph>> {
     let mut owned_paragraphs_by_control_id: BTreeMap<
         Hwp5SemanticControlId,
         Vec<&Hwp5SemanticParagraph>,
     > = BTreeMap::new();
-    for paragraph in &section.paragraphs {
+    for &paragraph in paragraphs {
         if let Some(owner_control_id) = paragraph.owner_control_id {
             owned_paragraphs_by_control_id.entry(owner_control_id).or_default().push(paragraph);
         }
@@ -411,8 +448,11 @@ fn count_occurrences(occurrences: &[&HwpxPathOccurrence], kind: &str) -> usize {
     occurrences.iter().filter(|occurrence| occurrence.kind == kind).count()
 }
 
-fn count_semantic_controls(section: &Hwp5SemanticSection, kind: Hwp5SemanticControlKind) -> usize {
-    section.controls.iter().filter(|control| control.kind == kind).count()
+fn count_semantic_controls(
+    controls: &[&Hwp5SemanticControlNode],
+    kind: Hwp5SemanticControlKind,
+) -> usize {
+    controls.iter().filter(|control| control.kind == kind).count()
 }
 
 fn count_paragraphs_recursive(paragraphs: &[Paragraph]) -> usize {

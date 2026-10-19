@@ -254,8 +254,11 @@ pub fn hwp5_to_hwpx_bytes_with_diagnostics(
         encode_options,
     )
     .map_err(ConvertError::Encode)?;
-    let hwpx_bytes =
-        layout_hint_patch::patch_hwpx_layout_hints(&outcome.bytes, &decoded.layout_hints)?;
+    let hwpx_bytes = layout_hint_patch::patch_hwpx_part_layout_hints(
+        &outcome.bytes,
+        &decoded.layout_hints,
+        &decoded.master_layout_hints,
+    )?;
 
     let mut all: Vec<ConvertWarning> = warnings.into_iter().map(ConvertWarning::Hwp5).collect();
     all.extend(outcome.warnings.into_iter().map(ConvertWarning::HwpxEncode));

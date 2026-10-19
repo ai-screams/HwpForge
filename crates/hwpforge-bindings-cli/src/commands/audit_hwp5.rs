@@ -4,6 +4,7 @@ use std::path::Path;
 
 mod raw_counts;
 
+use crate::analysis::master_pages::{self, MasterPageEvidence};
 use serde::Serialize;
 
 use hwpforge_smithy_hwp5::{
@@ -41,6 +42,8 @@ struct AuditSide {
     table_properties: AuditTableProperties,
     styles: AuditStyles,
     sections: Vec<AuditSection>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    master_pages: Vec<MasterPageEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
@@ -199,19 +202,43 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
         source_metadata.warning_count,
         source_metadata.validation_error.as_deref(),
     );
-    let output_side = audit_side_from_hwpx(&hwpx_doc, &output_deep);
+    let mut output_side = audit_side_from_hwpx(&hwpx_doc, &output_deep);
+    output_side.master_pages =
+        master_pages::from_hwpx(&hwpx_doc, &result_bytes).unwrap_or_else(|err| {
+            CliError::new("HWPX_ANALYSIS_FAILED", err.to_string()).exit(json_mode, 2)
+        });
     let raw = hwpforge_smithy_hwp5::census_hwp5(&source_bytes).unwrap_or_else(|err| {
         CliError::new("HWP5_CENSUS_FAILED", err.to_string()).exit(json_mode, 2)
     });
     // TABLE counts must not inherit losses from the parser being audited.
     source_side.totals.tables = 0;
     for (section, census) in source_side.sections.iter_mut().zip(&raw.sections) {
-        section.tables =
-            census.tag_counts.iter().filter(|t| t.tag_id == 0x4D).map(|t| t.count).sum();
+        let master_tables: usize = source_side
+            .master_pages
+            .iter()
+            .filter(|m| m.section_index == section.index)
+            .map(|m| m.objects.get("table").copied().unwrap_or(0))
+            .sum();
+        section.tables = census
+            .tag_counts
+            .iter()
+            .filter(|t| t.tag_id == 0x4D)
+            .map(|t| t.count)
+            .sum::<usize>()
+            .saturating_sub(master_tables);
         source_side.totals.tables += section.tables;
     }
     let (mut comparisons, section_comparisons, mut mismatch_found) =
         compare_sides(&source_side, &output_side);
+    if !source_side.master_pages.is_empty() || !output_side.master_pages.is_empty() {
+        push_metric(
+            &mut comparisons,
+            &mut mismatch_found,
+            "master_pages",
+            serde_json::to_string(&source_side.master_pages).unwrap(),
+            serde_json::to_string(&output_side.master_pages).unwrap(),
+        );
+    }
     raw_counts::compare(&raw, &result_bytes, &mut comparisons, &mut mismatch_found).unwrap_or_else(
         |err| CliError::new("HWPX_ANALYSIS_FAILED", err.to_string()).exit(json_mode, 2),
     );
@@ -276,6 +303,7 @@ fn audit_side_from_hwp5_semantic(
     if let Some(validation_error) = validation_error {
         side.notes.push(format!("validation-error: {validation_error}"));
     }
+    side.master_pages = master_pages::from_hwp5(semantic);
     side
 }
 
@@ -303,6 +331,7 @@ fn build_audit_side(
     warning_count: Option<usize>,
 ) -> AuditSide {
     AuditSide {
+        master_pages: Vec::new(),
         format,
         version,
         warning_count,

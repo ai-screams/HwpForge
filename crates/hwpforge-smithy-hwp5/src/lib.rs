@@ -84,8 +84,9 @@ pub use semantic::{
     Hwp5SemanticControlId, Hwp5SemanticControlKind, Hwp5SemanticControlNode,
     Hwp5SemanticControlPayload, Hwp5SemanticDocInfo, Hwp5SemanticDocument,
     Hwp5SemanticGraphIntegrityIssue, Hwp5SemanticImageFormat, Hwp5SemanticImagePayload,
-    Hwp5SemanticNamedStyleRef, Hwp5SemanticOlePayload, Hwp5SemanticPackageMeta,
-    Hwp5SemanticParagraph, Hwp5SemanticParagraphId, Hwp5SemanticSection, Hwp5SemanticSectionId,
+    Hwp5SemanticMasterPage, Hwp5SemanticMasterPageScope, Hwp5SemanticNamedStyleRef,
+    Hwp5SemanticOlePayload, Hwp5SemanticPackageMeta, Hwp5SemanticParagraph,
+    Hwp5SemanticParagraphId, Hwp5SemanticSection, Hwp5SemanticSectionId,
     Hwp5SemanticTableCellEvidence, Hwp5SemanticTableCellMargin, Hwp5SemanticTableCellVerticalAlign,
     Hwp5SemanticTablePageBreak, Hwp5SemanticTablePayload, Hwp5SemanticUnresolvedId,
     Hwp5UnresolvedItem, Hwp5UnresolvedReason,
@@ -684,6 +685,8 @@ pub struct Hwp5Decoded {
     /// Per-section captured layout hints (paragraph line segments, table
     /// heights) for output formats that preserve them as fidelity hints.
     pub layout_hints: Vec<layout_hint_patch::SectionLayoutHints>,
+    /// Independent hint queues for emitted master parts, grouped by section.
+    pub master_layout_hints: Vec<Vec<layout_hint_patch::SectionLayoutHints>>,
     /// Document metadata parsed from `\x05HwpSummaryInformation`.
     pub metadata: hwpforge_core::metadata::Metadata,
     /// Non-fatal warnings collected during decoding and Core projection.
@@ -732,6 +735,8 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
     let mut warnings = intermediate.warnings;
     let layout_hints =
         layout_hint_patch::capture_layout_hints(&intermediate.sections, &mut warnings);
+    let master_layout_hints =
+        layout_hint_patch::capture_master_layout_hints(&intermediate.sections, &mut warnings);
     // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
     // the projected Core Document so a downstream encoder emits a populated
     // `<opf:metadata>` block.
@@ -770,6 +775,7 @@ pub(crate) fn decode_hwp5_to_core_with_budget_limit(
         image_store,
         style_store,
         layout_hints,
+        master_layout_hints,
         metadata,
         warnings,
         bin_data_reference_names,
@@ -987,7 +993,23 @@ fn collect_image_geometry_hints(
 ) -> BTreeMap<u16, Hwp5ImageGeometryHint> {
     let mut hints: BTreeMap<u16, Hwp5ImageGeometryHint> = BTreeMap::new();
     for section in sections {
-        collect_image_geometry_hints_in_paragraphs(&section.paragraphs, &mut hints);
+        // Keep the existing first-wins asset geometry policy in wire order.
+        // A master is a distinct host, but may reference the same BinData as
+        // a body picture before or after its section-owned list.
+        let mut masters = section.master_pages.iter().peekable();
+        for (index, paragraph) in section.paragraphs.iter().enumerate() {
+            let mut from = 0;
+            while let Some(master) = masters.next_if(|m| m.body_paragraph_index == index) {
+                let to = master.body_control_index.min(paragraph.controls.len()).max(from);
+                collect_image_geometry_hints_in_controls(&paragraph.controls[from..to], &mut hints);
+                collect_image_geometry_hints_in_paragraphs(&master.paragraphs, &mut hints);
+                from = to;
+            }
+            collect_image_geometry_hints_in_controls(&paragraph.controls[from..], &mut hints);
+        }
+        for master in masters {
+            collect_image_geometry_hints_in_paragraphs(&master.paragraphs, &mut hints);
+        }
     }
     hints
 }
