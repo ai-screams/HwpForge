@@ -688,23 +688,9 @@ impl<'a> ProjectionImageState<'a> {
         use crate::schema::border_fill::{
             Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5GradationType, Hwp5RawBorderFillFill,
         };
-        use hwpforge_core::control::{Fill, LineStyle, ShapeStyle};
+        use hwpforge_core::control::{Fill, ShapeStyle};
         use hwpforge_foundation::{GradientType, ImageFillMode};
         let colour = |raw: u32| hwpforge_foundation::Color::from_raw(raw & 0x00FF_FFFF);
-        let line_style = match look.line.properties & 0x3F {
-            0 => LineStyle::None,
-            1 => LineStyle::Solid,
-            2 => LineStyle::Dot,
-            3 => LineStyle::Dash,
-            other => {
-                push_projection_fallback(
-                    &mut self.warnings,
-                    "shape.line_type",
-                    format!("line type {other} is not confirmed against Hancom; drawn solid"),
-                );
-                LineStyle::Solid
-            }
-        };
         // §19.5 1c: 모서리 곡률(0 = 각진 모서리 = `None`), 51 이상은 Core 범위
         // 밖이라 보고하고 50 으로 자른다. 이것을 실패시키는 것: 비율 투영을
         // 지우기 / 자르기 경고 삭제.
@@ -720,13 +706,8 @@ impl<'a> ProjectionImageState<'a> {
             }
             r => Some(r),
         };
-        let mut style = ShapeStyle {
-            corner_ratio,
-            line_color: Some(colour(look.line.color)),
-            line_width: u32::try_from(look.line.thickness).ok(),
-            line_style: Some(line_style),
-            ..ShapeStyle::default()
-        };
+        let mut style = ShapeStyle { corner_ratio, ..ShapeStyle::default() };
+        project_shape_line(&look.line, &mut style, &mut self.warnings);
         if !fillable {
             return style;
         }
@@ -4230,6 +4211,80 @@ fn shape_vertical_align_from_list_header(
         },
         None => VerticalAlign::Top,
     }
+}
+
+/// Project the outline once for both standalone shapes and group children.
+/// Fill, corner ratio and geometry belong to their existing separate paths.
+fn project_shape_line(
+    line: &crate::schema::section::Hwp5ShapeLine,
+    style: &mut hwpforge_core::control::ShapeStyle,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    use hwpforge_core::control::LineStyle;
+    style.line_color = Some(hwpforge_foundation::Color::from_raw(line.color & 0x00FF_FFFF));
+    style.line_width = u32::try_from(line.thickness).ok();
+    style.line_style = Some(match line.properties & 0x3F {
+        0 => LineStyle::None,
+        1 => LineStyle::Solid,
+        2 => LineStyle::Dot,
+        3 => LineStyle::Dash,
+        other => {
+            push_projection_fallback(
+                warnings,
+                "shape.line_type",
+                format!("line type {other} is not confirmed against Hancom; drawn solid"),
+            );
+            LineStyle::Solid
+        }
+    });
+    style.head_arrow = project_arrow(line.properties, true, warnings);
+    style.tail_arrow = project_arrow(line.properties, false, warnings);
+}
+
+/// HWP5 wire sizes are row-major; Core's original 0–2 discriminants are stable.
+fn project_arrow(
+    properties: u32,
+    head: bool,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<hwpforge_core::control::ArrowStyle> {
+    use hwpforge_core::control::ArrowStyle;
+    use hwpforge_foundation::{ArrowSize, ArrowType};
+    let side = if head { "head" } else { "tail" };
+    let shape = ((properties >> if head { 10 } else { 16 }) & 0x3F) as u8;
+    let raw_size = (properties >> if head { 22 } else { 26 }) & 0xF;
+    let arrow_type = ArrowType::try_from(shape).ok();
+    let size = match raw_size {
+        0 => Some(ArrowSize::Small),
+        1 => Some(ArrowSize::SmallMedium),
+        2 => Some(ArrowSize::SmallLarge),
+        3 => Some(ArrowSize::MediumSmall),
+        4 => Some(ArrowSize::Medium),
+        5 => Some(ArrowSize::MediumLarge),
+        6 => Some(ArrowSize::LargeSmall),
+        7 => Some(ArrowSize::LargeMedium),
+        8 => Some(ArrowSize::Large),
+        _ => None,
+    };
+    if arrow_type.is_none() {
+        push_projection_fallback(
+            warnings,
+            "shape.arrow",
+            format!("{side} arrow shape {shape} unsupported (expected 0–6); arrow omitted"),
+        );
+    }
+    if size.is_none() {
+        push_projection_fallback(
+            warnings,
+            "shape.arrow",
+            format!("{side} arrow size {raw_size} unsupported (expected 0–8); arrow omitted"),
+        );
+    }
+    ArrowStyle {
+        arrow_type: arrow_type?,
+        size: size?,
+        filled: properties & (1 << if head { 30 } else { 31 }) != 0,
+    }
+    .into_nondefault()
 }
 
 /// The style slot of a shape control.
@@ -9299,6 +9354,95 @@ mod shape_style_tests {
                         .count(),
                     usize::from(mixed && index == 0)
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod arrow_tests {
+    use super::*;
+    /// 이것을 실패시키는 것: HWP5 크기를 Core TryFrom에 직접 전달, head/tail 혼동,
+    /// 미지원 값 기본 대체 또는 경고 누락, 모양 0의 비기본 크기/채움 소실.
+    #[test]
+    fn hwp5_arrow_bits_sizes_and_unknown_values() {
+        let wires = [
+            "SMALL_SMALL",
+            "SMALL_MEDIUM",
+            "SMALL_LARGE",
+            "MEDIUM_SMALL",
+            "MEDIUM_MEDIUM",
+            "MEDIUM_LARGE",
+            "LARGE_SMALL",
+            "LARGE_MEDIUM",
+            "LARGE_LARGE",
+        ];
+        let shapes = [
+            "NORMAL",
+            "ARROW",
+            "SPEAR",
+            "CONCAVE_ARROW",
+            "EMPTY_DIAMOND",
+            "EMPTY_CIRCLE",
+            "EMPTY_BOX",
+        ];
+        for head in [true, false] {
+            let (shape_shift, size_shift, fill_shift) =
+                if head { (10, 22, 30) } else { (16, 26, 31) };
+            for (raw_shape, shape) in shapes.iter().enumerate() {
+                for (raw_size, size) in wires.iter().enumerate() {
+                    for filled in [false, true] {
+                        let props = (raw_shape as u32) << shape_shift
+                            | (raw_size as u32) << size_shift
+                            | u32::from(filled) << fill_shift;
+                        let mut warnings = Vec::new();
+                        let projected = project_arrow(props, head, &mut warnings);
+                        if raw_shape == 0 && raw_size == 4 && filled {
+                            assert!(projected.is_none());
+                            assert!(warnings.is_empty());
+                            continue;
+                        }
+                        let a = projected.unwrap();
+                        assert_eq!(
+                            a.arrow_type,
+                            shape.parse::<hwpforge_foundation::ArrowType>().unwrap()
+                        );
+                        assert_eq!(a.size.to_string(), *size);
+                        assert_eq!(a.filled, filled);
+                        assert!(warnings.is_empty());
+                        let other = project_arrow(props, !head, &mut warnings).unwrap();
+                        assert_eq!(other.arrow_type, hwpforge_foundation::ArrowType::None);
+                        assert_eq!(other.size, hwpforge_foundation::ArrowSize::Small);
+                        assert!(!other.filled);
+                    }
+                }
+            }
+            for (shape, size, detail) in [(7, 4, "shape 7"), (1, 9, "size 9")] {
+                let mut warnings = Vec::new();
+                assert!(project_arrow(
+                    shape << shape_shift | size << size_shift,
+                    head,
+                    &mut warnings
+                )
+                .is_none());
+                assert_eq!(warnings.len(), 1);
+                let warning = format!("{:?}", warnings[0]);
+                assert!(
+                    warning.contains(detail)
+                        && warning.contains(if head { "head" } else { "tail" }),
+                    "{warning}"
+                );
+            }
+            for raw_size in 9..=15 {
+                let mut warnings = Vec::new();
+                assert!(project_arrow(
+                    raw_size << size_shift | 1 << fill_shift,
+                    head,
+                    &mut warnings
+                )
+                .is_none());
+                assert_eq!(warnings.len(), 1);
+                assert!(format!("{:?}", warnings[0]).contains(&format!("size {raw_size}")));
             }
         }
     }

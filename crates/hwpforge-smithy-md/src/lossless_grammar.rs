@@ -312,6 +312,13 @@ pub(crate) fn arrow_size_str(v: ArrowSize) -> MdResult<&'static str> {
         ArrowSize::Small => "Small",
         ArrowSize::Medium => "Medium",
         ArrowSize::Large => "Large",
+        ArrowSize::SmallMedium => "SmallMedium",
+        ArrowSize::SmallLarge => "SmallLarge",
+        ArrowSize::MediumSmall => "MediumSmall",
+        ArrowSize::MediumLarge => "MediumLarge",
+        ArrowSize::LargeSmall => "LargeSmall",
+        ArrowSize::LargeMedium => "LargeMedium",
+
         _ => return Err(unsupported("arrow size")),
     })
 }
@@ -321,6 +328,13 @@ pub(crate) fn arrow_size_from(s: &str) -> Option<ArrowSize> {
         "Small" => ArrowSize::Small,
         "Medium" => ArrowSize::Medium,
         "Large" => ArrowSize::Large,
+        "SmallMedium" => ArrowSize::SmallMedium,
+        "SmallLarge" => ArrowSize::SmallLarge,
+        "MediumSmall" => ArrowSize::MediumSmall,
+        "MediumLarge" => ArrowSize::MediumLarge,
+        "LargeSmall" => ArrowSize::LargeSmall,
+        "LargeMedium" => ArrowSize::LargeMedium,
+
         _ => return None,
     })
 }

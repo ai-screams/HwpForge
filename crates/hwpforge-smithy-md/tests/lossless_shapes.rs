@@ -586,3 +586,50 @@ fn nested_empty_shapes_are_refused() {
     ));
     assert!(d.validate().is_ok());
 }
+
+/// 이것을 실패시키는 것: MD grammar의 새 크기 중 하나라도 누락.
+#[test]
+fn nine_arrow_sizes_round_trip_lossless_md() {
+    for size in [
+        ArrowSize::Small,
+        ArrowSize::SmallMedium,
+        ArrowSize::SmallLarge,
+        ArrowSize::MediumSmall,
+        ArrowSize::Medium,
+        ArrowSize::MediumLarge,
+        ArrowSize::LargeSmall,
+        ArrowSize::LargeMedium,
+        ArrowSize::Large,
+    ] {
+        let mut line =
+            Control::line(ShapePoint { x: 0, y: 0 }, ShapePoint { x: 1000, y: 0 }).unwrap();
+        let expected = ShapeStyle {
+            head_arrow: Some(ArrowStyle { arrow_type: ArrowType::Concave, size, filled: true }),
+            tail_arrow: Some(ArrowStyle { arrow_type: ArrowType::Oval, size, filled: false }),
+            ..Default::default()
+        };
+        if let Control::Line { style, .. } = &mut line {
+            *style = Some(expected.clone());
+        }
+        let out = round_trip(Run::control(line, CharShapeIndex::new(0)));
+        assert_eq!(style_of(&out), expected);
+    }
+}
+
+/// 이것을 실패시키는 것: Some + ArrowType::None을 머리 없음이라는 이유로 버리기.
+#[test]
+fn absent_arrow_nondefault_editing_values_round_trip() {
+    let mut line = Control::line(ShapePoint::new(0, 0), ShapePoint::new(1000, 0)).unwrap();
+    if let Control::Line { style, .. } = &mut line {
+        *style = Some(ShapeStyle {
+            head_arrow: Some(ArrowStyle {
+                arrow_type: ArrowType::None,
+                size: ArrowSize::Large,
+                filled: false,
+            }),
+            ..Default::default()
+        });
+    }
+    let run = Run::control(line, CharShapeIndex::new(0));
+    assert_eq!(round_trip(run.clone()), run);
+}

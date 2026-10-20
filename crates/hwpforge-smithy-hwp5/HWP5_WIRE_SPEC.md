@@ -1146,3 +1146,50 @@ its angle or flip fields say otherwise (the fields are dropped with a
 warning). A matrix that does not map the original box onto `sz` within 2.5
 HWPUNIT is recomputed from D with a warning; Hancom produces such a shape when
 the width of a rotated line is edited and the shape is rotated again.
+
+## 26. Shape outline property word (fixture 30)
+
+The 13-byte line information is COLORREF (u32), thickness (i32 HWPUNIT),
+properties (u32), outline (u8), after the shape matrix chain. Standalone
+shapes and group children use the same parser and projection function.
+
+| Bits          | Meaning                                                      |
+| ------------- | ------------------------------------------------------------ |
+| 0–5           | Line type: 0 NONE, 1 SOLID, 2 DOT, 3 DASH (confirmed values) |
+| 6–9           | End cap (unchanged by this implementation)                   |
+| 10–15 / 16–21 | Head / tail arrow shape                                      |
+| 22–25 / 26–29 | Head / tail arrow size                                       |
+| 30 / 31       | Head / tail filled                                           |
+
+| HWP5 shape | Core ArrowType | HWPX          |
+| ---------- | -------------- | ------------- |
+| 0          | None           | NORMAL        |
+| 1          | Normal         | ARROW         |
+| 2          | Arrow          | SPEAR         |
+| 3          | Concave        | CONCAVE_ARROW |
+| 4          | Diamond        | EMPTY_DIAMOND |
+| 5          | Oval           | EMPTY_CIRCLE  |
+| 6          | Open           | EMPTY_BOX     |
+
+The HWP 5.0 specification PDF's shape-name table is wrong starting at value 2.
+These mappings come from the Hancom-saved `tests/fixtures/shapes/arrows.*`
+pair. Filled/empty is independent of shape, including EMPTY_* names.
+
+| HWP5 size | Core ArrowSize (stable discriminant) | HWPX          |
+| --------- | ------------------------------------ | ------------- |
+| 0         | Small (0)                            | SMALL_SMALL   |
+| 1         | SmallMedium (3)                      | SMALL_MEDIUM  |
+| 2         | SmallLarge (4)                       | SMALL_LARGE   |
+| 3         | MediumSmall (5)                      | MEDIUM_SMALL  |
+| 4         | Medium (1)                           | MEDIUM_MEDIUM |
+| 5         | MediumLarge (6)                      | MEDIUM_LARGE  |
+| 6         | LargeSmall (7)                       | LARGE_SMALL   |
+| 7         | LargeMedium (8)                      | LARGE_MEDIUM  |
+| 8         | Large (2)                            | LARGE_LARGE   |
+
+Shape >=7 or size >=9 emits a concrete ProjectionFallback and omits that
+endpoint, including shape 0 with an unknown size. Decision B′: shape 0 is
+omitted only with Medium size and filled=true; nondefault size/fill is kept
+as `Some(ArrowStyle { arrow_type: None, .. })` for subsequent editing.
+HWPX unknown endpoint strings use UnknownEnumValue and likewise
+omit that endpoint, rather than silently replacing its size or shape.

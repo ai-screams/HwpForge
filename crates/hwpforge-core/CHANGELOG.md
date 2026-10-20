@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased — 0.17.0]
+
+### Changed
+
+- `ArrowStyle::into_nondefault()`로 HWP5·HWPX가 같은 기본값 판정을 쓴다. `Some`인 스타일의 `ArrowType::None`은 머리를 그리지 않으며 이후 편집에 쓰이는 크기·채움을 보존한다. 없음+Medium+filled는 기존처럼 `None`이다.
+
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.8...hwpforge-core-v0.16.9) - 2026-10-03
 
 ### Fixed

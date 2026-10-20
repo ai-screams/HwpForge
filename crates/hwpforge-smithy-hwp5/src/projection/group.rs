@@ -289,6 +289,19 @@ fn plan_children<'a>(
     GroupPlan { children: children.iter().map(|c| plan_child(c, origin, assets)).collect() }
 }
 
+fn shape_look(control: &Hwp5Control) -> Option<&crate::schema::section::Hwp5ShapeLook> {
+    match control {
+        Hwp5Control::Rect(s) => s.look.as_ref(),
+        Hwp5Control::Ellipse(s) => s.look.as_ref(),
+        Hwp5Control::Arc(s) => s.look.as_ref(),
+        Hwp5Control::Polygon(s) => s.look.as_ref(),
+        Hwp5Control::Curve(s) => s.look.as_ref(),
+        Hwp5Control::Line(s) => s.look.as_ref(),
+        Hwp5Control::ConnectLine(s) => s.look.as_ref(),
+        _ => None,
+    }
+}
+
 fn plan_child<'a>(
     child: &'a Hwp5GroupChild,
     origin: (f64, f64),
@@ -858,6 +871,11 @@ fn emit(
                 })
             }
             Outcome::Kept { mut control, keeps_text } => {
+                let look = shape_look(&c.child.control);
+                if let (Some(look), Some(slot)) = (look, super::shape_style_slot(&mut control)) {
+                    let style = slot.get_or_insert_with(Default::default);
+                    super::project_shape_line(&look.line, style, &mut state.warnings);
+                }
                 if keeps_text {
                     attach_text(&mut control, c.child, state);
                 }

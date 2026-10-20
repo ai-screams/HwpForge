@@ -109,6 +109,10 @@ impl std::str::FromStr for LineStyle {
 
 /// Arrowhead style for line endpoints.
 ///
+/// `Some(ArrowStyle { arrow_type: ArrowType::None, .. })` draws no arrowhead,
+/// but preserves size and fill values Hancom uses for subsequent editing.
+/// An absent endpoint with the Hancom defaults (Medium, filled) needs no style.
+///
 /// # Examples
 ///
 /// ```
@@ -129,6 +133,21 @@ pub struct ArrowStyle {
     pub size: ArrowSize,
     /// Whether the arrowhead is filled (true) or outlined (false).
     pub filled: bool,
+}
+
+impl ArrowStyle {
+    /// Omit only an absent arrowhead with Hancom's default size and fill.
+    ///
+    /// Decoders must validate wire values before calling this function. A
+    /// non-default size or fill is retained even when `arrow_type` is `None`,
+    /// because Hancom uses the stored size when an arrowhead is later selected.
+    pub fn into_nondefault(self) -> Option<Self> {
+        if self.arrow_type == ArrowType::None && self.size == ArrowSize::Medium && self.filled {
+            None
+        } else {
+            Some(self)
+        }
+    }
 }
 
 /// Fill specification for shapes.

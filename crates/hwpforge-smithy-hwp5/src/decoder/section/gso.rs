@@ -75,8 +75,7 @@ pub(super) struct GsoClassificationInput {
     pub(super) ctrl_properties: u32,
     /// The shape's hyperlink (a picture keeps it).
     pub(super) link: Option<Result<String, String>>,
-    /// The shape's outline and fill (single shapes; `None` for group
-    /// children).
+    /// The shape's outline and fill, shared by standalone and group projection.
     pub(super) look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// The shape's text paragraphs and its `LIST_HEADER` word (single
     /// shapes; empty for group children, whose text the group projection
@@ -122,6 +121,7 @@ pub(super) struct GsoChildBuilder {
     render: Result<Hwp5ShapeRender, String>,
     /// Control ids of `CtrlHeader` records under this child.
     nested_controls: Vec<u32>,
+    look: Option<crate::schema::section::Hwp5ShapeLook>,
     /// The child's hyperlink (its own `CtrlData`).
     link: Option<Result<String, String>>,
 }
@@ -152,6 +152,7 @@ impl GsoChildBuilder {
             render,
             nested_controls: Vec::new(),
             link: None,
+            look: None,
         }
     }
 
@@ -212,7 +213,7 @@ impl GsoChildBuilder {
             // treat_as_char 는 W5 에서 해석.
             ctrl_properties: 0,
             link: self.link,
-            look: None,
+            look: self.look,
             paragraphs: Vec::new(),
             list_header_properties: None,
             text_margin: None,
@@ -415,9 +416,9 @@ impl GsoGroupBuilder {
                     self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
                 }
             } else {
-                self.current_child = Some(GsoActiveChild::Leaf(Box::new(GsoChildBuilder::new(
-                    level, kind, geometry, render,
-                ))));
+                let mut child = GsoChildBuilder::new(level, kind, geometry, render);
+                child.look = Hwp5ShapeRender::parse_look(&record.data, false);
+                self.current_child = Some(GsoActiveChild::Leaf(Box::new(child)));
             }
             return;
         }

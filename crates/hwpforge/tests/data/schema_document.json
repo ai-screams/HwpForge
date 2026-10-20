@@ -3580,7 +3580,7 @@
       ]
     },
     "ArrowStyle": {
-      "description": "Arrowhead style for line endpoints.\n\n# Examples\n\n```\nuse hwpforge_core::control::ArrowStyle;\nuse hwpforge_foundation::{ArrowType, ArrowSize};\n\nlet arrow = ArrowStyle {\n    arrow_type: ArrowType::Normal,\n    size: ArrowSize::Medium,\n    filled: true,\n};\n```",
+      "description": "Arrowhead style for line endpoints.\n\n`Some(ArrowStyle { arrow_type: ArrowType::None, .. })` draws no arrowhead,\nbut preserves size and fill values Hancom uses for subsequent editing.\nAn absent endpoint with the Hancom defaults (Medium, filled) needs no style.\n\n# Examples\n\n```\nuse hwpforge_core::control::ArrowStyle;\nuse hwpforge_foundation::{ArrowType, ArrowSize};\n\nlet arrow = ArrowStyle {\n    arrow_type: ArrowType::Normal,\n    size: ArrowSize::Medium,\n    filled: true,\n};\n```",
       "type": "object",
       "properties": {
         "arrow_type": {
