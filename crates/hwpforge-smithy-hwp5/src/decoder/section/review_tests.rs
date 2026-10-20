@@ -2457,6 +2457,79 @@ fn unturned_native_arc_is_read_without_arrows() {
     }
 }
 
+/// 이것을 실패시키는 것: 묶음 자식 rect 레코드의 곡률 byte를 수집하지 않기.
+#[test]
+fn group_rectangle_collects_its_corner_byte() {
+    let source = r1_wrap(R1_GROUP, &r1_paragraph("corner"));
+    let mut wire = Vec::new();
+    for mut record in Record::parse_stream(&mut Cursor::new(source)).unwrap() {
+        if TagId::from(record.header.tag_id) == TagId::ShapeComponentRect {
+            record.data[0] = 25;
+        }
+        wire.extend(make_record(
+            TagId::from(record.header.tag_id),
+            record.header.level,
+            &record.data,
+        ));
+    }
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let Hwp5Control::Group(g) = &parsed.paragraphs[0].controls[0] else {
+        panic!("group")
+    };
+    let Hwp5Control::Rect(r) = &g.children[0].control else {
+        panic!("rect")
+    };
+    assert_eq!(r.look.as_ref().unwrap().corner_ratio, 25);
+}
+
+/// 이것을 실패시키는 것: 잘린 look의 비영 곡률 경고 제거 / 곡률 0도 경고 /
+/// 정상 look에도 손실 경고 / 중첩 묶음에서 곡률 진단 누락.
+#[test]
+fn group_corner_ratio_without_a_look_is_reported() {
+    use crate::schema::section::Hwp5ShapeRender;
+
+    for host in [R1_GROUP, R1_NESTED_GROUP] {
+        for truncated in [false, true] {
+            for ratio in [0, 25] {
+                let source = r1_wrap(host, &r1_paragraph("corner"));
+                let mut wire = Vec::new();
+                for mut record in Record::parse_stream(&mut Cursor::new(source)).unwrap() {
+                    let tag = TagId::from(record.header.tag_id);
+                    if tag == TagId::ShapeComponent && record.data.starts_with(b"cer$") {
+                        if truncated {
+                            // Keep valid dimensions/matrices; cut only the 13-byte
+                            // outline and 4-byte fill-kind block from this child.
+                            record.data.truncate(record.data.len() - 17);
+                            assert!(Hwp5ShapeRender::parse(&record.data, false).is_ok());
+                            assert!(Hwp5ShapeRender::parse_look(&record.data, false).is_err());
+                        }
+                    } else if tag == TagId::ShapeComponentRect {
+                        record.data[0] = ratio;
+                    }
+                    wire.extend(make_record(tag, record.header.level, &record.data));
+                }
+                let parsed = parse_body_text(&wire, &version()).unwrap();
+                let warnings: Vec<_> = parsed
+                    .warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        Hwp5Warning::ProjectionFallback { subject: "shape.corner_ratio", reason } => {
+                            Some(reason.as_str())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let expected = if truncated && ratio > 0 {
+                    vec!["corner ratio 25 not carried: the shape's outline and fill block is unreadable"]
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(warnings, expected, "host={host}, truncated={truncated}, ratio={ratio}");
+            }
+        }
+    }
+}
+
 /// 이것을 실패시키는 것: native 3 이상을 Normal로 대체하거나 잘림을 일반 UnsupportedTag로만 보고하기.
 #[test]
 fn native_arc_bad_type_and_truncation_are_specific_in_both_hosts() {
@@ -2543,6 +2616,61 @@ fn native_arc_bad_type_and_truncation_are_specific_in_both_hosts() {
                 }),
                 "{warnings}"
             );
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 채우기 헤더가 짧다는 이유로 정상 선 13바이트 폐기,
+/// fill_kind=0 대체값을 정상 없음으로 오인, 선 손실 경고 누락, 묶음만 복구.
+#[test]
+fn partial_look_preserves_lines_and_reports_each_loss_in_every_host() {
+    use hwpforge_core::{Control, RunContent};
+    use hwpforge_foundation::{ArrowType, Color};
+    fn shape(control: &Control) -> &hwpforge_core::control::ShapeStyle {
+        match control {
+            Control::Group { children, .. } => match &children[0] { hwpforge_core::control::GroupChild::Shape(c) => shape(c), other => panic!("{other:?}") },
+            Control::Rect { style, .. } | Control::TextBox { style, .. } => style.as_ref().unwrap(),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    for host in [CTRL_ID_GSO, R1_GROUP, R1_NESTED_GROUP] {
+        // Every truncation boundary, complete no-fill, and a broken fill body.
+        for len in 0..=18 {
+            let source = r1_wrap(host, &r1_paragraph("look"));
+            let mut wire = Vec::new();
+            for mut record in Record::parse_stream(&mut Cursor::new(source)).unwrap() {
+                let tag = TagId::from(record.header.tag_id);
+                if tag == TagId::ShapeComponent && record.data.starts_with(b"cer$") {
+                    let end = record.data.len() - 17;
+                    record.data.truncate(end);
+                    let mut tail = 0x00332211u32.to_le_bytes().to_vec();
+                    tail.extend(75i32.to_le_bytes());
+                    tail.extend((1u32 | (1 << 10) | (4 << 22) | (4 << 26) | (3 << 30)).to_le_bytes());
+                    tail.push(0);
+                    tail.extend(u32::from(len == 18).to_le_bytes());
+                    tail.push(0);
+                    record.data.extend(&tail[..len]);
+                }
+                wire.extend(make_record(tag, record.header.level, &record.data));
+            }
+            let parsed = parse_body_text(&wire, &version()).unwrap();
+            let line_lost = parsed.warnings.iter().any(|w| matches!(w,
+                Hwp5Warning::ProjectionFallback { subject: "shape.line", reason }
+                if reason.contains("13 needed") && reason.contains("arrows not carried")));
+            assert_eq!(line_lost, len < 13, "host={host}, len={len}");
+            let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+            let fill_lost = warnings.iter().any(|w| matches!(w,
+                Hwp5Warning::ProjectionFallback { subject: "shape.fill", .. }));
+            assert_eq!(fill_lost, len != 17, "host={host}, len={len}: {warnings:?}");
+            if len >= 13 {
+                let control = doc.sections()[0].paragraphs.iter().flat_map(|p| &p.runs)
+                    .find_map(|r| if let RunContent::Control(c) = &r.content { Some(c.as_ref()) } else { None }).unwrap();
+                let style = shape(control);
+                assert_eq!(style.line_color, Some(Color::from_raw(0x00332211)));
+                assert_eq!(style.line_width.unwrap(), 75);
+                assert_eq!(style.head_arrow.as_ref().unwrap().arrow_type, ArrowType::Normal);
+                if len != 17 { assert!(style.fill.is_none()); }
+            }
         }
     }
 }

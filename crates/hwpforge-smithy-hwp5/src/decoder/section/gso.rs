@@ -122,6 +122,7 @@ pub(super) struct GsoChildBuilder {
     /// Control ids of `CtrlHeader` records under this child.
     nested_controls: Vec<u32>,
     look: Option<crate::schema::section::Hwp5ShapeLook>,
+    unread_corner_ratio: u8,
     /// The child's hyperlink (its own `CtrlData`).
     link: Option<Result<String, String>>,
 }
@@ -153,6 +154,7 @@ impl GsoChildBuilder {
             nested_controls: Vec::new(),
             link: None,
             look: None,
+            unread_corner_ratio: 0,
         }
     }
 
@@ -168,6 +170,16 @@ impl GsoChildBuilder {
     /// `$con` kind when the [`GSO_GROUP_MAX_DEPTH`] cap forced the nested group
     /// to degrade to a leaf, in which case it becomes `Unknown` with a warning.
     fn into_child(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        // 이것을 실패시키는 것: look 파싱 실패 때 묶음 자식의 비영 곡률을 무음 폐기.
+        if self.unread_corner_ratio > 0 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "shape.corner_ratio",
+                reason: format!(
+                    "corner ratio {} not carried: the shape's outline and fill block is unreadable",
+                    self.unread_corner_ratio
+                ),
+            });
+        }
         if self.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
             warnings.push(Hwp5Warning::DroppedControl {
                 control: "gso_group",
@@ -417,7 +429,7 @@ impl GsoGroupBuilder {
                 }
             } else {
                 let mut child = GsoChildBuilder::new(level, kind, geometry, render);
-                child.look = Hwp5ShapeRender::parse_look(&record.data, false);
+                child.look = parse_shape_look(&record.data, false, warnings);
                 self.current_child = Some(GsoActiveChild::Leaf(Box::new(child)));
             }
             return;
@@ -478,7 +490,14 @@ impl GsoGroupBuilder {
                     warnings.push(short_list_header_warning(record.data.len()));
                 }
             }
-            TagId::ShapeComponentRect if own => child.saw_shape_rectangle = true,
+            TagId::ShapeComponentRect if own => {
+                child.saw_shape_rectangle = true;
+                match (child.look.as_mut(), record.data.first()) {
+                    (Some(look), Some(&ratio)) => look.corner_ratio = ratio,
+                    (None, Some(&ratio)) => child.unread_corner_ratio = ratio,
+                    _ => {}
+                }
+            }
             TagId::ShapeComponentLine if own => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => child.line = Some(line),
                 Err(_) => warnings
@@ -561,5 +580,34 @@ impl GsoGroupBuilder {
             has_link: self.has_link,
             ctrl_properties: self.ctrl_properties,
         })
+    }
+}
+
+/// Both standalone shapes and group leaves use the same partial-look boundary.
+/// Other component families have their own payload layout, not this line/fill block.
+pub(super) fn parse_shape_look(
+    data: &[u8],
+    type_repeated: bool,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<crate::schema::section::Hwp5ShapeLook> {
+    match Hwp5ShapeRender::parse_look(data, type_repeated) {
+        Ok(look) => Some(look),
+        Err(error) => {
+            if matches!(
+                data.get(..4),
+                Some(b"cer$" | b"lle$" | b"cra$" | b"lop$" | b"ruc$" | b"nil$" | b"loc$")
+            ) {
+                // 이것을 실패시키는 것: 선 정보 실패를 채우기 손실 경고만으로 숨기기.
+                warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.line",
+                    reason: format!("line information unreadable; color, thickness, style and arrows not carried: {error}"),
+                });
+                warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.fill",
+                    reason: "fill block unavailable after unreadable line information".into(),
+                });
+            }
+            None
+        }
     }
 }

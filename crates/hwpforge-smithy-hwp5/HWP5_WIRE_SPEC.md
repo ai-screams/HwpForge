@@ -1152,6 +1152,10 @@ the width of a rotated line is edited and the shape is rotated again.
 The 13-byte line information is COLORREF (u32), thickness (i32 HWPUNIT),
 properties (u32), outline (u8), after the shape matrix chain. Standalone
 shapes and group children use the same parser and projection function.
+Group children also use the standalone fill and corner-ratio projection.
+Gradient, pattern and picture values are carried unchanged (fixture 32); their
+drawn direction under group transforms awaits the PDF visual gate. Unsupported fill
+details and missing picture assets retain the existing warnings.
 
 | Bits          | Meaning                                                      |
 | ------------- | ------------------------------------------------------------ |
@@ -1208,3 +1212,19 @@ and grouped arcs: byte 0 is the closure type; bytes 1–8, 9–16 and 17–24 ar
 the center, first axis endpoint and second axis endpoint, each an `(x, y)`
 pair of little-endian i32 HWPUNIT values. The three Hancom arc-border buttons
 0 / 1 / 2 map to HWPX NORMAL / PIE / CHORD respectively.
+
+Fixture 32 (`tests/fixtures/shapes/fills.*`) adds the following evidence:
+
+- No fill has two HWP5 forms: the existing fill kind 0, and fixture 32's
+  kind 1 (solid) with face COLORREF `0xFFFFFFFF` and pattern −1.
+  Both mean Core `Fill::None`.
+  Hancom writes `winBrush faceColor="none"`; our existing writer omits
+  `fillBrush`. The spelling stays unchanged pending Hancom editing-UI checks.
+- Pattern value 2 means HWPX `SLASH` (Hancom UI `\`). Other pattern values
+  are not confirmed by fixture 32.
+- The first byte of `ShapeComponentRect` is the corner ratio in percent
+  (`20` in the rounded rectangle, both groups).
+- Group B stores horizontal flip 1 and rotation 30 on the group, plus
+  rotation 180 and no flip on every child, in both Hancom formats.
+  Our existing fold transfers the group transform to the children; fill
+  values are preserved independently of that placement representation.

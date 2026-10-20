@@ -25,8 +25,7 @@
 //! picture's turn, effect or border, a link that is not in Hancom's
 //! form, the group's own link, the text of a shape that does not keep it,
 //! the controls inside a child's text (the group child parser keeps only
-//! text), a directional fill (HWP5 shape styles are not projected at all
-//! yet — only the fills that decide geometry are reported here), a
+//! text), an unreadable fill (supported fills use the standalone projection), a
 //! displayed size or a nested group box that disagrees with the shapes, and
 //! a group left with nothing.
 
@@ -344,8 +343,8 @@ fn plan_child<'a>(
     let mut turns = has_text;
     match render.fill {
         Hwp5ShapeFill::Plain => {}
-        Hwp5ShapeFill::Directional(fill) => {
-            after.push(note("group_child_fill", format!("{fill} fill not carried by Core")));
+        Hwp5ShapeFill::Directional(_) => {
+            // Direction values are carried unchanged by apply_shape_fill in emit.
             turns = true;
         }
         Hwp5ShapeFill::Unreadable => {
@@ -862,9 +861,42 @@ fn emit(
             }
             Outcome::Kept { mut control, keeps_text } => {
                 let look = shape_look(&c.child.control);
+                let fillable =
+                    !matches!(control.as_ref(), Control::Line { .. } | Control::ConnectLine { .. });
                 if let (Some(look), Some(slot)) = (look, super::shape_style_slot(&mut control)) {
                     let style = slot.get_or_insert_with(Default::default);
                     super::project_shape_line(&look.line, style, &mut state.warnings);
+                    style.corner_ratio =
+                        super::project_corner_ratio(look.corner_ratio, &mut state.warnings);
+                    if fillable {
+                        state.apply_shape_fill(look, style);
+                    }
+                }
+                if let Ok(render) = &c.child.render {
+                    if let Hwp5ShapeFill::Directional(fill) = render.fill {
+                        let carried = super::shape_style_slot(&mut control)
+                            .and_then(|slot| slot.as_ref())
+                            .is_some_and(|style| {
+                                matches!(
+                                    style.fill,
+                                    Some(
+                                        hwpforge_core::control::Fill::Gradient { .. }
+                                            | hwpforge_core::control::Fill::Pattern { .. }
+                                            | hwpforge_core::control::Fill::Image { .. }
+                                    )
+                                )
+                            });
+                        if !carried {
+                            report(
+                                vec![note(
+                                    "group_child_fill",
+                                    format!("{fill} fill not carried by Core"),
+                                )],
+                                place,
+                                state,
+                            );
+                        }
+                    }
                 }
                 if keeps_text {
                     attach_text(&mut control, c.child, state);
@@ -1744,9 +1776,9 @@ mod tests {
     /// Solid and pattern fills share the kind bits and differ only in the
     /// pattern kind: read from record bytes and projected, the solid
     /// triangle folds its 30° turn into its points (no warning), the
-    /// patterned one keeps the turn and reports the fill. Neither carries a
-    /// fill in Core — HWP5 shape fills are not projected — so the loss the
-    /// warning names is real.
+    /// patterned one keeps the turn and reports the fill. This fixture
+    /// supplies rendering facts without a shape look, so its pattern cannot
+    /// be carried and must still be reported.
     ///
     /// 이것을 실패시키는 것: 무늬 종류를 보지 않는 것(두 기록이 같은 결과),
     /// 채우기 경고를 지우는 것.
@@ -2096,5 +2128,122 @@ mod tests {
         assert_eq!(lost, ["group_nested_object", "group_child_control", "group_child_text"]);
         let Some(Control::Group { children, .. }) = g else { panic!() };
         assert!(matches!(children[0], GroupChild::Picture(_)));
+    }
+    /// 이것을 실패시키는 것: 묶음 채우기/곡률 누락, 방향 값 변경, BinData 별도 경로.
+    #[test]
+    fn standalone_and_group_share_all_supported_fills_and_corner_ratio() {
+        use crate::schema::border_fill::*;
+        use crate::schema::section::{Hwp5ShapeLine, Hwp5ShapeLook};
+        use hwpforge_core::control::Fill;
+        let color = |pattern_kind| {
+            Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
+                background_color: 0x000000ff,
+                pattern_color: 0x0000ff00,
+                pattern_kind,
+                alpha: 0,
+                extra_data: Vec::new(),
+            })
+        };
+        let cases = [
+            (0, Hwp5RawBorderFillFill::None, Hwp5ShapeFill::Plain),
+            (1, color(Hwp5FillPatternKind::None), Hwp5ShapeFill::Plain),
+            (1, color(Hwp5FillPatternKind::BackSlash), Hwp5ShapeFill::Directional("pattern")),
+            (
+                4,
+                Hwp5RawBorderFillFill::Gradation(Hwp5RawGradationFill {
+                    gradation_type: Hwp5GradationType::Linear,
+                    angle: 37,
+                    center_x: 23,
+                    center_y: 71,
+                    blur: 40,
+                    colors: vec![0xff, 0xff0000],
+                    shape: None,
+                    blur_center: Some(60),
+                    extra_data: Vec::new(),
+                }),
+                Hwp5ShapeFill::Directional("gradient"),
+            ),
+            (
+                2,
+                Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
+                    mode: Hwp5FillImageMode::Resize,
+                    brightness: 0,
+                    contrast: 0,
+                    effect: Hwp5FillImageEffect::RealPic,
+                    bindata_id: 1,
+                    extra_data: Vec::new(),
+                }),
+                Hwp5ShapeFill::Directional("picture"),
+            ),
+        ];
+        for (fill_kind, fill, fact) in cases {
+            for ratio in [0, 25, 50] {
+                let look = Hwp5ShapeLook {
+                    corner_ratio: ratio,
+                    line: Hwp5ShapeLine {
+                        color: 0,
+                        thickness: 33,
+                        properties: 1 | (4 << 22) | (4 << 26) | (3 << 30),
+                    },
+                    fill_kind: Some(fill_kind),
+                    fill: Ok(fill.clone()),
+                };
+                let mut wire = rect();
+                if let Hwp5Control::Rect(r) = &mut wire {
+                    r.geometry = geo(0, 0, 1000, 1000);
+                    r.look = Some(look);
+                }
+                let assets = assets();
+                let mut state = ProjectionImageState::new(
+                    Some(&assets),
+                    None,
+                    DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+                );
+                let run = super::super::project_control_run(
+                    &wire,
+                    &mut state,
+                    super::super::ImageProjectionContext::Flow,
+                    CharShapeIndex::new(0),
+                )
+                .unwrap();
+                let RunContent::Control(standalone) = run.content else { panic!() };
+                let Control::Rect { style: Some(expected), .. } = standalone.as_ref() else {
+                    panic!()
+                };
+                assert_eq!(expected.corner_ratio, (ratio != 0).then_some(ratio));
+                if fill_kind == 0 {
+                    assert_eq!(expected.fill, Some(Fill::None));
+                }
+                if fill_kind == 1 && matches!(fact, Hwp5ShapeFill::Plain) {
+                    assert_eq!(expected.fill_color.unwrap().to_hex_rgb(), "#FF0000");
+                }
+                for angle in [0.0, 30.0] {
+                    let mut r = render((1000, 1000), tr(1000.0, 1000.0), (ID, rot(angle)));
+                    r.fill = fact;
+                    let top = group(
+                        geo(0, 0, 3000, 3000),
+                        at(3000, 3000, 0.0, 0.0),
+                        vec![child(wire.clone(), Ok(r))],
+                    );
+                    let run = project_group_run(&top, &mut state).unwrap();
+                    let RunContent::Control(g) = run.content else { panic!() };
+                    let Control::Rect { style: Some(actual), .. } = children(&g)[0] else {
+                        panic!()
+                    };
+                    assert_eq!(
+                        (&actual.fill, actual.fill_color, actual.corner_ratio),
+                        (&expected.fill, expected.fill_color, expected.corner_ratio),
+                        "{fill_kind} {angle}"
+                    );
+                    assert!(!state.warnings.iter().any(|w| matches!(w, Hwp5Warning::ContentLost { kind, .. } if kind == "group_child_fill")), "{:?}", state.warnings);
+                    if fill_kind == 2 {
+                        assert!(
+                            matches!(&actual.fill, Some(Fill::Image { image_id, .. }) if image_id == "BinData/image1.png")
+                        );
+                        assert!(state.image_store.get("image1.png").is_some());
+                    }
+                }
+            }
+        }
     }
 }

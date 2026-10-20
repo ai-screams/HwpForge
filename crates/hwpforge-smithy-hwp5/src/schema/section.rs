@@ -794,8 +794,9 @@ pub(crate) struct Hwp5ShapeLine {
 pub(crate) struct Hwp5ShapeLook {
     /// The outline.
     pub line: Hwp5ShapeLine,
-    /// Raw fill kind bits (0 none, 1 colour/hatch, 2 picture, 4 gradient).
-    pub fill_kind: u32,
+    /// Raw fill kind bits (0 none, 1 colour/hatch, 2 picture, 4 gradient),
+    /// or `None` when the kind header itself is cut short.
+    pub fill_kind: Option<u32>,
     /// The fill block, or why it could not be read.
     pub fill: Result<super::border_fill::Hwp5RawBorderFillFill, String>,
     /// Corner ratio of a rectangle (byte 0 of its `ShapeComponentRect`
@@ -921,12 +922,6 @@ impl Hwp5ShapeRender {
         })
     }
 
-    /// The line information and fill after the matrix chain of a
-    /// `ShapeComponent` payload (§19.5 1b), or `None` when the chain cannot
-    /// be read or the line block is cut short. The fill block has the
-    /// `DocInfo` border fill layout and goes through the same parser
-    /// ([`parse_fill_payload`](super::border_fill::parse_fill_payload)); its
-    /// error is kept, not guessed past.
     /// The initial (unscaled) width and height of a `ShapeComponent`
     /// rendering block (bytes 16–24 after the type tag) — HWPX `orgSz`.
     pub(crate) fn initial_size(data: &[u8], type_repeated: bool) -> Option<(u32, u32)> {
@@ -936,22 +931,38 @@ impl Hwp5ShapeRender {
         Some((word(16)?, word(20)?))
     }
 
-    pub(crate) fn parse_look(data: &[u8], type_repeated: bool) -> Option<Hwp5ShapeLook> {
-        let data = if type_repeated { data.get(4..)? } else { data };
-        let chain_end = Self::chain_end(data).ok()?;
-        let tail = data.get(chain_end..)?;
-        if tail.len() < Self::LINE_INFO + 4 {
-            return None;
+    /// Read the complete 13-byte line independently of the following fill.
+    /// An error means the line cannot be recovered; fill errors stay in `look.fill`.
+    pub(crate) fn parse_look(data: &[u8], type_repeated: bool) -> Hwp5Result<Hwp5ShapeLook> {
+        let data = if type_repeated { data.get(4..).unwrap_or(&[]) } else { data };
+        let chain_end = Self::chain_end(data)?;
+        let tail = &data[chain_end..];
+        if tail.len() < Self::LINE_INFO {
+            return Err(Hwp5Error::RecordParse {
+                offset: chain_end,
+                detail: format!("line information cut short: {} bytes, 13 needed", tail.len()),
+            });
         }
         let mut cur = Cursor::new(tail);
-        let color = cur.read_u32::<LittleEndian>().ok()?;
-        let thickness = cur.read_i32::<LittleEndian>().ok()?;
-        let properties = cur.read_u32::<LittleEndian>().ok()?;
-        let _outline = cur.read_u8().ok()?;
-        let fill_kind = cur.read_u32::<LittleEndian>().ok()?;
-        let fill =
-            super::border_fill::parse_fill_payload(fill_kind, &mut cur).map_err(|e| e.to_string());
-        Some(Hwp5ShapeLook {
+        let color = cur.read_u32::<LittleEndian>()?;
+        let thickness = cur.read_i32::<LittleEndian>()?;
+        let properties = cur.read_u32::<LittleEndian>()?;
+        let _outline = cur.read_u8()?;
+        // 이것을 실패시키는 것: 채우기 헤더 잘림을 선 정보 전체 실패로 올리기.
+        let (fill_kind, fill) = match cur.read_u32::<LittleEndian>() {
+            Ok(kind) => (
+                Some(kind),
+                super::border_fill::parse_fill_payload(kind, &mut cur).map_err(|e| e.to_string()),
+            ),
+            Err(_) => (
+                None,
+                Err(format!(
+                    "fill kind cut short: {} bytes, 4 needed",
+                    tail.len() - Self::LINE_INFO
+                )),
+            ),
+        };
+        Ok(Hwp5ShapeLook {
             corner_ratio: 0,
             line: Hwp5ShapeLine { color, thickness, properties },
             fill_kind,

@@ -1146,8 +1146,8 @@ pub(crate) fn decode_polygon(
 /// [`decode_shape_style_full`] for a shape the decoder places in Core, plus
 /// the picture-fill loss report: a picture fill Core cannot carry exactly is
 /// [`ContentLost`](super::DecodeWarning::ContentLost) (`shape_image_fill`).
-/// Direct group children are reported by the group path (`group_child_fill`);
-/// a shape in a group child's text is checked here like any other.
+/// Direct group children use `group_child_fill`; a shape in a group child's
+/// text uses `shape_image_fill`, like any other standalone shape.
 fn decode_shape_style(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
@@ -1157,13 +1157,13 @@ fn decode_shape_style(
     dropcap_style: &str,
     ctx: &mut DecodeCtx,
 ) -> Option<ShapeStyle> {
-    // 이것을 실패시키는 것: 직접 자식 판정을 `in_group_child` 로 되돌리기
-    // (묶음 글상자 안 도형의 그림 채우기 손실이 무음 —
-    // `image_fill_inside_a_group_text_box_is_reported`).
-    if !ctx.is_direct_group_child() {
-        if let Some(reason) = fill_brush.as_ref().and_then(image_fill_loss) {
-            ctx.content_lost("shape_image_fill", reason);
-        }
+    // Both hosts carry supported picture fills. Unsupported details retain
+    // their diagnostic, attributed to the direct child or nested shape.
+    if let Some(reason) = fill_brush.as_ref().and_then(image_fill_loss) {
+        ctx.content_lost(
+            if ctx.is_direct_group_child() { "group_child_fill" } else { "shape_image_fill" },
+            reason,
+        );
     }
     decode_shape_style_full(
         line_shape,
@@ -1250,8 +1250,9 @@ fn decode_arrow(
 /// and drop cap info.
 ///
 /// `fillable` = the shape has an interior (everything but lines and connect
-/// lines). For such a shape a missing `<hc:fillBrush>` means "no fill" and
-/// becomes [`Fill::None`](hwpforge_core::control::Fill::None); leaving it
+/// lines). For such a shape a missing `<hc:fillBrush>` or a patternless
+/// `winBrush faceColor="none"` means "no fill" and becomes
+/// [`Fill::None`](hwpforge_core::control::Fill::None); leaving it
 /// `None` would let the encoder write its default white fill.
 pub(crate) fn decode_shape_style_full(
     line_shape: &Option<HxLineShape>,
@@ -1329,6 +1330,12 @@ pub(crate) fn decode_shape_style_full(
                 let fg = parse_hex_color(&wb.hatch_color).unwrap_or(Color::BLACK);
                 let bg = parse_hex_color(&wb.face_color).unwrap_or(Color::WHITE);
                 return Some(Fill::Pattern { pattern_type, fg_color: fg, bg_color: bg });
+            }
+            // Fixture 32: Hancom's explicit no-face brush has the same Core
+            // meaning as an absent fillBrush. Keep the writer's spelling.
+            // 이것을 실패시키는 것: faceColor="none"을 기본 흰 채우기로 읽기.
+            if fillable && wb.face_color == "none" {
+                return Some(Fill::None);
             }
         }
         None
@@ -3098,18 +3105,6 @@ fn normalize_group_child(
             return kept;
         }
     }
-    if picture_fill {
-        // The picture is not carried; the shape still is, and a picture
-        // fill turns with it, so it takes the box rule.
-        ctx.content_lost("group_child_fill", "picture fill not carried by Core");
-        // Group children keep their old output (the encoder's default fill)
-        // until group picture fills are carried; see `decode_shape_style`.
-        if let Some(style) = control_style_mut(&mut control) {
-            if matches!(style.fill, Some(hwpforge_core::control::Fill::Image { .. })) {
-                style.fill = None;
-            }
-        }
-    }
     let input = FoldInput::new(m.to_transform(), org, origin)
         .with_geometry_facts(GeometryFacts::new(picture_fill));
     let (kept, losses) = match fold_group_child(control, &input) {
@@ -3128,21 +3123,6 @@ fn normalize_group_child(
         ctx.group_sources.push(None);
     }
     kept
-}
-
-/// The style of a shape control, when it has one.
-fn control_style_mut(control: &mut Control) -> Option<&mut ShapeStyle> {
-    match control {
-        Control::TextBox { style, .. }
-        | Control::Rect { style, .. }
-        | Control::Ellipse { style, .. }
-        | Control::Polygon { style, .. }
-        | Control::Arc { style, .. }
-        | Control::Curve { style, .. }
-        | Control::Line { style, .. }
-        | Control::ConnectLine { style, .. } => style.as_mut(),
-        _ => None,
-    }
 }
 
 /// Whether every value is a valid [`HwpUnit`] (which a Core size or offset
@@ -3269,6 +3249,42 @@ mod tests {
         // 선(채울 내부가 없음)은 종전대로 스타일 없음.
         assert!(decode_shape_style_full(&None, &None, false, None, None, "None", &mut Vec::new())
             .is_none());
+    }
+
+    /// 이것을 실패시키는 것: 명시적 none 누락 / 면 없음 무늬까지 지우기 /
+    /// 선 도형에 Fill::None 추가 / 빈 면 색을 none으로 추측하기.
+    #[test]
+    fn hancom_no_face_brush_is_no_fill_only_without_a_pattern() {
+        for fillable in [false, true] {
+            for face in ["none", "", "#FFFFFF"] {
+                for hatch in [None, Some("SLASH".to_string())] {
+                    let mut brush = HxFillBrush::default_white();
+                    let wb = brush.win_brush.as_mut().unwrap();
+                    wb.face_color = face.into();
+                    wb.hatch_style = hatch.clone();
+                    let mut warnings = Vec::new();
+                    let style = decode_shape_style_full(
+                        &None,
+                        &Some(brush),
+                        fillable,
+                        None,
+                        None,
+                        "None",
+                        &mut warnings,
+                    );
+                    let fill = style.as_ref().and_then(|s| s.fill.as_ref());
+                    if hatch.is_some() {
+                        assert!(matches!(fill, Some(Fill::Pattern { .. })));
+                    } else if fillable && face == "none" {
+                        assert_eq!(fill, Some(&Fill::None));
+                        assert_eq!(style.unwrap().fill_color, None);
+                    } else {
+                        assert_eq!(fill, None);
+                    }
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                }
+            }
+        }
     }
     use crate::schema::section::{
         HxConnectLine, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment, HxEllipse,
@@ -6011,14 +6027,9 @@ mod group_tests {
         assert_eq!(lost_kinds(&w), ["shape_drawn_extent"], "{w:?}");
     }
 
-    /// A polygon filled with a picture: Core has no picture fill for shapes,
-    /// so the fill is reported, and the polygon keeps its own rotation
-    /// (a picture turns with its shape) instead of folding it into points.
-    ///
-    /// 이것을 실패시키는 것: 그림 채우기 방출을 지우는 것, 또는 점 기반 분기
-    /// 조건에서 `!picture_fill` 을 빼는 것 (회전이 점에 접힌다).
+    /// 이것을 실패시키는 것: 묶음 그림 채우기를 지우거나 회전을 점에 굽기.
     #[test]
-    fn picture_filled_child_is_reported_and_keeps_its_rotation() {
+    fn picture_filled_child_is_carried_and_keeps_its_rotation() {
         let fill = r#"<hc:fillBrush><hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/></hc:imgBrush></hc:fillBrush>"#;
         let child = polygon(
             (1000, 600),
@@ -6027,20 +6038,12 @@ mod group_tests {
             fill,
         );
         let (g, w) = decode(&container((3000, 3000), &child));
-        assert_eq!(lost_kinds(&w), ["group_child_fill"]);
+        assert!(lost_kinds(&w).is_empty(), "{w:?}");
         let g = g.unwrap();
         assert_eq!(rotation(children(&g)[0]), (Some(30.0), None));
-        // 묶음 자식은 그림 채우기를 아직 나르지 않는다 — 옛 출력(인코더 기본
-        // 채우기)대로. 이것을 실패시키는 것: 묶음 경로의 `Fill::Image` 제거를
-        // 지우기(손실 경고와 함께 그림 채우기가 방출됨).
         let Control::Polygon { style, .. } = children(&g)[0] else { panic!("polygon") };
-        assert!(
-            !matches!(
-                style.as_ref().and_then(|s| s.fill.as_ref()),
-                Some(hwpforge_core::control::Fill::Image { .. })
-            ),
-            "{style:?}"
-        );
+        assert!(matches!(style.as_ref().and_then(|s| s.fill.as_ref()),
+            Some(hwpforge_core::control::Fill::Image { image_id, .. }) if image_id == "BinData/image1"));
     }
 
     /// Sizes and offsets outside the HWPUNIT range cannot be stored (they

@@ -569,7 +569,7 @@ impl NestedSubtreeContext {
         }
     }
 
-    fn note_shape_component(&mut self, data: &[u8], level: u16) {
+    fn note_shape_component(&mut self, data: &[u8], level: u16, warnings: &mut Vec<Hwp5Warning>) {
         self.saw_shape_component = true;
         if self.comp_level.is_none() {
             self.standalone_render = Some(
@@ -580,7 +580,7 @@ impl NestedSubtreeContext {
                     })
                     .map_err(|e| e.to_string()),
             );
-            self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
+            self.look = gso::parse_shape_look(data, true, warnings);
             // A shape's caption is a list one level below its control
             // header, before the component; its text list comes after. The
             // caption is not carried — its paragraphs must not become the
@@ -1663,7 +1663,7 @@ impl BodyTextParserState {
                     );
                 }
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_shape_component(&record.data, level);
+                    ctx.note_shape_component(&record.data, level, &mut self.warnings);
                 }
             }
             TagId::CtrlData => {
@@ -6504,7 +6504,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
-        ctx.note_shape_component(&[], 0);
+        ctx.note_shape_component(&[], 0, &mut Vec::new());
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -6526,7 +6526,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
-        ctx.note_shape_component(&[], 0);
+        ctx.note_shape_component(&[], 0, &mut Vec::new());
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),

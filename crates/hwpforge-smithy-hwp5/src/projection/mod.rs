@@ -685,39 +685,34 @@ impl<'a> ProjectionImageState<'a> {
         look: &crate::schema::section::Hwp5ShapeLook,
         fillable: bool,
     ) -> hwpforge_core::control::ShapeStyle {
+        let mut style = hwpforge_core::control::ShapeStyle::default();
+        project_shape_line(&look.line, &mut style, &mut self.warnings);
+        style.corner_ratio = project_corner_ratio(look.corner_ratio, &mut self.warnings);
+        if fillable {
+            self.apply_shape_fill(look, &mut style);
+        }
+        style
+    }
+
+    /// Shared fill projection and BinData storage, without parent transform changes.
+    fn apply_shape_fill(
+        &mut self,
+        look: &crate::schema::section::Hwp5ShapeLook,
+        style: &mut hwpforge_core::control::ShapeStyle,
+    ) {
         use crate::schema::border_fill::{
             Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5GradationType, Hwp5RawBorderFillFill,
         };
-        use hwpforge_core::control::{Fill, ShapeStyle};
+        use hwpforge_core::control::Fill;
         use hwpforge_foundation::{GradientType, ImageFillMode};
         let colour = |raw: u32| hwpforge_foundation::Color::from_raw(raw & 0x00FF_FFFF);
-        // §19.5 1c: 모서리 곡률(0 = 각진 모서리 = `None`), 51 이상은 Core 범위
-        // 밖이라 보고하고 50 으로 자른다. 이것을 실패시키는 것: 비율 투영을
-        // 지우기 / 자르기 경고 삭제.
-        let corner_ratio = match look.corner_ratio {
-            0 => None,
-            r if r > 50 => {
-                push_projection_fallback(
-                    &mut self.warnings,
-                    "shape.corner_ratio",
-                    format!("corner ratio {r} above 50; written as 50"),
-                );
-                Some(50)
-            }
-            r => Some(r),
-        };
-        let mut style = ShapeStyle { corner_ratio, ..ShapeStyle::default() };
-        project_shape_line(&look.line, &mut style, &mut self.warnings);
-        if !fillable {
-            return style;
-        }
         let lost = |warnings: &mut Vec<Hwp5Warning>, reason: String| {
             push_projection_fallback(warnings, "shape.fill", reason);
         };
-        if look.fill_kind == 0 {
+        if look.fill_kind == Some(0) {
             // 이것을 실패시키는 것: 채우기 없음을 흰 칠(기본값)로 두기.
             style.fill = Some(Fill::None);
-            return style;
+            return;
         }
         match &look.fill {
             Ok(Hwp5RawBorderFillFill::None) => style.fill = Some(Fill::None),
@@ -769,7 +764,7 @@ impl<'a> ProjectionImageState<'a> {
                             g.colors.len()
                         ),
                     );
-                    return style;
+                    return;
                 }
                 // 1 LINEAR·3 CONICAL (x6), 2 RADIAL (Hancom twins, 4 shapes);
                 // 4 is read in the border-fill table's order but unconfirmed.
@@ -800,7 +795,7 @@ impl<'a> ProjectionImageState<'a> {
                 let Some(asset) = self.image_asset(img.bindata_id) else {
                     let reason = self.missing_asset_reason(img.bindata_id);
                     lost(&mut self.warnings, format!("picture fill: {reason}"));
-                    return style;
+                    return;
                 };
                 self.store_asset(asset);
                 let mode = match img.mode {
@@ -836,7 +831,6 @@ impl<'a> ProjectionImageState<'a> {
             }
             Err(e) => lost(&mut self.warnings, format!("fill block unreadable: {e}")),
         }
-        style
     }
 
     /// `run`'s shape with the style of `look` (none when `look` is `None`).
@@ -4210,6 +4204,22 @@ fn shape_vertical_align_from_list_header(
             }
         },
         None => VerticalAlign::Top,
+    }
+}
+
+/// Same corner policy for standalone and grouped rectangles.
+fn project_corner_ratio(raw: u8, warnings: &mut Vec<Hwp5Warning>) -> Option<u8> {
+    match raw {
+        0 => None,
+        r if r > 50 => {
+            push_projection_fallback(
+                warnings,
+                "shape.corner_ratio",
+                format!("corner ratio {r} above 50; written as 50"),
+            );
+            Some(50)
+        }
+        r => Some(r),
     }
 }
 
@@ -8985,7 +8995,7 @@ mod shape_style_tests {
         Hwp5ShapeLook {
             corner_ratio: 0,
             line: Hwp5ShapeLine { color: 0x0017_9EDE, thickness: 283, properties: line_type },
-            fill_kind,
+            fill_kind: Some(fill_kind),
             fill: Ok(fill),
         }
     }
@@ -9057,8 +9067,15 @@ mod shape_style_tests {
     /// 채우기를 쓰기.
     #[test]
     fn no_fill_is_an_empty_box() {
-        let (s, _) = style(&look(1, 0, Hwp5RawBorderFillFill::None), true);
-        assert_eq!(s.fill, Some(Fill::None));
+        // 이것을 실패시키는 것: 종류 0 또는 fixture 32의 단색 + 면 색
+        // 0xFFFFFFFF를 흰색/기본 채우기로 치환하기.
+        for (kind, fill) in [
+            (0, Hwp5RawBorderFillFill::None),
+            (1, colour_fill(0xFFFF_FFFF, Hwp5FillPatternKind::None)),
+        ] {
+            let (s, warnings) = style(&look(1, kind, fill), true);
+            assert_eq!((s.fill, s.fill_color, warnings), (Some(Fill::None), None, 0));
+        }
         // 종류 0 이면 뒤 블록을 못 읽어도 빈 상자다.
         let mut unreadable = look(1, 0, Hwp5RawBorderFillFill::None);
         unreadable.fill = Err("cut short".into());

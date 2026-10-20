@@ -109,3 +109,76 @@ fn x6_picture_fill_round_trips_through_hwpx() {
         "{stem} not in the image store"
     );
 }
+
+/// 이것을 실패시키는 것: 묶음 HWPX 그림 채우기 제거, BinData 연결 누락,
+/// 묶음 회전·대칭에 따라 채우기 방향 값을 수정하기.
+#[test]
+fn grouped_fills_keep_standalone_values_and_packaged_image() {
+    use hwpforge_core::{control::GroupChild, Document, PageSettings, Paragraph, Run, Section};
+    use hwpforge_foundation::{CharShapeIndex, Flip, HwpUnit, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::HwpxEncoder;
+    let source = HwpxDecoder::decode(&fixture("x6-fill.hwpx")).unwrap();
+    let shapes: Vec<_> = source.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| match &r.content {
+            RunContent::Control(c) if matches!(c.as_ref(), Control::Rect { .. }) => {
+                Some(c.as_ref().clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shapes.len(), 5);
+    for turned in [false, true] {
+        let mut children = shapes.clone();
+        for child in &mut children {
+            let Control::Rect { style: Some(s), .. } = child else { panic!() };
+            if turned {
+                s.rotation = Some(30.0);
+                s.flip = Some(Flip::Horizontal);
+            }
+        }
+        let group = Control::Group {
+            children: children.into_iter().map(GroupChild::Shape).collect(),
+            width: HwpUnit::new(60000).unwrap(),
+            height: HwpUnit::new(60000).unwrap(),
+            frame: Default::default(),
+            placement: None,
+            inst_id: None,
+        };
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(group, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&doc.validate().unwrap(), &source.style_store, &source.image_store)
+                .unwrap();
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(!decoded.warnings.iter().any(|w| format!("{w:?}").contains("group_child_fill")));
+        let RunContent::Control(g) = &decoded.document.sections()[0].paragraphs[0].runs[0].content
+        else {
+            panic!()
+        };
+        let Control::Group { children, .. } = g.as_ref() else { panic!() };
+        assert_eq!(children.len(), shapes.len());
+        for (original, child) in shapes.iter().zip(children) {
+            let Control::Rect { style: Some(expected), .. } = original else { panic!() };
+            let GroupChild::Shape(Control::Rect { style: Some(actual), .. }) = child else {
+                panic!()
+            };
+            assert_eq!((&actual.fill, actual.fill_color), (&expected.fill, expected.fill_color));
+            if let Some(Fill::Image { image_id, .. }) = &actual.fill {
+                let stem = image_id.trim_start_matches("BinData/");
+                assert!(decoded
+                    .image_store
+                    .iter()
+                    .any(|(key, _)| { key == stem || key.split('.').next() == Some(stem) }));
+            }
+        }
+    }
+}
