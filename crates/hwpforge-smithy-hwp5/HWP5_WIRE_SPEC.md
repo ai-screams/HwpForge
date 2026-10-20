@@ -1115,3 +1115,30 @@ footnote/endnote `NewNumber` found in a master list (directly or through a
 memo whose content is attached later) is kept and reported as
 `master_page.note_numbering`, because the HWPX note planner numbers master
 pages after the body.
+
+## 25. Rotation and Flip of Shapes Outside Groups
+
+Source: Core `fold_standalone` / `fold_standalone_picture`
+(`hwpforge-core/src/control/geometry.rs`), HWP5 `projection/standalone.rs`,
+HWPX `decoder/shapes.rs` and `encoder/standalone.rs`. Fixtures:
+`tests/fixtures/standalone-rotation/` (Hancom-saved HWP5/HWPX pairs).
+
+HWP5 `SHAPE_COMPONENT` and HWPX `hp:renderingInfo` hold the same values:
+original size (`orgSz`), current size, flip bits, angle, rotation centre and
+the matrix chain (translation, then scale/rotation pairs). The `gso`
+`CtrlHeader` width and height are HWPX `hp:sz`. HWPX writes a current-size
+axis that equals the original as 0.
+
+| Rule            | Fact                                                                                                                                                                                                                  |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drawing         | Hancom draws with the composed matrix `T · R1 · S1 · …` (scale first). Mapping the original box `[0, orgSz]` through it fills `[0, sz]`                                                                               |
+| Local box       | D = original size × the scale; the current size is a copy of it. A text box grown by its content carries the grown height in the scale                                                                                |
+| Bounding box    | `sz` is the bounding box of D rotated (and flipped) about its centre. Pictures add their inner margin (`inMargin`) outside the rotation                                                                               |
+| Source of truth | The angle and flip fields and the `offset` attribute are not geometry. Older documents store the same flip with a different matrix combination, and Hancom does not use `offset` when drawing a shape outside a group |
+| Text            | Text in a rotated text box is not rotated; it wraps to the bounding-box width minus the left and right margins                                                                                                        |
+
+A shape whose matrix has no rotation or flip takes the existing path even if
+its angle or flip fields say otherwise (the fields are dropped with a
+warning). A matrix that does not map the original box onto `sz` within 2.5
+HWPUNIT is recomputed from D with a warning; Hancom produces such a shape when
+the width of a rotated line is edited and the shape is rotated again.
