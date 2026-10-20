@@ -191,7 +191,11 @@ fn normalize_definition_ids(
     if let Some(styles) = &mut refs.styles {
         let count = styles.items.len();
         for style in &mut styles.items {
-            if style.next_style_id_ref as usize >= count {
+            if let Some((kind, reason)) = hwpforge_core::style_lookup::recover_next_style(
+                &mut style.next_style_id_ref,
+                style.id,
+                count,
+            ) {
                 changed = true;
                 // Hancom opens a Hancom-saved public document and even its
                 // resave retains old nextStyleIDRef 58..60 beyond 57 styles.
@@ -199,10 +203,9 @@ fn normalize_definition_ids(
                 warnings.push(super::DecodeWarning::ContentLost {
                     part: "Contents/header.xml".into(),
                     path: super::ParagraphPath::default(),
-                    kind: "style.nextStyleIDRef".into(),
-                    reason: format!("style position {}: nextStyleIDRef {} out of range {count}; replaced with self {}", style.id, style.next_style_id_ref, style.id),
+                    kind: kind.into(),
+                    reason,
                 });
-                style.next_style_id_ref = style.id;
             }
         }
     }

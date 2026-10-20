@@ -27,6 +27,26 @@ pub fn lookup<T>(value: Option<T>, kind: &str, id: impl std::fmt::Display) -> cr
     })
 }
 
+/// Recover an out-of-range next-style position to self, reporting the lost
+/// reference as a warning kind and reason. Other style references stay strict.
+/// Call after assigning definition positions and before reference validation.
+#[doc(hidden)]
+pub fn recover_next_style(
+    next: &mut u32,
+    position: u32,
+    count: usize,
+) -> Option<(&'static str, String)> {
+    // 이것을 실패시키는 것: 상한 포함 오류, 자기 위치 대신 0 대입, 경고 누락.
+    if (*next as usize) < count {
+        return None;
+    }
+    let reason = format!(
+        "style position {position}: nextStyleIDRef {next} out of range {count}; replaced with self {position}"
+    );
+    *next = position;
+    Some(("style.nextStyleIDRef", reason))
+}
+
 /// Check body border IDs against the supplied original definition IDs.
 /// Call before synthesizing any output definitions. Zero denotes no border.
 /// # Errors

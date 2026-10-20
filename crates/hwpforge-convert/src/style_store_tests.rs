@@ -3050,7 +3050,6 @@ fn fix3_all_header_reference_kinds_use_strict_lookup() {
         "numbering",
         "char borderFill",
         "para borderFill",
-        "style",
     ] {
         let mut store = valid.clone();
         match kind {
@@ -3064,7 +3063,6 @@ fn fix3_all_header_reference_kinds_use_strict_lookup() {
             }
             "char borderFill" => store.char_shapes[0].border_fill_id = Some(99),
             "para borderFill" => store.para_shapes[0].border_fill_id = 99,
-            "style" => store.styles[0].next_style_id = 99,
             _ => unreachable!(),
         }
         let error = crate::hwp5_style_store_to_hwpx(&store).unwrap_err().to_string();
@@ -3242,4 +3240,81 @@ fn encode_test_header(store: &hwpforge_smithy_hwpx::HwpxStyleStore) -> Vec<u8> {
         &ImageStore::new(),
     )
     .unwrap()
+}
+
+#[test]
+fn next_style_recovery_matches_hwpx_and_preserves_valid_boundaries() {
+    // 이것을 실패시키는 것: HWP5 보정 미호출, self 대신 0, 경고 종류/문구 분기, >= 를 > 로 변경.
+    use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder};
+    for next in [0, 18, 19, 53] {
+        let mut source = Hwp5StyleStore::from_doc_info(&empty_doc_info());
+        source.char_shapes.push(default_char_shape());
+        source.para_shapes.push(default_para_shape());
+        source.styles = (0..19)
+            .map(|id| Hwp5RawStyle {
+                name: format!("style{id}"),
+                english_name: format!("style{id}"),
+                kind: 1,
+                next_style_id: if id == 17 { next } else { id },
+                lang_id: 1042,
+                para_shape_id: 99,
+                char_shape_id: 0,
+                lock_form: 0,
+            })
+            .collect();
+        let (store, warnings) = crate::hwp5_style_store_to_hwpx(&source).unwrap();
+        let expected = if next >= 19 { 17 } else { u32::from(next) };
+        assert_eq!(store.iter_styles().nth(17).unwrap().next_style_id_ref, expected);
+        let losses: Vec<_> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::ContentLost { kind, reason, .. } => {
+                    Some((kind.as_str(), reason.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(losses.len(), usize::from(next >= 19));
+        let bytes = encode_test_header(&store);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert_eq!(decoded.style_store.iter_styles().nth(17).unwrap().next_style_id_ref, expected);
+        if next >= 19 {
+            // Feed the same invalid next position through the HWPX decoder.
+            let mut input = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+            let mut output = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for i in 0..input.len() {
+                let mut entry = input.by_index(i).unwrap();
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut data).unwrap();
+                if entry.name().unwrap() == "Contents/header.xml" {
+                    let xml = String::from_utf8(data).unwrap();
+                    data = xml
+                        .replace("nextStyleIDRef=\"17\"", &format!("nextStyleIDRef=\"{next}\""))
+                        .into_bytes();
+                }
+                output
+                    .start_file(entry.name().unwrap(), zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                std::io::Write::write_all(&mut output, &data).unwrap();
+            }
+            let changed = output.finish().unwrap().into_inner();
+            let decoded = HwpxDecoder::decode(&changed).unwrap();
+            let hwpx_losses: Vec<_> = decoded
+                .warnings
+                .iter()
+                .filter_map(|w| match w {
+                    DecodeWarning::ContentLost { kind, reason, .. }
+                        if kind == "style.nextStyleIDRef" =>
+                    {
+                        Some((kind.as_str(), reason.as_str()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(losses, hwpx_losses);
+            assert_eq!(losses[0].0, "style.nextStyleIDRef");
+            assert_eq!(losses[0].1, format!("style position 17: nextStyleIDRef {next} out of range 19; replaced with self 17"));
+            assert_eq!(decoded.style_store.iter_styles().nth(17).unwrap().next_style_id_ref, 17);
+        }
+    }
 }

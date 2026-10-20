@@ -474,12 +474,24 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     }
 
     for (idx, raw) in store.styles.iter().enumerate() {
-        out.push_style(hwp5_style_to_hwpx(
+        let mut style = hwp5_style_to_hwpx(
             u32::try_from(idx).map_err(|_| hwpforge_smithy_hwpx::HwpxError::InvalidStructure {
                 detail: "HWP5 style ID exceeds u32 range".into(),
             })?,
             raw,
-        ));
+        );
+        if let Some((kind, reason)) = hwpforge_core::style_lookup::recover_next_style(
+            &mut style.next_style_id_ref,
+            style.id,
+            store.styles.len(),
+        ) {
+            warnings.push(Hwp5Warning::ContentLost {
+                kind: kind.into(),
+                reason,
+                location: "DocInfo".into(),
+            });
+        }
+        out.push_style(style);
     }
 
     let references = HeaderReferences::build(&out)?;
