@@ -499,6 +499,7 @@ struct NestedSubtreeContext {
     unread_corner_ratio: u8,
     /// Initial box of the scope's first `ShapeComponent` (HWPX `orgSz`).
     original_size: Option<(u32, u32)>,
+    standalone_render: Option<Result<crate::schema::section::Hwp5ShapeRender, String>>,
     /// Length of the last list header seen (a shape's text list when the
     /// scope is a shape).
     list_header_len: Option<usize>,
@@ -540,6 +541,7 @@ impl NestedSubtreeContext {
             caption_paragraphs: 0,
             unread_corner_ratio: 0,
             original_size: None,
+            standalone_render: None,
             list_header_len: None,
         }
     }
@@ -570,6 +572,14 @@ impl NestedSubtreeContext {
     fn note_shape_component(&mut self, data: &[u8], level: u16) {
         self.saw_shape_component = true;
         if self.comp_level.is_none() {
+            self.standalone_render = Some(
+                crate::schema::section::Hwp5ShapeRender::parse(data, true)
+                    .map(|mut r| {
+                        r.source_id = self.instance_id;
+                        r
+                    })
+                    .map_err(|e| e.to_string()),
+            );
             self.look = crate::schema::section::Hwp5ShapeRender::parse_look(data, true);
             // A shape's caption is a list one level below its control
             // header, before the component; its text list comes after. The
@@ -721,6 +731,7 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::TextBox) if self.saw_list_header => match self.geometry {
                 Some(geometry) => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                    standalone_render: self.standalone_render,
                     look: self.look,
                     ctrl_id: self.ctrl_id,
                     geometry,
@@ -733,6 +744,7 @@ impl NestedSubtreeContext {
                 None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id, header_data: Vec::new() },
             },
             _ => classify_gso_control(GsoClassificationInput {
+                standalone_render: self.standalone_render,
                 ctrl_id: self.ctrl_id,
                 saw_shape_component: self.saw_shape_component,
                 saw_shape_rectangle: self.saw_shape_rectangle && !self.saw_list_header,
@@ -798,6 +810,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         let ctrl_id = input.ctrl_id;
         return match input.geometry {
             Some(geometry) if ellipse.is_arc() => Hwp5Control::Arc(Hwp5ArcControl {
+                standalone_render: input.standalone_render,
                 look: input.look.clone(),
                 ctrl_id,
                 geometry,
@@ -806,6 +819,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 original_size: input.original_size,
             }),
             Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl {
+                standalone_render: input.standalone_render,
                 paragraphs: input.paragraphs.clone(),
                 list_header_properties: input.list_header_properties,
                 text_margin: input.text_margin,
@@ -823,6 +837,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         let ctrl_id = input.ctrl_id;
         return match input.geometry {
             Some(geometry) => Hwp5Control::Curve(Hwp5CurveControl {
+                standalone_render: input.standalone_render,
                 look: input.look.clone(),
                 ctrl_id,
                 geometry,
@@ -843,6 +858,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
     if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE) {
         if let (Some(geometry), Some(line)) = (input.geometry.as_ref(), input.line.as_ref()) {
             return Hwp5Control::ConnectLine(Hwp5ConnectLineControl {
+                standalone_render: input.standalone_render,
                 look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry: geometry.clone(),
@@ -857,6 +873,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
     let gso_instance_id = input.instance_id;
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
         (Some(geometry), Some(picture), None, None, None) => Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: input.standalone_render,
             ctrl_id: input.ctrl_id,
             geometry,
             binary_data_id: picture.binary_data_id,
@@ -877,6 +894,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }
         (Some(geometry), None, None, None, None) if input.saw_shape_rectangle => {
             Hwp5Control::Rect(Hwp5RectControl {
+                standalone_render: input.standalone_render,
                 look: input.look.clone(),
                 ctrl_id: input.ctrl_id,
                 geometry,
@@ -885,6 +903,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             })
         }
         (Some(geometry), None, None, Some(line), None) => Hwp5Control::Line(Hwp5LineControl {
+            standalone_render: input.standalone_render,
             look: input.look.clone(),
             ctrl_id: input.ctrl_id,
             geometry,
@@ -895,6 +914,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }),
         (Some(geometry), None, None, None, Some(polygon)) if polygon.points.len() >= 3 => {
             Hwp5Control::Polygon(Hwp5PolygonControl {
+                standalone_render: input.standalone_render,
                 paragraphs: input.paragraphs.clone(),
                 list_header_properties: input.list_header_properties,
                 text_margin: input.text_margin,
@@ -1672,6 +1692,32 @@ impl BodyTextParserState {
                 }
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::ShapeComponentArc => {
+                // Keep the legacy unturned path, but do not discard a native
+                // arc merely because its matrix failed to parse. Projection
+                // retains its declared box and reports the specific failure.
+                let transformed = self
+                    .subtree_ctx
+                    .as_ref()
+                    .and_then(|c| c.standalone_render.as_ref())
+                    .is_some_and(|r| match r {
+                        Err(_) => true,
+                        Ok(r) => {
+                            let m = r.map().matrix();
+                            !(m[1].abs() < 1e-9 && m[3].abs() < 1e-9 && m[0] >= 0.0 && m[4] >= 0.0)
+                        }
+                    });
+                if transformed {
+                    match Hwp5ShapeComponentEllipse::parse_arc(&record.data) {
+                        Ok(arc) => {
+                            if let Some(ctx) = self.subtree_ctx.as_mut() {
+                                ctx.note_shape_ellipse(arc);
+                            }
+                        }
+                        Err(_) => self.push_unsupported_tag(record.header.tag_id),
+                    }
+                }
+            }
             TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
                 Ok(ellipse) => {
                     if let Some(ctx) = self.subtree_ctx.as_mut() {
@@ -6503,6 +6549,7 @@ mod tests {
 
     fn line_gso_input(shape_component_kind: Option<[u8; 4]>) -> GsoClassificationInput {
         GsoClassificationInput {
+            standalone_render: None,
             ctrl_id: CTRL_ID_GSO,
             saw_shape_component: true,
             saw_shape_rectangle: false,

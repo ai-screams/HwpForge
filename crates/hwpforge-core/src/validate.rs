@@ -262,6 +262,15 @@ fn run_frame_error(run: &crate::run::Run) -> Option<(&'static str, &'static str,
     fn image_error(
         image: &crate::image::Image,
     ) -> Option<(&'static str, &'static str, &'static str)> {
+        if image.rotation.is_some_and(|r| !r.is_finite()) {
+            return Some(("picture", "rotation", "rotation is not finite"));
+        }
+        if image
+            .in_margin
+            .is_some_and(|m| [m.left, m.right, m.top, m.bottom].iter().any(|v| v.as_i32() < 0))
+        {
+            return Some(("picture", "in_margin", "negative inner margin"));
+        }
         let o = image.frame.original_size?;
         original_size_error(o, image.width, image.height)
             .map(|reason| ("picture", "original_size", reason))

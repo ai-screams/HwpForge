@@ -158,6 +158,7 @@ const AUDITED: &[Audited] = &[
             ("PageNumberStyleFallback", "PAGE_NUMBER_STYLE_FALLBACK"),
             ("MissingGlyphs", "MISSING_GLYPHS"),
             ("LineOverflow", "LINE_OVERFLOW"),
+            ("ObjectTransformIgnored", "OBJECT_TRANSFORM_IGNORED"),
         ],
     },
     Audited {

@@ -353,6 +353,8 @@ enum HxRunChildDe {
     Line(Box<HxLine>),
     #[serde(rename = "ellipse")]
     Ellipse(Box<HxEllipse>),
+    #[serde(rename = "arc")]
+    Arc(Box<HxEllipse>),
     #[serde(rename = "polygon")]
     Polygon(Box<HxPolygon>),
     #[serde(rename = "curve")]
@@ -448,6 +450,15 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                 HxRunChildDe::Line(x) => {
                     run.child_order.push((K::Line, run.lines.len()));
                     run.lines.push(*x);
+                }
+                HxRunChildDe::Arc(mut x) => {
+                    // Object identity must survive zero-angle quantization and malformed
+                    // matrices. Geometry classification/diagnostics belong to the decoder.
+                    // A run child is a paragraph object. Direct group children are
+                    // parsed by HxContainerChildDe, regardless of this cached level.
+                    x.has_arc_pr = 1;
+                    run.child_order.push((K::Ellipse, run.ellipses.len()));
+                    run.ellipses.push(*x);
                 }
                 HxRunChildDe::Ellipse(x) => {
                     run.child_order.push((K::Ellipse, run.ellipses.len()));

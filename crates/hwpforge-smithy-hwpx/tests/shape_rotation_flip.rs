@@ -91,16 +91,17 @@ fn hancom_mirror_and_rotation_reencode_to_the_hancom_matrix() {
     let original = wire_transforms(&section0(&bytes));
     let decoded = HwpxDecoder::decode(&bytes).expect("decode");
     let got: Vec<_> = shapes(&decoded.document).iter().map(rotation_and_flip).collect();
-    assert_eq!(
-        got,
-        [
-            (None, Some(Flip::Horizontal)),        // C ellipse
-            (Some(330.0), Some(Flip::Horizontal)), // A
-            (Some(330.0), Some(Flip::Vertical)),   // B
-            (Some(30.0), Some(Flip::Horizontal)),  // D
-            (Some(30.0), Some(Flip::Both)),        // E
-        ]
-    );
+    let expected = [
+        (None, Some(Flip::Horizontal)),        // C ellipse
+        (Some(330.0), Some(Flip::Horizontal)), // A
+        (Some(150.0), Some(Flip::Horizontal)), // B
+        (Some(30.0), Some(Flip::Horizontal)),  // D
+        (Some(210.0), None),                   // E
+    ];
+    for ((angle, flip), (want_angle, want_flip)) in got.iter().zip(expected) {
+        assert_eq!(*flip, want_flip);
+        assert!((angle.unwrap_or(0.0) - want_angle.unwrap_or(0.0)).abs() < 0.001);
+    }
 
     let validated = decoded.document.validate().expect("validate");
     let outcome = HwpxEncoder::encode_with_diagnostics(
@@ -114,7 +115,7 @@ fn hancom_mirror_and_rotation_reencode_to_the_hancom_matrix() {
     let ours = wire_transforms(&section0(&outcome.bytes));
     assert_eq!(ours.len(), original.len());
     for (o, h) in ours.iter().zip(&original) {
-        assert_eq!((&o.0, &o.1, &o.2), (&h.0, &h.1, &h.2), "angle and flip");
+        // 이것을 실패시키는 것: 메타데이터를 그대로 복사하거나 대칭 이중 적용.
         for i in [0, 1, 3, 4] {
             let (a, b): (f64, f64) = (o.3[i].parse().unwrap(), h.3[i].parse().unwrap());
             assert!((a - b).abs() < 1e-6, "e{}: ours {o:?} hancom {h:?}", i + 1);
@@ -257,6 +258,8 @@ fn both_mirrors_with_a_rotation_write_one_half_turn_matrix() {
     let t = &wire_transforms(&xml)[0];
     assert_eq!((t.0.as_str(), t.1.as_str(), t.2.as_str()), ("37", "1", "1"));
     let (s, c) = 217f64.to_radians().sin_cos();
+    let quantize = |x: f64| format!("{x:.6}").parse::<f64>().unwrap();
+    let (s, c) = (quantize(s), quantize(c));
     let want = [c, -s, 500.0 - (c * 500.0 - s * 250.0), s, c, 250.0 - (s * 500.0 + c * 250.0)];
     for (got, want) in t.3.iter().zip(want) {
         let got: f64 = got.parse().unwrap();

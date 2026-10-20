@@ -1248,6 +1248,36 @@
       "description": "An image reference within the document.\n\nContains the path to the image resource (relative to the document\npackage root), its display dimensions, and format hint.\n\n# No Binary Data\n\nCore deliberately holds no image bytes. The Smithy crate resolves\n`path` into actual binary data during encode/decode.\n\n# Examples\n\n```\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet img = Image::new(\n    \"BinData/logo.jpeg\",\n    HwpUnit::from_mm(80.0).unwrap(),\n    HwpUnit::from_mm(40.0).unwrap(),\n    ImageFormat::Jpeg,\n);\nassert_eq!(img.format, ImageFormat::Jpeg);\n```",
       "type": "object",
       "properties": {
+        "rotation": {
+          "description": "Clockwise rotation of the local box, in degrees.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "flip": {
+          "description": "Reflection about the local box's centre, before rotation.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Flip"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "in_margin": {
+          "description": "Axis-aligned padding outside the rotated picture box.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "path": {
           "description": "Relative path within the document package (e.g. `\"BinData/image1.png\"`).",
           "type": "string"
@@ -1343,6 +1373,9 @@
         "height",
         "format"
       ]
+    },
+    "Flip": {
+      "type": "string"
     },
     "ImageFormat": {
       "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nphases without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
@@ -3545,9 +3578,6 @@
           "const": "None"
         }
       ]
-    },
-    "Flip": {
-      "type": "string"
     },
     "ArrowStyle": {
       "description": "Arrowhead style for line endpoints.\n\n# Examples\n\n```\nuse hwpforge_core::control::ArrowStyle;\nuse hwpforge_foundation::{ArrowType, ArrowSize};\n\nlet arrow = ArrowStyle {\n    arrow_type: ArrowType::Normal,\n    size: ArrowSize::Medium,\n    filled: true,\n};\n```",

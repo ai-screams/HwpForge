@@ -1,0 +1,51 @@
+{
+  "source": "Hancom fixture 29; native HWP5/HWPX pairs",
+  "files": [
+    {
+      "path": "rot-box-basis.hwp",
+      "sha256": "2025ce82c6886bb7864f9186e2ccbf1f897f05eba94b16f558d78b69e18ff6c2",
+      "bytes": 51200
+    },
+    {
+      "path": "rot-box-basis.hwpx",
+      "sha256": "100472bd6a039a9d1cda6c688b85ce9b0b3519280f16cff0dd8d02351d166f48",
+      "bytes": 53404
+    },
+    {
+      "path": "rot-shapes.hwp",
+      "sha256": "6b2afe86a4a98938d61d607c755789424742da073bbf0a117318ff74fa21a098",
+      "bytes": 48640
+    },
+    {
+      "path": "rot-shapes.hwpx",
+      "sha256": "8a9817dfff67c0709ce6e5140ecd728af9610097dfc104a32b5638f683b32394",
+      "bytes": 51199
+    },
+    {
+      "path": "head-rect-metadata.hwpx",
+      "sha256": "2251d9379837f45987e52d52bd5c2cf8759c194643479a42ecc72d206d93c4ae",
+      "bytes": 5856,
+      "source": "69482cd6 decode/re-encode of synthetic rect-metadata (unturned_matrix_metadata_cannot_reactivate_emission)"
+    },
+    {
+      "path": "head-rect-plain.hwpx",
+      "sha256": "d8c639eac7e9a83e5269f162b07d3d6dd5d7f3b75e8cc0d7e4c5b1bcb94eca18",
+      "bytes": 5805,
+      "source": "69482cd6 decode/re-encode of synthetic rect-plain (unturned_matrix_metadata_cannot_reactivate_emission)"
+    },
+    {
+      "path": "head-textbox-metadata.hwpx",
+      "sha256": "a2b832b9d7257cdde5332ee24595ce354bdfd68e698d350cf0172c0e1eaf26c0",
+      "bytes": 5978,
+      "source": "69482cd6 decode/re-encode of synthetic textbox-metadata (unturned_matrix_metadata_cannot_reactivate_emission)"
+    },
+    {
+      "path": "head-textbox-plain.hwpx",
+      "sha256": "69d9474681409a6d0c67c87af8db93b28b579b298a854bfb1481e8bf526c98b3",
+      "bytes": 5925,
+      "source": "69482cd6 decode/re-encode of synthetic textbox-plain (unturned_matrix_metadata_cannot_reactivate_emission)"
+    }
+  ],
+  "exceptions": "Large rot-exceptions BinData excluded; synthetic small image/textbox tests use contract integer constants.",
+  "head_snapshot": "Complete HEAD 69482cd6 outputs for identical synthetic inputs. Tests compare every uncompressed ZIP part byte for byte; no timestamp or ID normalization."
+}

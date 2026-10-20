@@ -574,6 +574,9 @@ mod tests {
             Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0, outer_margin: [0; 4] };
         let id = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let render = Ok(Hwp5ShapeRender {
+            source_id: 0,
+            angle: 0,
+            flip: (false, false),
             initial: (100, 100),
             trans: id,
             pairs: vec![(id, id)],
@@ -589,6 +592,7 @@ mod tests {
         };
         let rect = || {
             Hwp5Control::Rect(Hwp5RectControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0,
@@ -603,6 +607,7 @@ mod tests {
                 child(rect(), render.clone(), 1),
                 child(
                     Hwp5Control::Polygon(Hwp5PolygonControl {
+                        standalone_render: None,
                         original_size: None,
                         look: None,
                         ctrl_id: 0,
@@ -646,6 +651,9 @@ mod tests {
         let flat = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
         let render = |sca| {
             Ok(Hwp5ShapeRender {
+                source_id: 0,
+                angle: 0,
+                flip: (false, false),
                 initial: (100, 100),
                 trans: id,
                 pairs: vec![(sca, id)],
@@ -654,6 +662,7 @@ mod tests {
         };
         let rect = |sca, start| Hwp5GroupChild {
             control: Hwp5Control::Rect(Hwp5RectControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0,

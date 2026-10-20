@@ -609,8 +609,8 @@ pub fn picture_frame_plan(image: &crate::image::Image, policy: &EmissionPolicy) 
     plan_box(
         (image.width.as_i32(), image.height.as_i32()),
         (o.width.as_i32(), o.height.as_i32()),
-        None,
-        None,
+        image.rotation,
+        image.flip,
         Vec::new(),
         policy,
     )
@@ -978,7 +978,9 @@ fn plan_children(
                     *worst = worst.max(node.1);
                 }
                 exact.push(counted.then_some(node.2));
-                if frames && picture_frame_plan(image, policy).is_fallback() {
+                if frames
+                    && plan_box((w, h), (ow, oh), None, None, Vec::new(), policy).is_fallback()
+                {
                     *worst = f64::INFINITY;
                 }
                 nodes.push(node.0);
@@ -1326,16 +1328,229 @@ fn decompose_box(m: &ShapeTransform) -> Option<BoxDecomposition> {
     if !(sx * sy).is_finite() || sx * sy <= f64::EPSILON {
         return None;
     }
+    Some(decompose_columns(m, sx, sy))
+}
+
+fn decompose_columns(m: &ShapeTransform, sx: f64, sy: f64) -> BoxDecomposition {
     let det = m.a * m.e - m.b * m.d;
     let flip = det < 0.0;
     let angle = if flip { (-m.d).atan2(-m.a) } else { m.d.atan2(m.a) }.to_degrees();
-    Some(BoxDecomposition {
+    BoxDecomposition {
         sx,
         sy,
         angle: angle.rem_euclid(360.0),
         flip,
         shear: (m.a * m.b + m.d * m.e).abs() / (sx * sy),
-    })
+    }
+}
+
+/// Restores a standalone shape from its complete source map. Defining points,
+/// placement, text and non-geometric style stay untouched. No mutation on error.
+///
+/// # Errors
+/// Reports shear, collapsed axes, invalid sizes or an unrepresentable residual.
+pub fn fold_standalone(
+    control: &mut Control,
+    input: &FoldInput,
+) -> Result<Vec<FoldLoss>, FoldLoss> {
+    if style_mut(control).is_none() {
+        return Err(FoldLoss::new(FoldLossKind::Unstorable, "not a standalone drawing shape"));
+    }
+    let line = matches!(control, Control::Line { .. } | Control::ConnectLine { .. });
+    let points = defining_points(control);
+    let fold = standalone_box(input, line, &points)?;
+    let (width, height) = match control {
+        Control::TextBox { width, height, .. }
+        | Control::Rect { width, height, .. }
+        | Control::Ellipse { width, height, .. }
+        | Control::Arc { width, height, .. }
+        | Control::Polygon { width, height, .. }
+        | Control::Curve { width, height, .. }
+        | Control::Line { width, height, .. }
+        | Control::ConnectLine { width, height, .. } => (width, height),
+        _ => unreachable!(),
+    };
+    *width = HwpUnit::new(fold.width).map_err(|_| out_of_range())?;
+    *height = HwpUnit::new(fold.height).map_err(|_| out_of_range())?;
+    if let Some(frame) = control.frame_mut() {
+        frame.original_size = Some(standalone_original(input)?);
+    }
+    set_rotation_and_flip(control, fold.rotation, fold.flip);
+    Ok(fold.losses)
+}
+
+/// The picture counterpart of [`fold_standalone`]. Crop, margin, asset,
+/// caption and placement are independent of this operation.
+///
+/// # Errors
+/// Reports the same geometry losses as [`fold_standalone`].
+pub fn fold_standalone_picture(
+    image: &mut crate::image::Image,
+    input: &FoldInput,
+) -> Result<Vec<FoldLoss>, FoldLoss> {
+    let fold = standalone_box(input, false, &[])?;
+    let original = standalone_original(input)?;
+    image.width = HwpUnit::new(fold.width).map_err(|_| out_of_range())?;
+    image.height = HwpUnit::new(fold.height).map_err(|_| out_of_range())?;
+    image.frame.original_size = Some(original);
+    image.rotation = fold.rotation;
+    image.flip = fold.flip;
+    Ok(fold.losses)
+}
+
+/// HWPX integer placement of a standalone local box (whole degrees, six decimals).
+/// Returns the centre-based matrix, placement size, and translation of the
+/// rounded minimum to zero. No configurable policy or fold losses are exposed.
+/// This does not change Core's exact local transform or group coordinates.
+/// Callers supply validated, nonnegative HWPUNIT dimensions.
+///
+/// The writer and input diagnostics share this calculation; no source
+/// offset, declared placement size, or metadata angle participates.
+pub fn standalone_layout(
+    size: (i32, i32),
+    rotation: Option<f32>,
+    flip: Option<Flip>,
+) -> (ShapeTransform, (i32, i32), (i32, i32)) {
+    let angle = stored_angle(rotation, AngleRounding::WholeDegrees);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let (fx, fy) = flip_signs(flip);
+    let q = |v| quantize(v, CoefficientRounding::Decimals(6));
+    let (a, b, d, e) = (q(cos * fx), q(-sin * fy), q(sin * fx), q(cos * fy));
+    let (cx, cy) = (f64::from(size.0 / 2), f64::from(size.1 / 2));
+    let map = ShapeTransform::from_matrix([a, b, cx - a * cx - b * cy, d, e, cy - d * cx - e * cy]);
+    let bounds =
+        group_bounds(box_corners(f64::from(size.0), f64::from(size.1)).map(|p| map.apply(p)))
+            .expect("validated finite standalone box");
+    let (x0, y0, x1, y1) = (
+        bounds.min_x().round() as i32,
+        bounds.min_y().round() as i32,
+        bounds.max_x().round() as i32,
+        bounds.max_y().round() as i32,
+    );
+    (map, (x1 - x0, y1 - y0), (-x0, -y0))
+}
+
+fn standalone_original(input: &FoldInput) -> Result<hwpforge_foundation::Size, FoldLoss> {
+    let unit = |v: f64, axis: &str| {
+        let invalid = || {
+            FoldLoss::new(
+                FoldLossKind::OutOfRange,
+                format!(
+                    "original {axis}: O={:?}, value={v} outside the HWPUNIT range",
+                    input.original_size
+                ),
+            )
+        };
+        if !v.is_finite() || v < 0.0 || v.fract() != 0.0 || v > f64::from(i32::MAX) {
+            return Err(invalid());
+        }
+        HwpUnit::new(v as i32).map_err(|_| invalid())
+    };
+    Ok(hwpforge_foundation::Size::new(
+        unit(input.original_size.0, "x")?,
+        unit(input.original_size.1, "y")?,
+    ))
+}
+
+fn standalone_box(
+    input: &FoldInput,
+    line: bool,
+    points: &[ShapePoint],
+) -> Result<BoxFold, FoldLoss> {
+    let (ow, oh) = input.original_size;
+    finite_input(ow, oh, input)?;
+    standalone_original(input)?;
+    let m = &input.map;
+    let (sx, sy) = (m.a.hypot(m.d), m.b.hypot(m.e));
+    // 이것을 실패시키는 것: 작은 비영 열을 epsilon으로 0 처리 / 선 0축 일괄 거부.
+    let d = if sx == 0.0 || sy == 0.0 {
+        if !line || (sx == 0.0 && sy == 0.0) {
+            return Err(FoldLoss::new(
+                FoldLossKind::Degenerate,
+                format!("axis collapse: O={ow}x{oh}, scales={sx},{sy}, map={:?}", m.matrix()),
+            ));
+        }
+        BoxDecomposition {
+            sx,
+            sy,
+            flip: false,
+            shear: 0.0,
+            angle: if sx == 0.0 { (-m.b).atan2(m.e) } else { m.d.atan2(m.a) }
+                .to_degrees()
+                .rem_euclid(360.0),
+        }
+    } else {
+        decompose_columns(m, sx, sy)
+    };
+    if d.shear > SHEAR_TOLERANCE {
+        return Err(FoldLoss::new(
+            FoldLossKind::Shear,
+            format!("shear={}, O={ow}x{oh}, map={:?}", d.shear, m.matrix()),
+        ));
+    }
+    let dimension = |o: f64, s: f64, axis: &str| {
+        let v = (o * s).round();
+        if !v.is_finite() || v < 0.0 || v > f64::from(i32::MAX) {
+            return Err(FoldLoss::new(
+                FoldLossKind::OutOfRange,
+                format!("{axis}: O={o}, scale={s}, calculated D={v}"),
+            ));
+        }
+        let v = v as i32;
+        HwpUnit::new(v).map_err(|_| {
+            FoldLoss::new(
+                FoldLossKind::OutOfRange,
+                format!("{axis}: O={o}, scale={s}, calculated D={v} outside the HWPUNIT range"),
+            )
+        })?;
+        if v == 0 && (!line || (s != 0.0 && o != 0.0)) {
+            return Err(FoldLoss::new(
+                FoldLossKind::Degenerate,
+                format!("{axis}: nonzero size rounds to zero; O={o}, scale={s}"),
+            ));
+        }
+        Ok(v)
+    };
+    let (w, h) = (dimension(ow, sx, "x")?, dimension(oh, sy, "y")?);
+    let angle = d.angle as f32;
+    let rotation = (angle != 0.0 && angle != 360.0).then_some(angle);
+    let flip = d.flip.then_some(Flip::Horizontal);
+    let (local, _) =
+        local_affine(f64::from(w), f64::from(h), rotation, flip, &EmissionPolicy::exact());
+    let scale = ShapeTransform::from_matrix([
+        if ow == 0.0 { 1.0 } else { f64::from(w) / ow },
+        0.0,
+        0.0,
+        0.0,
+        if oh == 0.0 { 1.0 } else { f64::from(h) / oh },
+        0.0,
+    ]);
+    let core = local.then(scale);
+    // Normalize using the O box, never the defining-point bounds. Translation
+    // mismatch belongs to the codec's G7 check and is not stored as placement.
+    let minimum = |map: ShapeTransform| {
+        box_corners(ow, oh)
+            .iter()
+            .map(|&p| map.apply(p))
+            .fold((f64::INFINITY, f64::INFINITY), |a, p| (a.0.min(p.0), a.1.min(p.1)))
+    };
+    let source_min = minimum(*m);
+    let core_min = minimum(core);
+    let mut ps = box_corners(ow, oh).to_vec();
+    ps.extend(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))));
+    let normalized = |map: ShapeTransform, min: (f64, f64)| {
+        ps.iter()
+            .map(|&p| {
+                let q = map.apply(p);
+                (q.0 - min.0, q.1 - min.1)
+            })
+            .collect::<Vec<_>>()
+    };
+    let residual = max_residual(&normalized(*m, source_min), &normalized(core, core_min));
+    if let Some(loss) = residual_loss(residual) {
+        return Err(loss);
+    }
+    Ok(BoxFold { width: w, height: h, offset: (0, 0), rotation, flip, losses: Vec::new() })
 }
 
 fn round_i32(v: f64) -> i32 {

@@ -137,6 +137,8 @@ pub(crate) const LINE_COLOR: &str = "data-line-color";
 pub(crate) const LINE_WIDTH: &str = "data-line-width-unit";
 pub(crate) const LINE_STYLE: &str = "data-line-style";
 pub(crate) const FILL_COLOR: &str = "data-fill-color";
+pub(crate) const IN_MARGIN: [&str; 4] =
+    ["data-in-margin-left", "data-in-margin-right", "data-in-margin-top", "data-in-margin-bottom"];
 pub(crate) const ROTATION: &str = "data-rotation";
 pub(crate) const FLIP: &str = "data-flip";
 /// Head and tail arrows: type, size, filled — all three or none, each.
@@ -487,7 +489,8 @@ pub(crate) fn group_attributes() -> Vec<&'static str> {
 /// Every attribute `<img>` may carry.
 pub(crate) fn picture_attributes() -> Vec<&'static str> {
     let mut v = group_attributes();
-    v.extend([SRC, ALT, FORMAT, FORMAT_RAW, HYPERLINK]);
+    v.extend([SRC, ALT, FORMAT, FORMAT_RAW, HYPERLINK, ROTATION, FLIP]);
+    v.extend(IN_MARGIN);
     v.extend(CROP);
     v.extend(EXTENT);
     v

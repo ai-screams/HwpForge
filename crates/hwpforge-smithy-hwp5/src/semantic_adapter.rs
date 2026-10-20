@@ -1793,6 +1793,7 @@ mod tests {
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
                     controls: vec![Hwp5Control::Image(Hwp5ImageControl {
+                        standalone_render: None,
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                             outer_margin: [0; 4],
@@ -2052,6 +2053,7 @@ mod tests {
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
                     controls: vec![Hwp5Control::TextBox(Hwp5TextBoxControl {
+                        standalone_render: None,
                         original_size: None,
                         look: None,
                         ctrl_id: 0x6773_6F20,

@@ -1295,7 +1295,7 @@ fn build_runs(
             }
             RunContent::Image(img) => {
                 ledger.token(hwpforge_core::layout::WireTokenKind::Picture);
-                pictures.push(build_picture(img, depth, hyperlink_entries, options, sink)?);
+                pictures.push(build_picture(img, false, depth, hyperlink_entries, options, sink)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
@@ -1317,6 +1317,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         rects.push(encode_textbox_to_rect(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1327,6 +1328,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         rects.push(encode_rect_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1337,6 +1339,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         lines.push(encode_line_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1347,6 +1350,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         ellipses.push(encode_ellipse_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1357,6 +1361,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         polygons.push(encode_polygon_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1365,18 +1370,48 @@ fn build_runs(
                     }
                     Control::Arc { .. } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
-                        ellipses.push(encode_arc_to_hx(
-                            ctrl,
-                            depth,
-                            hyperlink_entries,
-                            options,
-                            sink,
-                        )?);
+                        let mut hx =
+                            encode_arc_to_hx(ctrl, false, depth, hyperlink_entries, options, sink)?;
+                        // A native axis-defined arc has no ellipse sweep points.
+                        // Keep its native wire kind using the existing XML replacement
+                        // channel, without consuming another object/field identifier.
+                        if let Control::Arc { start1, end1, start2, end2, style, .. } =
+                            ctrl.as_ref()
+                        {
+                            if [start1, end1, start2, end2].iter().all(|p| p.x == 0 && p.y == 0)
+                                && style.as_ref().is_some_and(|s| {
+                                    super::standalone::transformed(s.rotation, s.flip)
+                                })
+                            {
+                                let from = super::shapes::serialize_with_root(&hx, "hp:ellipse")?;
+                                // Only this object's sweep fields and root attributes change.
+                                // Moving fields avoids cloning nested caption/content trees.
+                                let sweep = (
+                                    hx.start1.take(),
+                                    hx.end1.take(),
+                                    hx.start2.take(),
+                                    hx.end2.take(),
+                                );
+                                let native = super::shapes::serialize_with_root(&hx, "hp:arc")?;
+                                (hx.start1, hx.end1, hx.start2, hx.end2) = sweep;
+                                let (root, children) =
+                                    native.split_once('>').expect("serialized root");
+                                let to = format!(
+                                    "{}>{children}",
+                                    root.replace(" arcType=", " type=")
+                                        .replace(" intervalDirty=\"0\"", "")
+                                        .replace(" hasArcPr=\"1\"", "")
+                                );
+                                hyperlink_entries.push((from, to));
+                            }
+                        }
+                        ellipses.push(hx);
                     }
                     Control::Curve { .. } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         curves.push(encode_curve_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -1387,6 +1422,7 @@ fn build_runs(
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
                         connect_lines.push(encode_connect_line_to_hx(
                             ctrl,
+                            false,
                             depth,
                             hyperlink_entries,
                             options,
@@ -3204,6 +3240,7 @@ mod tests {
         );
         let hx = build_picture(
             &img,
+            false,
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
@@ -3237,8 +3274,9 @@ mod tests {
             );
             img.hyperlink = Some(url.to_string());
             let mut sink = DocumentEncodeContext::new(0);
-            let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
-                .unwrap();
+            let hx =
+                build_picture(&img, false, 0, &mut Vec::new(), EncodeOptions::default(), &mut sink)
+                    .unwrap();
             assert_eq!(hx.href, href, "{url}");
             assert_eq!(content_lost(&sink.warnings).len(), usize::from(lost), "{url}");
         }
@@ -3267,6 +3305,7 @@ mod tests {
 
         let hx = build_picture(
             &img,
+            false,
             0,
             &mut Vec::new(),
             EncodeOptions::default(),
@@ -3295,6 +3334,7 @@ mod tests {
         );
         let hx = build_picture(
             &img,
+            false,
             0,
             &mut Vec::new(),
             EncodeOptions::default(),

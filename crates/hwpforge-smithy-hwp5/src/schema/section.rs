@@ -829,6 +829,11 @@ pub(crate) struct Hwp5ShapeLook {
 /// the HWPX resave of a corpus document carries the same matrices.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Hwp5ShapeRender {
+    /// Owning CtrlHeader instance ID, set for independent objects.
+    pub source_id: u32,
+    /// Wire caches for diagnostics only; never folded into Core geometry.
+    pub angle: i16,
+    pub flip: (bool, bool),
     /// Initial (unscaled) width and height.
     pub initial: (u32, u32),
     /// `transMatrix`.
@@ -840,6 +845,13 @@ pub(crate) struct Hwp5ShapeRender {
 }
 
 impl Hwp5ShapeRender {
+    /// Compose every pair including translations in wire order.
+    pub(crate) fn map(&self) -> hwpforge_core::control::geometry::ShapeTransform {
+        use hwpforge_core::control::geometry::ShapeTransform;
+        self.pairs.iter().fold(ShapeTransform::from_matrix(self.trans), |m, (s, r)| {
+            m.then(ShapeTransform::from_matrix(*r)).then(ShapeTransform::from_matrix(*s))
+        })
+    }
     const HEADER: usize = 48;
     const MATRIX: usize = 48;
     /// Line information before the fill kind: colour, thickness, properties
@@ -865,6 +877,9 @@ impl Hwp5ShapeRender {
         let group_level = cur.read_u16::<LittleEndian>()?;
         let _version = cur.read_u16::<LittleEndian>()?;
         let initial = (cur.read_u32::<LittleEndian>()?, cur.read_u32::<LittleEndian>()?);
+        let flags = u32::from_le_bytes(data[32..36].try_into().expect("checked header"));
+        let angle = i16::from_le_bytes(data[36..38].try_into().expect("checked header"));
+        let flip = (flags & 1 != 0, flags & 2 != 0);
         cur.set_position(34);
         let pair_count = usize::from(cur.read_u16::<LittleEndian>()?);
         if pair_count != usize::from(group_level) + 1 {
@@ -895,7 +910,15 @@ impl Hwp5ShapeRender {
         for _ in 0..pair_count {
             pairs.push((matrix()?, matrix()?));
         }
-        Ok(Self { initial, trans, pairs, fill: Self::fill_after(&data[chain_end..]) })
+        Ok(Self {
+            source_id: 0,
+            angle,
+            flip,
+            initial,
+            trans,
+            pairs,
+            fill: Self::fill_after(&data[chain_end..]),
+        })
     }
 
     /// The line information and fill after the matrix chain of a
@@ -1116,9 +1139,8 @@ impl Hwp5ShapeComponentPolygon {
 
 /// Minimal `ShapeComponentEllipse` (tag `0x50`) payload.
 ///
-/// 한컴 stores **both** plain ellipses and arcs in this 60-byte record — it does
-/// not emit a separate `ShapeComponentArc` (`0x51`) for arcs (empirically
-/// confirmed from 한컴 output). The discriminator is content: a plain ellipse
+/// Hancom stores ellipse-derived arcs in this 60-byte record; native axis
+/// arcs also use tag `0x51` (fixture 29). A plain ellipse
 /// leaves `property` at zero and all four arc endpoints at the origin, while an
 /// arc carries a non-zero `property` and real arc endpoints.
 ///
@@ -1130,6 +1152,8 @@ impl Hwp5ShapeComponentPolygon {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapeComponentEllipse {
+    /// Native 0x51 closure type; absent for an ellipse-derived arc.
+    pub native_type: Option<u8>,
     /// Raw property bitfield (`0` for a plain ellipse; non-zero marks an arc).
     pub property: u32,
     /// Ellipse center in local object coordinates.
@@ -1174,7 +1198,33 @@ impl Hwp5ShapeComponentEllipse {
         let end1 = read_point(&mut cur)?;
         let start2 = read_point(&mut cur)?;
         let end2 = read_point(&mut cur)?;
-        Ok(Self { property, center, axis1, axis2, start1, end1, start2, end2 })
+        Ok(Self { native_type: None, property, center, axis1, axis2, start1, end1, start2, end2 })
+    }
+
+    /// A native Arc (0x51): type byte followed by centre and two axes.
+    pub(crate) fn parse_arc(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < 25 {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!("ShapeComponentArc too short: {}", data.len()),
+            });
+        }
+        let mut cur = Cursor::new(&data[1..]);
+        let center = read_point(&mut cur)?;
+        let axis1 = read_point(&mut cur)?;
+        let axis2 = read_point(&mut cur)?;
+        let zero = Hwp5ShapePoint { x: 0, y: 0 };
+        Ok(Self {
+            native_type: Some(data[0]),
+            property: 2,
+            center,
+            axis1,
+            axis2,
+            start1: zero,
+            end1: zero,
+            start2: zero,
+            end2: zero,
+        })
     }
 
     /// Whether this record describes an arc rather than a plain ellipse:
@@ -2930,6 +2980,10 @@ impl Hwp5EqEdit {
 /// `[82..90]` (= HWPX `imgDim`). Older records stop at 73 or 78 bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Hwp5ShapePicture {
+    /// Ordered destination rectangle points (x,y) in the initial box.
+    pub rectangle: [(i32, i32); 4],
+    /// Left, right, top, bottom inner margins (HWPUNIT).
+    pub in_margin: [u16; 4],
     /// 1-based binary item identifier.
     pub binary_data_id: u16,
     /// Border thickness (HWPUNIT); `0` = no border drawn.
@@ -2979,6 +3033,8 @@ impl Hwp5ShapePicture {
             _ => None,
         };
         Ok(Self {
+            rectangle: [12, 20, 28, 36].map(|i| (i32_at(i), i32_at(i + 4))),
+            in_margin: [60, 62, 64, 66].map(|i| u16::from_le_bytes([data[i], data[i + 1]])),
             binary_data_id: u16::from_le_bytes([data[start], data[start + 1]]),
             border_thickness: i32_at(4),
             crop: [i32_at(44), i32_at(48), i32_at(52), i32_at(56)],
@@ -4019,6 +4075,18 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    /// 이것을 실패시키는 것: wire flags/angle 바이트를 읽지 않거나 위치를 혼동.
+    #[test]
+    fn render_keeps_raw_metadata_only_for_diagnostics() {
+        let mut data = vec![0u8; 48 + 48 * 3];
+        data[32..36].copy_from_slice(&3u32.to_le_bytes());
+        data[36..38].copy_from_slice(&(-30i16).to_le_bytes());
+        data[46..48].copy_from_slice(&1u16.to_le_bytes());
+        let render = Hwp5ShapeRender::parse(&data, false).unwrap();
+        assert_eq!(render.angle, -30);
+        assert_eq!(render.flip, (true, true));
+    }
+
     // Hwp5ShapeRender
     // -----------------------------------------------------------------------
 
@@ -4275,6 +4343,8 @@ mod tests {
         assert_eq!(
             p,
             Hwp5ShapePicture {
+                rectangle: [(0, 0); 4],
+                in_margin: [0; 4],
                 binary_data_id: 3,
                 border_thickness: 28,
                 crop: [0, 0, 7474, 15_000],

@@ -56,6 +56,15 @@ use crate::placement::ObjectPlacement;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct Image {
+    /// Clockwise rotation of the local box, in degrees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<f32>,
+    /// Reflection about the local box's centre, before rotation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip: Option<hwpforge_foundation::Flip>,
+    /// Axis-aligned padding outside the rotated picture box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_margin: Option<crate::table::TableMargin>,
     /// Relative path within the document package (e.g. `"BinData/image1.png"`).
     pub path: String,
     /// Display width.
@@ -156,6 +165,9 @@ impl Image {
         format: ImageFormat,
     ) -> Self {
         Self {
+            rotation: None,
+            flip: None,
+            in_margin: None,
             path: path.into(),
             width,
             height,
@@ -198,6 +210,9 @@ impl Image {
         let path: String = path.into();
         let format = ImageFormat::from_extension(&path);
         Self {
+            rotation: None,
+            flip: None,
+            in_margin: None,
             path,
             width,
             height,
@@ -1056,5 +1071,42 @@ mod tests {
             "{json}"
         );
         assert_eq!(serde_json::from_str::<Image>(&json).unwrap(), cropped);
+    }
+}
+
+#[cfg(test)]
+mod standalone_contract_tests {
+    use super::*;
+    /// 이것을 실패시키는 것: None 필드를 null로 출력 / 새 선택 필드를 required로 만들기.
+    #[test]
+    fn old_json_and_optional_schema_stay_compatible() {
+        let image =
+            Image::from_path("a.png", HwpUnit::new(100).unwrap(), HwpUnit::new(200).unwrap());
+        let old = r#"{"path":"a.png","width":100,"height":200,"format":"Png","caption":null}"#;
+        let value = serde_json::to_string(&image).unwrap();
+        assert_eq!(value, old);
+        let decoded: Image = serde_json::from_str(old).unwrap();
+        assert_eq!(decoded, image);
+        let schema = serde_json::to_value(schemars::schema_for!(Image)).unwrap();
+        for field in ["rotation", "flip", "in_margin"] {
+            assert!(schema["properties"].get(field).is_some());
+            assert!(!schema["required"].as_array().unwrap().contains(&serde_json::json!(field)));
+        }
+    }
+    /// 이것을 실패시키는 것: resize에서 회전·대칭·여백 초기화 / O를 새 크기로 덮기.
+    #[test]
+    fn transform_json_and_resize_preserve_semantics() {
+        let mut image =
+            Image::from_path("a.png", HwpUnit::new(100).unwrap(), HwpUnit::new(200).unwrap());
+        image.rotation = Some(30.25);
+        image.flip = Some(hwpforge_foundation::Flip::Vertical);
+        image.in_margin = Some(crate::table::TableMargin::default());
+        let before = serde_json::to_string(&image).unwrap();
+        assert_eq!(serde_json::from_str::<Image>(&before).unwrap(), image);
+        image.resize(HwpUnit::new(300).unwrap(), HwpUnit::new(400).unwrap());
+        assert_eq!(image.rotation, Some(30.25));
+        assert_eq!(image.flip, Some(hwpforge_foundation::Flip::Vertical));
+        assert!(image.in_margin.is_some());
+        assert_eq!(image.effective_original_size().width.as_i32(), 100);
     }
 }

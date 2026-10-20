@@ -9,6 +9,7 @@ mod image_size;
 
 pub(crate) use group::written_group_text;
 mod shapes;
+mod standalone;
 mod text;
 
 use std::collections::VecDeque;
@@ -3983,6 +3984,7 @@ fn project_control_run(
         }
     };
     run.map(|mut r| {
+        standalone::settle(control, &mut r, &mut projection_images.warnings);
         r.char_shape_id = char_shape_id;
         r
     })
@@ -5155,6 +5157,7 @@ mod tests {
         // 한컴 stores the textbox 세로 정렬 in the ListHeader 속성 bits 5~6.
         // A CENTER (code 1) textbox must project to Core with Center align.
         let textbox = Hwp5TextBoxControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
@@ -5230,6 +5233,7 @@ mod tests {
     #[test]
     fn project_textbox_carries_its_frame() {
         let textbox = Hwp5TextBoxControl {
+            standalone_render: None,
             original_size: Some((4_000, 3_000)),
             look: None,
             ctrl_id: 0x6773_6F20,
@@ -5257,6 +5261,7 @@ mod tests {
     #[test]
     fn project_textbox_defaults_top_when_list_header_absent() {
         let textbox = Hwp5TextBoxControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
@@ -5821,6 +5826,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_preserves_inline_order_and_populates_store() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -5900,6 +5906,7 @@ mod tests {
     #[test]
     fn an_object_takes_the_char_shape_that_starts_at_it() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -5959,6 +5966,7 @@ mod tests {
     fn an_object_on_the_structured_path_takes_the_char_shape_that_starts_at_it() {
         use crate::schema::section::TextSegment;
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6017,6 +6025,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_projects_header_and_footer_subtrees() {
         let header_image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6102,6 +6111,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_projects_textbox_with_nested_image() {
         let nested_image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6122,6 +6132,7 @@ mod tests {
             link: None,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0x6773_6F20,
@@ -6211,6 +6222,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_warns_when_image_asset_join_is_missing() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6263,6 +6275,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_falls_back_to_joined_asset_dimensions() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6327,6 +6340,7 @@ mod tests {
     fn body_picture_keeps_its_hyperlink() {
         let project = |link: Option<Result<String, String>>| {
             let image = Hwp5Control::Image(Hwp5ImageControl {
+                standalone_render: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     outer_margin: [0; 4],
@@ -6394,6 +6408,7 @@ mod tests {
     #[test]
     fn project_to_core_with_images_drops_zero_sized_image_without_fallback() {
         let image = Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: 0x6773_6F20,
             geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                 outer_margin: [0; 4],
@@ -6966,6 +6981,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Image(Hwp5ImageControl {
+                standalone_render: None,
                 ctrl_id: id(b"gso "),
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     outer_margin: [0; 4],
@@ -7296,6 +7312,7 @@ mod tests {
     fn size_lock_is_carried() {
         let doc_with = |props: u32| {
             let image = Hwp5Control::Image(Hwp5ImageControl {
+                standalone_render: None,
                 ctrl_id: 0x6773_6F20,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     outer_margin: [0; 4],
@@ -8167,6 +8184,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Line(Hwp5LineControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
@@ -8214,6 +8232,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Polygon(Hwp5PolygonControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
@@ -8272,6 +8291,7 @@ mod tests {
             char_shape_runs: vec![],
             line_segments: Vec::new(),
             controls: vec![Hwp5Control::Rect(crate::decoder::section::Hwp5RectControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
@@ -8828,6 +8848,7 @@ mod tests {
                 paragraphs: vec![chart_paragraph()],
             }),
             "textbox" => Hwp5Control::TextBox(Hwp5TextBoxControl {
+                standalone_render: None,
                 original_size: None,
                 look: None,
                 ctrl_id: 0x6773_6F20,
@@ -9027,6 +9048,7 @@ mod shape_style_tests {
     #[test]
     fn text_box_takes_its_look() {
         let textbox = Hwp5TextBoxControl {
+            standalone_render: None,
             original_size: None,
             look: Some(look(0, 1, colour_fill(0x00DC_AF86, Hwp5FillPatternKind::None))),
             ctrl_id: 0,
@@ -9076,6 +9098,7 @@ mod shape_style_tests {
         use crate::schema::section::Hwp5ShapePicture;
         let subject = |crop: [i32; 4]| {
             let image = Hwp5ImageControl {
+                standalone_render: None,
                 ctrl_id: 0,
                 geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
                     outer_margin: [0; 4],
@@ -9088,7 +9111,7 @@ mod shape_style_tests {
                 original_size: None,
                 instance_id: 0,
                 ctrl_properties: 0,
-                picture: Hwp5ShapePicture { crop, ..Default::default() },
+                picture: Hwp5ShapePicture { in_margin: [0; 4], crop, ..Default::default() },
                 link: None,
             };
             let mut images = ProjectionImageState::new(
@@ -9125,6 +9148,7 @@ mod shape_style_tests {
         use crate::schema::section::Hwp5ShapePicture;
         let u = |v: i32| HwpUnit::new(v).unwrap();
         let pic = |crop: [i32; 4], dimension: Option<(u32, u32)>| Hwp5ShapePicture {
+            in_margin: [0; 4],
             crop,
             dimension,
             ..Default::default()

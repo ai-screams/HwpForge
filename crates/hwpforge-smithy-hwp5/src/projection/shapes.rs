@@ -429,7 +429,12 @@ pub(super) fn project_arc_run(
 ) -> Option<Run> {
     let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
-    let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
+    let arc_type = match arc.shape.native_type {
+        Some(1) => ArcType::Pie,
+        Some(2) => ArcType::Chord,
+        _ => ArcType::Normal,
+    };
+    let mut control = hwpforge_core::control::Control::arc(arc_type, width, height);
     let mut framed = control.clone();
     if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut framed {
         *center = wire_point(arc.shape.center);
@@ -635,6 +640,7 @@ mod tests {
     fn r6_ellipse(original: Option<(u32, u32)>, props: u32) -> Hwp5EllipseControl {
         let pt = shape_point;
         Hwp5EllipseControl {
+            standalone_render: None,
             original_size: original,
             look: None,
             ctrl_id: 0,
@@ -650,6 +656,7 @@ mod tests {
             },
             ctrl_properties: props | 1,
             shape: crate::schema::section::Hwp5ShapeComponentEllipse {
+                native_type: None,
                 property: 0,
                 center: pt(280, 280),
                 axis1: pt(280, 0),
@@ -690,6 +697,7 @@ mod tests {
         assert!(!c.frame().unwrap().size_protect);
 
         let line = crate::decoder::section::Hwp5LineControl {
+            standalone_render: None,
             original_size: Some((1000, 0)),
             look: None,
             ctrl_id: 0,
@@ -710,6 +718,7 @@ mod tests {
         assert_eq!(frame.original_size, Some(hwpforge_foundation::Size::new(u(1000), u(0))));
 
         let rect = crate::decoder::section::Hwp5RectControl {
+            standalone_render: None,
             original_size: Some((100, 50)),
             look: None,
             ctrl_id: 0,
@@ -752,6 +761,7 @@ mod tests {
         // single point makes the scaled start/end coincide so
         // `Control::line` rejects it.
         let line = crate::decoder::section::Hwp5LineControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,
@@ -770,6 +780,7 @@ mod tests {
     fn project_line_run_returns_some_for_valid_line() {
         // Regression: a non-degenerate line still projects successfully.
         let line = crate::decoder::section::Hwp5LineControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,
@@ -790,6 +801,7 @@ mod tests {
         // rejects the shape, so the projection must return None rather than
         // panicking via .expect().
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,
@@ -810,6 +822,7 @@ mod tests {
     fn project_polygon_run_returns_some_for_valid_polygon() {
         // Regression: a valid 3-vertex polygon still projects successfully.
         let polygon = crate::decoder::section::Hwp5PolygonControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,

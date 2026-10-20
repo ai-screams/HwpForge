@@ -88,6 +88,7 @@ pub(super) struct GsoClassificationInput {
     /// The initial box of the scope's first `ShapeComponent` (single
     /// shapes; `None` for group children).
     pub(super) original_size: Option<(u32, u32)>,
+    pub(super) standalone_render: Option<Result<Hwp5ShapeRender, String>>,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -193,6 +194,7 @@ impl GsoChildBuilder {
             })
             .unwrap_or_default();
         let control = classify_gso_control(GsoClassificationInput {
+            standalone_render: None,
             ctrl_id: CTRL_ID_GSO,
             saw_shape_component: true,
             saw_shape_rectangle: self.saw_shape_rectangle,

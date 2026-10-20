@@ -278,6 +278,7 @@ struct PreparedRun {
 pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<PdfOutput> {
     let layout = replay_layout(input, options)?;
     let mut warnings = layout.warnings;
+    report_ignored_transforms(input, &mut warnings);
     let mut table =
         FontTable::new(FontResolver::with_discovery(&options.font_dirs, options.discovery)?);
     let pages = build_paint_pages(input, options, &layout.pages, &mut table, &mut warnings)?;
@@ -1351,5 +1352,80 @@ mod subline_image_top_tests {
         // = 1_000_000 − 1_500_000 + 1_500_000×152/1000 = −272_000
         let top = inline_image_top(100_000_000, 1_000_000, 2_000_000, 1_500_000);
         assert_eq!(top, 100_000_000 - 272_000);
+    }
+}
+
+/// Diagnostics only; layout, clipping and painting stay unchanged.
+fn report_ignored_transforms(input: &PdfInput<'_>, warnings: &mut Vec<PdfWarning>) {
+    use hwpforge_core::control::GroupChild;
+    use hwpforge_core::{Control, RunContent};
+    use hwpforge_foundation::Flip;
+    fn transformed(r: Option<f32>, f: Option<Flip>) -> bool {
+        r.is_some_and(|v| v.rem_euclid(360.0) != 0.0)
+            || matches!(f, Some(Flip::Horizontal | Flip::Vertical | Flip::Both))
+    }
+    fn image(i: &hwpforge_core::image::Image, location: &str, warnings: &mut Vec<PdfWarning>) {
+        if transformed(i.rotation, i.flip) || i.in_margin.is_some() {
+            warnings.push(PdfWarning::ObjectTransformIgnored { location: location.into(), kind: "picture",
+                detail: format!("rotation={:?}, flip={:?}, in_margin={:?}; PDF output does not apply this transform",i.rotation,i.flip,i.in_margin) });
+        }
+    }
+    fn control(c: &Control, location: &str, warnings: &mut Vec<PdfWarning>) {
+        match c {
+            Control::TextBox { style: Some(s), .. } if transformed(s.rotation, s.flip) => {
+                warnings.push(PdfWarning::ObjectTransformIgnored {
+                    location: location.into(),
+                    kind: "textbox",
+                    detail: format!(
+                        "rotation={:?}, flip={:?}; PDF output does not apply this transform",
+                        s.rotation, s.flip
+                    ),
+                });
+            }
+            Control::Group { children, .. } => {
+                for (n, child) in children.iter().enumerate() {
+                    let loc = format!("{location}.child[{n}]");
+                    match child {
+                        GroupChild::Picture(i) => image(i, &loc, warnings),
+                        GroupChild::Shape(c) => control(c, &loc, warnings),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn own_run(run: &hwpforge_core::Run, loc: &str, warnings: &mut Vec<PdfWarning>) {
+        match &run.content {
+            RunContent::Image(i) => {
+                image(i, loc, warnings);
+                for (n, p) in i.caption.iter().flat_map(|c| c.paragraphs.iter()).enumerate() {
+                    p.for_each_paragraph(|q| {
+                        for (r, run) in q.runs.iter().enumerate() {
+                            own_run(run, &format!("{loc}.caption[{n}].run[{r}]"), warnings);
+                        }
+                    });
+                }
+            }
+            RunContent::Control(c) => {
+                control(c, loc, warnings);
+                if let Control::Memo { anchor_runs, .. } = c.as_ref() {
+                    for (n, run) in anchor_runs.iter().enumerate() {
+                        own_run(run, &format!("{loc}.anchor[{n}]"), warnings);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut p = 0;
+    for section in input.document.sections() {
+        section.for_each_paragraph(|para| {
+            for (r, run) in para.runs.iter().enumerate() {
+                let loc = format!("paragraph[{p}].run[{r}]");
+                own_run(run, &loc, warnings);
+            }
+            p += 1;
+        });
     }
 }

@@ -377,3 +377,32 @@ fn line_overflow_is_surfaced() {
         out.warnings
     );
 }
+
+/// 이것을 실패시키는 것: render_document 경계의 변환 무시 경고 호출 삭제.
+#[test]
+fn direct_render_reports_ignored_picture_transform_once() {
+    let mut p = para_with_cache("a", vec![]);
+    p.layout_cache = None;
+    let mut image = hwpforge_core::image::Image::from_path(
+        "missing.png",
+        HwpUnit::new(100).unwrap(),
+        HwpUnit::new(100).unwrap(),
+    );
+    image.rotation = Some(30.0);
+    image.flip = Some(hwpforge_foundation::Flip::Horizontal);
+    image.in_margin = Some(hwpforge_core::table::TableMargin::default());
+    p.runs.push(Run::image(image, CharShapeIndex::new(0)));
+    let doc = doc_of(vec![para_with_cache("a", vec![seg(0, 0)]), p]);
+    let mut options = options();
+    options.failure_mode = RenderFailureMode::Degraded;
+    let out =
+        render_document(&PdfInput { document: &doc, styles: &TestStyles::default() }, &options)
+            .unwrap();
+    let warnings: Vec<_> = out
+        .warnings
+        .iter()
+        .filter(|w| matches!(w, PdfWarning::ObjectTransformIgnored { .. }))
+        .collect();
+    assert_eq!(warnings.len(), 1);
+    assert!(format!("{:?}", warnings[0]).contains("rotation=Some(30.0)"));
+}

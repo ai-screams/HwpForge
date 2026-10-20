@@ -607,3 +607,38 @@ fn unclosed_source_field_warns_without_blocking_pdf_reading() {
         1
     );
 }
+
+/// 이것을 실패시키는 것: PDF 직접 호출 경고를 convert::to_pdf에서 누락/필터링.
+#[test]
+fn transformed_textbox_warning_reaches_to_pdf() {
+    use hwpforge_core::{control::ShapeStyle, Control};
+    use hwpforge_foundation::HwpUnit;
+    let mut decoded = HwpxDecoder::decode(&retyped("rules-justify.hwpx", false)).unwrap();
+    let mut textbox = Control::text_box(
+        vec![Paragraph::with_runs(
+            vec![Run::text("a", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        HwpUnit::new(1000).unwrap(),
+        HwpUnit::new(1000).unwrap(),
+    );
+    if let Control::TextBox { style, .. } = &mut textbox {
+        *style = Some(ShapeStyle { rotation: Some(30.), ..Default::default() });
+    }
+    decoded.document.sections_mut()[0].add_paragraph(Paragraph::with_runs(
+        vec![Run::control(textbox, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    ));
+    let encoded = HwpxEncoder::encode_with_diagnostics(
+        &decoded.document.validate().unwrap(),
+        &decoded.style_store,
+        &decoded.image_store,
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .unwrap();
+    let out = to_pdf(&encoded.bytes, &options()).unwrap();
+    let warnings: Vec<_> =
+        out.warnings.iter().filter(|w| w.parts().code == "OBJECT_TRANSFORM_IGNORED").collect();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].stage(), "render");
+}

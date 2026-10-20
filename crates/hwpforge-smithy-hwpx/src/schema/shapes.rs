@@ -697,7 +697,7 @@ pub struct HxEllipse {
     #[serde(rename = "@hasArcPr", default)]
     pub has_arc_pr: u32,
     /// Arc type (NORMAL for full ellipse).
-    #[serde(rename = "@arcType", default)]
+    #[serde(rename = "@arcType", alias = "@type", default)]
     pub arc_type: String,
 
     // ── Shape-common children (ORDER MATTERS!) ──

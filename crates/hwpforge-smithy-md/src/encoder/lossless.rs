@@ -629,6 +629,17 @@ fn encode_picture(image: &Image, char_shape: Option<usize>) -> MdResult<String> 
     out.push_str(&frame_attrs(&image.frame));
     out.push_str(&place_attrs(image.placement.as_ref())?);
     out.push_str(&inst_id_attr(image.inst_id));
+    if let Some(r) = image.rotation {
+        out.push_str(&format!(" {}=\"{r}\"", g::ROTATION));
+    }
+    if let Some(f) = image.flip {
+        out.push_str(&format!(" {}=\"{}\"", g::FLIP, g::flip_str(f)?));
+    }
+    if let Some(m) = image.in_margin {
+        for (name, value) in g::IN_MARGIN.iter().zip([m.left, m.right, m.top, m.bottom]) {
+            out.push_str(&format!(" {name}=\"{}\"", value.as_i32()));
+        }
+    }
     if let Some(c) = image.crop {
         for (name, v) in g::CROP.iter().zip([c.left, c.top, c.right, c.bottom]) {
             out.push_str(&format!(" {name}=\"{}\"", v.as_i32()));

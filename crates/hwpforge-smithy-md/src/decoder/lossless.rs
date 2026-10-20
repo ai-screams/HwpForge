@@ -1276,6 +1276,17 @@ fn parse_picture(
     image.hyperlink = attrs.get(g::HYPERLINK).map(str::to_string);
     image.placement = attrs.placement()?;
     image.inst_id = attrs.inst_id()?;
+    image.rotation =
+        attrs.optional(g::ROTATION, |v| v.parse::<f32>().ok().filter(|r| r.is_finite()))?;
+    image.flip = attrs.optional(g::FLIP, g::flip_from)?;
+    if attrs.all_or_none(&g::IN_MARGIN)? {
+        image.in_margin = Some(hwpforge_core::table::TableMargin {
+            left: attrs.unit(g::IN_MARGIN[0])?,
+            right: attrs.unit(g::IN_MARGIN[1])?,
+            top: attrs.unit(g::IN_MARGIN[2])?,
+            bottom: attrs.unit(g::IN_MARGIN[3])?,
+        });
+    }
     if attrs.all_or_none(&g::CROP)? {
         image.crop = Some(hwpforge_core::image::ImageCrop {
             left: attrs.unit(g::CROP[0])?,

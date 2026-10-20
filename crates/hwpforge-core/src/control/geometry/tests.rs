@@ -669,3 +669,151 @@ fn aligned_fold_refuses_a_turn() {
     );
     assert!(fold_aligned_child(circle, &flat).is_none(), "a box may not be flat");
 }
+
+/// 이것을 실패시키는 것: 독립 개체에 set_box/group placement/점 접기를 적용.
+#[test]
+fn standalone_keeps_points_placement_and_non_geometry_style() {
+    let mut c = Control::polygon(vec![
+        ShapePoint::new(10, 10),
+        ShapePoint::new(50, 10),
+        ShapePoint::new(10, 25),
+    ])
+    .unwrap();
+    if let Control::Polygon { placement, style, .. } = &mut c {
+        *placement = Some(ObjectPlacement::legacy_inline_defaults());
+        *style = Some(ShapeStyle { line_width: Some(33), ..Default::default() });
+    }
+    let points = defining_points(&c);
+    let map = ShapeTransform::from_matrix([0., -3., 3000., 2., 0., -3000.]);
+    fold_standalone(&mut c, &FoldInput::new(map, (100., 50.), (0., 0.))).unwrap();
+    assert_eq!(defining_points(&c), points);
+    let Control::Polygon { width, height, placement, style, frame, .. } = c else { panic!() };
+    assert_eq!((width.as_i32(), height.as_i32()), (200, 150));
+    assert_eq!(placement, Some(ObjectPlacement::legacy_inline_defaults()));
+    assert_eq!(style.as_ref().unwrap().line_width, Some(33));
+    assert_eq!(style.unwrap().rotation, Some(90.));
+    assert_eq!(frame.original_size.unwrap().width.as_i32(), 100);
+}
+
+/// 이것을 실패시키는 것: 작은 비영 배율을 epsilon으로 0 처리 / curSz에서 0축 복원.
+#[test]
+fn standalone_line_zero_columns_and_tiny_nonzero_scale() {
+    let mut line = Control::line(ShapePoint::new(0, 0), ShapePoint::new(100, 0)).unwrap();
+    fold_standalone(
+        &mut line,
+        &FoldInput::new(
+            ShapeTransform::from_matrix([66.483778, 0., 0., 38.385, 0., 0.]),
+            (100., 100.),
+            (0., 0.),
+        ),
+    )
+    .unwrap();
+    let b = shape_box(&line).unwrap();
+    assert_eq!((b.width, b.height), (7677, 0));
+    assert!((rotation_and_flip(&line).0.unwrap() - 30.).abs() < 0.001);
+    let mut c = rect(1, 1, None, None);
+    let loss = fold_standalone(
+        &mut c,
+        &FoldInput::new(
+            ShapeTransform::from_matrix([0., -1e-8, 0., 1e-8, 0., 0.]),
+            (100_000_000., 100_000_000.),
+            (0., 0.),
+        ),
+    );
+    assert!(loss.is_ok(), "{loss:?}");
+    assert_eq!(shape_box(&c).unwrap().width, 1);
+}
+
+/// 이것을 실패시키는 것: 점 도형 전단 우회 / 포화 캐스트 / 오류 전 부분 변경.
+#[test]
+fn standalone_errors_are_atomic_and_specific() {
+    for (m, o, kind) in [
+        ([1., 0.5, 0., 0., 1., 0.], (100., 100.), FoldLossKind::Shear),
+        ([0., 0., 0., 0., 0., 0.], (100., 100.), FoldLossKind::Degenerate),
+        ([0., -2., 0., 2., 0., 0.], (100_000_000., 100.), FoldLossKind::OutOfRange),
+        ([0., -1., 0., 1., 0., 0.], (-1., 100.), FoldLossKind::OutOfRange),
+        ([f64::NAN, 0., 0., 0., 1., 0.], (100., 100.), FoldLossKind::Degenerate),
+    ] {
+        let mut c = rect(100, 100, None, None);
+        let before = c.clone();
+        let loss =
+            fold_standalone(&mut c, &FoldInput::new(ShapeTransform::from_matrix(m), o, (0., 0.)))
+                .unwrap_err();
+        assert_eq!(loss.kind(), kind);
+        // 이것을 실패시키는 것: 실패 축/O/계산 D를 범용 out_of_range 문구로 숨기기.
+        if kind == FoldLossKind::OutOfRange {
+            assert!(loss.detail().contains("x:") && loss.detail().contains("O="), "{loss}");
+            if o.0 > 0.0 {
+                assert!(loss.detail().contains("D=200000000"), "{loss}");
+            }
+        }
+        assert_eq!(c, before);
+    }
+}
+
+/// 이것을 실패시키는 것: 음수 배율을 절댓값으로만 저장 / f32 360 정규화 누락.
+#[test]
+fn standalone_reflection_uses_matrix_and_preserves_direction() {
+    let mut c = rect(1, 1, None, None);
+    fold_standalone(
+        &mut c,
+        &FoldInput::new(
+            ShapeTransform::from_matrix([0.866025, 0.5, 0., 0.5, -0.866025, 0.]),
+            (100., 50.),
+            (0., 0.),
+        ),
+    )
+    .unwrap();
+    let (r, f) = rotation_and_flip(&c);
+    assert!((r.unwrap() - 210.).abs() < 0.001);
+    assert_eq!(f, Some(Flip::Horizontal));
+    fold_standalone(
+        &mut c,
+        &FoldInput::new(
+            ShapeTransform::from_matrix([1., 1e-10, 0., -1e-10, 1., 0.]),
+            (100., 50.),
+            (0., 0.),
+        ),
+    )
+    .unwrap();
+    assert_eq!(rotation_and_flip(&c), (None, None));
+}
+
+/// 이것을 실패시키는 것: 정수 중심 대신 정확 중심 / 경계 대신 폭 반올림 / Q 양자화 생략.
+#[test]
+fn standalone_layout_has_one_fixed_hwpx_rounding_rule() {
+    for (size, angle, expected_size, translation) in [
+        ((6217, 9325), 90., (9325, 6217), (1555, -1554)),
+        ((10329, 8619), 90., (8619, 10329), (-854, 855)),
+        ((8881, 32), 90., (32, 8881), (-4424, 4424)),
+        ((5790, 12766), 30., (11398, 13950), (2804, 592)),
+        ((9168, 9338), 30., (12608, 12670), (1720, 1666)),
+        ((7677, 0), 30., (6649, 3839), (-514, 1919)),
+    ] {
+        let (_, b, t) = standalone_layout(size, Some(angle), None);
+        assert_eq!(b, expected_size);
+        assert_eq!(t, translation);
+    }
+}
+
+/// 이것을 실패시키는 것: 그림 fold에서 실패 전 width/height/frame 변경.
+#[test]
+fn standalone_picture_errors_leave_every_field_intact() {
+    let u = |v| HwpUnit::new(v).unwrap();
+    let mut image = crate::image::Image::from_path("x.png", u(100), u(200));
+    image.rotation = Some(45.);
+    image.flip = Some(Flip::Vertical);
+    for (map, o) in [
+        ([1., 0.5, 0., 0., 1., 0.], (100., 200.)),
+        ([0., -1., 0., 1., 0., 0.], (200_000_000., 200.)),
+        ([f64::INFINITY, 0., 0., 0., 1., 0.], (100., 200.)),
+    ] {
+        let before = image.clone();
+        assert!(fold_standalone_picture(
+            &mut image,
+            &FoldInput::new(ShapeTransform::from_matrix(map), o, (0., 0.))
+        )
+        .is_err());
+        assert_eq!(image, before);
+    }
+}

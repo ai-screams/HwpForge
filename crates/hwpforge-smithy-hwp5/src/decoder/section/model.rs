@@ -185,6 +185,7 @@ pub(crate) enum Hwp5Control {
 /// Parsed image evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ImageControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     pub ctrl_id: u32,
     /// Minimal recovered geometry.
@@ -214,6 +215,7 @@ pub(crate) struct Hwp5ImageControl {
 /// Parsed line evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5LineControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -240,6 +242,7 @@ pub(crate) struct Hwp5LineControl {
 /// Parsed pure rectangle evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5RectControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -262,6 +265,7 @@ pub(crate) struct Hwp5RectControl {
 /// Parsed polygon evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5PolygonControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -297,6 +301,7 @@ pub(crate) struct Hwp5PolygonControl {
 /// axes ([`Self::shape`]) are folded with the group's matrices instead.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5EllipseControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -357,6 +362,7 @@ pub(crate) struct Hwp5TextArtControl {
 /// are intentionally not propagated here.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ArcControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -387,6 +393,7 @@ pub(crate) struct Hwp5ArcControl {
 /// `<hp:connectLine>` attribute, so they are intentionally dropped.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5ConnectLineControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -456,6 +463,7 @@ pub(crate) struct Hwp5MemoControl {
 /// Parsed curve evidence from a `gso ` scope.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5CurveControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
@@ -482,6 +490,7 @@ pub(crate) struct Hwp5CurveControl {
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5TextBoxControl {
+    pub standalone_render: Option<Result<Hwp5ShapeRender, String>>,
     /// Owning control identifier, currently always `gso `.
     pub ctrl_id: u32,
     /// Minimal recovered geometry from the owning `CtrlHeader`.

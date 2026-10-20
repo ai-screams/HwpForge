@@ -131,6 +131,15 @@ pub struct PdfOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PdfWarning {
+    /// An object transform that the frozen PDF painter does not apply.
+    ObjectTransformIgnored {
+        /// Document location.
+        location: String,
+        /// Object kind.
+        kind: &'static str,
+        /// Ignored rotation, reflection and margin values.
+        detail: String,
+    },
     /// 캐시 결손 문단을 건너뜀 ([`PartialCachePolicy::WarnAndSkip`]).
     ParagraphSkipped {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).

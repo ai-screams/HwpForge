@@ -44,7 +44,9 @@ use crate::decoder::section::{
     Hwp5Control, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5Paragraph,
 };
 use crate::decoder::Hwp5Warning;
-use crate::schema::section::{Hwp5Matrix, Hwp5ShapeFill, Hwp5ShapePoint, Hwp5ShapeRender};
+#[cfg(test)]
+use crate::schema::section::Hwp5Matrix;
+use crate::schema::section::{Hwp5ShapeFill, Hwp5ShapePoint, Hwp5ShapeRender};
 
 use super::shapes::offset_placement;
 use super::text::hwp_unit_from_u32;
@@ -86,16 +88,9 @@ fn lost(state: &mut ProjectionImageState<'_>, place: &Place, kind: &str, reason:
     });
 }
 
-fn matrix(m: &Hwp5Matrix) -> ShapeTransform {
-    ShapeTransform::from_matrix(*m)
-}
-
 /// `T · R1 · S1 · … · Rn · Sn`: within a pair the scale applies first.
-fn chain(render: &Hwp5ShapeRender) -> ShapeTransform {
-    render
-        .pairs
-        .iter()
-        .fold(matrix(&render.trans), |m, (sca, rot)| m.then(matrix(rot)).then(matrix(sca)))
+pub(super) fn chain(render: &Hwp5ShapeRender) -> ShapeTransform {
+    render.map()
 }
 
 /// S20 (§19.23.13): a chain with no turn, mirror or shear —
@@ -995,7 +990,15 @@ mod tests {
         trans: Hwp5Matrix,
         pair: (Hwp5Matrix, Hwp5Matrix),
     ) -> Hwp5ShapeRender {
-        Hwp5ShapeRender { initial, trans, pairs: vec![pair], fill: Hwp5ShapeFill::Plain }
+        Hwp5ShapeRender {
+            source_id: 0,
+            angle: 0,
+            flip: (false, false),
+            initial,
+            trans,
+            pairs: vec![pair],
+            fill: Hwp5ShapeFill::Plain,
+        }
     }
 
     /// A shape `w × h` placed by a translation only.
@@ -1020,6 +1023,7 @@ mod tests {
 
     fn rect() -> Hwp5Control {
         Hwp5Control::Rect(Hwp5RectControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,
@@ -1030,6 +1034,7 @@ mod tests {
 
     fn polygon(points: &[(i32, i32)]) -> Hwp5Control {
         Hwp5Control::Polygon(Hwp5PolygonControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,
@@ -1044,6 +1049,7 @@ mod tests {
 
     fn picture() -> Hwp5Control {
         Hwp5Control::Image(Hwp5ImageControl {
+            standalone_render: None,
             ctrl_id: CTRL_ID_GSO,
             geometry: geo(0, 0, 0, 0),
             binary_data_id: 1,
@@ -1051,6 +1057,7 @@ mod tests {
             instance_id: 0,
             ctrl_properties: 0,
             picture: Hwp5ShapePicture {
+                in_margin: [0; 4],
                 binary_data_id: 1,
                 crop: [0, 0, 22_500, 15_000],
                 dimension: Some((22_500, 15_000)),
@@ -1306,6 +1313,7 @@ mod tests {
     fn ellipse_keeps_its_stored_centre_and_axes() {
         let pt = |x, y| Hwp5ShapePoint { x, y };
         let shape = Hwp5ShapeComponentEllipse {
+            native_type: None,
             property: 0,
             center: pt(300, 300),
             axis1: pt(800, 300),
@@ -1316,6 +1324,7 @@ mod tests {
             end2: pt(0, 0),
         };
         let ellipse = Hwp5Control::Ellipse(Hwp5EllipseControl {
+            standalone_render: None,
             original_size: None,
             look: None,
             ctrl_id: 0,

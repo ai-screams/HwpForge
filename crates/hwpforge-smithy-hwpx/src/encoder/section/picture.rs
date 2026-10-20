@@ -23,6 +23,7 @@ use super::*;
 /// img, sz, pos, outMargin) to match 한글's expected structure.
 pub(crate) fn build_picture(
     img: &Image,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -55,9 +56,69 @@ pub(crate) fn build_picture(
     let half_w = w / 2;
     let half_h = h / 2;
     let placement = img.placement.as_ref();
-    let frame = PictureFrame::of(img);
+    let mut group_box = Image::from_path("", img.width, img.height);
+    group_box.frame = img.frame;
+    let source = if as_group_child { &group_box } else { img };
+    let plan = hwpforge_core::control::geometry::picture_frame_plan(
+        source,
+        &crate::encoder::shapes::HWPX_POLICY,
+    );
+    let frame = PictureFrame::of(img, &plan);
 
-    Ok(HxPic {
+    if as_group_child
+        && (super::super::standalone::transformed(img.rotation, img.flip)
+            || img.in_margin.is_some())
+    {
+        sink.content_lost(
+            "shape_transform",
+            "group picture rotation/flip/inner margin is outside the group model".into(),
+        );
+    }
+    let standalone = (!as_group_child
+        && super::super::standalone::transformed(img.rotation, img.flip))
+    .then(|| super::super::standalone::plan((w, h), img.rotation, img.flip, &plan));
+    if !as_group_child && super::super::standalone::transformed(img.rotation, img.flip) {
+        crate::encoder::shapes::report_shape_emission(&plan, sink);
+        if plan.loss().is_none() {
+            let exact = hwpforge_core::control::geometry::picture_frame_plan(
+                img,
+                &hwpforge_core::control::geometry::EmissionPolicy::exact(),
+            );
+            let residual = super::super::standalone::residual(
+                &plan,
+                &exact,
+                standalone.as_ref().expect("transformed picture"),
+            );
+            if residual > 2.0 {
+                sink.content_lost(
+                    "shape_emission",
+                    format!("picture actual standalone T*R*S residual {residual} HWPUNIT"),
+                );
+            }
+        }
+    }
+    let margin = if as_group_child { None } else { img.in_margin };
+    let (bw, bh) = standalone.as_ref().map_or((w, h), |p| p.size);
+    let add_margin = |size: i32, a: i32, b: i32| {
+        i32::try_from(i64::from(size) + i64::from(a) + i64::from(b)).map_err(|_| {
+            crate::error::HwpxError::InvalidStructure {
+                detail: format!("picture output size overflows i32: {size} + {a} + {b}"),
+            }
+        })
+    };
+    let (bw, bh) = (
+        add_margin(
+            bw,
+            margin.map_or(0, |m| m.left.as_i32()),
+            margin.map_or(0, |m| m.right.as_i32()),
+        )?,
+        add_margin(
+            bh,
+            margin.map_or(0, |m| m.top.as_i32()),
+            margin.map_or(0, |m| m.bottom.as_i32()),
+        )?,
+    );
+    let mut hx = HxPic {
         // Wave 12p Step 4: HWPX `<hp:pic id="...">` cross-ref target.
         // Image.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
         // 없으면 sequential fallback.
@@ -110,9 +171,9 @@ pub(crate) fn build_picture(
             alpha: "0".to_string(),
         }),
         sz: Some(HxTableSz {
-            width: w,
+            width: bw,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
+            height: bh,
             height_rel_to: "ABSOLUTE".to_string(),
             // 이것을 실패시키는 것: 상수 0 으로 되돌리기(`picture_and_table_protect_round_trip`).
             protect: u32::from(img.frame.size_protect),
@@ -122,11 +183,26 @@ pub(crate) fn build_picture(
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options, sink))
+            .map(|c| build_hx_caption(c, bw, depth, hyperlink_entries, options, sink))
             .transpose()?,
         line_shape: None,
         effects: None,
-    })
+    };
+    if let Some(p) = standalone {
+        hx.cur_sz = Some(p.cur);
+        hx.flip = Some(p.flip);
+        hx.rotation_info = Some(p.rotation);
+        hx.rendering_info = Some(p.rendering);
+    }
+    if let Some(m) = margin {
+        hx.in_margin = Some(HxTableMargin {
+            left: m.left.as_i32(),
+            right: m.right.as_i32(),
+            top: m.top.as_i32(),
+            bottom: m.bottom.as_i32(),
+        });
+    }
+    Ok(hx)
 }
 
 /// A picture's box and crop on the wire: `orgSz`/`imgRect` (the original
@@ -147,13 +223,9 @@ struct PictureFrame {
 }
 
 impl PictureFrame {
-    fn of(img: &Image) -> Self {
+    fn of(img: &Image, plan: &hwpforge_core::control::geometry::FramePlan) -> Self {
         let display = (img.width.as_i32(), img.height.as_i32());
         let pair = |(a, b): (HwpUnit, HwpUnit)| (a.as_i32(), b.as_i32());
-        let plan = hwpforge_core::control::geometry::picture_frame_plan(
-            img,
-            &crate::encoder::shapes::HWPX_POLICY,
-        );
         let extent = img.image_extent.map(pair);
         let clip = match img.crop {
             Some(c) => HxImgClip {

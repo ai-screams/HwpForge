@@ -135,6 +135,199 @@ fn displayed_size(control: &Control) -> Option<(i32, i32)> {
     }
 }
 
+/// Classifies the complete chain, deliberately ignoring angle/flip/offset caches.
+fn standalone_map(
+    ri: Option<&crate::schema::section::HxRenderingInfo>,
+) -> Result<Option<super::group_geometry::Affine>, &'static str> {
+    let Some(ri) = ri else { return Ok(None) };
+    let m =
+        super::group_geometry::wire_chain(ri).ok_or("unparseable or nonfinite renderingInfo")?;
+    if ![m.a, m.b, m.c, m.d, m.e, m.f].iter().all(|v| v.is_finite()) {
+        return Err("composed renderingInfo is nonfinite");
+    }
+    Ok((!(m.b.abs() < 1e-9 && m.d.abs() < 1e-9 && m.a >= 0.0 && m.e >= 0.0)).then_some(m))
+}
+
+fn clear_standalone_transform(control: &mut Control) {
+    let style = match control {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Curve { style, .. }
+        | Control::Line { style, .. }
+        | Control::ConnectLine { style, .. } => style,
+        _ => return,
+    };
+    if let Some(s) = style {
+        s.rotation = None;
+        s.flip = None;
+    }
+    if style.as_ref().is_some_and(|s| *s == ShapeStyle::default()) {
+        *style = None;
+    }
+}
+
+fn check_standalone_source(
+    map: super::group_geometry::Affine,
+    original: (i32, i32),
+    declared_and_margin: ((i32, i32), [i32; 4]),
+    plan: &crate::encoder::standalone::StandalonePlan,
+    points: &[hwpforge_core::control::ShapePoint],
+    kind: &str,
+    ctx: &mut DecodeCtx,
+) {
+    let (declared, margin) = declared_and_margin;
+    // Validate margins before reaching here; widen before sums and differences.
+    let content = (
+        i64::from(declared.0) - i64::from(margin[0]) - i64::from(margin[1]),
+        i64::from(declared.1) - i64::from(margin[2]) - i64::from(margin[3]),
+    );
+    let output = (
+        i64::from(plan.size.0) + i64::from(margin[0]) + i64::from(margin[1]),
+        i64::from(plan.size.1) + i64::from(margin[2]) + i64::from(margin[3]),
+    );
+    let corners = super::group_geometry::corners(f64::from(original.0), f64::from(original.1));
+    let source: Vec<_> = corners.iter().map(|&p| map.apply(p)).collect();
+    let b = super::group_geometry::bounds(&source).expect("four corners");
+    let error =
+        b.0.abs()
+            .max(b.1.abs())
+            .max((b.2 - content.0 as f64).abs())
+            .max((b.3 - content.1 as f64).abs());
+    // 이것을 실패시키는 것: offset을 검사 / transMatrix 이동을 버리기 / 2.0 임계값.
+    if error > 2.5 {
+        ctx.content_lost("shape_transform",format!(
+            "G7; {kind}; source sz={}x{}, composite bounds={b:?}, max boundary error={error}; recomputed sz={:?}, transMatrix=({},{}); normalized source matrix placement mismatch",
+            declared.0,declared.1,output,plan.rendering.trans_matrix.e3,plan.rendering.trans_matrix.e6));
+    }
+    let ps = corners.into_iter().chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))));
+    let source: Vec<_> = ps.clone().map(|p| map.apply(p)).collect();
+    let emitted: Vec<_> = ps.map(|p| plan.map.apply(p)).collect();
+    let residual = anchored_residual(&source, &emitted);
+    if residual > 2.0 {
+        ctx.content_lost(
+            "shape_emission",
+            format!("{kind}: actual T*R*S residual {residual} HWPUNIT"),
+        );
+    }
+}
+
+fn report_unturned_metadata(kind: &str, metadata: (i32, u32, u32), ctx: &mut DecodeCtx) {
+    let (angle, horizontal, vertical) = metadata;
+    if angle.rem_euclid(360) != 0 || horizontal != 0 || vertical != 0 {
+        ctx.content_lost("shape_transform", format!(
+            "metadata mismatch; {kind}; source angle={angle}, flip=({horizontal},{vertical}); composite matrix has no rotation or reflection; discarded rotation/flip metadata"
+        ));
+    }
+}
+
+fn settle_standalone_shape(
+    control: &mut Control,
+    source_id: &str,
+    metadata: (i32, u32, u32),
+    org: Option<&crate::schema::section::HxSizeAttr>,
+    ri: Option<&crate::schema::section::HxRenderingInfo>,
+    ctx: &mut DecodeCtx,
+) -> bool {
+    use hwpforge_core::control::geometry::{
+        defining_points, fold_standalone, frame_plan, FoldInput,
+    };
+    if !matches!(
+        control,
+        Control::TextBox { .. }
+            | Control::Rect { .. }
+            | Control::Ellipse { .. }
+            | Control::Arc { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::Line { .. }
+            | Control::ConnectLine { .. }
+    ) {
+        return false;
+    }
+    let map = match standalone_map(ri) {
+        Ok(None) => {
+            // Appendix B: only the complete matrix defines geometry. Missing
+            // renderingInfo keeps the legacy metadata path (no matrix to compare).
+            if ri.is_some() {
+                report_unturned_metadata(
+                    &format!("{} id={source_id}", control.kind_name()),
+                    metadata,
+                    ctx,
+                );
+                clear_standalone_transform(control);
+            }
+            return false;
+        }
+        Ok(Some(m)) => m,
+        Err(e) => {
+            clear_standalone_transform(control);
+            ctx.content_lost("shape_transform", e);
+            return true;
+        }
+    };
+    let declared = displayed_size(control).expect("shape size");
+    let Some(org) = org else {
+        clear_standalone_transform(control);
+        ctx.content_lost("shape_transform", "missing orgSz");
+        return true;
+    };
+    let original = (org.width, org.height);
+    let input = FoldInput::new(
+        map.to_transform(),
+        (f64::from(org.width), f64::from(org.height)),
+        (0.0, 0.0),
+    );
+    match fold_standalone(control, &input) {
+        Ok(_) => {
+            let frame =
+                frame_plan(control, &crate::encoder::shapes::HWPX_POLICY).expect("shape frame");
+            let style = match control {
+                Control::TextBox { style, .. }
+                | Control::Rect { style, .. }
+                | Control::Ellipse { style, .. }
+                | Control::Arc { style, .. }
+                | Control::Polygon { style, .. }
+                | Control::Curve { style, .. }
+                | Control::Line { style, .. }
+                | Control::ConnectLine { style, .. } => style.as_ref(),
+                _ => None,
+            };
+            let (rotation, flip) = style.map_or((None, None), |s| (s.rotation, s.flip));
+            let plan = crate::encoder::standalone::plan(
+                displayed_size(control).unwrap(),
+                rotation,
+                flip,
+                &frame,
+            );
+            check_standalone_source(
+                map,
+                original,
+                (declared, [0; 4]),
+                &plan,
+                &defining_points(control),
+                &format!("{} id={source_id}", control.kind_name()),
+                ctx,
+            );
+        }
+        Err(e) => {
+            clear_standalone_transform(control);
+            if unusable_original(original, declared).is_none() {
+                if let Some(frame) = control.frame_mut() {
+                    frame.original_size = Some(hwpforge_foundation::Size::new(
+                        HwpUnit::new(original.0).expect("checked original"),
+                        HwpUnit::new(original.1).expect("checked original"),
+                    ));
+                }
+            }
+            ctx.content_lost("shape_transform", format!("{}: {e}", control.kind_name()));
+        }
+    }
+    true
+}
+
 /// S20: a top-level shape's original box and size lock from the wire
 /// (`<hp:orgSz>`, `<hp:sz protect>`), checked against what the writer will
 /// store ([`FrameCheck`]). Its defining points stay as read: they are
@@ -146,6 +339,8 @@ fn displayed_size(control: &Control) -> Option<(i32, i32)> {
 /// (`dropping_the_original_box_keeps_the_lock`).
 pub(crate) fn settle_shape_frame(
     control: &mut Control,
+    source_id: &str,
+    metadata: (i32, u32, u32),
     org: Option<&crate::schema::section::HxSizeAttr>,
     sz: Option<&crate::schema::section::HxTableSz>,
     ri: Option<&crate::schema::section::HxRenderingInfo>,
@@ -154,6 +349,12 @@ pub(crate) fn settle_shape_frame(
     use crate::encoder::shapes::HWPX_POLICY;
     use hwpforge_core::control::geometry::{defining_points, drop_original_size, frame_plan};
     if ctx.is_direct_group_child() {
+        return;
+    }
+    if let Some(frame) = control.frame_mut() {
+        frame.size_protect = sz.is_some_and(|s| s.protect != 0);
+    }
+    if settle_standalone_shape(control, source_id, metadata, org, ri, ctx) {
         return;
     }
     let Some(displayed) = displayed_size(control) else { return };
@@ -302,6 +503,118 @@ fn text_bytes_of(control: &Control) -> usize {
 ///
 /// 이것을 실패시키는 것: 이 호출을 지우기(`picture_and_table_protect_round_trip`) /
 /// 음수 원래 크기 보고를 지우기(`negative_original_size_is_reported`).
+fn settle_standalone_picture(
+    image: &mut hwpforge_core::image::Image,
+    pic: &crate::schema::section::HxPic,
+    ctx: &mut DecodeCtx,
+) -> bool {
+    use hwpforge_core::control::geometry::{
+        fold_standalone_picture, picture_frame_plan, FoldInput,
+    };
+    let map = match standalone_map(pic.rendering_info.as_ref()) {
+        Ok(None) => {
+            if pic.rendering_info.is_some() {
+                report_unturned_metadata(
+                    &format!("picture id={}", pic.id),
+                    (
+                        pic.rotation_info.as_ref().map_or(0, |r| r.angle),
+                        pic.flip.as_ref().map_or(0, |f| f.horizontal),
+                        pic.flip.as_ref().map_or(0, |f| f.vertical),
+                    ),
+                    ctx,
+                );
+            }
+            return false;
+        }
+        Ok(Some(m)) => m,
+        Err(e) => {
+            ctx.content_lost("shape_transform", format!("picture id={}: {e}", pic.id));
+            return true;
+        }
+    };
+    let Some(org) = pic.org_sz.as_ref() else {
+        ctx.content_lost("shape_transform", "picture missing orgSz");
+        return true;
+    };
+    let original = (org.width, org.height);
+    let displayed = (image.width.as_i32(), image.height.as_i32());
+    if original != displayed && unusable_original(original, displayed).is_none() {
+        if let (Ok(w), Ok(h)) = (HwpUnit::new(original.0), HwpUnit::new(original.1)) {
+            image.frame.original_size = Some(hwpforge_foundation::Size::new(w, h));
+        }
+    }
+    let margin = pic.in_margin.as_ref().map_or([0; 4], |m| [m.left, m.right, m.top, m.bottom]);
+    let rectangular = pic.img_rect.as_ref().is_none_or(|r| {
+        [(r.pt0.x, r.pt0.y), (r.pt1.x, r.pt1.y), (r.pt2.x, r.pt2.y), (r.pt3.x, r.pt3.y)]
+            == [(0, 0), (org.width, 0), original, (0, org.height)]
+    });
+    // 이것을 실패시키는 것: 범위 검증 전에 1200000000 여백의 합/차 계산.
+    let mut units = [HwpUnit::ZERO; 4];
+    for (i, name) in ["left", "right", "top", "bottom"].iter().enumerate() {
+        match HwpUnit::new(margin[i]) {
+            Ok(value) if margin[i] >= 0 => units[i] = value,
+            _ => {
+                ctx.content_lost("shape_transform", format!(
+                    "picture id={}: invalid inner margin {name}={}; expected 0..={}; using declared sz={}x{} without rotation/flip/inner margin",
+                    pic.id, margin[i], HwpUnit::MAX_VALUE, displayed.0, displayed.1
+                ));
+                return true;
+            }
+        }
+    }
+    if margin[0] != margin[1] || margin[2] != margin[3] || !rectangular {
+        ctx.content_lost(
+            "shape_transform",
+            format!(
+                "picture id={}: unsupported inner margin {margin:?} or nonrectangular imgRect",
+                pic.id
+            ),
+        );
+        return true;
+    }
+    let input = FoldInput::new(
+        map.to_transform(),
+        (f64::from(org.width), f64::from(org.height)),
+        (0.0, 0.0),
+    );
+    match fold_standalone_picture(image, &input) {
+        Ok(_) => {
+            if let Some(dim) = &pic.img_dim {
+                if let (Ok(w), Ok(h)) = (HwpUnit::new(dim.dim_width), HwpUnit::new(dim.dim_height))
+                {
+                    image.image_extent = Some((w, h));
+                }
+            }
+            if margin != [0; 4] {
+                image.in_margin = Some(hwpforge_core::table::TableMargin {
+                    left: units[0],
+                    right: units[1],
+                    top: units[2],
+                    bottom: units[3],
+                });
+            }
+            let frame = picture_frame_plan(image, &crate::encoder::shapes::HWPX_POLICY);
+            let plan = crate::encoder::standalone::plan(
+                (image.width.as_i32(), image.height.as_i32()),
+                image.rotation,
+                image.flip,
+                &frame,
+            );
+            check_standalone_source(
+                map,
+                original,
+                (displayed, margin),
+                &plan,
+                &[],
+                &format!("picture id={}", pic.id),
+                ctx,
+            );
+        }
+        Err(e) => ctx.content_lost("shape_transform", format!("picture id={}: {e}", pic.id)),
+    }
+    true
+}
+
 pub(crate) fn settle_picture_frame(
     image: &mut hwpforge_core::image::Image,
     pic: &crate::schema::section::HxPic,
@@ -313,6 +626,9 @@ pub(crate) fn settle_picture_frame(
         return;
     }
     image.frame.size_protect = pic.sz.as_ref().is_some_and(|s| s.protect != 0);
+    if settle_standalone_picture(image, pic, ctx) {
+        return;
+    }
     let displayed = (image.width.as_i32(), image.height.as_i32());
     let Some(org) = pic.org_sz.as_ref().map(|o| (o.width, o.height)) else { return };
     if let Some(reason) = unusable_original(org, displayed) {
@@ -562,6 +878,12 @@ pub(crate) fn decode_textbox(
     let mut control = control;
     settle_shape_frame(
         &mut control,
+        &rect.id,
+        (
+            rect.rotation_info.as_ref().map_or(0, |r| r.angle),
+            rect.flip.as_ref().map_or(0, |f| f.horizontal),
+            rect.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         rect.org_sz.as_ref(),
         rect.sz.as_ref(),
         rect.rendering_info.as_ref(),
@@ -632,6 +954,12 @@ pub(crate) fn decode_line(
     };
     settle_shape_frame(
         &mut control,
+        &line.id,
+        (
+            line.rotation_info.as_ref().map_or(0, |r| r.angle),
+            line.flip.as_ref().map_or(0, |f| f.horizontal),
+            line.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         line.org_sz.as_ref(),
         line.sz.as_ref(),
         line.rendering_info.as_ref(),
@@ -721,6 +1049,12 @@ pub(crate) fn decode_ellipse(
     };
     settle_shape_frame(
         &mut control,
+        &ellipse.id,
+        (
+            ellipse.rotation_info.as_ref().map_or(0, |r| r.angle),
+            ellipse.flip.as_ref().map_or(0, |f| f.horizontal),
+            ellipse.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         ellipse.org_sz.as_ref(),
         ellipse.sz.as_ref(),
         ellipse.rendering_info.as_ref(),
@@ -795,6 +1129,12 @@ pub(crate) fn decode_polygon(
     };
     settle_shape_frame(
         &mut control,
+        &polygon.id,
+        (
+            polygon.rotation_info.as_ref().map_or(0, |r| r.angle),
+            polygon.flip.as_ref().map_or(0, |f| f.horizontal),
+            polygon.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         polygon.org_sz.as_ref(),
         polygon.sz.as_ref(),
         polygon.rendering_info.as_ref(),
@@ -1120,6 +1460,12 @@ pub(crate) fn decode_arc(
     };
     settle_shape_frame(
         &mut control,
+        &ellipse.id,
+        (
+            ellipse.rotation_info.as_ref().map_or(0, |r| r.angle),
+            ellipse.flip.as_ref().map_or(0, |f| f.horizontal),
+            ellipse.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         ellipse.org_sz.as_ref(),
         ellipse.sz.as_ref(),
         ellipse.rendering_info.as_ref(),
@@ -1199,6 +1545,12 @@ pub(crate) fn decode_curve(
     };
     settle_shape_frame(
         &mut control,
+        &curve.id,
+        (
+            curve.rotation_info.as_ref().map_or(0, |r| r.angle),
+            curve.flip.as_ref().map_or(0, |f| f.horizontal),
+            curve.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         curve.org_sz.as_ref(),
         curve.sz.as_ref(),
         curve.rendering_info.as_ref(),
@@ -1265,6 +1617,8 @@ pub(crate) fn decode_textart(
     };
     settle_shape_frame(
         &mut control,
+        "",
+        (0, 0, 0),
         text_art.org_sz.as_ref(),
         text_art.sz.as_ref(),
         text_art.rendering_info.as_ref(),
@@ -1420,6 +1774,12 @@ pub(crate) fn decode_connect_line(
     };
     settle_shape_frame(
         &mut control,
+        &cl.id,
+        (
+            cl.rotation_info.as_ref().map_or(0, |r| r.angle),
+            cl.flip.as_ref().map_or(0, |f| f.horizontal),
+            cl.flip.as_ref().map_or(0, |f| f.vertical),
+        ),
         cl.org_sz.as_ref(),
         cl.sz.as_ref(),
         cl.rendering_info.as_ref(),
@@ -3903,6 +4263,7 @@ mod tests {
         let mut hl = Vec::new();
         let hx = crate::encoder::shapes::encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             crate::encoder::EncodeOptions::default(),
@@ -4026,6 +4387,7 @@ mod tests {
         let mut hyperlinks = Vec::new();
         let encoded = crate::encoder::shapes::encode_rect_to_hx(
             &control,
+            false,
             0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
@@ -4082,6 +4444,7 @@ mod tests {
         let mut hyperlinks = Vec::new();
         let encoded = crate::encoder::shapes::encode_textbox_to_rect(
             &control,
+            false,
             0,
             &mut hyperlinks,
             crate::encoder::EncodeOptions::default(),
@@ -4322,6 +4685,7 @@ mod group_tests {
             &crate::encoder::shapes::build_shape_common(
                 c,
                 &crate::encoder::shapes::shape_frame_plan(c).unwrap(),
+                false,
             )
             .rendering_info
             .rot_matrix,
@@ -4448,16 +4812,9 @@ mod group_tests {
     #[test]
     fn f9_turned_and_mirrored_group_matches_hancom_ungroup() {
         let doc = HwpxDecoder::decode(&fixture("rotflip-group.hwpx")).unwrap();
-        // D and E, outside the group, are turned 30° and mirrored: Hancom's
-        // `<hp:sz>` for them is the turned bounding box (12654 × 10579), not
-        // the box `orgSz` 11339 × 5669 their matrices draw — the layout size
-        // Core keeps does not draw them (S20 reports it; §19.23.20).
-        assert_eq!(
-            lost_kinds(&doc.warnings),
-            ["shape_drawn_extent", "shape_drawn_extent"],
-            "{:?}",
-            doc.warnings
-        );
+        // D/E are standalone siblings: their rotation is now representable.
+        // Group leaf geometry assertions below remain unchanged.
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
         assert!(
             doc.warnings.iter().all(|w| matches!(
                 w,
@@ -7708,7 +8065,8 @@ mod frame_tests {
             r#"<hp:orgSz width="4369" height="3299"/>"#,
         );
         let (content, lost) = decode(&plain);
-        assert_eq!(lost, ["shape_drawn_extent"]);
+        // 이것을 실패시키는 것: O와 다른 imgRect를 회전 성공으로 인정.
+        assert_eq!(lost, ["shape_transform"]);
         let RunContent::Image(image) = &content else { panic!("{content:?}") };
         assert!(image.frame.original_size.is_none());
     }
@@ -7818,6 +8176,7 @@ mod frame_tests {
         picture.frame.original_size = Some(Size::new(u(560), u(-1)));
         let err = crate::encoder::section::build_picture(
             &picture,
+            false,
             0,
             &mut Vec::new(),
             crate::encoder::EncodeOptions::default(),

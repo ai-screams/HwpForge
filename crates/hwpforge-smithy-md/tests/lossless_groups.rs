@@ -350,3 +350,26 @@ fn cell_background_color_is_read_strictly() {
         Err(MdError::UnsupportedStructure { .. })
     ));
 }
+
+/// 이것을 실패시키는 것: 그림 회전·대칭·여백 방출/파싱/허용 목록 중 하나 누락.
+#[test]
+fn standalone_picture_transform_roundtrips_losslessly() {
+    for margin in [
+        None,
+        Some(TableMargin::default()),
+        Some(TableMargin { left: u(1), right: u(2), top: u(3), bottom: u(4) }),
+    ] {
+        let mut image = picture("a.png", ImageFormat::Png);
+        image.rotation = Some(30.123_457);
+        image.flip = Some(hwpforge_foundation::Flip::Both);
+        image.in_margin = margin;
+        let runs = vec![Run::image(image, CharShapeIndex::new(0))];
+        let encoded = encode(runs.clone()).unwrap();
+        let decoded = MdDecoder::decode_lossless(&encoded).unwrap();
+        assert_eq!(first_run(&decoded), &runs[0]);
+        if margin.is_some() {
+            let invalid = encoded.replace("data-in-margin-top=", "data-unknown-margin-top=");
+            assert!(MdDecoder::decode_lossless(&invalid).is_err());
+        }
+    }
+}

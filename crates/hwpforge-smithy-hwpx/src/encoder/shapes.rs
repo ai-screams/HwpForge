@@ -60,6 +60,7 @@ use crate::decoder::PathSeg;
 /// All four shape encoders (rect/textbox, line, ellipse, polygon) produce
 /// the same prefix block. This struct avoids repeating the construction logic.
 pub(crate) struct ShapeCommon {
+    pub size: (i32, i32),
     pub offset: HxOffset,
     pub org_sz: HxSizeAttr,
     pub cur_sz: HxSizeAttr,
@@ -180,6 +181,29 @@ pub(crate) fn report_shape_emission(plan: &FramePlan, sink: &mut DocumentEncodeC
     }
 }
 
+fn report_shape_output(
+    ctrl: &Control,
+    as_group_child: bool,
+    frame: &FramePlan,
+    sink: &mut DocumentEncodeContext,
+) {
+    report_shape_emission(frame, sink);
+    let (w, h, style) = shape_parts(ctrl);
+    let (rotation, flip) = style.map_or((None, None), |s| (s.rotation, s.flip));
+    if as_group_child || frame.loss().is_some() || !super::standalone::transformed(rotation, flip) {
+        return;
+    }
+    let emitted = super::standalone::plan((w, h), rotation, flip, frame);
+    let exact = frame_plan(ctrl, &EmissionPolicy::exact()).expect("drawing frame");
+    let residual = super::standalone::residual(frame, &exact, &emitted);
+    if residual > 2.0 {
+        sink.content_lost(
+            "shape_emission",
+            format!("actual standalone T*R*S residual {residual} HWPUNIT"),
+        );
+    }
+}
+
 /// The emission plan of a shape control under [`HWPX_POLICY`]
 /// ([`frame_plan`]): what its `<hp:orgSz>`, `scaMatrix` and points store.
 ///
@@ -239,7 +263,11 @@ pub(crate) fn size_protect(ctrl: &Control) -> u32 {
 /// overrides, they are applied to the common block instead of identity
 /// values. The rotation matrix is the Core local transform under
 /// [`HWPX_POLICY`].
-pub(crate) fn build_shape_common(ctrl: &Control, plan: &FramePlan) -> ShapeCommon {
+pub(crate) fn build_shape_common(
+    ctrl: &Control,
+    plan: &FramePlan,
+    as_group_child: bool,
+) -> ShapeCommon {
     let (width, height, style) = shape_parts(ctrl);
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
@@ -428,7 +456,8 @@ pub(crate) fn build_shape_common(ctrl: &Control, plan: &FramePlan) -> ShapeCommo
     let trans_matrix = HxMatrix::identity();
     let (org_w, org_h) = plan.original_size();
 
-    ShapeCommon {
+    let mut common = ShapeCommon {
+        size: (width, height),
         offset: HxOffset { x: 0, y: 0 },
         org_sz: HxSizeAttr { width: org_w, height: org_h },
         cur_sz: HxSizeAttr { width, height },
@@ -448,7 +477,17 @@ pub(crate) fn build_shape_common(ctrl: &Control, plan: &FramePlan) -> ShapeCommo
         line_shape,
         fill_brush: (!no_fill).then_some(fill_brush),
         shadow: HxShadow::default_none(),
+    };
+    let (rotation, flip) = style.map_or((None, None), |s| (s.rotation, s.flip));
+    if !as_group_child && super::standalone::transformed(rotation, flip) {
+        let standalone = super::standalone::plan((width, height), rotation, flip, plan);
+        common.size = standalone.size;
+        common.cur_sz = standalone.cur;
+        common.rotation_info = standalone.rotation;
+        common.rendering_info = standalone.rendering;
+        common.flip = standalone.flip;
     }
+    common
 }
 
 /// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
@@ -456,6 +495,7 @@ pub(crate) fn build_shape_common(ctrl: &Control, plan: &FramePlan) -> ShapeCommo
 /// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
 pub(crate) fn encode_textbox_to_rect(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -486,12 +526,11 @@ pub(crate) fn encode_textbox_to_rect(
             _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
         };
 
-    let width_hwp = width.as_i32();
-    let height_hwp = height.as_i32();
+    let _width_hwp = width.as_i32();
+    let _height_hwp = height.as_i32();
 
     // Default text margin: 283 HWPUNIT (~1mm)
     const MARGIN: i32 = 283;
-    let last_width = width_hwp.max(0) as u32;
 
     sink.enter(PathSeg::TextBox);
     let sub_list_result = encode_paragraphs_to_sublist_with_align(
@@ -505,8 +544,10 @@ pub(crate) fn encode_textbox_to_rect(
     sink.leave();
     let sub_list = sub_list_result?;
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (width_hwp, height_hwp) = sc.size;
+    let last_width = width_hwp.max(0) as u32;
 
     Ok(HxRect {
         id: generate_instid(),
@@ -580,6 +621,7 @@ pub(crate) fn encode_textbox_to_rect(
 /// which encodes `Control::TextBox` as a rect with embedded text.
 pub(crate) fn encode_rect_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -592,11 +634,12 @@ pub(crate) fn encode_rect_to_hx(
         _ => unreachable!("encode_rect_to_hx called with non-Rect"),
     };
 
-    let width_hwp = width.as_i32();
-    let height_hwp = height.as_i32();
+    let _width_hwp = width.as_i32();
+    let _height_hwp = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (width_hwp, height_hwp) = sc.size;
 
     Ok(HxRect {
         id: generate_instid(),
@@ -647,6 +690,7 @@ pub(crate) fn encode_rect_to_hx(
 /// Encodes a Core `Control::Line` into `HxLine`.
 pub(crate) fn encode_line_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -659,11 +703,12 @@ pub(crate) fn encode_line_to_hx(
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
     let stored = plan.points();
 
     Ok(HxLine {
@@ -712,6 +757,7 @@ pub(crate) fn encode_line_to_hx(
 /// Encodes a Core `Control::Ellipse` into `HxEllipse`.
 pub(crate) fn encode_ellipse_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -756,11 +802,12 @@ pub(crate) fn encode_ellipse_to_hx(
         _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
     };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -836,6 +883,7 @@ pub(crate) fn encode_ellipse_to_hx(
 /// Encodes a Core `Control::Polygon` into `HxPolygon`.
 pub(crate) fn encode_polygon_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -866,11 +914,12 @@ pub(crate) fn encode_polygon_to_hx(
             _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
         };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -941,6 +990,7 @@ pub(crate) fn encode_polygon_to_hx(
 /// Arc reuses the ellipse schema with arc-specific fields enabled.
 pub(crate) fn encode_arc_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -983,11 +1033,12 @@ pub(crate) fn encode_arc_to_hx(
         _ => unreachable!("encode_arc_to_hx called with non-Arc"),
     };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
     let arc = plan.points();
 
     Ok(HxEllipse {
@@ -1041,6 +1092,7 @@ pub(crate) fn encode_arc_to_hx(
 /// Encodes a Core `Control::Curve` into `HxCurve`.
 pub(crate) fn encode_curve_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -1060,11 +1112,12 @@ pub(crate) fn encode_curve_to_hx(
         _ => unreachable!("encode_curve_to_hx called with non-Curve"),
     };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
 
     // Per KS X 6101 표 269: each <hp:seg> has x1/y1 (start) + x2/y2 (end).
     // Points array encodes control vertices; segments connect adjacent pairs.
@@ -1127,6 +1180,7 @@ pub(crate) fn encode_curve_to_hx(
 /// Encodes a Core `Control::ConnectLine` into `HxConnectLine`.
 pub(crate) fn encode_connect_line_to_hx(
     ctrl: &Control,
+    as_group_child: bool,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -1159,11 +1213,12 @@ pub(crate) fn encode_connect_line_to_hx(
             _ => unreachable!("encode_connect_line_to_hx called with non-ConnectLine"),
         };
 
-    let w = width.as_i32();
-    let h = height.as_i32();
+    let _w = width.as_i32();
+    let _h = height.as_i32();
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
-    report_shape_emission(&plan, sink);
+    let sc = build_shape_common(ctrl, &plan, as_group_child);
+    report_shape_output(ctrl, as_group_child, &plan, sink);
+    let (w, h) = sc.size;
 
     // Per golden fixture: controlPoints wrapper contains ALL points
     // (start type=3, intermediates type=2, end type=26).
@@ -1232,7 +1287,10 @@ pub(crate) fn encode_connect_line_to_hx(
 /// name (e.g. `"hp:rect"`). Used by the recursive group emitter to turn each
 /// `Hx*` shape and the container's shape-common sub-blocks into raw XML that
 /// is concatenated in document (z-) order inside `<hp:container>`.
-fn serialize_with_root<T: serde::Serialize>(value: &T, root: &str) -> HwpxResult<String> {
+pub(super) fn serialize_with_root<T: serde::Serialize>(
+    value: &T,
+    root: &str,
+) -> HwpxResult<String> {
     let mut buf = String::new();
     #[allow(clippy::disallowed_methods)] // normalized below
     let ser = quick_xml::se::Serializer::with_root(&mut buf, Some(root))
@@ -1558,42 +1616,46 @@ fn encode_group_child_xml(
     }
     let raw = match child {
         Control::TextBox { .. } => {
-            let mut hx = encode_textbox_to_rect(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx =
+                encode_textbox_to_rect(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:rect")?
         }
         Control::Rect { .. } => {
-            let mut hx = encode_rect_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_rect_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:rect")?
         }
         Control::Line { .. } => {
-            let mut hx = encode_line_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_line_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:line")?
         }
         Control::Ellipse { .. } => {
-            let mut hx = encode_ellipse_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx =
+                encode_ellipse_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:ellipse")?
         }
         Control::Arc { .. } => {
-            let mut hx = encode_arc_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_arc_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:ellipse")?
         }
         Control::Polygon { .. } => {
-            let mut hx = encode_polygon_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx =
+                encode_polygon_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:polygon")?
         }
         Control::Curve { .. } => {
-            let mut hx = encode_curve_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx = encode_curve_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:curve")?
         }
         Control::ConnectLine { .. } => {
-            let mut hx = encode_connect_line_to_hx(child, depth, hyperlink_entries, options, sink)?;
+            let mut hx =
+                encode_connect_line_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
             serialize_with_root(&hx, "hp:connectLine")?
         }
@@ -1682,7 +1744,8 @@ fn encode_group_picture_xml(
         .as_ref()
         .map_or((0, 0), |p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()));
     let (x, y) = (parent_origin.0.saturating_add(dx), parent_origin.1.saturating_add(dy));
-    let mut hx = super::section::build_picture(image, depth, hyperlink_entries, options, sink)?;
+    let mut hx =
+        super::section::build_picture(image, true, depth, hyperlink_entries, options, sink)?;
     (hx.sz, hx.pos, hx.out_margin) = (None, None, None);
     hx.numbering_type = "NONE".to_string();
     hx.text_wrap = "TOP_AND_BOTTOM".to_string();
@@ -1772,7 +1835,7 @@ fn encode_group_at(
     let id_slot = super::object_ids::reserve();
 
     let plan = shape_frame_plan(ctrl)?;
-    let sc = build_shape_common(ctrl, &plan);
+    let sc = build_shape_common(ctrl, &plan, true);
 
     // Shape-common block (serialized via the same Hx* sub-structs the per-shape
     // encoders use, so the element shape matches native exactly).
@@ -2015,7 +2078,7 @@ mod tests {
         if let Control::Rect { style: s, .. } = &mut ctrl {
             *s = style.cloned();
         }
-        build_shape_common(&ctrl, &shape_frame_plan(&ctrl).unwrap())
+        build_shape_common(&ctrl, &shape_frame_plan(&ctrl).unwrap(), false)
     }
 
     #[test]
@@ -2730,9 +2793,9 @@ mod tests {
         let style = ShapeStyle { rotation: Some(45.0), ..Default::default() };
         let sc = common(1000, 500, Some(&style));
         assert_eq!(sc.rotation_info.angle, 45);
-        // rotation center = dimension / 2
-        assert_eq!(sc.rotation_info.center_x, 500);
-        assert_eq!(sc.rotation_info.center_y, 250);
+        // 이것을 실패시키는 것: 독립 출력 중심에서 배치 이동 T 누락.
+        assert_eq!(sc.rotation_info.center_x, 530);
+        assert_eq!(sc.rotation_info.center_y, 530);
     }
 
     #[test]
@@ -2967,6 +3030,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -2997,6 +3061,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3027,6 +3092,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3069,6 +3135,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3103,6 +3170,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3133,6 +3201,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_arc_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3159,6 +3228,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3188,6 +3258,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3224,6 +3295,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3254,6 +3326,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3282,6 +3355,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3306,6 +3380,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_curve_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3334,6 +3409,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3368,6 +3444,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3398,6 +3475,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3425,6 +3503,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3455,6 +3534,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3487,6 +3567,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3517,6 +3598,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3546,6 +3628,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3572,6 +3655,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3598,6 +3682,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3622,6 +3707,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3646,6 +3732,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3673,6 +3760,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_line_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3708,6 +3796,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3735,6 +3824,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3762,6 +3852,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3797,6 +3888,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3813,6 +3905,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3829,6 +3922,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3863,6 +3957,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3897,6 +3992,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3927,6 +4023,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3948,6 +4045,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_rect_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3968,6 +4066,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let rect = encode_rect_to_hx(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -3998,6 +4097,7 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_textbox_to_rect(
             &ctrl,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -4023,6 +4123,7 @@ mod tests {
         let rect = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
         let hx = encode_rect_to_hx(
             &rect,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),
@@ -4048,6 +4149,7 @@ mod tests {
             Control::text_box(vec![], HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap());
         let hx = encode_textbox_to_rect(
             &tb,
+            false,
             0,
             &mut hl,
             EncodeOptions::default(),

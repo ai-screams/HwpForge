@@ -762,6 +762,9 @@ fn decode_warning_parts(warning: &DecodeWarning) -> (&'static str, String, Optio
 /// Reproduces the CLI's `render_warning_dto` (`commands/to_pdf.rs`).
 fn render_warning_parts(warning: &PdfWarning) -> (&'static str, String, Option<String>) {
     match warning {
+        PdfWarning::ObjectTransformIgnored { location, kind, detail } => {
+            ("OBJECT_TRANSFORM_IGNORED", format!("{kind}: {detail}"), Some(location.clone()))
+        }
         PdfWarning::ParagraphSkipped { location } => (
             "PARAGRAPH_SKIPPED",
             "paragraph without layout cache skipped".to_string(),
