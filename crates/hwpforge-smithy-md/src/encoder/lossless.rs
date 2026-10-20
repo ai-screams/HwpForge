@@ -849,7 +849,21 @@ fn encode_shape(shape: &Control, char_shape: Option<usize>) -> MdResult<String> 
         Control::Polygon { vertices, .. } => {
             out.push_str(&format!(" {}=\"{}\"", g::POINTS, points_str(vertices)));
         }
-        Control::Arc { arc_type, center, axis1, axis2, start1, end1, start2, end2, .. } => {
+        Control::Arc {
+            definition,
+            arc_type,
+            center,
+            axis1,
+            axis2,
+            start1,
+            end1,
+            start2,
+            end2,
+            ..
+        } => {
+            if *definition == hwpforge_core::control::ArcDefinition::AxisEndpoints {
+                out.push_str(&format!(" {}=\"AxisEndpoints\"", g::ARC_DEFINITION));
+            }
             out.push_str(&point_attrs(g::CENTER, *center));
             out.push_str(&point_attrs(g::AXIS1, *axis1));
             out.push_str(&point_attrs(g::AXIS2, *axis2));

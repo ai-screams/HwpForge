@@ -731,7 +731,8 @@ fn native_arc(angle: f32) -> hwpforge_core::Control {
     use hwpforge_foundation::{ArcType, HwpUnit};
     let mut c =
         Control::arc(ArcType::Normal, HwpUnit::new(1000).unwrap(), HwpUnit::new(1000).unwrap());
-    if let Control::Arc { start1, end1, start2, end2, style, .. } = &mut c {
+    if let Control::Arc { definition, start1, end1, start2, end2, style, .. } = &mut c {
+        *definition = hwpforge_core::control::ArcDefinition::AxisEndpoints;
         *start1 = ShapePoint::new(0, 0);
         *end1 = *start1;
         *start2 = *start1;
@@ -979,6 +980,20 @@ fn zero_translation_nine_kinds_match_6a0e7d6f_bytes() {
     let head = fixture("standalone-rotation", "head-6a0-zero-nine.hwpx");
     let objects = wire(&head);
     assert_eq!(objects.len(), 9);
+    // 이것을 실패시키는 것: B' 기본 NORMAL을 Some으로 강제하거나 EllipseSweep 출력 변경.
+    let decoded = HwpxDecoder::decode(&head).unwrap();
+    let mut ellipse_arcs = 0;
+    decoded.document.for_each_paragraph(|p| {
+        for r in &p.runs {
+            if let hwpforge_core::RunContent::Control(c) = &r.content {
+                if let hwpforge_core::Control::Arc { definition, .. } = c.as_ref() {
+                    assert_eq!(*definition, hwpforge_core::control::ArcDefinition::EllipseSweep);
+                    ellipse_arcs += 1;
+                }
+            }
+        }
+    });
+    assert_eq!(ellipse_arcs, 1);
     for o in objects {
         if let Some(line) = o.fields.get("lineShape") {
             for side in ["head", "tail"] {

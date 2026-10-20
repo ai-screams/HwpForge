@@ -452,6 +452,7 @@ fn w4_shapes_round_trip() {
         style: style.clone(),
     };
     let arc = Control::Arc {
+        definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
         arc_type: ArcType::Pie,
         center: p(1, 2),
         axis1: p(3, 4),
@@ -613,6 +614,25 @@ fn nine_arrow_sizes_round_trip_lossless_md() {
         }
         let out = round_trip(Run::control(line, CharShapeIndex::new(0)));
         assert_eq!(style_of(&out), expected);
+    }
+}
+
+/// 이것을 실패시키는 것: MD definition 누락/무시, 구 문법의 기본 의미 변경.
+#[test]
+fn arc_definition_is_optional_and_lossless() {
+    use hwpforge_core::control::ArcDefinition;
+    for definition in [ArcDefinition::EllipseSweep, ArcDefinition::AxisEndpoints] {
+        let mut c = Control::arc(hwpforge_foundation::ArcType::Pie, u(1000), u(500));
+        if let Control::Arc { definition: d, .. } = &mut c {
+            *d = definition;
+        }
+        let run = Run::control(c, CharShapeIndex::new(0));
+        assert_eq!(round_trip(run.clone()), run);
+        let markup = encode(vec![run]).unwrap();
+        assert_eq!(
+            markup.contains("data-arc-definition=\"AxisEndpoints\""),
+            definition == ArcDefinition::AxisEndpoints
+        );
     }
 }
 

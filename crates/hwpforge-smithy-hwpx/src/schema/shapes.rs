@@ -655,6 +655,9 @@ pub struct HxLine {
 /// sz → pos → outMargin → caption → drawText
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxEllipse {
+    /// Input element identity; not an XML attribute.
+    #[serde(skip)]
+    pub(crate) axis_endpoints: bool,
     // ── AbstractShapeObjectType attrs ──
     /// Element ID.
     #[serde(rename = "@id", default)]

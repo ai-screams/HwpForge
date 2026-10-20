@@ -817,3 +817,28 @@ fn standalone_picture_errors_leave_every_field_intact() {
         assert_eq!(image, before);
     }
 }
+
+/// 이것을 실패시키는 것: AxisEndpoints의 미사용 sweep 네 점을 정의점으로 변환하기.
+#[test]
+fn arc_definition_selects_active_points_and_defaults_for_old_json() {
+    use crate::control::ArcDefinition;
+    let mut arc = Control::arc(hwpforge_foundation::ArcType::Pie, unit(100), unit(80));
+    assert_eq!(defining_points(&arc).len(), 7);
+    let mut old = serde_json::to_value(&arc).unwrap();
+    old["Arc"].as_object_mut().unwrap().remove("definition");
+    assert_eq!(serde_json::from_value::<Control>(old).unwrap(), arc);
+    let unused = ShapePoint::new(123456, -654321);
+    if let Control::Arc { definition, start1, end1, start2, end2, .. } = &mut arc {
+        *definition = ArcDefinition::AxisEndpoints;
+        *start1 = unused;
+        *end1 = unused;
+        *start2 = unused;
+        *end2 = unused;
+    }
+    assert_eq!(defining_points(&arc).len(), 3);
+    for p in defining_points_mut(&mut arc) {
+        p.x += 3;
+    }
+    let Control::Arc { start1, end1, start2, end2, .. } = arc else { panic!() };
+    assert_eq!([start1, end1, start2, end2], [unused; 4]);
+}

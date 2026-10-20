@@ -184,6 +184,7 @@ pub(crate) const START1: [&str; 2] = ["data-start1-x", "data-start1-y"];
 pub(crate) const END1: [&str; 2] = ["data-end1-x", "data-end1-y"];
 pub(crate) const START2: [&str; 2] = ["data-start2-x", "data-start2-y"];
 pub(crate) const END2: [&str; 2] = ["data-end2-x", "data-end2-y"];
+pub(crate) const ARC_DEFINITION: &str = "data-arc-definition";
 pub(crate) const ARC_TYPE: &str = "data-arc-type";
 /// Curve segment kinds, `Line`/`Curve` joined by `,` (empty = none).
 pub(crate) const SEGMENTS: &str = "data-segments";
@@ -764,4 +765,13 @@ pub(crate) fn field_parameter_from(
             })
         }
     })
+}
+
+pub(crate) fn arc_definition_from(s: &str) -> Option<hwpforge_core::control::ArcDefinition> {
+    use hwpforge_core::control::ArcDefinition;
+    match s {
+        "EllipseSweep" => Some(ArcDefinition::EllipseSweep),
+        "AxisEndpoints" => Some(ArcDefinition::AxisEndpoints),
+        _ => None,
+    }
 }

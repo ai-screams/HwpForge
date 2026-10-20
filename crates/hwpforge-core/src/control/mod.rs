@@ -429,9 +429,14 @@ pub enum Control {
         char_pr_ids: Vec<u32>,
     },
 
-    /// An arc (partial ellipse) drawing object.
-    /// Maps to HWPX `<hp:ellipse>` with `hasArcPr="1"`.
+    /// An arc drawing object. Its definition selects HWPX `arc` or `ellipse`.
     Arc {
+        /// Active defining points and wire representation.
+        /// Omitted values default to `EllipseSweep` only during JSON/MD deserialization.
+        /// Rust struct literals must specify `definition: ArcDefinition::EllipseSweep`
+        /// to retain the default ellipse-sweep representation.
+        #[serde(default)]
+        definition: ArcDefinition,
         /// Arc type (normal open arc, pie/sector, chord).
         arc_type: ArcType,
         /// Center point of the parent ellipse.
@@ -1968,6 +1973,7 @@ impl Control {
     }
 
     /// Creates an arc control with the given bounding box dimensions.
+    /// Uses [`ArcDefinition::EllipseSweep`], with all seven defining points.
     ///
     /// Geometry is auto-derived from the bounding box.
     /// Defaults: inline positioning, no caption, no style.
@@ -1987,6 +1993,7 @@ impl Control {
         let w = width.as_i32();
         let h = height.as_i32();
         Self::Arc {
+            definition: ArcDefinition::EllipseSweep,
             frame: crate::frame::ObjectFrame::new(),
             arc_type,
             center: ShapePoint::new(w / 2, h / 2),

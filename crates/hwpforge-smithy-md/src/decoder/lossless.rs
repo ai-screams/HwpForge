@@ -655,7 +655,7 @@ fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode
         "arc" => {
             allowed.extend(g::CENTER.into_iter().chain(g::AXIS1).chain(g::AXIS2));
             allowed.extend(g::START1.into_iter().chain(g::END1).chain(g::START2).chain(g::END2));
-            allowed.push(g::ARC_TYPE);
+            allowed.extend([g::ARC_TYPE, g::ARC_DEFINITION]);
         }
         "curve" => allowed.extend([g::POINTS, g::SEGMENTS]),
         _ => {
@@ -722,6 +722,9 @@ fn parse_shape(start: &BytesStart<'_>, stack: &[OpenNode]) -> MdResult<ShapeNode
         },
         "rect" => Control::Rect { width, height, frame, placement, caption: None, style },
         "arc" => Control::Arc {
+            definition: attrs
+                .optional(g::ARC_DEFINITION, g::arc_definition_from)?
+                .unwrap_or_default(),
             arc_type: attrs.spelled(g::ARC_TYPE, g::arc_type_from)?,
             center: point(g::CENTER)?,
             axis1: point(g::AXIS1)?,

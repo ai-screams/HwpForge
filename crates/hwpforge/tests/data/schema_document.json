@@ -2331,12 +2331,17 @@
           "additionalProperties": false
         },
         {
-          "description": "An arc (partial ellipse) drawing object.\nMaps to HWPX `<hp:ellipse>` with `hasArcPr=\"1\"`.",
+          "description": "An arc drawing object. Its definition selects HWPX `arc` or `ellipse`.",
           "type": "object",
           "properties": {
             "Arc": {
               "type": "object",
               "properties": {
+                "definition": {
+                  "description": "Active defining points and wire representation.\nOmitted values default to `EllipseSweep` only during JSON/MD deserialization.\nRust struct literals must specify `definition: ArcDefinition::EllipseSweep`\nto retain the default ellipse-sweep representation.",
+                  "$ref": "#/$defs/ArcDefinition",
+                  "default": "EllipseSweep"
+                },
                 "arc_type": {
                   "description": "Arc type (normal open arc, pie/sector, chord).",
                   "$ref": "#/$defs/ArcType"
@@ -4255,6 +4260,21 @@
       },
       "required": [
         "option"
+      ]
+    },
+    "ArcDefinition": {
+      "description": "The defining geometry of an arc, independent of closure, rotation and parent.",
+      "oneOf": [
+        {
+          "description": "An ellipse and four sweep points: all seven points define the arc.\nThis is the meaning of `Control::arc()` and of a missing serde field.",
+          "type": "string",
+          "const": "EllipseSweep"
+        },
+        {
+          "description": "Center and two axis endpoints define the arc. The remaining four\nsweep points are unused, even when their stored values are nonzero.",
+          "type": "string",
+          "const": "AxisEndpoints"
+        }
       ]
     },
     "ArcType": {

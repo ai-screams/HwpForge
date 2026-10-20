@@ -63,7 +63,7 @@ pub(super) fn settle(
             // Restore wire points before folding: a legacy fallback may have
             // fitted them to sz. Never transform those fitted points again.
             let saved = hwpforge_core::control::geometry::defining_points(c);
-            restore_points(wire, c);
+            super::shapes::restore_wire_points(wire, c);
             let result = fold_standalone(c, &input);
             if result.is_err() {
                 replace_points(c, saved);
@@ -165,44 +165,6 @@ pub(super) fn settle(
     }
 }
 
-fn restore_points(wire: &Hwp5Control, core: &mut Control) {
-    let p = |v: crate::schema::section::Hwp5ShapePoint| ShapePoint { x: v.x, y: v.y };
-    match (wire, core) {
-        (Hwp5Control::Line(w), Control::Line { start, end, .. }) => {
-            *start = p(w.start);
-            *end = p(w.end);
-        }
-        (Hwp5Control::ConnectLine(w), Control::ConnectLine { start, end, .. }) => {
-            *start = p(w.start);
-            *end = p(w.end);
-        }
-        (Hwp5Control::Polygon(w), Control::Polygon { vertices, .. }) => {
-            *vertices = w.points.iter().copied().map(p).collect();
-        }
-        (Hwp5Control::Curve(w), Control::Curve { points, .. }) => {
-            *points = w.points.iter().copied().map(p).collect();
-        }
-        (Hwp5Control::Ellipse(w), Control::Ellipse { center, axis1, axis2, .. }) => {
-            *center = p(w.shape.center);
-            *axis1 = p(w.shape.axis1);
-            *axis2 = p(w.shape.axis2);
-        }
-        (
-            Hwp5Control::Arc(w),
-            Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. },
-        ) => {
-            *center = p(w.shape.center);
-            *axis1 = p(w.shape.axis1);
-            *axis2 = p(w.shape.axis2);
-            *start1 = p(w.shape.start1);
-            *end1 = p(w.shape.end1);
-            *start2 = p(w.shape.start2);
-            *end2 = p(w.shape.end2);
-        }
-        _ => {}
-    }
-}
-
 // Restore only the object's own points; never clone its caption or text tree.
 fn replace_points(core: &mut Control, points: Vec<ShapePoint>) {
     let slots: Vec<&mut ShapePoint> = match core {
@@ -218,6 +180,15 @@ fn replace_points(core: &mut Control, points: Vec<ShapePoint>) {
             return;
         }
         Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
+        Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::AxisEndpoints,
+            center,
+            axis1,
+            axis2,
+            ..
+        } => {
+            vec![center, axis1, axis2]
+        }
         Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
             vec![center, axis1, axis2, start1, end1, start2, end2]
         }

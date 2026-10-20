@@ -1066,21 +1066,7 @@ fn shape_offset(c: &Control) -> (i32, i32) {
 }
 
 fn defining_points(c: &Control) -> Vec<hwpforge_core::control::ShapePoint> {
-    match c {
-        Control::Line { start, end, .. } => vec![*start, *end],
-        Control::Ellipse { center, axis1, axis2, .. } => vec![*center, *axis1, *axis2],
-        Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
-            vec![*center, *axis1, *axis2, *start1, *end1, *start2, *end2]
-        }
-        Control::Polygon { vertices, .. } => vertices.clone(),
-        Control::Curve { points, .. } => points.clone(),
-        Control::ConnectLine { start, end, control_points, .. } => {
-            let mut v = vec![*start, *end];
-            v.extend(control_points.iter().copied());
-            v
-        }
-        _ => Vec::new(),
-    }
+    hwpforge_core::control::geometry::defining_points(c)
 }
 
 /// `b` with `a`'s size, offset, rotation, flip and defining points (`a` and
@@ -1173,6 +1159,15 @@ fn defining_points_mut(c: &mut Control) -> Vec<&mut hwpforge_core::control::Shap
     match c {
         Control::Line { start, end, .. } => vec![start, end],
         Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
+        Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::AxisEndpoints,
+            center,
+            axis1,
+            axis2,
+            ..
+        } => {
+            vec![center, axis1, axis2]
+        }
         Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
             vec![center, axis1, axis2, start1, end1, start2, end2]
         }

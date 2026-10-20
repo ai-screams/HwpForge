@@ -1692,39 +1692,31 @@ impl BodyTextParserState {
                 }
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
-            TagId::ShapeComponentArc => {
-                // Keep the legacy unturned path, but do not discard a native
-                // arc merely because its matrix failed to parse. Projection
-                // retains its declared box and reports the specific failure.
-                let transformed = self
-                    .subtree_ctx
-                    .as_ref()
-                    .and_then(|c| c.standalone_render.as_ref())
-                    .is_some_and(|r| match r {
-                        Err(_) => true,
-                        Ok(r) => {
-                            let m = r.map().matrix();
-                            !(m[1].abs() < 1e-9 && m[3].abs() < 1e-9 && m[0] >= 0.0 && m[4] >= 0.0)
-                        }
-                    });
-                if transformed {
-                    match Hwp5ShapeComponentEllipse::parse_arc(&record.data) {
-                        Ok(arc) => {
-                            if let Some(ctx) = self.subtree_ctx.as_mut() {
-                                ctx.note_shape_ellipse(arc);
-                            }
-                        }
-                        Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            // Native arcs exist independently of rotation and arrowheads.
+            TagId::ShapeComponentArc => match Hwp5ShapeComponentEllipse::parse_arc(&record.data) {
+                Ok(arc) => {
+                    if let Some(ctx) = self.subtree_ctx.as_mut() {
+                        ctx.note_shape_ellipse(arc);
                     }
                 }
-            }
+                Err(e) => self.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.arc_record",
+                    reason: format!(
+                        "native arc record ({} bytes, expected at least 25): {e}",
+                        record.data.len()
+                    ),
+                }),
+            },
             TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
                 Ok(ellipse) => {
                     if let Some(ctx) = self.subtree_ctx.as_mut() {
                         ctx.note_shape_ellipse(ellipse);
                     }
                 }
-                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+                Err(e) => self.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "shape.ellipse_record",
+                    reason: format!("ellipse/arc record: {e}"),
+                }),
             },
             TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
                 Ok(curve) => {

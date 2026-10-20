@@ -1275,7 +1275,9 @@ fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<(Vec
             HxRunChildKind::Ellipse => {
                 let ellipse = &hx.ellipses[idx];
                 if ellipse.has_arc_pr == 1 {
-                    runs.push(decode_arc(ellipse, char_shape_id, depth, ctx)?);
+                    if let Some(run) = decode_arc(ellipse, char_shape_id, depth, ctx)? {
+                        runs.push(run);
+                    }
                 } else {
                     runs.push(decode_ellipse(ellipse, char_shape_id, depth, ctx)?);
                 }

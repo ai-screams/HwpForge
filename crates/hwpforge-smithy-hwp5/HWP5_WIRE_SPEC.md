@@ -1193,3 +1193,18 @@ omitted only with Medium size and filled=true; nondefault size/fill is kept
 as `Some(ArrowStyle { arrow_type: None, .. })` for subsequent editing.
 HWPX unknown endpoint strings use UnknownEnumValue and likewise
 omit that endpoint, rather than silently replacing its size or shape.
+
+The native `ShapeComponentArc` (0x51) is always read, both standalone and
+inside groups. Its byte type 0/1/2 maps to Normal/Pie/Chord through the same
+projection; other values are diagnosed and omitted. It defines an
+`AxisEndpoints` arc (center and two axes). Ellipse-derived arcs retain
+`EllipseSweep` (seven defining points). HWPX emission follows this definition,
+independent of rotation, reflection or parent.
+
+## 27. Native arc layout and group fills (fixtures 31–32)
+
+Fixture 31 confirms the same `ShapeComponentArc` (0x51) layout for standalone
+and grouped arcs: byte 0 is the closure type; bytes 1–8, 9–16 and 17–24 are
+the center, first axis endpoint and second axis endpoint, each an `(x, y)`
+pair of little-endian i32 HWPUNIT values. The three Hancom arc-border buttons
+0 / 1 / 2 map to HWPX NORMAL / PIE / CHORD respectively.

@@ -418,33 +418,90 @@ pub(super) fn project_ellipse_run(
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
-/// Project an arc. 한컴 stores arcs inside the ellipse (`0x50`) record; we have
-/// verified the `Normal` open-arc shape end to end. Pie/chord arc types and
-/// exact arc-sweep endpoints are a future refinement that needs dedicated
-/// fixtures, so we carry a `Normal` arc sized from the bounding box rather than
-/// guess a sweep we cannot yet validate.
+pub(super) fn restore_wire_points(wire: &crate::decoder::section::Hwp5Control, core: &mut Control) {
+    use crate::decoder::section::Hwp5Control;
+    let p = |v: crate::schema::section::Hwp5ShapePoint| hwpforge_core::control::ShapePoint {
+        x: v.x,
+        y: v.y,
+    };
+    match (wire, core) {
+        (Hwp5Control::Line(w), Control::Line { start, end, .. }) => {
+            *start = p(w.start);
+            *end = p(w.end);
+        }
+        (Hwp5Control::ConnectLine(w), Control::ConnectLine { start, end, .. }) => {
+            *start = p(w.start);
+            *end = p(w.end);
+        }
+        (Hwp5Control::Polygon(w), Control::Polygon { vertices, .. }) => {
+            *vertices = w.points.iter().copied().map(p).collect();
+        }
+        (Hwp5Control::Curve(w), Control::Curve { points, .. }) => {
+            *points = w.points.iter().copied().map(p).collect();
+        }
+        (Hwp5Control::Ellipse(w), Control::Ellipse { center, axis1, axis2, .. }) => {
+            *center = p(w.shape.center);
+            *axis1 = p(w.shape.axis1);
+            *axis2 = p(w.shape.axis2);
+        }
+        (Hwp5Control::Arc(w), core @ Control::Arc { .. }) => restore_arc_points(&w.shape, core),
+        _ => {}
+    }
+}
+
+/// Build only arc semantics; placement remains the caller's responsibility.
+pub(super) fn wire_arc(
+    shape: &crate::schema::section::Hwp5ShapeComponentEllipse,
+    width: HwpUnit,
+    height: HwpUnit,
+) -> Result<Control, String> {
+    use hwpforge_core::control::ArcDefinition;
+    let (definition, arc_type) = match shape.native_type {
+        Some(raw) => (
+            ArcDefinition::AxisEndpoints,
+            ArcType::try_from(raw).map_err(|_| {
+                format!("native arc type {raw} unsupported (expected 0–2); arc omitted")
+            })?,
+        ),
+        // Ellipse property closure semantics are not inferred from native values.
+        None => (ArcDefinition::EllipseSweep, ArcType::Normal),
+    };
+    let mut control = Control::arc(arc_type, width, height);
+    if let Control::Arc { definition: d, .. } = &mut control {
+        *d = definition;
+    }
+    restore_arc_points(shape, &mut control);
+    Ok(control)
+}
+
+fn restore_arc_points(
+    shape: &crate::schema::section::Hwp5ShapeComponentEllipse,
+    core: &mut Control,
+) {
+    if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = core {
+        *center = wire_point(shape.center);
+        *axis1 = wire_point(shape.axis1);
+        *axis2 = wire_point(shape.axis2);
+        *start1 = wire_point(shape.start1);
+        *end1 = wire_point(shape.end1);
+        *start2 = wire_point(shape.start2);
+        *end2 = wire_point(shape.end2);
+    }
+}
+
+/// Project native and ellipse-derived arcs using their stored definition points.
 pub(super) fn project_arc_run(
     arc: &Hwp5ArcControl,
     warnings: &mut Vec<Hwp5Warning>,
 ) -> Option<Run> {
     let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
-    let arc_type = match arc.shape.native_type {
-        Some(1) => ArcType::Pie,
-        Some(2) => ArcType::Chord,
-        _ => ArcType::Normal,
-    };
-    let mut control = hwpforge_core::control::Control::arc(arc_type, width, height);
+    let mut control = wire_arc(&arc.shape, width, height)
+        .map_err(|reason| {
+            super::push_projection_fallback(warnings, "shape.arc_type", reason);
+        })
+        .ok()?;
     let mut framed = control.clone();
-    if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut framed {
-        *center = wire_point(arc.shape.center);
-        *axis1 = wire_point(arc.shape.axis1);
-        *axis2 = wire_point(arc.shape.axis2);
-        *start1 = wire_point(arc.shape.start1);
-        *end1 = wire_point(arc.shape.end1);
-        *start2 = wire_point(arc.shape.start2);
-        *end2 = wire_point(arc.shape.end2);
-    }
     if frame_wire_shape(
         &mut framed,
         &arc.geometry,
@@ -453,6 +510,10 @@ pub(super) fn project_arc_run(
         warnings,
     ) {
         control = framed;
+    } else if arc.shape.native_type.is_none() {
+        // Preserve the existing ellipse-sweep fallback when its source box
+        // cannot be represented. Native axis points are never invented.
+        control = Control::arc(ArcType::Normal, width, height);
     }
     if let Control::Arc { placement, .. } = &mut control {
         *placement = shape_placement(&arc.geometry, arc.ctrl_properties, warnings);

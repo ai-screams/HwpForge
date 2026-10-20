@@ -1428,25 +1428,55 @@ pub(crate) fn decode_arc(
     char_shape_id: CharShapeIndex,
     _depth: usize,
     ctx: &mut DecodeCtx,
-) -> HwpxResult<Run> {
-    use hwpforge_core::control::ShapePoint;
-
-    let arc_type = ellipse.arc_type.parse::<ArcType>().unwrap_or(ArcType::Normal);
-
-    let center =
-        ellipse.center.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let axis1 =
-        ellipse.ax1.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let axis2 =
-        ellipse.ax2.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let start1 =
-        ellipse.start1.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let end1 =
-        ellipse.end1.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let start2 =
-        ellipse.start2.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let end2 =
-        ellipse.end2.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
+) -> HwpxResult<Option<Run>> {
+    use hwpforge_core::control::{ArcDefinition, ShapePoint};
+    let definition = if ellipse.axis_endpoints {
+        ArcDefinition::AxisEndpoints
+    } else {
+        ArcDefinition::EllipseSweep
+    };
+    let arc_type = match ellipse.arc_type.parse::<ArcType>() {
+        Ok(kind) => kind,
+        Err(_) => {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: if ellipse.axis_endpoints { "arc@type" } else { "ellipse@arcType" },
+                raw: ellipse.arc_type.clone(),
+                fallback: "arc omitted",
+            });
+            ctx.content_lost(
+                "arc",
+                format!("unsupported arc type {:?}; arc omitted", ellipse.arc_type),
+            );
+            return Ok(None);
+        }
+    };
+    let fields = [
+        ("center", &ellipse.center),
+        ("ax1", &ellipse.ax1),
+        ("ax2", &ellipse.ax2),
+        ("start1", &ellipse.start1),
+        ("end1", &ellipse.end1),
+        ("start2", &ellipse.start2),
+        ("end2", &ellipse.end2),
+    ];
+    let required = if ellipse.axis_endpoints { 3 } else { 7 };
+    let missing: Vec<_> =
+        fields[..required].iter().filter_map(|(name, p)| p.is_none().then_some(*name)).collect();
+    if !missing.is_empty() {
+        ctx.content_lost(
+            "arc",
+            format!(
+                "{definition:?} arc missing required points: {}; arc omitted",
+                missing.join(", ")
+            ),
+        );
+        return Ok(None);
+    }
+    let points: Vec<_> = fields
+        .iter()
+        .map(|(_, p)| p.as_ref().map_or(ShapePoint::new(0, 0), |p| ShapePoint::new(p.x, p.y)))
+        .collect();
+    let [center, axis1, axis2, start1, end1, start2, end2] = points[..] else { unreachable!() };
 
     let (width, height) = ellipse
         .sz
@@ -1470,6 +1500,7 @@ pub(crate) fn decode_arc(
         .transpose()?;
 
     let mut control = Control::Arc {
+        definition,
         frame: hwpforge_core::ObjectFrame::new(),
         arc_type,
         center,
@@ -1506,7 +1537,7 @@ pub(crate) fn decode_arc(
         ellipse.rendering_info.as_ref(),
         ctx,
     );
-    Ok(Run { content: RunContent::Control(Box::new(control)), char_shape_id })
+    Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
 }
 
 /// Decodes an `HxCurve` into a Core `Run` with `Control::Curve`.
@@ -2542,9 +2573,9 @@ fn decode_group_child(
             let run = if e.has_arc_pr == 1 {
                 decode_arc(e, char_shape_id, depth, ctx)?
             } else {
-                decode_ellipse(e, char_shape_id, depth, ctx)?
+                Some(decode_ellipse(e, char_shape_id, depth, ctx)?)
             };
-            take(Some(run)).map(|control| WireChild {
+            take(run).map(|control| WireChild {
                 control,
                 map: child_chain(e.rendering_info.as_ref(), e.offset.as_ref()),
                 org: org_size(e.org_sz.as_ref(), e.cur_sz.as_ref()),
@@ -3338,6 +3369,7 @@ mod tests {
 
     fn default_ellipse() -> HxEllipse {
         HxEllipse {
+            axis_endpoints: false,
             id: String::new(),
             z_order: 0,
             numbering_type: "NONE".to_string(),
@@ -3815,13 +3847,30 @@ mod tests {
         assert!(matches!(style.fill, Some(Fill::Gradient { .. })));
     }
 
+    fn complete_arc() -> HxEllipse {
+        let mut e = default_ellipse();
+        e.has_arc_pr = 1;
+        for slot in [
+            &mut e.center,
+            &mut e.ax1,
+            &mut e.ax2,
+            &mut e.start1,
+            &mut e.end1,
+            &mut e.start2,
+            &mut e.end2,
+        ] {
+            *slot = Some(HxPoint { x: 0, y: 0 });
+        }
+        e
+    }
+
     // ── decode_arc tests ─────────────────────────────────────────────
 
     #[test]
     fn decode_arc_default_fields_normal_type() {
-        let ellipse = default_ellipse();
+        let ellipse = complete_arc();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         if let Control::Arc { arc_type, center, axis1, axis2, width, height, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -3838,10 +3887,10 @@ mod tests {
 
     #[test]
     fn decode_arc_pie_type() {
-        let mut ellipse = default_ellipse();
+        let mut ellipse = complete_arc();
         ellipse.arc_type = "PIE".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(arc_type, ArcType::Pie);
         } else {
@@ -3851,10 +3900,10 @@ mod tests {
 
     #[test]
     fn decode_arc_chord_type() {
-        let mut ellipse = default_ellipse();
+        let mut ellipse = complete_arc();
         ellipse.arc_type = "CHORD".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(arc_type, ArcType::Chord);
         } else {
@@ -3864,14 +3913,14 @@ mod tests {
 
     #[test]
     fn decode_arc_with_geometry_points() {
-        let mut ellipse = default_ellipse();
+        let mut ellipse = complete_arc();
         ellipse.center = Some(HxPoint { x: 100, y: 200 });
         ellipse.ax1 = Some(HxPoint { x: 300, y: 200 });
         ellipse.ax2 = Some(HxPoint { x: 100, y: 400 });
         ellipse.start1 = Some(HxPoint { x: 50, y: 100 });
         ellipse.end1 = Some(HxPoint { x: 150, y: 100 });
         let cs = CharShapeIndex::new(2);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         assert_eq!(run.char_shape_id, cs);
         if let Control::Arc { center, axis1, axis2, start1, end1, .. } =
             run.content.as_control().unwrap().clone()
@@ -3888,11 +3937,11 @@ mod tests {
 
     #[test]
     fn decode_arc_with_size_and_offset() {
-        let mut ellipse = default_ellipse();
+        let mut ellipse = complete_arc();
         ellipse.sz = Some(make_sz(5000, 3000));
         ellipse.pos = Some(make_pos(100, 200));
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         if let Control::Arc { width, height, placement, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -3908,11 +3957,11 @@ mod tests {
 
     #[test]
     fn decode_arc_with_rotation_style() {
-        let mut ellipse = default_ellipse();
+        let mut ellipse = complete_arc();
         ellipse.rotation_info =
             Some(HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 });
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap().unwrap();
         if let Control::Arc { style, .. } = run.content.as_control().unwrap().clone() {
             let s = style.unwrap();
             let rot = s.rotation.unwrap();
@@ -3922,16 +3971,47 @@ mod tests {
         }
     }
 
+    /// 이것을 실패시키는 것: 모르는 호 종류를 Normal로 대체하기.
     #[test]
-    fn decode_arc_unknown_type_falls_back_to_normal() {
-        let mut ellipse = default_ellipse();
-        ellipse.arc_type = "BOGUS".to_string();
-        let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
-            assert_eq!(arc_type, ArcType::Normal);
-        } else {
-            panic!("expected Control::Arc");
+    fn decode_arc_unknown_type_is_reported_and_omitted() {
+        for native in [false, true] {
+            let mut ellipse = complete_arc();
+            ellipse.axis_endpoints = native;
+            ellipse.arc_type = "BOGUS".to_string();
+            let mut ctx = DecodeCtx::new(0);
+            assert!(decode_arc(&ellipse, CharShapeIndex::new(0), 0, &mut ctx).unwrap().is_none());
+            assert!(ctx.warnings.iter().any(|w| matches!(w, super::super::DecodeWarning::UnknownEnumValue { attribute, raw, fallback } if *attribute == if native { "arc@type" } else { "ellipse@arcType" } && raw == "BOGUS" && *fallback == "arc omitted")));
+        }
+    }
+
+    /// 이것을 실패시키는 것: 필수 점 누락을 (0,0)으로 채우기, 축 끝점 호에 sweep을 요구하기.
+    #[test]
+    fn decode_arc_checks_only_active_required_points() {
+        for native in [false, true] {
+            for missing in 0..7 {
+                let mut ellipse = complete_arc();
+                ellipse.axis_endpoints = native;
+                let slots = [
+                    &mut ellipse.center,
+                    &mut ellipse.ax1,
+                    &mut ellipse.ax2,
+                    &mut ellipse.start1,
+                    &mut ellipse.end1,
+                    &mut ellipse.start2,
+                    &mut ellipse.end2,
+                ];
+                *slots.into_iter().nth(missing).unwrap() = None;
+                let mut ctx = DecodeCtx::new(0);
+                let run = decode_arc(&ellipse, CharShapeIndex::new(0), 0, &mut ctx).unwrap();
+                let required = !native || missing < 3;
+                assert_eq!(run.is_none(), required);
+                if required {
+                    assert!(ctx
+                        .warnings
+                        .iter()
+                        .any(|w| format!("{w:?}").contains("missing required points")));
+                }
+            }
         }
     }
 

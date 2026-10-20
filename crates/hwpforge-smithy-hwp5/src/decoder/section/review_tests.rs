@@ -2405,3 +2405,144 @@ fn standalone_native_arc_keeps_its_kind_when_the_matrix_is_truncated() {
     assert_eq!(arcs,1);
     assert!(warnings.iter().any(|w|matches!(w,crate::Hwp5Warning::ContentLost { kind,reason,.. } if kind=="shape_transform" && reason.contains("matrix chain:"))));
 }
+
+/// 이것을 실패시키는 것: native 호 읽기를 회전 또는 화살표 존재에 종속시키기.
+#[test]
+fn unturned_native_arc_is_read_without_arrows() {
+    for properties in [
+        0u32,
+        (4 << 22) | (4 << 26) | (3 << 30),
+        1 << 10,
+        1 << 16,
+        7 << 16,
+    ] {
+        let mut render = shape_component_render_data(b"cra$", true, 0, (1000, 1000), 0.0);
+        let props_at = render.len() - 17 + 8;
+        render[props_at..props_at + 4].copy_from_slice(&properties.to_le_bytes());
+        let mut arc = vec![0u8];
+        for v in [0i32, 0, 1000, 0, 0, 1000] {
+            arc.extend(v.to_le_bytes());
+        }
+        let mut wire = make_record(TagId::ParaHeader, 0, &para_header_data(0, 0));
+        wire.extend(make_record(
+            TagId::ParaText,
+            1,
+            &para_text_with_control_ref("", ""),
+        ));
+        wire.extend(make_record(
+            TagId::CtrlHeader,
+            1,
+            &gso_ctrl_header_data(0, 0, 1000, 1000),
+        ));
+        wire.extend(make_record(TagId::ShapeComponent, 2, &render));
+        wire.extend(make_record(TagId::ShapeComponentArc, 2, &arc));
+        let parsed = parse_body_text(&wire, &version()).unwrap();
+        let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+        let mut arcs = 0;
+        doc.for_each_paragraph(|p| {
+            for run in &p.runs {
+                if let hwpforge_core::RunContent::Control(c) = &run.content {
+                    if matches!(c.as_ref(), hwpforge_core::Control::Arc { .. }) {
+                        arcs += 1;
+                    }
+                }
+            }
+        });
+        assert_eq!(arcs, 1);
+        if properties == 7 << 16 {
+            assert!(warnings
+                .iter()
+                .any(|w| format!("{w:?}").contains("tail arrow shape 7")));
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: native 3 이상을 Normal로 대체하거나 잘림을 일반 UnsupportedTag로만 보고하기.
+#[test]
+fn native_arc_bad_type_and_truncation_are_specific_in_both_hosts() {
+    for grouped in [false, true] {
+        for (kind, len, ellipse) in [
+            (3, 25, false),
+            (255, 25, false),
+            (0, 24, false),
+            (0, 0, false),
+            (2, 59, true),
+        ] {
+            let mut wire = make_record(TagId::ParaHeader, 0, &para_header_data(0, 0));
+            wire.extend(make_record(
+                TagId::ParaText,
+                1,
+                &para_text_with_control_ref("", ""),
+            ));
+            wire.extend(make_record(
+                TagId::CtrlHeader,
+                1,
+                &gso_ctrl_header_data(0, 0, 1000, 1000),
+            ));
+            if grouped {
+                wire.extend(make_record(
+                    TagId::ShapeComponent,
+                    2,
+                    &shape_component_render_data(
+                        &SHAPE_COMPONENT_TYPE_GROUP,
+                        true,
+                        0,
+                        (1000, 1000),
+                        0.0,
+                    ),
+                ));
+            }
+            let level = if grouped { 3 } else { 2 };
+            wire.extend(make_record(
+                TagId::ShapeComponent,
+                level,
+                &shape_component_render_data(
+                    b"cra$",
+                    !grouped,
+                    u16::from(grouped),
+                    (1000, 1000),
+                    0.0,
+                ),
+            ));
+            let mut data = vec![kind];
+            for v in [0i32, 0, 1000, 0, 0, 1000] {
+                data.extend(v.to_le_bytes());
+            }
+            data.truncate(len);
+            if ellipse {
+                data.resize(len, 0);
+            }
+            wire.extend(make_record(
+                if ellipse {
+                    TagId::ShapeComponentEllipse
+                } else {
+                    TagId::ShapeComponentArc
+                },
+                level + 1,
+                &data,
+            ));
+            let parsed = parse_body_text(&wire, &version()).unwrap();
+            let parse_warnings = format!("{:?}", parsed.warnings);
+            let (_, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+            let warnings = format!("{parse_warnings} {warnings:?}");
+            assert!(
+                warnings.contains(if ellipse {
+                    "shape.ellipse_record"
+                } else if len < 25 {
+                    "shape.arc_record"
+                } else {
+                    "shape.arc_type"
+                }),
+                "{grouped} {kind} {len}: {warnings}"
+            );
+            assert!(
+                warnings.contains(&if ellipse || len < 25 {
+                    format!("{len} bytes")
+                } else {
+                    format!("native arc type {kind}")
+                }),
+                "{warnings}"
+            );
+        }
+    }
+}

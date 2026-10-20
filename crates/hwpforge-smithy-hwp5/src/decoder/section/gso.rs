@@ -493,12 +493,24 @@ impl GsoGroupBuilder {
                     }),
                 }
             }
+            TagId::ShapeComponentArc if own => {
+                match Hwp5ShapeComponentEllipse::parse_arc(&record.data) {
+                    Ok(arc) => child.ellipse = Some(arc),
+                    Err(e) => warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "shape.arc_record",
+                        reason: format!(
+                            "native arc record ({} bytes, expected at least 25): {e}",
+                            record.data.len()
+                        ),
+                    }),
+                }
+            }
             TagId::ShapeComponentEllipse if own => {
                 match Hwp5ShapeComponentEllipse::parse(&record.data) {
                     Ok(ellipse) => child.ellipse = Some(ellipse),
-                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
-                        tag_id: record.header.tag_id,
-                        offset: 0,
+                    Err(e) => warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "shape.ellipse_record",
+                        reason: format!("ellipse/arc record: {e}"),
                     }),
                 }
             }

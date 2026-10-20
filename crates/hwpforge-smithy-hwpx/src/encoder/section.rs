@@ -1370,40 +1370,12 @@ fn build_runs(
                     }
                     Control::Arc { .. } => {
                         ledger.token(hwpforge_core::layout::WireTokenKind::Shape);
-                        let mut hx =
+                        let hx =
                             encode_arc_to_hx(ctrl, false, depth, hyperlink_entries, options, sink)?;
-                        // A native axis-defined arc has no ellipse sweep points.
-                        // Keep its native wire kind using the existing XML replacement
-                        // channel, without consuming another object/field identifier.
-                        if let Control::Arc { start1, end1, start2, end2, style, .. } =
-                            ctrl.as_ref()
-                        {
-                            if [start1, end1, start2, end2].iter().all(|p| p.x == 0 && p.y == 0)
-                                && style.as_ref().is_some_and(|s| {
-                                    super::standalone::transformed(s.rotation, s.flip)
-                                })
-                            {
-                                let from = super::shapes::serialize_with_root(&hx, "hp:ellipse")?;
-                                // Only this object's sweep fields and root attributes change.
-                                // Moving fields avoids cloning nested caption/content trees.
-                                let sweep = (
-                                    hx.start1.take(),
-                                    hx.end1.take(),
-                                    hx.start2.take(),
-                                    hx.end2.take(),
-                                );
-                                let native = super::shapes::serialize_with_root(&hx, "hp:arc")?;
-                                (hx.start1, hx.end1, hx.start2, hx.end2) = sweep;
-                                let (root, children) =
-                                    native.split_once('>').expect("serialized root");
-                                let to = format!(
-                                    "{}>{children}",
-                                    root.replace(" arcType=", " type=")
-                                        .replace(" intervalDirty=\"0\"", "")
-                                        .replace(" hasArcPr=\"1\"", "")
-                                );
-                                hyperlink_entries.push((from, to));
-                            }
+                        if hx.axis_endpoints {
+                            let from = super::shapes::serialize_with_root(&hx, "hp:ellipse")?;
+                            let to = super::shapes::serialize_arc(&hx)?;
+                            hyperlink_entries.push((from, to));
                         }
                         ellipses.push(hx);
                     }

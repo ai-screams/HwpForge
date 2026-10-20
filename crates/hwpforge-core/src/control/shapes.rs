@@ -12,6 +12,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
+/// The defining geometry of an arc, independent of closure, rotation and parent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ArcDefinition {
+    /// An ellipse and four sweep points: all seven points define the arc.
+    /// This is the meaning of `Control::arc()` and of a missing serde field.
+    #[default]
+    EllipseSweep,
+    /// Center and two axis endpoints define the arc. The remaining four
+    /// sweep points are unused, even when their stored values are nonzero.
+    AxisEndpoints,
+}
+
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
 ///
 /// Uses `i32` (not `HwpUnit`) because shape geometry points are raw

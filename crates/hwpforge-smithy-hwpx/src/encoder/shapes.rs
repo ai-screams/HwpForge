@@ -834,6 +834,7 @@ pub(crate) fn encode_ellipse_to_hx(
     };
 
     Ok(HxEllipse {
+        axis_endpoints: false,
         id: generate_instid(),
         z_order: 0,
         numbering_type: shape_numbering_type(placement.as_ref()),
@@ -1013,6 +1014,7 @@ pub(crate) fn encode_arc_to_hx(
         style,
     ) = match ctrl {
         Control::Arc {
+            definition: _,
             frame: _,
             arc_type,
             center,
@@ -1043,6 +1045,10 @@ pub(crate) fn encode_arc_to_hx(
     let arc = plan.points();
 
     Ok(HxEllipse {
+        axis_endpoints: matches!(
+            ctrl,
+            Control::Arc { definition: hwpforge_core::control::ArcDefinition::AxisEndpoints, .. }
+        ),
         id: generate_instid(),
         z_order: 0,
         numbering_type: shape_numbering_type(placement.as_ref()),
@@ -1083,11 +1089,26 @@ pub(crate) fn encode_arc_to_hx(
         center: Some(HxPoint { x: arc[0].x, y: arc[0].y }),
         ax1: Some(HxPoint { x: arc[1].x, y: arc[1].y }),
         ax2: Some(HxPoint { x: arc[2].x, y: arc[2].y }),
-        start1: Some(HxPoint { x: arc[3].x, y: arc[3].y }),
-        end1: Some(HxPoint { x: arc[4].x, y: arc[4].y }),
-        start2: Some(HxPoint { x: arc[5].x, y: arc[5].y }),
-        end2: Some(HxPoint { x: arc[6].x, y: arc[6].y }),
+        start1: arc.get(3).map(|p| HxPoint { x: p.x, y: p.y }),
+        end1: arc.get(4).map(|p| HxPoint { x: p.x, y: p.y }),
+        start2: arc.get(5).map(|p| HxPoint { x: p.x, y: p.y }),
+        end2: arc.get(6).map(|p| HxPoint { x: p.x, y: p.y }),
     })
+}
+
+/// Serialize both arc definitions identically for standalone and group children.
+pub(crate) fn serialize_arc(hx: &HxEllipse) -> HwpxResult<String> {
+    if !hx.axis_endpoints {
+        return serialize_with_root(hx, "hp:ellipse");
+    }
+    let xml = serialize_with_root(hx, "hp:arc")?;
+    let (root, children) = xml.split_once('>').expect("serialized arc root");
+    Ok(format!(
+        "{}>{children}",
+        root.replace(" arcType=", " type=")
+            .replace(" intervalDirty=\"0\"", "")
+            .replace(" hasArcPr=\"1\"", "")
+    ))
 }
 
 /// Encodes a Core `Control::Curve` into `HxCurve`.
@@ -1641,7 +1662,7 @@ fn encode_group_child_xml(
         Control::Arc { .. } => {
             let mut hx = encode_arc_to_hx(child, true, depth, hyperlink_entries, options, sink)?;
             (hx.sz, hx.pos) = (None, None);
-            serialize_with_root(&hx, "hp:ellipse")?
+            serialize_arc(&hx)?
         }
         Control::Polygon { .. } => {
             let mut hx =
@@ -3013,6 +3034,7 @@ mod tests {
     #[test]
     fn encode_arc_has_arc_pr_flag_set() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
@@ -3044,6 +3066,7 @@ mod tests {
     #[test]
     fn encode_arc_type_pie_encoded() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Pie,
             center: ShapePoint::new(0, 0),
@@ -3075,6 +3098,7 @@ mod tests {
     #[test]
     fn encode_arc_geometry_points_preserved() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(100, 200),
@@ -3113,6 +3137,7 @@ mod tests {
     #[test]
     fn encode_arc_size_preserved() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
@@ -3153,6 +3178,7 @@ mod tests {
     #[test]
     fn encode_arc_shape_comment_is_ho() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),
@@ -3184,6 +3210,7 @@ mod tests {
     #[test]
     fn encode_arc_draw_text_is_none() {
         let ctrl = Control::Arc {
+            definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
             frame: hwpforge_core::ObjectFrame::new(),
             arc_type: ArcType::Normal,
             center: ShapePoint::new(0, 0),

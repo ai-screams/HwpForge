@@ -2889,6 +2889,7 @@ mod tests {
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
                 Control::Arc {
+                    definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
                     frame: hwpforge_core::ObjectFrame::new(),
                     arc_type: hwpforge_foundation::ArcType::Normal,
                     center: ShapePoint { x: 500, y: 300 },

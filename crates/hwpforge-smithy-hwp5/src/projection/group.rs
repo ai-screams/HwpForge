@@ -37,7 +37,7 @@ use hwpforge_core::control::geometry::{
 use hwpforge_core::control::{Control, GroupChild, ShapePoint};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::ObjectId;
-use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
+use hwpforge_foundation::{CharShapeIndex, CurveSegmentType, HwpUnit};
 
 use crate::ctrl_ids::{CTRL_ID_EQED, CTRL_ID_GSO, CTRL_ID_TABLE};
 use crate::decoder::section::{
@@ -693,19 +693,9 @@ fn wire_local_control(
             }
             c
         }
-        Hwp5Control::Arc(a) => {
-            let mut c = Control::arc(ArcType::Normal, width, height);
-            if let Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } = &mut c {
-                *center = point(a.shape.center);
-                *axis1 = point(a.shape.axis1);
-                *axis2 = point(a.shape.axis2);
-                *start1 = point(a.shape.start1);
-                *end1 = point(a.shape.end1);
-                *start2 = point(a.shape.start2);
-                *end2 = point(a.shape.end2);
-            }
-            c
-        }
+        Hwp5Control::Arc(a) => super::shapes::wire_arc(&a.shape, width, height)
+            .map_err(|reason| notes.push(note("shape.arc_type", reason)))
+            .ok()?,
         Hwp5Control::Polygon(p) => {
             match Control::polygon(p.points.iter().copied().map(point).collect()) {
                 Ok(c) => c,

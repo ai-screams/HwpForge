@@ -1202,6 +1202,9 @@ impl Hwp5ShapeComponentEllipse {
     }
 
     /// A native Arc (0x51): type byte followed by centre and two axes.
+    /// This internal carrier reuses ellipse storage; property=2 routes it as an
+    /// arc, while native_type distinguishes AxisEndpoints from EllipseSweep.
+    /// The four zero sweep slots are unused, not inferred defining points.
     pub(crate) fn parse_arc(data: &[u8]) -> Hwp5Result<Self> {
         if data.len() < 25 {
             return Err(Hwp5Error::RecordParse {

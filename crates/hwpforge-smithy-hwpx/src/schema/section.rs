@@ -457,6 +457,7 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                     // A run child is a paragraph object. Direct group children are
                     // parsed by HxContainerChildDe, regardless of this cached level.
                     x.has_arc_pr = 1;
+                    x.axis_endpoints = true;
                     run.child_order.push((K::Ellipse, run.ellipses.len()));
                     run.ellipses.push(*x);
                 }
@@ -757,6 +758,8 @@ enum HxContainerChildDe {
     Rect(Box<HxRect>),
     #[serde(rename = "line")]
     Line(Box<HxLine>),
+    #[serde(rename = "arc")]
+    Arc(Box<HxEllipse>),
     #[serde(rename = "ellipse")]
     Ellipse(Box<HxEllipse>),
     #[serde(rename = "polygon")]
@@ -833,6 +836,12 @@ impl<'de> serde::Deserialize<'de> for HxContainer {
                 C::Line(x) => {
                     c.child_order.push((K::Line, c.lines.len()));
                     c.lines.push(*x);
+                }
+                C::Arc(mut x) => {
+                    x.has_arc_pr = 1;
+                    x.axis_endpoints = true;
+                    c.child_order.push((K::Ellipse, c.ellipses.len()));
+                    c.ellipses.push(*x);
                 }
                 C::Ellipse(x) => {
                     c.child_order.push((K::Ellipse, c.ellipses.len()));

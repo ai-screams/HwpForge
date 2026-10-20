@@ -1740,6 +1740,15 @@ pub fn defining_points(control: &Control) -> Vec<ShapePoint> {
     match control {
         Control::Line { start, end, .. } => vec![*start, *end],
         Control::Ellipse { center, axis1, axis2, .. } => vec![*center, *axis1, *axis2],
+        Control::Arc {
+            definition: super::ArcDefinition::AxisEndpoints,
+            center,
+            axis1,
+            axis2,
+            ..
+        } => {
+            vec![*center, *axis1, *axis2]
+        }
         Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
             vec![*center, *axis1, *axis2, *start1, *end1, *start2, *end2]
         }
@@ -1758,6 +1767,15 @@ fn defining_points_mut(control: &mut Control) -> Vec<&mut ShapePoint> {
     match control {
         Control::Line { start, end, .. } => vec![start, end],
         Control::Ellipse { center, axis1, axis2, .. } => vec![center, axis1, axis2],
+        Control::Arc {
+            definition: super::ArcDefinition::AxisEndpoints,
+            center,
+            axis1,
+            axis2,
+            ..
+        } => {
+            vec![center, axis1, axis2]
+        }
         Control::Arc { center, axis1, axis2, start1, end1, start2, end2, .. } => {
             vec![center, axis1, axis2, start1, end1, start2, end2]
         }

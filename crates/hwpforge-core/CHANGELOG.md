@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `Control::Arc`에 `definition: ArcDefinition` 필드를 추가한다. 구조체 리터럴은 정의 방식을 지정해야 한다. `Control::arc()`와 JSON·lossless MD의 필드 생략은 기존 `EllipseSweep` 의미를 유지한다. `AxisEndpoints`는 중심·두 축점만 사용하며 나머지 네 점은 미사용이다.
 - `ArrowStyle::into_nondefault()`로 HWP5·HWPX가 같은 기본값 판정을 쓴다. `Some`인 스타일의 `ArrowType::None`은 머리를 그리지 않으며 이후 편집에 쓰이는 크기·채움을 보존한다. 없음+Medium+filled는 기존처럼 `None`이다.
 
 ## [0.16.9](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.16.8...hwpforge-core-v0.16.9) - 2026-10-03

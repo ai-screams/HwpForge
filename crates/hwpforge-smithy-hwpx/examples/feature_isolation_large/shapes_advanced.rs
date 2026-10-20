@@ -91,6 +91,7 @@ fn append_arc_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             paras,
             label,
             Control::Arc {
+                definition: hwpforge_core::control::ArcDefinition::EllipseSweep,
                 frame: hwpforge_core::ObjectFrame::new(),
                 arc_type,
                 center: ShapePoint::new(4000, 4000),
