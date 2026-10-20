@@ -488,6 +488,9 @@ pub(crate) enum Piece<M> {
     Text(String),
     /// The encoder's markup, written as it is.
     Markup(M),
+    /// Block markup. The piece writer supplies both boundaries outside cells;
+    /// inside a cell the producer's cell-safe representation is kept as is.
+    Block(M),
 }
 
 impl<M> Piece<M> {
@@ -495,6 +498,7 @@ impl<M> Piece<M> {
         match self {
             Piece::Text(t) => Piece::Text(t),
             Piece::Markup(m) => Piece::Markup(f(m)),
+            Piece::Block(m) => Piece::Block(f(m)),
         }
     }
 }
@@ -541,6 +545,14 @@ fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, Fen
         let (s, is_markup) = match piece {
             Piece::Text(t) => (lines(t).into_owned(), false),
             Piece::Markup(m) => (m.clone(), true),
+            // One join contract for tables, captions and blocks propagated
+            // through containers, including already formatted paragraph text.
+            // Empty captions must not split adjacent inline pieces.
+            // 이것을 실패시키는 것: 블록 앞/뒤 경계 삭제, 빈 블록 경계 생성, Cell에 경계 적용.
+            Piece::Block(m) if !cell && !m.trim().is_empty() => {
+                (format!("\n\n{}\n\n", m.trim_matches('\n')), true)
+            }
+            Piece::Block(m) => (m.clone(), true),
         };
         for c in s.chars() {
             chars.push(c);

@@ -148,25 +148,65 @@ fn encode_paragraph(
 ) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
-            RunContent::Table(table) => {
-                let mut md: Md = table_to_markdown(table, warnings, destinations, 0);
-                md.push(lossy_caption(table.caption.as_ref(), warnings, destinations, 0));
-                return md.into_string();
-            }
-            RunContent::Image(image) => {
-                let mut md = Md::image(
-                    Md::lossy_label(&image_alt_text(&image.path)),
-                    &image.path,
-                    destinations,
-                );
-                md.push(lossy_caption(image.caption.as_ref(), warnings, destinations, 0));
-                return md.into_string();
+            RunContent::Table(_) | RunContent::Image(_) => {
+                // Standalone objects keep their existing style exemption, but
+                // use the same piece writer as mixed paragraphs and containers.
+                return paragraph_text_markdown(paragraph, warnings, destinations)
+                    .as_str()
+                    .trim_matches('\n')
+                    .to_string();
             }
             _ => {}
         }
     }
 
-    let text = paragraph_text_markdown(paragraph, warnings, destinations).into_string();
+    // Keep the existing raw-text code projection and unstyled paragraph path.
+    if mapping.is_none()
+        || mapping
+            .is_some_and(|m| m.classify_para_shape(paragraph.para_shape_id) == ParagraphKind::Code)
+    {
+        return format_paragraph_text(
+            paragraph_text_markdown(paragraph, warnings, destinations).into_string(),
+            paragraph,
+            mapping,
+            registry,
+        );
+    }
+
+    let pieces = paragraph_pieces_at::<Md>(paragraph, warnings, destinations, 0);
+    let mut out = Vec::new();
+    let mut inline = Vec::new();
+    let flush_inline = |inline: &mut Vec<Piece<Md>>, out: &mut Vec<Piece<Md>>| {
+        let text = Md::from_pieces(std::mem::take(inline));
+        if !text.as_str().trim().is_empty() {
+            out.push(Piece::Markup(
+                text.layout(|text| format_paragraph_text(text, paragraph, mapping, registry)),
+            ));
+        }
+    };
+    for piece in pieces {
+        match piece {
+            // Preserve block identity until the common piece writer joins it
+            // to the formatted inline pieces; do not infer it from whitespace.
+            // 이것을 실패시키는 것: 블록을 Markup으로 낮춰 캡션 뒤 접두사 경계 우회.
+            Piece::Block(block) if !block.as_str().trim().is_empty() => {
+                flush_inline(&mut inline, &mut out);
+                out.push(Piece::Block(block));
+            }
+            Piece::Block(_) => {}
+            piece => inline.push(piece),
+        }
+    }
+    flush_inline(&mut inline, &mut out);
+    Md::from_pieces(out).into_string()
+}
+
+fn format_paragraph_text(
+    text: String,
+    paragraph: &Paragraph,
+    mapping: Option<&MdMapping>,
+    registry: Option<&StyleRegistry>,
+) -> String {
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
@@ -258,6 +298,8 @@ fn raw_text(paragraph: &Paragraph) -> String {
 /// paragraph's pieces ([`Sink::from_pieces`]), escaped once for the place
 /// it lands.
 trait Sink: Default + Sized {
+    /// Tables open blocks only outside a GFM cell.
+    const BLOCK_TABLES: bool;
     /// The paragraph written from its pieces.
     fn from_pieces(pieces: Vec<Piece<Self>>) -> Self;
     /// Markup the encoder made, for this place.
@@ -271,6 +313,8 @@ trait Sink: Default + Sized {
 }
 
 impl Sink for Md {
+    const BLOCK_TABLES: bool = true;
+
     fn from_pieces(pieces: Vec<Piece<Self>>) -> Self {
         Md::lossy_paragraph(pieces)
     }
@@ -289,6 +333,8 @@ impl Sink for Md {
 }
 
 impl Sink for Cell {
+    const BLOCK_TABLES: bool = false;
+
     fn from_pieces(pieces: Vec<Piece<Self>>) -> Self {
         Cell::lossy_paragraph(pieces)
     }
@@ -329,6 +375,15 @@ fn paragraph_text_at<S: Sink>(
     destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
+    S::from_pieces(paragraph_pieces_at(paragraph, warnings, destinations, depth))
+}
+
+fn paragraph_pieces_at<S: Sink>(
+    paragraph: &Paragraph,
+    warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
+    depth: usize,
+) -> Vec<Piece<S>> {
     let paragraph = hwpforge_core::field_view::expand_memos(paragraph);
     let mut pieces: Vec<Piece<S>> = Vec::new();
     let text = |pieces: &mut Vec<Piece<S>>, t: &str| match pieces.last_mut() {
@@ -338,12 +393,13 @@ fn paragraph_text_at<S: Sink>(
     let written = |pieces: &[Piece<S>]| {
         pieces.iter().any(|p| match p {
             Piece::Text(t) => !t.is_empty(),
-            Piece::Markup(m) => !m.as_str().is_empty(),
+            Piece::Markup(m) | Piece::Block(m) => !m.as_str().is_empty(),
         })
     };
 
-    // A group is drawn as its children (WS): body, table cells and captions
-    // come through here; the plain-text paths (notes, text boxes) do not.
+    // Every readable container uses this traversal, including groups inside
+    // shapes and notes. The document preflight bounds total container depth;
+    // `depth` separately tracks the table budget, even through shapes/notes.
     for (part, _) in super::spread_groups(&paragraph.runs) {
         match part {
             // Markdown cannot represent inline tab attributes, so any
@@ -363,7 +419,7 @@ fn paragraph_text_at<S: Sink>(
                 }
                 let alt = Md::lossy_label(&image_alt_text(&image.path));
                 pieces.push(Piece::Markup(S::from_md(Md::image(alt, &image.path, destinations))));
-                pieces.push(Piece::Markup(lossy_caption(
+                pieces.push(Piece::Block(lossy_caption(
                     image.caption.as_ref(),
                     warnings,
                     destinations,
@@ -383,29 +439,23 @@ fn paragraph_text_at<S: Sink>(
                         text(&mut pieces, label);
                     }
                 }
-                Control::Footnote { paragraphs, .. } => {
-                    let footnote = paragraphs
-                        .iter()
-                        .map(Paragraph::text_content)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    text(&mut pieces, &format!("(footnote: {})", footnote.trim()));
-                }
-                Control::Endnote { paragraphs, .. } => {
-                    let endnote = paragraphs
-                        .iter()
-                        .map(Paragraph::text_content)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    text(&mut pieces, &format!("(endnote: {})", endnote.trim()));
-                }
-                Control::TextBox { paragraphs, .. } => {
-                    let body = paragraphs
-                        .iter()
-                        .map(Paragraph::text_content)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    text(&mut pieces, body.trim());
+                Control::Footnote { paragraphs, .. }
+                | Control::Endnote { paragraphs, .. }
+                | Control::TextBox { paragraphs, .. }
+                | Control::Ellipse { paragraphs, .. }
+                | Control::Polygon { paragraphs, .. } => {
+                    let prefix = match control {
+                        Control::Footnote { .. } => Some("(footnote: "),
+                        Control::Endnote { .. } => Some("(endnote: "),
+                        _ => None,
+                    };
+                    if let Some(prefix) = prefix {
+                        text(&mut pieces, prefix);
+                    }
+                    pieces.extend(container_pieces_at(paragraphs, warnings, destinations, depth));
+                    if prefix.is_some() {
+                        text(&mut pieces, ")");
+                    }
                 }
                 Control::Unknown { tag, .. } => {
                     let code = Md::code_span(&format!("[{tag}]"));
@@ -413,17 +463,6 @@ fn paragraph_text_at<S: Sink>(
                 }
                 Control::Line { .. } => {
                     // Lines have no text content to render in lossy mode
-                }
-                Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
-                    // Render any text content inside the shape
-                    let body = paragraphs
-                        .iter()
-                        .map(Paragraph::text_content)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    if !body.trim().is_empty() {
-                        text(&mut pieces, body.trim());
-                    }
                 }
                 Control::Dutmal { main_text, sub_text, .. } => {
                     text(&mut pieces, &format!("{main_text}({sub_text})"));
@@ -445,11 +484,15 @@ fn paragraph_text_at<S: Sink>(
                 }
             },
             Part::Table(table) => {
-                if written(&pieces) {
-                    pieces.push(Piece::Markup(S::from_md(Md::syntax("\n"))));
+                // The common piece writer owns Markdown block boundaries.
+                // Cells retain their existing inline nested-table separator.
+                let mut block = S::default();
+                if !S::BLOCK_TABLES && written(&pieces) {
+                    block.append(S::from_md(Md::syntax("\n")));
                 }
-                pieces.push(Piece::Markup(table_to_markdown(table, warnings, destinations, depth)));
-                pieces.push(Piece::Markup(lossy_caption(
+                block.append(table_to_markdown(table, warnings, destinations, depth));
+                pieces.push(Piece::Block(block));
+                pieces.push(Piece::Block(lossy_caption(
                     table.caption.as_ref(),
                     warnings,
                     destinations,
@@ -458,7 +501,49 @@ fn paragraph_text_at<S: Sink>(
             }
         }
     }
-    S::from_pieces(pieces)
+    pieces
+}
+
+/// Keep child text as pieces until its enclosing paragraph escapes it once.
+/// This also checks markup split across container boundaries as one paragraph.
+/// 이것을 실패시키는 것: 얕은 text_content 복귀, 표 깊이 초기화, 재escape.
+fn container_pieces_at<S: Sink>(
+    paragraphs: &[Paragraph],
+    warnings: &mut Vec<super::MdWarning>,
+    destinations: &mut std::collections::HashSet<String>,
+    depth: usize,
+) -> Vec<Piece<S>> {
+    let mut pieces = Vec::new();
+    for (index, paragraph) in paragraphs.iter().enumerate() {
+        if index > 0 {
+            pieces.push(Piece::Text(" ".into()));
+        }
+        pieces.extend(paragraph_pieces_at::<S>(paragraph, warnings, destinations, depth));
+    }
+    // Preserve the old shape/note body's trim, including whitespace-only boxes.
+    for piece in &mut pieces {
+        match piece {
+            Piece::Text(text) => {
+                *text = text.trim_start().to_string();
+                if !text.is_empty() {
+                    break;
+                }
+            }
+            Piece::Markup(_) | Piece::Block(_) => break,
+        }
+    }
+    for piece in pieces.iter_mut().rev() {
+        match piece {
+            Piece::Text(text) => {
+                *text = text.trim_end().to_string();
+                if !text.is_empty() {
+                    break;
+                }
+            }
+            Piece::Markup(_) | Piece::Block(_) => break,
+        }
+    }
+    pieces
 }
 
 /// A picture's or table's caption as a paragraph after it, empty without
@@ -472,16 +557,18 @@ fn lossy_caption<S: Sink>(
     destinations: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> S {
-    let mut out = S::default();
-    let Some(caption) = caption else { return out };
+    let mut pieces = Vec::new();
+    let Some(caption) = caption else { return S::default() };
     for p in &caption.paragraphs {
         let text: S = paragraph_text_at(p, warnings, destinations, depth);
         if !text.as_str().trim().is_empty() {
-            out.append(S::from_md(Md::syntax("\n\n")));
-            out.append(text);
+            if !S::BLOCK_TABLES {
+                pieces.push(Piece::Markup(S::from_md(Md::syntax("\n\n"))));
+            }
+            pieces.push(Piece::Block(text));
         }
     }
-    out
+    S::from_pieces(pieces)
 }
 
 /// A table inside `depth` tables, written for `S`: Markdown at the top, a
@@ -524,7 +611,7 @@ fn table_to_markdown<S: Sink>(
         warnings.push(super::MdWarning::MergedCellsFlattened { merged_cells });
     }
 
-    let rows: Vec<Vec<Cell>> = table
+    let mut rows: Vec<Vec<Cell>> = table
         .rows
         .iter()
         .map(|row| {
@@ -545,7 +632,11 @@ fn table_to_markdown<S: Sink>(
         .collect();
     // GFM always uses the first physical row as its header; row/cell title
     // markers do not change this existing readable projection.
-    let width = rows.first().map_or(1, |r| r.len().max(1));
+    // 이것을 실패시키는 것: 첫 행 너비로 복귀, 헤더/짧은 행 패딩 생략.
+    let width = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    for row in &mut rows {
+        row.resize_with(width, Cell::new);
+    }
     S::table(rows, width)
 }
 
@@ -1169,8 +1260,11 @@ mod tests {
         );
 
         let md = encode_paragraph(&paragraph, None, None, &mut Vec::new(), &mut Default::default());
-        // An empty row renders as "| |"
-        assert!(md.contains("| |"));
+        // 이것을 실패시키는 것: 빈 행 패딩 중 행/셀 누락.
+        assert_eq!(
+            gfm_blocks(&md),
+            vec![GfmBlock::Table(vec![vec!["header".into()], vec!["".into()]])]
+        );
     }
 
     #[test]
@@ -1316,12 +1410,12 @@ mod tests {
 
     /// WS: a group is drawn as its children in z-order in the body and in a
     /// table cell — picture links, a text box's text, nothing for a rectangle
-    /// or an equation, a nested group's picture; inside a text box (plain
-    /// text path) a group draws nothing.
+    /// or an equation, a nested group's picture; the same traversal applies
+    /// inside a text box.
     ///
     /// 이것을 실패시키는 것: 그림 갈래 삭제 · 중첩 재귀 삭제 · 자식 순서 뒤집기 ·
     /// 글상자 글자 갈래 삭제 · Equation 을 lossy 에서 렌더 · 표 칸 경로에서 묶음 누락 ·
-    /// 평문 경로에서 묶음을 그림.
+    /// 글상자 내부 묶음 누락.
     #[test]
     fn lossy_group_children_in_order() {
         use hwpforge_core::control::GroupChild;
@@ -1375,16 +1469,13 @@ mod tests {
             Control::text_box(vec![para(vec![t("in"), cell_group])], u(10), u(10)),
             CharShapeIndex::new(0),
         );
-        assert_eq!(doc(para(vec![in_box])), "in");
+        assert_eq!(doc(para(vec![in_box])), "in ![a](BinData/a.png)");
     }
 
-    /// S1 and S2 in lossy: a group holding a text box with only a table, or a
-    /// text box of spaces, draws nothing (the box's plain text, trimmed).
-    ///
-    /// 이것을 실패시키는 것: lossy 묶음 글상자에 `text_content` 대신 표 렌더 ·
-    /// 도형 글자 잘라내기 삭제.
+    /// A grouped text box retains its table; a whitespace-only box stays empty.
+    /// 이것을 실패시키는 것: 묶음 글상자 안 표 누락 · 표 경계 삭제 · 도형 공백 트림 삭제.
     #[test]
-    fn lossy_false_positive_shapes() {
+    fn lossy_grouped_textbox_table_and_empty_shape() {
         use hwpforge_core::control::GroupChild;
         use hwpforge_core::{Table, TableCell, TableRow};
         let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
@@ -1417,15 +1508,683 @@ mod tests {
             u(10),
             u(10),
         ));
-        assert_eq!(doc(para(vec![t("앞"), s1])), "앞");
+        assert_eq!(
+            gfm_blocks(&doc(para(vec![t("앞"), s1, t("뒤")]))),
+            vec![
+                GfmBlock::Paragraph("앞".into()),
+                GfmBlock::Table(vec![vec!["칸".into()]]),
+                GfmBlock::Paragraph("뒤".into()),
+            ]
+        );
         let s2 = grp(Control::text_box(vec![para(vec![t("  ")])], u(10), u(10)));
-        assert_eq!(doc(para(vec![t("앞"), s2, t("뒤")])), "앞뒤");
+        assert_eq!(
+            gfm_blocks(&doc(para(vec![t("앞"), s2, t("뒤")]))),
+            vec![GfmBlock::Paragraph("앞뒤".into())]
+        );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum GfmBlock {
+        Paragraph(String),
+        Table(Vec<Vec<String>>),
+    }
+
+    /// Read consumer-visible paragraphs and table cells, not source substrings.
+    fn gfm_blocks(md: &str) -> Vec<GfmBlock> {
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        let mut blocks = Vec::new();
+        for event in Parser::new_ext(md, Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS) {
+            match event {
+                Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::Item) => {
+                    if !matches!(blocks.last(), Some(GfmBlock::Paragraph(text)) if text.is_empty())
+                    {
+                        blocks.push(GfmBlock::Paragraph(String::new()));
+                    }
+                }
+                Event::Start(Tag::List(_) | Tag::BlockQuote(_) | Tag::Image { .. })
+                | Event::TaskListMarker(_) => {}
+                Event::Start(Tag::Table(_)) => blocks.push(GfmBlock::Table(Vec::new())),
+                Event::Start(Tag::TableHead | Tag::TableRow) => {
+                    let Some(GfmBlock::Table(rows)) = blocks.last_mut() else {
+                        panic!("row outside table: {md}");
+                    };
+                    rows.push(Vec::new());
+                }
+                Event::Start(Tag::TableCell) => {
+                    let Some(GfmBlock::Table(rows)) = blocks.last_mut() else {
+                        panic!("cell outside table: {md}");
+                    };
+                    rows.last_mut().unwrap().push(String::new());
+                }
+                Event::Text(text) | Event::Code(text) | Event::InlineHtml(text) => {
+                    match blocks.last_mut().unwrap() {
+                        GfmBlock::Paragraph(out) => out.push_str(&text),
+                        GfmBlock::Table(rows) => {
+                            rows.last_mut().unwrap().last_mut().unwrap().push_str(&text);
+                        }
+                    }
+                }
+                Event::SoftBreak | Event::HardBreak => match blocks.last_mut().unwrap() {
+                    GfmBlock::Paragraph(out) => out.push('\n'),
+                    GfmBlock::Table(rows) => {
+                        rows.last_mut().unwrap().last_mut().unwrap().push('\n');
+                    }
+                },
+                other => assert!(matches!(other, Event::End(_)), "unexpected {other:?}: {md}"),
+            }
+        }
+        blocks
+    }
+
+    #[test]
+    fn lossy_ragged_tables_preserve_all_parsed_cells() {
+        // 이것을 실패시키는 것: 첫 행 너비 사용, 헤더/본문 패딩 생략, 연속 표 경계 삭제.
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        let table = |rows: Vec<Vec<&str>>| {
+            Table::new(
+                rows.into_iter()
+                    .map(|row| {
+                        TableRow::new(
+                            row.into_iter()
+                                .map(|text| TableCell::new(vec![p(vec![t(text)])], u(1000)))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+        };
+        let wide = table(vec![vec!["head"], vec!["left", "LOST", "last"], vec!["short"]]);
+        let expected = GfmBlock::Table(vec![
+            vec!["head".into(), "".into(), "".into()],
+            vec!["left".into(), "LOST".into(), "last".into()],
+            vec!["short".into(), "".into(), "".into()],
+        ]);
+        // Direct body, inline body and container all use the same width policy.
+        for run in [
+            Run::table(wide.clone(), CharShapeIndex::new(0)),
+            Run::control(
+                Control::text_box(
+                    vec![p(vec![Run::table(wide.clone(), CharShapeIndex::new(0))])],
+                    u(1000),
+                    u(1000),
+                ),
+                CharShapeIndex::new(0),
+            ),
+        ] {
+            for lead in [false, true] {
+                let mut runs = Vec::new();
+                if lead {
+                    runs.push(t("LEAD"));
+                }
+                runs.push(run.clone());
+                let md = encode_without_template(&validated_document(vec![p(runs)])).unwrap();
+                let parsed = gfm_blocks(&md);
+                let mut wanted = Vec::new();
+                if lead {
+                    wanted.push(GfmBlock::Paragraph("LEAD".into()));
+                }
+                wanted.push(expected.clone());
+                assert_eq!(parsed, wanted, "{md}");
+            }
+        }
+        let md = encode_without_template(&validated_document(vec![p(vec![
+            Run::table(table(vec![vec!["A", "B"]]), CharShapeIndex::new(0)),
+            Run::table(wide.clone(), CharShapeIndex::new(0)),
+            Run::table(table(vec![vec!["END"]]), CharShapeIndex::new(0)),
+        ])]))
+        .unwrap();
+        assert_eq!(
+            gfm_blocks(&md),
+            vec![
+                GfmBlock::Table(vec![vec!["A".into(), "B".into()]]),
+                expected,
+                GfmBlock::Table(vec![vec!["END".into()]]),
+            ]
+        );
+        // A nested table stays in one outer cell; padded pipes are escaped once.
+        let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![p(vec![Run::control(
+                Control::text_box(
+                    vec![p(vec![Run::table(wide, CharShapeIndex::new(0))])],
+                    u(1000),
+                    u(1000),
+                ),
+                CharShapeIndex::new(0),
+            )])],
+            u(1000),
+        )])]);
+        let md = encode_without_template(&validated_document(vec![p(vec![Run::table(
+            outer,
+            CharShapeIndex::new(0),
+        )])]))
+        .unwrap();
+        assert_eq!(gfm_blocks(&md), vec![GfmBlock::Table(vec![vec![
+            "| head |  |  |<br>| --- | --- | --- |<br>| left | LOST | last |<br>| short |  |  |".into(),
+        ]])]);
+    }
+
+    #[test]
+    fn lossy_template_prefixes_only_format_text_around_tables() {
+        // 이것을 실패시키는 것: 표 Piece까지 제목/목록 포맷팅, 표뿐인 문단에 빈 접두사 생성.
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        let template = builtin_default().unwrap();
+        let (mapping, _) = resolve_mapping(&template).unwrap();
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, mapping.body.para_shape_id);
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        let table = || {
+            p(vec![Run::table(
+                Table::new(vec![
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("head")])], u(1000))]),
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("cell")])], u(1000))]),
+                ]),
+                CharShapeIndex::new(0),
+            )])
+        };
+        for style in [
+            mapping.heading1.para_shape_id,
+            mapping.list_item.para_shape_id,
+            mapping.task_list.unchecked[0],
+            mapping.task_list.checked[1],
+        ] {
+            for (lead, tail) in [(false, false), (false, true), (true, true)] {
+                let mut children = vec![table()];
+                if tail {
+                    children.push(p(vec![t("TAIL")]));
+                }
+                let mut runs = Vec::new();
+                if lead {
+                    runs.push(t("LEAD"));
+                }
+                runs.push(Run::control(
+                    Control::text_box(children, u(1000), u(1000)),
+                    CharShapeIndex::new(0),
+                ));
+                let paragraph = Paragraph::with_runs(runs, style);
+                let doc = validated_document(vec![paragraph.clone()]);
+                let md = encode_with_template(&doc, &template).unwrap();
+                let body = crate::frontmatter::extract_frontmatter(&md).unwrap();
+                let mut expected = Vec::new();
+                if lead {
+                    expected.push(GfmBlock::Paragraph("LEAD".into()));
+                }
+                expected.push(GfmBlock::Table(vec![vec!["head".into()], vec!["cell".into()]]));
+                if tail {
+                    expected.push(GfmBlock::Paragraph("TAIL".into()));
+                }
+                assert_eq!(gfm_blocks(body.content), expected, "{md}");
+                let formatted = Parser::new_ext(
+                    body.content,
+                    Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+                )
+                .filter(|event| matches!(event, Event::Start(Tag::Heading { .. } | Tag::Item)))
+                .count();
+                assert_eq!(formatted, usize::from(lead) + usize::from(tail), "{md}");
+                // Exercise the mapping-only list fallback as well as registry lists.
+                if style == mapping.list_item.para_shape_id {
+                    let fallback = encode_paragraph(
+                        &paragraph,
+                        Some(&mapping),
+                        None,
+                        &mut Vec::new(),
+                        &mut Default::default(),
+                    );
+                    assert_eq!(gfm_blocks(&fallback), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_template_block_joins_preserve_captions_and_prefixes() {
+        // 이것을 실패시키는 것: 캡션/표의 Block 표시 제거, 블록 앞/뒤 경계 삭제,
+        // 포맷팅 후 공통 Piece 연결 우회, 캡션 본문에 부모 접두사 적용.
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+        for numbered in [false, true] {
+            let mut template = builtin_default().unwrap();
+            if numbered {
+                template.numberings.push(hwpforge_core::NumberingDef::default_outline());
+                template.styles.get_mut("list_item").unwrap().para_shape.as_mut().unwrap().list =
+                    Some(hwpforge_blueprint::style::PartialParagraphListRef::Number {
+                        numbering_id: 1,
+                        level: 0,
+                    });
+            }
+            let (mapping, _) = resolve_mapping(&template).unwrap();
+            let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+            let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+            let p = |runs| Paragraph::with_runs(runs, mapping.body.para_shape_id);
+            let table = || {
+                Table::new(vec![
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("head")])], u(1000))]),
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("cell")])], u(1000))]),
+                ])
+            };
+            for (style, heading, checked) in [
+                (mapping.heading1.para_shape_id, true, None),
+                (mapping.list_item.para_shape_id, false, None),
+                (mapping.task_list.unchecked[0], false, Some(false)),
+                (mapping.task_list.checked[1], false, Some(true)),
+            ] {
+                for kind in ["table-caption", "image-caption", "container-table"] {
+                    for lead in [false, true] {
+                        let caption = Caption::new(
+                            vec![p(vec![t("CAP")]), p(vec![t("CAP2")])],
+                            CaptionSide::Bottom,
+                        );
+                        let object = match kind {
+                            "table-caption" => {
+                                let mut table = table();
+                                table.caption = Some(caption);
+                                Run::table(table, CharShapeIndex::new(0))
+                            }
+                            "image-caption" => {
+                                let mut image = hwpforge_core::Image::new(
+                                    "pic.png",
+                                    u(1000),
+                                    u(1000),
+                                    hwpforge_core::ImageFormat::Png,
+                                );
+                                image.caption = Some(caption);
+                                Run::image(image, CharShapeIndex::new(0))
+                            }
+                            _ => Run::control(
+                                Control::text_box(
+                                    vec![p(vec![Run::table(table(), CharShapeIndex::new(0))])],
+                                    u(1000),
+                                    u(1000),
+                                ),
+                                CharShapeIndex::new(0),
+                            ),
+                        };
+                        let mut runs = Vec::new();
+                        if lead {
+                            runs.push(t("LEAD"));
+                        }
+                        runs.extend([object, t("TAIL")]);
+                        let doc = validated_document(vec![Paragraph::with_runs(runs, style)]);
+                        let md = encode_with_template(&doc, &template).unwrap();
+                        let body = crate::frontmatter::extract_frontmatter(&md).unwrap();
+                        let mut expected = Vec::new();
+                        if kind == "image-caption" {
+                            expected.push(GfmBlock::Paragraph(
+                                if lead { "LEAD pic" } else { "pic" }.into(),
+                            ));
+                        } else {
+                            if lead {
+                                expected.push(GfmBlock::Paragraph("LEAD".into()));
+                            }
+                            expected.push(GfmBlock::Table(vec![
+                                vec!["head".into()],
+                                vec!["cell".into()],
+                            ]));
+                        }
+                        if kind != "container-table" {
+                            expected.extend([
+                                GfmBlock::Paragraph("CAP".into()),
+                                GfmBlock::Paragraph("CAP2".into()),
+                            ]);
+                        }
+                        expected.push(GfmBlock::Paragraph("TAIL".into()));
+                        assert_eq!(gfm_blocks(body.content), expected, "{kind}: {md}");
+                        let plain = encode_without_template(&doc).unwrap();
+                        assert_eq!(gfm_blocks(&plain), expected, "{kind}: {plain}");
+                        let events: Vec<_> = Parser::new_ext(
+                            body.content,
+                            Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+                        )
+                        .collect();
+                        let formatted = 1 + usize::from(lead || kind == "image-caption");
+                        // Counts alone miss CAP becoming the heading while
+                        // TAIL falls back to a body paragraph.
+                        // 이것을 실패시키는 것: 표 캡션 Block 표시를 제거해 CAP에 접두사 적용.
+                        let mut formatted_texts = Vec::<String>::new();
+                        let mut in_formatted = false;
+                        for event in &events {
+                            match event {
+                                Event::Start(Tag::Heading { .. } | Tag::Item) => {
+                                    formatted_texts.push(String::new());
+                                    in_formatted = true;
+                                }
+                                Event::Text(text) if in_formatted => {
+                                    formatted_texts.last_mut().unwrap().push_str(text);
+                                }
+                                Event::End(TagEnd::Heading(_) | TagEnd::Item) => {
+                                    in_formatted = false;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let mut expected_formatted = Vec::new();
+                        if kind == "image-caption" {
+                            expected_formatted.push(if lead { "LEAD pic" } else { "pic" });
+                        } else if lead {
+                            expected_formatted.push("LEAD");
+                        }
+                        expected_formatted.push("TAIL");
+                        assert_eq!(formatted_texts, expected_formatted, "{kind}: {md}");
+                        assert_eq!(
+                            events
+                                .iter()
+                                .filter(|e| matches!(e, Event::Start(Tag::Heading { .. })))
+                                .count(),
+                            if heading { formatted } else { 0 },
+                            "{md}"
+                        );
+                        assert_eq!(
+                            events.iter().filter(|e| matches!(e, Event::Start(Tag::Item))).count(),
+                            if heading { 0 } else { formatted },
+                            "{md}"
+                        );
+                        if style == mapping.list_item.para_shape_id {
+                            assert_eq!(
+                                events
+                                    .iter()
+                                    .any(|e| matches!(e, Event::Start(Tag::List(Some(1))))),
+                                numbered,
+                                "{md}"
+                            );
+                        }
+                        let tasks: Vec<_> = events
+                            .iter()
+                            .filter_map(|e| match e {
+                                Event::TaskListMarker(value) => Some(*value),
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            tasks,
+                            checked.map_or_else(Vec::new, |value| vec![value; formatted]),
+                            "{md}"
+                        );
+                        let images: Vec<_> = events
+                            .iter()
+                            .filter_map(|e| match e {
+                                Event::Start(Tag::Image { dest_url, .. }) => {
+                                    Some(dest_url.as_ref())
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            images,
+                            if kind == "image-caption" { vec!["pic.png"] } else { vec![] },
+                            "{md}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_empty_captions_keep_inline_text_together() {
+        // 이것을 실패시키는 것: 빈 Block이 인라인을 나누거나 블록 경계를 생성.
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        let template = builtin_default().unwrap();
+        let (mapping, _) = resolve_mapping(&template).unwrap();
+        for caption in [
+            None,
+            Some(Caption::default()),
+            Some(Caption::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("  ", CharShapeIndex::new(0))],
+                    mapping.body.para_shape_id,
+                )],
+                CaptionSide::Bottom,
+            )),
+        ] {
+            let mut image = hwpforge_core::Image::new(
+                "pic.png",
+                hwpforge_foundation::HwpUnit::new(1000).unwrap(),
+                hwpforge_foundation::HwpUnit::new(1000).unwrap(),
+                hwpforge_core::ImageFormat::Png,
+            );
+            image.caption = caption;
+            let doc = validated_document(vec![Paragraph::with_runs(
+                vec![
+                    Run::text("LEAD", CharShapeIndex::new(0)),
+                    Run::image(image, CharShapeIndex::new(0)),
+                    Run::text("TAIL", CharShapeIndex::new(0)),
+                ],
+                mapping.heading1.para_shape_id,
+            )]);
+            let plain = encode_without_template(&doc).unwrap();
+            assert_eq!(gfm_blocks(&plain), vec![GfmBlock::Paragraph("LEAD picTAIL".into())]);
+            let md = encode_with_template(&doc, &template).unwrap();
+            let body = crate::frontmatter::extract_frontmatter(&md).unwrap();
+            assert_eq!(gfm_blocks(body.content), vec![GfmBlock::Paragraph("LEAD picTAIL".into())]);
+            assert_eq!(
+                Parser::new_ext(body.content, Options::ENABLE_TABLES)
+                    .filter(|e| matches!(e, Event::Start(Tag::Heading { .. })))
+                    .count(),
+                1,
+                "{md}"
+            );
+        }
+    }
+
+    #[test]
+    fn lossy_caption_blocks_remain_cell_safe() {
+        // 이것을 실패시키는 것: 공통 Block 연결이 Cell에도 실제 빈 줄을 삽입하거나 재escape.
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        let caption = Caption::new(vec![p(vec![t(r"CAP\a|b")])], CaptionSide::Bottom);
+        let mut image =
+            hwpforge_core::Image::new("pic.png", u(1000), u(1000), hwpforge_core::ImageFormat::Png);
+        image.caption = Some(caption.clone());
+        let mut table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![p(vec![t("inner")])],
+            u(1000),
+        )])]);
+        table.caption = Some(caption);
+        for (object, expected) in [
+            (Run::image(image, CharShapeIndex::new(0)), r"LEAD pic<br><br>CAP\a|bTAIL"),
+            (
+                Run::table(table, CharShapeIndex::new(0)),
+                r"LEAD<br>| inner |<br>| --- |<br><br>CAP\a|bTAIL",
+            ),
+        ] {
+            let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+                vec![p(vec![t("LEAD"), object, t("TAIL")])],
+                u(1000),
+            )])]);
+            let md = encode_without_template(&validated_document(vec![p(vec![Run::table(
+                outer,
+                CharShapeIndex::new(0),
+            )])]))
+            .unwrap();
+            assert_eq!(gfm_blocks(&md), vec![GfmBlock::Table(vec![vec![expected.into()]])], "{md}");
+        }
+    }
+
+    #[test]
+    fn lossy_container_table_block_boundaries() {
+        // 이것을 실패시키는 것: 표 앞/뒤 빈 줄 제거, 자식 전체를 평문 공백으로 연결.
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        let c = |control| Run::control(control, CharShapeIndex::new(0));
+        let table = || {
+            p(vec![Run::table(
+                Table::new(vec![
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("head")])], u(1000))]),
+                    TableRow::new(vec![TableCell::new(vec![p(vec![t("cell")])], u(1000))]),
+                ]),
+                CharShapeIndex::new(0),
+            )])
+        };
+        let textbox = |children| c(Control::text_box(children, u(1000), u(1000)));
+        let expected_table = || GfmBlock::Table(vec![vec!["head".into()], vec!["cell".into()]]);
+        let body = |text: &str| GfmBlock::Paragraph(text.into());
+        let cases = [
+            // r1: the second child must not become a discarded excess cell.
+            (
+                vec![textbox(vec![table(), p(vec![t("TAIL")])])],
+                vec![expected_table(), body("TAIL")],
+            ),
+            (
+                vec![t("LEAD"), textbox(vec![table()]), t("TAIL")],
+                vec![body("LEAD"), expected_table(), body("TAIL")],
+            ),
+            (
+                vec![
+                    textbox(vec![table()]),
+                    textbox(vec![table()]),
+                    textbox(vec![p(vec![t("TAIL")])]),
+                ],
+                vec![expected_table(), expected_table(), body("TAIL")],
+            ),
+            (
+                vec![c(Control::footnote(vec![table()]))],
+                vec![body("(footnote:"), expected_table(), body(")")],
+            ),
+            (
+                vec![c(Control::endnote(vec![table(), p(vec![t("TAIL")])]))],
+                vec![body("(endnote:"), expected_table(), body("TAIL)")],
+            ),
+            (
+                vec![textbox(vec![p(vec![t("LEAD")]), table(), p(vec![t("TAIL")])])],
+                vec![body("LEAD"), expected_table(), body("TAIL")],
+            ),
+            (
+                vec![t("PARENT"), textbox(vec![p(vec![t(" first")]), p(vec![t("second ")])])],
+                vec![body("PARENTfirst second")],
+            ),
+        ];
+        for (runs, expected) in cases {
+            let md = encode_without_template(&validated_document(vec![p(runs)])).unwrap();
+            assert_eq!(gfm_blocks(&md), expected, "{md}");
+        }
+
+        // 이것을 실패시키는 것: 셀 안 표에 본문 블록 경계를 적용하거나 재escape.
+        let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![p(vec![t(r"a\b|c"), textbox(vec![table(), p(vec![t("TAIL")])])])],
+            u(1000),
+        )])]);
+        let md = encode_without_template(&validated_document(vec![p(vec![Run::table(
+            outer,
+            CharShapeIndex::new(0),
+        )])]))
+        .unwrap();
+        assert_eq!(
+            gfm_blocks(&md),
+            vec![GfmBlock::Table(vec![vec![r"a\b|c| head |<br>| --- |<br>| cell | TAIL".into()]])],
+            "{md}"
+        );
+    }
+
+    #[test]
+    fn lossy_container_tables_keep_cells_and_single_escape() {
+        // 이것을 실패시키는 것: 각 컨테이너의 내부 제어 생략, 칸에서 재escape.
+        use hwpforge_core::{TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let table = Table::new(vec![TableRow::new(vec![
+            TableCell::new(vec![p(vec![Run::text("왼쪽", CharShapeIndex::new(0))])], u(1000)),
+            TableCell::new(vec![p(vec![Run::text("오른쪽", CharShapeIndex::new(0))])], u(1000)),
+        ])]);
+        let children = vec![p(vec![Run::table(table, CharShapeIndex::new(0))])];
+        let mut polygon = Control::polygon(vec![
+            hwpforge_core::control::ShapePoint::new(0, 0),
+            hwpforge_core::control::ShapePoint::new(1000, 0),
+            hwpforge_core::control::ShapePoint::new(500, 1000),
+        ])
+        .unwrap();
+        if let Control::Polygon { paragraphs, .. } = &mut polygon {
+            *paragraphs = children.clone();
+        }
+        for control in [
+            Control::text_box(children.clone(), u(1000), u(1000)),
+            Control::footnote(children.clone()),
+            Control::endnote(children.clone()),
+            Control::ellipse_with_text(u(1000), u(1000), children),
+            polygon,
+        ] {
+            let control_label = match &control {
+                Control::Footnote { .. } => Some("(footnote:"),
+                Control::Endnote { .. } => Some("(endnote:"),
+                _ => None,
+            };
+            let md = encode_without_template(&validated_document(vec![p(vec![Run::control(
+                control,
+                CharShapeIndex::new(0),
+            )])]))
+            .unwrap();
+            let expected_table = GfmBlock::Table(vec![vec!["왼쪽".into(), "오른쪽".into()]]);
+            let expected = match control_label {
+                Some(label) => vec![
+                    GfmBlock::Paragraph(label.into()),
+                    expected_table,
+                    GfmBlock::Paragraph(")".into()),
+                ],
+                None => vec![expected_table],
+            };
+            assert_eq!(gfm_blocks(&md), expected, "{md}");
+        }
+        let textbox = Control::text_box(
+            vec![p(vec![Run::text(r"a\b|c", CharShapeIndex::new(0))])],
+            u(1000),
+            u(1000),
+        );
+        let outer = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![p(vec![Run::control(textbox, CharShapeIndex::new(0))])],
+            u(1000),
+        )])]);
+        let md = encode_without_template(&validated_document(vec![p(vec![Run::table(
+            outer,
+            CharShapeIndex::new(0),
+        )])]))
+        .unwrap();
+        assert_eq!(gfm_blocks(&md), vec![GfmBlock::Table(vec![vec![r"a\b|c".into()]])]);
+    }
+
+    #[test]
+    fn lossy_table_depth_survives_textbox_and_note_boundaries() {
+        // 이것을 실패시키는 것: 글상자/각주 재귀에서 표 깊이를 0으로 초기화.
+        use hwpforge_core::{TableCell, TableRow};
+        let u = |v| hwpforge_foundation::HwpUnit::new(v).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        for count in [8, 9] {
+            let mut run = Run::text("deep cell", CharShapeIndex::new(0));
+            for index in 0..count {
+                let paragraphs = vec![p(vec![run])];
+                let container = if index % 2 == 0 {
+                    Control::text_box(paragraphs, u(1000), u(1000))
+                } else {
+                    Control::footnote(paragraphs)
+                };
+                run = Run::table(
+                    Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![p(vec![Run::control(container, CharShapeIndex::new(0))])],
+                        u(1000),
+                    )])]),
+                    CharShapeIndex::new(0),
+                );
+            }
+            let (md, warnings) =
+                encode_without_template_report(&validated_document(vec![p(vec![run])])).unwrap();
+            assert_eq!(md.contains("deep cell"), count == 8, "{md}");
+            assert_eq!(md.contains(TABLE_TOO_DEEP), count == 9);
+            assert_eq!(
+                warnings
+                    .iter()
+                    .filter(|w| matches!(w, super::super::MdWarning::ContainerTooDeep { .. }))
+                    .count(),
+                usize::from(count == 9)
+            );
+        }
     }
 
     /// A document nested past the lossless limit is refused before
-    /// drawing; at the limit it is drawn. (Notes are the nesting here: lossy
-    /// draws nested tables in time that doubles per level, an older cost
-    /// kept out of this test.)
+    /// drawing; at the limit it is drawn. Notes exercise the container limit
+    /// independently of the smaller table nesting budget.
     ///
     /// 이것을 실패시키는 것: 이 검사를 지우기.
     #[test]
