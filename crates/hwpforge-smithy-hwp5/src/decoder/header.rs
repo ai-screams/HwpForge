@@ -165,6 +165,17 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                 let id = (result.bullets.len() as u32) + 1;
                 match Hwp5RawBulletDef::parse(&record.data) {
                     Ok(bullet) => {
+                        // 이것을 실패시키는 것: 미지 확장 길이를 경고 없이 버리기.
+                        if record.data.len() > 25 {
+                            result.warnings.push(Hwp5Warning::ParserFallback {
+                                subject: "bullet.extension",
+                                reason: format!(
+                                    "bullet slot {id}: unsupported record length {} bytes; parsed 25-byte prefix, ignored {} trailing bytes",
+                                    record.data.len(),
+                                    record.data.len() - 25
+                                ),
+                            });
+                        }
                         result.bullets.push(Hwp5DocInfoBulletSlot { id, bullet: Some(bullet) });
                     }
                     Err(err) => {
@@ -504,6 +515,31 @@ mod tests {
             data.extend_from_slice(&0u16.to_le_bytes());
         }
         data
+    }
+
+    #[test]
+    fn bullet_record_lengths_preserve_slots_and_diagnose_unknown_extensions() {
+        // 이것을 실패시키는 것: 14바이트 slot 누락, 잘린 확장 기본값 대입, 미지 길이 경고 누락.
+        let base = [0x08, 0, 0, 0, 0, 0, 0x32, 0, 0xff, 0xff, 0xff, 0xff, 0xa1, 0xf0];
+        for len in 0..=28 {
+            let mut payload = base.to_vec();
+            payload.resize(len, 0);
+            let result =
+                parse_doc_info(&make_record_bytes(0x18, &payload), &HwpVersion::new(5, 0, 1, 7))
+                    .unwrap();
+            assert_eq!(result.bullets.len(), 1);
+            assert_eq!(result.bullets[0].id, 1);
+            let valid = matches!(len, 14 | 23 | 25..);
+            assert_eq!(result.bullets[0].bullet.is_some(), valid, "length {len}");
+            if !valid || len > 25 {
+                assert!(result.warnings.iter().any(|w| matches!(w,
+                    Hwp5Warning::ParserFallback { subject, reason }
+                    if subject.starts_with("bullet.") && reason.contains(&format!("{len} bytes"))
+                )), "length {len}: {:?}", result.warnings);
+            } else {
+                assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+            }
+        }
     }
 
     #[test]

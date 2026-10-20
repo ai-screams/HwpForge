@@ -400,17 +400,18 @@ impl Hwp5RawBulletDef {
     /// # Record layout (verified against real Hancom `HWPTAG_BULLET` records)
     ///
     /// The published KS X 6101 / HWP5 spec (table 42) is incomplete here. Real
-    /// records have a 23-byte base and an optional 2-byte check glyph:
+    /// HWP 5.0.1.7 records have a 14-byte glyph base. Extended records have
+    /// a 9-byte image extension and an optional 2-byte check glyph:
     ///
     /// | offset | bytes | field                                            |
     /// |--------|-------|--------------------------------------------------|
     /// | 0..12  | 12    | paragraph-head info (attribute u32 + i16 + i16 + char-shape u32) |
     /// | 12..14 | 2     | bullet glyph (WCHAR)                              |
     /// | 14..18 | 4     | image-bullet flag (INT32; 0 = glyph bullet)       |
-    /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — ALWAYS present |
+    /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — present with extension |
     /// | 23..25 | 2     | optional check-bullet glyph (WCHAR)               |
     ///
-    /// The image-bullet block is a fixed 5 bytes regardless of the flag value,
+    /// In extended records the image block is 5 bytes regardless of the flag,
     /// so `check_bullet_char` always sits at offset 23, not at a flag-dependent
     /// offset. The previous code read the block as 4 bytes and only when the
     /// flag was set, which silently dropped `checkedChar` for glyph bullets.
@@ -418,17 +419,29 @@ impl Hwp5RawBulletDef {
         const IMAGE_BLOCK_LEN: usize = 5;
         // 12 (para head) + 2 (bullet char) + 4 (image flag) + 5 (image block)
         // Optional check glyph starts at offset 23; a partial WCHAR is invalid.
-        const MIN_SIZE: usize = 23;
-        if data.len() < MIN_SIZE || data.len() == 24 {
+        // 이것을 실패시키는 것: 구형 14바이트 거부 또는 잘린 확장 허용.
+        if !matches!(data.len(), 14 | 23 | 25..) {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
-                detail: format!("Bullet incomplete: {} bytes (expected 23 or >= 25)", data.len()),
+                detail: format!(
+                    "Bullet incomplete: {} bytes (expected 14, 23 or >= 25)",
+                    data.len()
+                ),
             });
         }
 
         let mut cur = Cursor::new(data);
         let paragraph_head = parse_numbering_para_head(&mut cur, 0, false)?;
         let bullet_char = decode_utf16_code_unit(cur.read_u16::<LittleEndian>()?);
+        if data.len() == 14 {
+            return Ok(Self {
+                paragraph_head,
+                bullet_char,
+                use_image: false,
+                image_id: None,
+                check_bullet_char: None,
+            });
+        }
         let image_bullet_flag = cur.read_i32::<LittleEndian>()?;
         let use_image = image_bullet_flag != 0;
         let image_id = use_image.then_some(image_bullet_flag as u32);
@@ -2059,7 +2072,7 @@ mod tests {
         assert_eq!(base.check_bullet_char, None);
         assert!(!base.paragraph_head.checkable);
         // 이것을 실패시키는 것: 24바이트 잘린 WCHAR 허용 또는 기본형보다 짧은 입력 허용.
-        for len in (0..23).chain([24]) {
+        for len in (0..23).filter(|len| *len != 14).chain([24]) {
             assert!(Hwp5RawBulletDef::parse(&full[..len]).is_err(), "length {len}");
         }
         // 이것을 실패시키는 것: 체크 WCHAR offset 변경 또는 25바이트 초과 입력 거부.

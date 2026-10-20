@@ -3190,3 +3190,56 @@ fn fix8b_failed_list_slots_rebind_later_references_and_reject_failed_slot() {
         }
     }
 }
+
+#[test]
+fn legacy_bullet_record_projects_and_encodes_glyph() {
+    // 이것을 실패시키는 것: 실제 14바이트 레코드 거부, glyph/slot/heading 손실.
+    // HWP 5.0.1.7, 1111 대기업참여하한개정 행정예고: BULLET payload only.
+    const BULLET: [u8; 14] = [0x08, 0, 0, 0, 0, 0, 0x32, 0, 0xff, 0xff, 0xff, 0xff, 0xa1, 0xf0];
+    let raw = Hwp5RawBulletDef::parse(&BULLET).unwrap();
+    assert_eq!(raw.bullet_char, "\u{f0a1}");
+    assert_eq!(raw.paragraph_head.char_shape_id, u32::MAX);
+    assert!(!raw.use_image);
+    assert_eq!(raw.image_id, None);
+    assert_eq!(raw.check_bullet_char, None);
+    let mut source = Hwp5StyleStore::from_doc_info(&empty_doc_info());
+    source.char_shapes.push(default_char_shape());
+    source.para_shapes.push(default_para_shape());
+    source.para_shapes[0].property1 = 3 << 23;
+    source.para_shapes[0].numbering_bullet_id = 1;
+    source.bullets.push(bullet_slot(1, raw));
+    let (store, warnings) = crate::hwp5_style_store_to_hwpx(&source).unwrap();
+    assert!(!warnings.iter().any(|w| matches!(w, Hwp5Warning::ParserFallback { subject, .. } if subject.starts_with("bullet"))));
+    assert_eq!(store.iter_bullets().next().unwrap().bullet_char, "\u{f0a1}");
+    let bytes = encode_test_header(&store);
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("Contents/header.xml").unwrap(), &mut xml)
+        .unwrap();
+    assert!(xml.contains("<hh:bullet id=\"1\" char=\"\u{f0a1}\""), "{xml}");
+    assert!(xml.contains("type=\"BULLET\" idRef=\"1\""), "{xml}");
+    // A genuinely absent slot must still be rejected.
+    source.bullets.clear();
+    assert!(crate::hwp5_style_store_to_hwpx(&source)
+        .unwrap_err()
+        .to_string()
+        .contains("broken bullet reference ID 1"));
+}
+
+fn encode_test_header(store: &hwpforge_smithy_hwpx::HwpxStyleStore) -> Vec<u8> {
+    use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section};
+    let mut document = Document::new();
+    document.add_section(Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::text("body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    ));
+    hwpforge_smithy_hwpx::HwpxEncoder::encode(
+        &document.validate().unwrap(),
+        store,
+        &ImageStore::new(),
+    )
+    .unwrap()
+}
