@@ -482,6 +482,7 @@ pub(crate) fn build_shape_common(
     if !as_group_child && super::standalone::transformed(rotation, flip) {
         let standalone = super::standalone::plan((width, height), rotation, flip, plan);
         common.size = standalone.size;
+        common.offset = standalone.offset;
         common.cur_sz = standalone.cur;
         common.rotation_info = standalone.rotation;
         common.rendering_info = standalone.rendering;

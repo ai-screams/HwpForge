@@ -1,10 +1,13 @@
 //! The single HWPX integer emission calculation for standalone drawings.
-use crate::schema::section::{HxFlip, HxMatrix, HxRenderingInfo, HxRotationInfo, HxSizeAttr};
+use crate::schema::section::{
+    HxFlip, HxMatrix, HxOffset, HxRenderingInfo, HxRotationInfo, HxSizeAttr,
+};
 use hwpforge_core::control::geometry::{FramePlan, ShapeTransform};
 use hwpforge_foundation::Flip;
 
 pub(crate) struct StandalonePlan {
     pub size: (i32, i32),
+    pub offset: HxOffset,
     pub cur: HxSizeAttr,
     pub flip: HxFlip,
     pub rotation: HxRotationInfo,
@@ -49,6 +52,8 @@ pub(crate) fn plan(
     let original = frame.original_size();
     StandalonePlan {
         size: layout,
+        // Offset mirrors the translation actually emitted, never source metadata.
+        offset: HxOffset { x: tx, y: ty },
         cur: HxSizeAttr {
             width: if w == original.0 { 0 } else { w },
             height: if h == original.1 { 0 } else { h },

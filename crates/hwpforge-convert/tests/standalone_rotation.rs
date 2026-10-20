@@ -153,7 +153,11 @@ fn check(reference: &[u8], bytes: &[u8], g7: bool) {
         let o = a.size("orgSz");
         assert_eq!(o, b.size("orgSz"));
         assert_eq!(a.size("sz"), b.size("sz"));
-        assert_eq!((b.v("offset", "x"), b.v("offset", "y")), (0, 0));
+        // 이것을 실패시키는 것: 독립 offset을 0으로 되돌리기.
+        assert_eq!(
+            (b.v("offset", "x"), b.v("offset", "y")),
+            (b.matrices[0][2] as i32, b.matrices[0][5] as i32),
+        );
         let expected = match o {
             (9643, 9262) => Some(((0, 0), (1670, 1790))),
             (6217, 9325) => Some(((0, 0), (1555, -1554))),
@@ -949,4 +953,58 @@ fn whole_degree_emission_loss_is_reported() {
     }
     let out = encode_controls_diagnostics(vec![rect]);
     assert!(out.warnings.iter().any(|w| format!("{w:?}").contains("shape_emission")));
+}
+
+/// 이것을 실패시키는 것: 그림 offset=0 또는 source offset 보존.
+#[test]
+fn picture_offset_is_emitted_translation_and_hancom_oracle() {
+    let answer = fixture("standalone-rotation", "rot-exceptions.hwpx");
+    let (converted, _) = hwp5_to_hwpx_bytes_with_options(
+        &fixture("standalone-rotation", "rot-exceptions.hwp"),
+        ConvertOptions::default(),
+    )
+    .unwrap();
+    for bytes in [&answer, &converted, &reencode(&answer), &reencode(&converted)] {
+        let objects = wire(bytes);
+        let p = objects.iter().find(|w| w.kind == "pic").unwrap();
+        assert_eq!((p.v("offset", "x"), p.v("offset", "y")), (1720, 1666));
+        assert_eq!((p.matrices[0][2], p.matrices[0][5]), (1720., 1666.));
+    }
+}
+
+/// 이것을 실패시키는 것: 이동량 0인 9종의 offset 외 속성·행렬·패키지 변경.
+#[test]
+fn zero_translation_nine_kinds_match_6a0e7d6f_bytes() {
+    use std::io::Read;
+    let head = fixture("standalone-rotation", "head-6a0-zero-nine.hwpx");
+    let objects = wire(&head);
+    assert_eq!(objects.len(), 9);
+    for o in objects {
+        if let Some(line) = o.fields.get("lineShape") {
+            for side in ["head", "tail"] {
+                assert_eq!(line[&format!("{side}Style")], "NORMAL");
+                assert_eq!(line[&format!("{side}Sz")], "MEDIUM_MEDIUM");
+                assert_eq!(line[&format!("{side}fill")], "1");
+            }
+        }
+        assert_eq!((o.v("offset", "x"), o.v("offset", "y")), (0, 0));
+        assert_eq!((o.matrices[0][2], o.matrices[0][5]), (0., 0.));
+    }
+    let parts = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut parts = BTreeMap::new();
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            parts.insert(entry.name().unwrap().into_owned(), data);
+        }
+        parts
+    };
+    let actual = parts(&reencode(&head));
+    let expected = parts(&head);
+    assert_eq!(actual.keys().collect::<Vec<_>>(), expected.keys().collect::<Vec<_>>());
+    for (name, bytes) in expected {
+        assert!(actual[&name] == bytes, "ZIP part {name} differs, no ID/XML normalization");
+    }
 }

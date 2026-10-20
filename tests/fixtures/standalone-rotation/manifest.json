@@ -46,6 +46,6 @@
       "source": "69482cd6 decode/re-encode of synthetic textbox-plain (unturned_matrix_metadata_cannot_reactivate_emission)"
     }
   ],
-  "exceptions": "Large rot-exceptions BinData excluded; synthetic small image/textbox tests use contract integer constants.",
+  "exceptions": "Large original rot-exceptions assets excluded; minimized geometry fixtures and HEAD 6a0e7d6f zero-translation output are documented in offset-manifest.json.",
   "head_snapshot": "Complete HEAD 69482cd6 outputs for identical synthetic inputs. Tests compare every uncompressed ZIP part byte for byte; no timestamp or ID normalization."
 }

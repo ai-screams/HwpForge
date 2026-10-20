@@ -189,6 +189,7 @@ pub(crate) fn build_picture(
         effects: None,
     };
     if let Some(p) = standalone {
+        hx.offset = Some(p.offset);
         hx.cur_sz = Some(p.cur);
         hx.flip = Some(p.flip);
         hx.rotation_info = Some(p.rotation);

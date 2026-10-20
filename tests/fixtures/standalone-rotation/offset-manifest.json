@@ -1,0 +1,30 @@
+{
+  "source": "Hancom fixture 29 rot-exceptions",
+  "derivation": "BinData and preview raster replaced by a transparent PNG with the original image pixel dimensions. All document XML and HWP5 geometry records unchanged. Geometry-only fixture, not a visual oracle.",
+  "image_dimensions": [
+    2048,
+    2048
+  ],
+  "files": [
+    {
+      "file": "rot-exceptions.hwp",
+      "sha256": "a0c98041c955e3d0bb975d0f837e5f15f9ff8db969518358edd49445775231b4",
+      "source_sha256": "bc22a3fa040ead6273d8e0fe501f3aa7d4fff6e567038394233dc165015c4170"
+    },
+    {
+      "file": "rot-exceptions.hwpx",
+      "sha256": "de3712ed0e6e14cf61fff88a046d6d8b9e03c6db03fa6ca862ba0884607388b6",
+      "source_sha256": "162579d23a4c7bb5fef9115f607186dfeb083443a7fe9f69a2b8e76841154b1f"
+    },
+    {
+      "file": "head-6a0-zero-nine.hwpx",
+      "sha256": "ceb5721e033d1f4ee62186234c6b3ae8cda66afaeabe8b85758bfd5b861d4357",
+      "source": "6a0e7d6f release decoder/encoder linked from the same build as the reference CLI. Nine standalone kinds with zero rotation/flip/translation. Direct decode/encode twice verified every ZIP part byte-identical."
+    }
+  ],
+  "head_reference": {
+    "commit": "6a0e7d6f552a0869142c620d11a0beca04ed3aed",
+    "cli_sha256": "152194edc0bdea6a1ed5fe8040c8b07151425fd39037d6640d15a92c10985330",
+    "hwpx_rlib_sha256": "92f7f6ec6ae9da209b28052db3944b880c813fa798a745c3f05370bcb2ffcabe"
+  }
+}
