@@ -865,11 +865,16 @@ fn emit(
                     !matches!(control.as_ref(), Control::Line { .. } | Control::ConnectLine { .. });
                 if let (Some(look), Some(slot)) = (look, super::shape_style_slot(&mut control)) {
                     let style = slot.get_or_insert_with(Default::default);
-                    super::project_shape_line(&look.line, style, &mut state.warnings);
+                    super::project_shape_line(
+                        &look.line,
+                        style,
+                        &mut state.warnings,
+                        &place.location(),
+                    );
                     style.corner_ratio =
                         super::project_corner_ratio(look.corner_ratio, &mut state.warnings);
                     if fillable {
-                        state.apply_shape_fill(look, style);
+                        state.apply_shape_fill(look, style, &place.location());
                     }
                 }
                 if let Ok(render) = &c.child.render {
@@ -2129,6 +2134,103 @@ mod tests {
         let Some(Control::Group { children, .. }) = g else { panic!() };
         assert!(matches!(children[0], GroupChild::Picture(_)));
     }
+    /// 이것을 실패시키는 것: HWP5 독립/묶음에서 실제 손실의 분류·위치 누락.
+    #[test]
+    fn arrow_and_pattern_losses_share_classification_in_both_hosts() {
+        use crate::schema::border_fill::*;
+        use crate::schema::section::{Hwp5ShapeLine, Hwp5ShapeLook};
+        for grouped in [false, true] {
+            // Shape 7+, size 9+, for each endpoint; transparent hatch separately.
+            for case in 0..5 {
+                let mut properties = 1 | (4 << 22) | (4 << 26) | (3 << 30);
+                if case < 4 {
+                    let (shape_shift, size_shift) = if case < 2 { (10, 22) } else { (16, 26) };
+                    if case % 2 == 0 {
+                        properties |= 7 << shape_shift;
+                    } else {
+                        properties = (properties & !(15 << size_shift))
+                            | (9 << size_shift)
+                            | (1 << shape_shift);
+                    }
+                }
+                let look = Hwp5ShapeLook {
+                    corner_ratio: 0,
+                    line: Hwp5ShapeLine { color: 0, thickness: 33, properties },
+                    fill_kind: Some(1),
+                    fill: Ok(Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
+                        background_color: 0xFFFF_FFFF,
+                        pattern_color: 0,
+                        pattern_kind: if case == 4 {
+                            Hwp5FillPatternKind::BackSlash
+                        } else {
+                            Hwp5FillPatternKind::None
+                        },
+                        alpha: 0,
+                        extra_data: Vec::new(),
+                    })),
+                };
+                let mut wire = rect();
+                if let Hwp5Control::Rect(r) = &mut wire {
+                    r.geometry = geo(0, 0, 1000, 1000);
+                    r.look = Some(look);
+                }
+                let mut state = ProjectionImageState::new(
+                    None,
+                    None,
+                    DecompressBudget::new(MAX_TOTAL_DECOMPRESSED),
+                );
+                let run = if grouped {
+                    let top = group(
+                        geo(0, 0, 1000, 1000),
+                        at(1000, 1000, 0.0, 0.0),
+                        vec![child(wire, at(1000, 1000, 0.0, 0.0))],
+                    );
+                    project_group_run(&top, &mut state)
+                } else {
+                    super::super::project_control_run(
+                        &wire,
+                        &mut state,
+                        super::super::ImageProjectionContext::Flow,
+                        CharShapeIndex::new(0),
+                    )
+                }
+                .unwrap();
+                let lost: Vec<_> = state
+                    .warnings
+                    .iter()
+                    .filter_map(|w| match w {
+                        Hwp5Warning::ContentLost { kind, reason, location } => {
+                            Some((kind.as_str(), reason.as_str(), location.as_str()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(lost.len(), 1, "{:?}", state.warnings);
+                assert_eq!(
+                    lost[0].0,
+                    if case == 4 { "shape_pattern_background" } else { "shape_arrow" }
+                );
+                let expected_location = if grouped { "group[0].child[0]" } else { "shape[0]" };
+                assert!(lost[0].2.starts_with(expected_location), "{lost:?}");
+                if case < 4 {
+                    assert!(lost[0].1.contains(if case < 2 { "head" } else { "tail" }));
+                } else {
+                    assert!(lost[0].1.contains("white") && lost[0].1.contains("0xFFFFFFFF"));
+                    let RunContent::Control(control) = run.content else { panic!() };
+                    let rect = if grouped { children(&control)[0] } else { control.as_ref() };
+                    let Control::Rect { style: Some(style), .. } = rect else { panic!() };
+                    assert!(matches!(
+                        style.fill,
+                        Some(hwpforge_core::control::Fill::Pattern {
+                            bg_color: hwpforge_foundation::Color::WHITE,
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+    }
+
     /// 이것을 실패시키는 것: 묶음 채우기/곡률 누락, 방향 값 변경, BinData 별도 경로.
     #[test]
     fn standalone_and_group_share_all_supported_fills_and_corner_ratio() {

@@ -503,6 +503,8 @@ struct ProjectionImageState<'a> {
     generated_cells: u64,
     /// Top-level groups projected so far — numbers group warnings.
     group_seq: usize,
+    /// Standalone styled shapes in document order (including text boxes).
+    shape_seq: usize,
     /// Unique range field ids across all sections and nested flows of this document.
     field_seq: usize,
     /// Pixel size of each image asset read so far (by storage name), a
@@ -539,6 +541,7 @@ impl<'a> ProjectionImageState<'a> {
             budget_error: None,
             generated_cells: 0,
             group_seq: 0,
+            shape_seq: 0,
             field_seq: 0,
             pixel_sizes: std::cell::RefCell::default(),
         }
@@ -686,10 +689,12 @@ impl<'a> ProjectionImageState<'a> {
         fillable: bool,
     ) -> hwpforge_core::control::ShapeStyle {
         let mut style = hwpforge_core::control::ShapeStyle::default();
-        project_shape_line(&look.line, &mut style, &mut self.warnings);
+        let location = format!("shape[{}]", self.shape_seq);
+        self.shape_seq += 1;
+        project_shape_line(&look.line, &mut style, &mut self.warnings, &location);
         style.corner_ratio = project_corner_ratio(look.corner_ratio, &mut self.warnings);
         if fillable {
-            self.apply_shape_fill(look, &mut style);
+            self.apply_shape_fill(look, &mut style, &location);
         }
         style
     }
@@ -699,6 +704,7 @@ impl<'a> ProjectionImageState<'a> {
         &mut self,
         look: &crate::schema::section::Hwp5ShapeLook,
         style: &mut hwpforge_core::control::ShapeStyle,
+        location: &str,
     ) {
         use crate::schema::border_fill::{
             Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5GradationType, Hwp5RawBorderFillFill,
@@ -743,6 +749,14 @@ impl<'a> ProjectionImageState<'a> {
                         style.fill_color = Some(colour(c.background_color));
                     }
                     if let Some(pattern_type) = pattern {
+                        // 이것을 실패시키는 것: 투명 패턴 배경의 흰색 대체를 무음 처리.
+                        if no_face {
+                            self.warnings.push(Hwp5Warning::ContentLost {
+                                kind: "shape_pattern_background".into(),
+                                reason: format!("background_color=0xFFFFFFFF with hatch {:?}: transparent pattern background replaced by white", c.pattern_kind),
+                                location: location.into(),
+                            });
+                        }
                         style.fill = Some(Fill::Pattern {
                             pattern_type,
                             fg_color: colour(c.pattern_color),
@@ -4229,6 +4243,7 @@ fn project_shape_line(
     line: &crate::schema::section::Hwp5ShapeLine,
     style: &mut hwpforge_core::control::ShapeStyle,
     warnings: &mut Vec<Hwp5Warning>,
+    location: &str,
 ) {
     use hwpforge_core::control::LineStyle;
     style.line_color = Some(hwpforge_foundation::Color::from_raw(line.color & 0x00FF_FFFF));
@@ -4247,8 +4262,8 @@ fn project_shape_line(
             LineStyle::Solid
         }
     });
-    style.head_arrow = project_arrow(line.properties, true, warnings);
-    style.tail_arrow = project_arrow(line.properties, false, warnings);
+    style.head_arrow = project_arrow(line.properties, true, warnings, location);
+    style.tail_arrow = project_arrow(line.properties, false, warnings, location);
 }
 
 /// HWP5 wire sizes are row-major; Core's original 0–2 discriminants are stable.
@@ -4256,6 +4271,7 @@ fn project_arrow(
     properties: u32,
     head: bool,
     warnings: &mut Vec<Hwp5Warning>,
+    location: &str,
 ) -> Option<hwpforge_core::control::ArrowStyle> {
     use hwpforge_core::control::ArrowStyle;
     use hwpforge_foundation::{ArrowSize, ArrowType};
@@ -4288,6 +4304,16 @@ fn project_arrow(
             "shape.arrow",
             format!("{side} arrow size {raw_size} unsupported (expected 0–8); arrow omitted"),
         );
+    }
+    // 이것을 실패시키는 것: 실제 끝점 제거에 ContentLost를 남기지 않기.
+    if arrow_type.is_none() || size.is_none() {
+        warnings.push(Hwp5Warning::ContentLost {
+            kind: "shape_arrow".into(),
+            reason: format!(
+                "{side} arrow shape {shape}, size {raw_size}: unsupported endpoint omitted"
+            ),
+            location: format!("{location}.{side}"),
+        });
     }
     ArrowStyle {
         arrow_type: arrow_type?,
@@ -9413,7 +9439,7 @@ mod arrow_tests {
                             | (raw_size as u32) << size_shift
                             | u32::from(filled) << fill_shift;
                         let mut warnings = Vec::new();
-                        let projected = project_arrow(props, head, &mut warnings);
+                        let projected = project_arrow(props, head, &mut warnings, "shape[0]");
                         if raw_shape == 0 && raw_size == 4 && filled {
                             assert!(projected.is_none());
                             assert!(warnings.is_empty());
@@ -9427,7 +9453,7 @@ mod arrow_tests {
                         assert_eq!(a.size.to_string(), *size);
                         assert_eq!(a.filled, filled);
                         assert!(warnings.is_empty());
-                        let other = project_arrow(props, !head, &mut warnings).unwrap();
+                        let other = project_arrow(props, !head, &mut warnings, "shape[0]").unwrap();
                         assert_eq!(other.arrow_type, hwpforge_foundation::ArrowType::None);
                         assert_eq!(other.size, hwpforge_foundation::ArrowSize::Small);
                         assert!(!other.filled);
@@ -9439,10 +9465,11 @@ mod arrow_tests {
                 assert!(project_arrow(
                     shape << shape_shift | size << size_shift,
                     head,
-                    &mut warnings
+                    &mut warnings,
+                    "shape[0]"
                 )
                 .is_none());
-                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings.len(), 2);
                 let warning = format!("{:?}", warnings[0]);
                 assert!(
                     warning.contains(detail)
@@ -9455,10 +9482,11 @@ mod arrow_tests {
                 assert!(project_arrow(
                     raw_size << size_shift | 1 << fill_shift,
                     head,
-                    &mut warnings
+                    &mut warnings,
+                    "shape[0]"
                 )
                 .is_none());
-                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings.len(), 2);
                 assert!(format!("{:?}", warnings[0]).contains(&format!("size {raw_size}")));
             }
         }

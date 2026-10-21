@@ -1172,7 +1172,7 @@ fn decode_shape_style(
         rotation_info,
         flip_info,
         dropcap_style,
-        &mut ctx.warnings,
+        ctx,
     )
 }
 
@@ -1211,14 +1211,14 @@ fn image_fill_loss(fill: &HxFillBrush) -> Option<String> {
     None
 }
 
-/// Unknown endpoint values discard only that endpoint and reuse the enum warning.
+/// Unknown endpoint values discard only that endpoint and report both the raw enum and the located loss.
 fn decode_arrow(
     shape: &str,
     size: &str,
     filled: u32,
     shape_attribute: &'static str,
     size_attribute: &'static str,
-    warnings: &mut Vec<super::DecodeWarning>,
+    ctx: &mut DecodeCtx,
 ) -> Option<hwpforge_core::control::ArrowStyle> {
     use hwpforge_foundation::{ArrowSize, ArrowType};
     if shape.is_empty() {
@@ -1231,12 +1231,21 @@ fn decode_arrow(
         (size_value.is_some(), size_attribute, size),
     ] {
         if !valid {
-            warnings.push(super::DecodeWarning::UnknownEnumValue {
+            ctx.warnings.push(super::DecodeWarning::UnknownEnumValue {
                 attribute,
                 raw: raw.to_string(),
                 fallback: "arrow omitted",
             });
         }
+    }
+    // 이것을 실패시키는 것: 끝점 소실을 enum 경고만 남겨 편집 차단 우회.
+    if arrow_type.is_none() || size_value.is_none() {
+        ctx.content_lost(
+            "shape_arrow",
+            format!(
+                "{shape_attribute}={shape}, {size_attribute}={size}: unsupported endpoint omitted"
+            ),
+        );
     }
     hwpforge_core::control::ArrowStyle {
         arrow_type: arrow_type?,
@@ -1261,7 +1270,7 @@ pub(crate) fn decode_shape_style_full(
     rotation_info: Option<&crate::schema::section::HxRotationInfo>,
     flip_info: Option<&crate::schema::section::HxFlip>,
     dropcap_style: &str,
-    warnings: &mut Vec<super::DecodeWarning>,
+    ctx: &mut DecodeCtx,
 ) -> Option<ShapeStyle> {
     use hwpforge_core::control::Fill;
     use hwpforge_foundation::GradientType;
@@ -1328,6 +1337,13 @@ pub(crate) fn decode_shape_style_full(
             if let Some(ref hs) = wb.hatch_style {
                 let pattern_type = hs.parse::<PatternType>().unwrap_or(PatternType::Horizontal);
                 let fg = parse_hex_color(&wb.hatch_color).unwrap_or(Color::BLACK);
+                // 이것을 실패시키는 것: 면 없음+무늬의 흰 배경 대체를 무음 처리.
+                if wb.face_color == "none" {
+                    ctx.content_lost(
+                        "shape_pattern_background",
+                        format!("winBrush faceColor=none with hatchStyle={hs}: transparent pattern background replaced by white"),
+                    );
+                }
                 let bg = parse_hex_color(&wb.face_color).unwrap_or(Color::WHITE);
                 return Some(Fill::Pattern { pattern_type, fg_color: fg, bg_color: bg });
             }
@@ -1383,7 +1399,7 @@ pub(crate) fn decode_shape_style_full(
                 ls.head_fill,
                 "lineShape@headStyle",
                 "lineShape@headSz",
-                warnings,
+                ctx,
             );
             let tail = decode_arrow(
                 &ls.tail_style,
@@ -1391,7 +1407,7 @@ pub(crate) fn decode_shape_style_full(
                 ls.tail_fill,
                 "lineShape@tailStyle",
                 "lineShape@tailSz",
-                warnings,
+                ctx,
             );
             (head, tail)
         }
@@ -3205,6 +3221,29 @@ pub(super) fn with_object_out_margin(
 mod tests {
     use super::*;
 
+    fn decode_shape_style_full(
+        line_shape: &Option<HxLineShape>,
+        fill_brush: &Option<HxFillBrush>,
+        fillable: bool,
+        rotation_info: Option<&crate::schema::section::HxRotationInfo>,
+        flip_info: Option<&crate::schema::section::HxFlip>,
+        dropcap_style: &str,
+        warnings: &mut Vec<crate::DecodeWarning>,
+    ) -> Option<ShapeStyle> {
+        let mut ctx = DecodeCtx::new(0);
+        let style = super::decode_shape_style_full(
+            line_shape,
+            fill_brush,
+            fillable,
+            rotation_info,
+            flip_info,
+            dropcap_style,
+            &mut ctx,
+        );
+        warnings.extend(ctx.warnings);
+        style
+    }
+
     // 이것을 실패시키는 것: 결측 `width` 의 기본값을 0 으로 되돌리기(결측이
     // 굵기 0 으로 읽힘), 또는 결측 표식을 직렬화에서 빼지 않기(`width="-1"`).
     #[test]
@@ -3281,7 +3320,12 @@ mod tests {
                     } else {
                         assert_eq!(fill, None);
                     }
-                    assert!(warnings.is_empty(), "{warnings:?}");
+                    assert_eq!(
+                        warnings.len(),
+                        usize::from(face == "none" && hatch.is_some()),
+                        "{warnings:?}"
+                    );
+                    assert!(warnings.iter().all(crate::DecodeWarning::is_content_loss));
                 }
             }
         }
@@ -6515,6 +6559,136 @@ mod group_tests {
     }
 
     // ── input boundaries of the regenerating editors ───────────────
+
+    fn loss_test_rect() -> String {
+        rect((1000, 1000), &ri(ID, &[(ID, ID)]))
+            .replace("</hp:rect>", r#"<hp:sz width="1000" widthRelTo="ABSOLUTE" height="1000" heightRelTo="ABSOLUTE" protect="0"/></hp:rect>"#)
+    }
+
+    fn assert_loss_rejects_editors(bytes: &[u8], kind: &str) {
+        use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
+        let check = |component: String, diff_path: String| {
+            if kind == "shape_pattern_background" && component == "document" {
+                // The existing semantic round-trip check can run first: the
+                // white replacement also changes fill_color on re-decode.
+                assert!(diff_path.contains("fill_color"), "{diff_path}");
+                return;
+            }
+            assert_eq!(component, format!("input decode: CONTENT_LOST {kind}"), "{diff_path}");
+            assert!(diff_path.starts_with("Contents/section0.xml:"), "{diff_path}");
+        };
+        match HwpxStamper::stamp(bytes, &[]) {
+            Err(StamperError::NotRoundTripSafe { component, diff_path }) => {
+                check(component, diff_path)
+            }
+            other => panic!("stamp v1: {other:?}"),
+        }
+        let request = StampRequestV2 {
+            schema_version: STAMP_MAP_VERSION,
+            source_sha256: crate::patch::sha256_hex(bytes),
+            text: Vec::new(),
+            cells: Vec::new(),
+        };
+        match HwpxStamper::stamp_v2(bytes, &request) {
+            Err(StamperError::NotRoundTripSafe { component, diff_path }) => {
+                check(component, diff_path)
+            }
+            other => panic!("stamp v2: {other:?}"),
+        }
+        match crate::HwpxCellEditor::set_cells(bytes, &[]) {
+            Err(crate::CellEditError::NotRoundTripSafe { component, diff_path }) => {
+                check(component, diff_path)
+            }
+            other => panic!("cell edit: {other:?}"),
+        }
+    }
+
+    /// 이것을 실패시키는 것: head/tail 모양/크기 손실 경고 또는 편집 차단 삭제.
+    #[test]
+    fn discarded_arrow_endpoints_reject_editors_in_both_hosts() {
+        for grouped in [false, true] {
+            for side in ["head", "tail"] {
+                for unknown in ["Style", "Sz"] {
+                    let outline = r##"<hp:lineShape color="#000000" width="33" style="SOLID" headStyle="ARROW" tailStyle="ARROW" headSz="MEDIUM_MEDIUM" tailSz="MEDIUM_MEDIUM" headfill="1" tailfill="1"/>"##;
+                    let shape =
+                        loss_test_rect().replace("</hp:rect>", &format!("{outline}</hp:rect>"));
+                    let shape = if grouped { container((1000, 1000), &shape) } else { shape };
+                    let good = encode(&HwpxDecoder::decode(&package_with_group(&shape)).unwrap());
+                    // Start from a stable package, so refusal must be this loss,
+                    // not unrelated ZIP carry or pre-existing geometry drift.
+                    crate::stamp::HwpxStamper::stamp(&good, &[]).unwrap();
+                    crate::HwpxCellEditor::set_cells(&good, &[]).unwrap();
+                    let xml = section0_xml(&good);
+                    let old = format!(
+                        "{side}{unknown}=\"{}\"",
+                        if unknown == "Style" { "ARROW" } else { "MEDIUM_MEDIUM" }
+                    );
+                    let bad_shape = shape.replace(&old, &format!("{side}{unknown}=\"FUTURE\""));
+                    assert!(xml.contains(&old));
+                    let bad = package_with_group(&bad_shape);
+                    let decoded = HwpxDecoder::decode(&bad).unwrap();
+                    let lost: Vec<_> =
+                        decoded.warnings.iter().filter(|w| w.is_content_loss()).collect();
+                    assert_eq!(lost.len(), 1, "{:?}", decoded.warnings);
+                    assert!(
+                        matches!(lost[0], crate::DecodeWarning::ContentLost { kind, path, reason, .. }
+                        if kind == "shape_arrow" && !path.0.is_empty() && reason.contains(side))
+                    );
+                    assert_loss_rejects_editors(&bad, "shape_arrow");
+                }
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: UnknownEnumValue 전체를 손실로 분류/B' 값 제거.
+    #[test]
+    fn preserved_absent_arrow_values_and_enum_warning_allow_editing() {
+        let outline = r##"<hp:lineShape color="#000000" width="33" style="SOLID" headStyle="NORMAL" tailStyle="NORMAL" headSz="LARGE_LARGE" tailSz="SMALL_SMALL" headfill="0" tailfill="0"/>"##;
+        let shape = loss_test_rect().replace("</hp:rect>", &format!("{outline}</hp:rect>"));
+        let bytes = encode(&HwpxDecoder::decode(&package_with_group(&shape)).unwrap());
+        let decoded = HwpxDecoder::decode(&bytes).unwrap();
+        assert!(!decoded.warnings.iter().any(crate::DecodeWarning::is_content_loss));
+        let warning = crate::DecodeWarning::UnknownEnumValue {
+            attribute: "test@preserved",
+            raw: "FUTURE".into(),
+            fallback: "preserved",
+        };
+        assert!(!warning.is_content_loss());
+        crate::stamp::reject_input_content_loss(&[warning]).unwrap();
+        let stamped = crate::stamp::HwpxStamper::stamp(&bytes, &[]).unwrap();
+        assert!(section0_xml(&stamped.bytes).contains("headSz=\"LARGE_LARGE\""));
+        crate::HwpxCellEditor::set_cells(&bytes, &[]).unwrap();
+    }
+
+    /// 이것을 실패시키는 것: 면 없음+무늬 손실 진단/독립·묶음 공용 경로 삭제.
+    #[test]
+    fn transparent_pattern_background_is_located_and_rejects_editors() {
+        for grouped in [false, true] {
+            let brush = r##"<hc:fillBrush><hc:winBrush faceColor="none" hatchColor="#000000" hatchStyle="SLASH" alpha="0"/></hc:fillBrush>"##;
+            let shape = loss_test_rect().replace("</hp:rect>", &format!("{brush}</hp:rect>"));
+            let shape = if grouped { container((1000, 1000), &shape) } else { shape };
+            let bytes = package_with_group(&shape);
+            let decoded = HwpxDecoder::decode(&bytes).unwrap();
+            assert!(
+                matches!(decoded.warnings.as_slice(), [crate::DecodeWarning::ContentLost { kind, reason, part, path }]
+                if kind == "shape_pattern_background" && reason.contains("white") && part == "Contents/section0.xml" && !path.0.is_empty()),
+                "{:?}",
+                decoded.warnings
+            );
+            assert_loss_rejects_editors(&bytes, "shape_pattern_background");
+            // Explicit opaque white is representable and must stay editable.
+            let opaque =
+                package_with_group(&shape.replace("faceColor=\"none\"", "faceColor=\"#FFFFFF\""));
+            let opaque = encode(&HwpxDecoder::decode(&opaque).unwrap());
+            assert!(!HwpxDecoder::decode(&opaque)
+                .unwrap()
+                .warnings
+                .iter()
+                .any(crate::DecodeWarning::is_content_loss));
+            crate::stamp::HwpxStamper::stamp(&opaque, &[]).unwrap();
+            crate::HwpxCellEditor::set_cells(&opaque, &[]).unwrap();
+        }
+    }
 
     fn assert_refused_by_stamp_and_set_cell(name: &str, kind: &str) {
         use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
