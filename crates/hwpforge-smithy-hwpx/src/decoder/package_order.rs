@@ -15,6 +15,8 @@ pub(crate) struct PackageOrder {
     pub sections: Vec<String>,
     /// Unknown/missing rootfiles must never be excluded as packaging syntax.
     pub container_supported: bool,
+    /// Exclude content only when its newly accepted extensions are represented.
+    pub content_supported: bool,
     /// Decoder reports these as document-wide ContentLost; analysis fails closed.
     pub problems: Vec<String>,
 }
@@ -36,14 +38,17 @@ impl PackageOrder {
             .ok_or_else(|| "missing container.xml".to_string())
             .and_then(|xml| validate_container(xml, paths))
         {
-            Ok(()) => result.container_supported = true,
+            Ok(excludable) => result.container_supported = excludable,
             Err(reason) => result.problems.push(format!("container: {reason}")),
         }
         match content
             .ok_or_else(|| "missing content.hpf".to_string())
             .and_then(|xml| resolve_spine(xml, paths, &result.sections))
         {
-            Ok(sections) => result.sections = sections,
+            Ok((sections, excludable)) => {
+                result.sections = sections;
+                result.content_supported = excludable;
+            }
             Err(reason) => {
                 result.problems.push(format!("spine: {reason}; using file-number fallback"))
             }
@@ -112,23 +117,55 @@ fn visit(
     Ok(())
 }
 
-fn validate_container(xml: &str, paths: &[String]) -> Result<(), String> {
+/// Qualified/conditional attributes can change selection. Only unqualified
+/// additive attributes are ignored for order; their layout meaning stays unknown.
+fn selection_attributes(attrs: &BTreeMap<String, String>) -> Result<(), String> {
+    if attrs.keys().any(|k| {
+        k.contains(':')
+            || matches!(
+                k.as_str(),
+                "required-namespace"
+                    | "required-modules"
+                    | "fallback"
+                    | "fallback-style"
+                    | "requiredFeatures"
+                    | "requiredExtensions"
+                    | "systemLanguage"
+            )
+    }) {
+        return Err("unsupported selection attributes".into());
+    }
+    Ok(())
+}
+
+fn validate_container(xml: &str, paths: &[String]) -> Result<bool, String> {
+    let mut excludable = true;
     let mut packages = 0;
     let mut seen = BTreeSet::new();
     visit(xml, |path, ns, attrs| {
         if ns != OCF {
             return Err("unsupported container namespace".into());
         }
+        selection_attributes(attrs)?;
         let names: Vec<_> = path.iter().map(String::as_str).collect();
         match names.as_slice() {
-            ["container"] | ["container", "rootfiles"] if attrs.is_empty() => Ok(()),
+            ["container"] => {
+                if attrs.get("version").is_some_and(|v| v != "1.0") {
+                    return Err("unsupported container version".into());
+                }
+                excludable &= attrs.keys().all(|k| k == "version");
+                Ok(())
+            }
+            ["container", "rootfiles"] => {
+                excludable &= attrs.is_empty();
+                Ok(())
+            }
             ["container", "rootfiles", "rootfile"] => {
                 let target = attrs.get("full-path").map(String::as_str).unwrap_or("");
                 let media = attrs.get("media-type").map(String::as_str).unwrap_or("");
-                if attrs.len() != 2
-                    || !seen.insert(target.to_string())
-                    || !paths.iter().any(|p| p == target)
-                {
+                excludable &=
+                    attrs.keys().all(|k| matches!(k.as_str(), "full-path" | "media-type"));
+                if !seen.insert(target.to_string()) || !paths.iter().any(|p| p == target) {
                     return Err(format!("invalid/missing rootfile {target}"));
                 }
                 match (target, media) {
@@ -145,10 +182,15 @@ fn validate_container(xml: &str, paths: &[String]) -> Result<(), String> {
     if packages != 1 {
         return Err("expected exactly one supported package rootfile".into());
     }
-    Ok(())
+    Ok(excludable)
 }
 
-fn resolve_spine(xml: &str, paths: &[String], fallback: &[String]) -> Result<Vec<String>, String> {
+fn resolve_spine(
+    xml: &str,
+    paths: &[String],
+    fallback: &[String],
+) -> Result<(Vec<String>, bool), String> {
+    let mut excludable = true;
     let mut manifest: BTreeMap<String, Option<(String, String)>> = BTreeMap::new();
     let mut refs = Vec::new();
     let mut spines = 0;
@@ -161,22 +203,43 @@ fn resolve_spine(xml: &str, paths: &[String], fallback: &[String]) -> Result<Vec
             | ["package", "manifest"]
             | ["package", "spine"]
             | ["package", "manifest", "item"]
+            | ["package", "spine", "itemref"] => selection_attributes(attrs)?,
+            _ => {}
+        }
+        match names.as_slice() {
+            ["package"]
+            | ["package", "manifest"]
+            | ["package", "spine"]
+            | ["package", "manifest", "item"]
             | ["package", "spine", "itemref"]
                 if ns != OPF =>
             {
                 return Err("unsupported OPF namespace".into())
             }
-            ["package", "manifest"] => manifests += 1,
-            ["package", "spine"] => spines += 1,
+            ["package"] => {
+                excludable &= attrs
+                    .keys()
+                    .all(|k| matches!(k.as_str(), "version" | "unique-identifier" | "id"));
+            }
+            ["package", "manifest"] => {
+                excludable &= attrs.is_empty();
+                manifests += 1;
+            }
+            ["package", "spine"] => {
+                excludable &= attrs.is_empty();
+                spines += 1;
+            }
             ["package", "manifest", "item"] => {
+                excludable &= attrs
+                    .keys()
+                    .all(|k| matches!(k.as_str(), "id" | "href" | "media-type" | "isEmbeded"));
                 let id = get("id")?;
                 let value = (get("href")?, get("media-type")?);
                 manifest.entry(id).and_modify(|v| *v = None).or_insert(Some(value));
             }
             ["package", "spine", "itemref"] => {
-                if attrs.keys().any(|k| k != "idref" && k != "linear")
-                    || attrs.get("linear").is_some_and(|v| v != "yes")
-                {
+                excludable &= attrs.keys().all(|k| matches!(k.as_str(), "idref" | "linear"));
+                if attrs.get("linear").is_some_and(|v| v != "yes") {
                     return Err("unsupported spine itemref attributes".into());
                 }
                 refs.push(get("idref")?);
@@ -215,7 +278,7 @@ fn resolve_spine(xml: &str, paths: &[String], fallback: &[String]) -> Result<Vec
     if sections.len() != fallback.len() || fallback.iter().any(|p| !sections.contains(p)) {
         return Err("spine does not cover each section exactly once".into());
     }
-    Ok(sections)
+    Ok((sections, excludable))
 }
 
 #[cfg(test)]
@@ -240,6 +303,79 @@ mod tests {
         .to_vec()
     }
 
+    // 이것을 실패시키는 것: version/future 때문에 순서를 버리거나 레이아웃에서 제외하기.
+    #[test]
+    fn w3_order_attributes() {
+        for extra in ["version='1.0'", "version='1.0' future='1'"] {
+            let xml = CONTAINER_XML.replace("<c:container ", &format!("<c:container {extra} "));
+            let content = CONTENT_XML.replace("idref='beta'", "idref='beta' future='1'");
+            let result = PackageOrder::resolve(&paths(), Some(&content), Some(&xml));
+            assert!(result.problems.is_empty(), "{:?}", result.problems);
+            assert_eq!(result.sections, ["Contents/section1.xml", "Contents/section0.xml"]);
+            assert_eq!(result.container_supported, !extra.contains("future"));
+        }
+    }
+
+    // 이것을 실패시키는 것: rootfiles/rootfile 부가 속성을 레이아웃에서 제외,
+    // 알려진 선택 필드를 누락/접두사/중복이어도 유일한 값으로 간주.
+    #[test]
+    fn w3_container_attribute_positions() {
+        for tag in ["<c:rootfiles>", "<c:rootfile "] {
+            let replacement = if tag.ends_with('>') {
+                "<c:rootfiles future='1'>"
+            } else {
+                "<c:rootfile future='1' "
+            };
+            let xml = CONTAINER_XML.replace(tag, replacement);
+            let result = PackageOrder::resolve(&paths(), Some(CONTENT_XML), Some(&xml));
+            assert!(result.problems.is_empty());
+            assert!(!result.container_supported);
+        }
+        for (from, to) in [
+            ("full-path=", "x:full-path="),
+            ("media-type=", "x:media-type="),
+            ("<c:rootfile ", "<c:rootfile full-path='Contents/content.hpf' "),
+            ("<c:rootfiles>", "<c:rootfiles xml:base='x'>"),
+        ] {
+            assert!(validate_container(&CONTAINER_XML.replace(from, to), &paths()).is_err());
+        }
+    }
+
+    // 이것을 실패시키는 것: 모든 부가 속성을 무조건 무시하여 조건부/경로/접두사 의미를 버리기.
+    #[test]
+    fn w3_order_semantic_attributes_fallback() {
+        for extra in [
+            "xml:base='x'",
+            "required-namespace='x'",
+            "required-modules='x'",
+            "fallback='x'",
+            "fallback-style='x'",
+            "requiredFeatures='x'",
+            "requiredExtensions='x'",
+            "systemLanguage='x'",
+            "xmlns:x='urn:x' x:idref='beta'",
+            "x:idref='beta'",
+            "idref='beta'",
+            "linear='no'",
+        ] {
+            let content = CONTENT_XML.replace("idref='beta'", &format!("idref='beta' {extra}"));
+            let result = PackageOrder::resolve(&paths(), Some(&content), Some(CONTAINER_XML));
+            assert!(!result.problems.is_empty(), "{extra}");
+            assert_eq!(result.sections, ["Contents/section0.xml", "Contents/section1.xml"]);
+        }
+        for extra in [
+            "version='2.0'",
+            "xml:base='x'",
+            "required-namespace='x'",
+            "xmlns:x='urn:x' x:idref='x'",
+        ] {
+            let xml = CONTAINER_XML.replace("<c:container ", &format!("<c:container {extra} "));
+            let result = PackageOrder::resolve(&paths(), Some(CONTENT_XML), Some(&xml));
+            assert!(!result.problems.is_empty(), "{extra}");
+            assert!(!result.container_supported);
+        }
+    }
+
     // 이것을 실패시키는 것: manifest id를 section 파일 번호로 오인하기,
     // ZIP/manifest 순서로 읽기, 알려진 preview/RDF rootfile도 무조건 거부하기.
     #[test]
@@ -252,7 +388,7 @@ mod tests {
         let encoded = CONTENT_XML
             .replace("id='beta'", "id='b&#101;ta'")
             .replace("idref='beta'", "idref='beta' linear='yes'");
-        assert_eq!(resolve_spine(&encoded, &paths(), &result.sections).unwrap(), result.sections);
+        assert_eq!(resolve_spine(&encoded, &paths(), &result.sections).unwrap().0, result.sections);
     }
 
     // 이것을 실패시키는 것: 없는/중복/비구역 대상, namespace/scope/속성/구역 누락
@@ -275,7 +411,6 @@ mod tests {
             ("<p:itemref idref='beta'/>", "", "cover each section"),
             ("<p:itemref idref='beta'/>", "<p:itemref/>", "missing idref"),
             ("idref='beta'", "idref='beta' linear='no'", "itemref attributes"),
-            ("idref='beta'", "idref='beta' future='1'", "itemref attributes"),
             ("</p:spine>", "<p:future/></p:spine>", "unsupported spine child"),
             ("</p:spine>", "</p:spine><p:spine/>", "exactly one manifest and spine"),
             ("</p:manifest>", "</p:manifest><p:manifest/>", "exactly one manifest and spine"),
@@ -320,7 +455,7 @@ mod tests {
             (CONTENT, "settings.xml", "unsupported rootfile"),
             ("application/hwpml-package+xml", "application/xml", "unsupported rootfile"),
             ("media-type=", "other-type=", "unsupported rootfile"),
-            ("<c:rootfile ", "<c:rootfile future='1' ", "invalid/missing rootfile"),
+            ("<c:rootfile ", "<c:rootfile xml:base='x' ", "selection attributes"),
             ("urn:oasis:names:tc:opendocument:xmlns:container", "urn:fake", "container namespace"),
             ("</c:rootfiles>", "<c:future/></c:rootfiles>", "container structure"),
             ("</c:rootfiles>", "<c:rootfile full-path='Contents/content.hpf' media-type='application/hwpml-package+xml'/></c:rootfiles>", "invalid/missing rootfile"),

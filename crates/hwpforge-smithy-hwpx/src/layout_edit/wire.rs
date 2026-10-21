@@ -17,6 +17,9 @@ type Fingerprint = [u8; 32];
 
 #[derive(Default, Clone)]
 struct Node {
+    // Input provenance, independent of element names/namespaces. Package XML
+    // uses the same canonical tree but never HWP identities or references.
+    package_xml: bool,
     name: String,
     namespace: String,
     attrs: BTreeMap<String, String>,
@@ -32,6 +35,24 @@ impl Node {
     }
 
     fn parse(xml: &str) -> HwpxResult<Self> {
+        let mut root = Self::parse_xml(xml)?;
+        canonicalize_field_links(&mut root);
+        Ok(root)
+    }
+
+    fn parse_package_xml(xml: &str) -> HwpxResult<Self> {
+        fn mark(n: &mut Node) {
+            n.package_xml = true;
+            for child in &mut n.children {
+                mark(child);
+            }
+        }
+        let mut root = Self::parse_xml(xml)?;
+        mark(&mut root);
+        Ok(root)
+    }
+
+    fn parse_xml(xml: &str) -> HwpxResult<Self> {
         fn expanded(ns: ResolveResult<'_>, local: &str) -> HwpxResult<String> {
             match ns {
                 ResolveResult::Bound(ns) => Ok(format!("{{{}}}{local}", ns.as_ref())),
@@ -107,9 +128,7 @@ impl Node {
         if stack.len() != 1 {
             return Err(error("unclosed XML".into()));
         }
-        let mut root = stack.pop().unwrap();
-        canonicalize_field_links(&mut root);
-        Ok(root)
+        Ok(stack.pop().unwrap())
     }
 }
 
@@ -484,8 +503,9 @@ impl Definitions {
             facts: &mut BTreeMap<String, BTreeSet<String>>,
             dependencies: &mut BTreeSet<Key>,
         ) {
-            if n.name == "linesegarray"
-                || (shell && !root && matches!(n.name.as_str(), "p" | "header" | "footer"))
+            if !n.package_xml
+                && (n.name == "linesegarray"
+                    || (shell && !root && matches!(n.name.as_str(), "p" | "header" | "footer")))
             {
                 return;
             }
@@ -495,10 +515,10 @@ impl Definitions {
             for (key, value) in &n.attrs {
                 // Definition ids and nonreferenced paragraph/object identities do not
                 // affect layout. Reference values are replaced by their target below.
-                if key == "id" && neutral_identity(&n.name) {
+                if !n.package_xml && key == "id" && neutral_identity(&n.name) {
                     continue;
                 }
-                if is_resolved_reference(n, key) {
+                if !n.package_xml && is_resolved_reference(n, key) {
                     field(hash, key);
                     continue;
                 }
@@ -516,24 +536,26 @@ impl Definitions {
                     facts.entry(format!("{}#text", n.name)).or_default().insert(text.clone());
                 }
             }
-            *resolved &= !n.unresolved_links;
-            signals.unresolved |= n.unresolved_links;
-            signals.scan(n);
-            for reference in references(n) {
-                match reference {
-                    Ok(key) => {
-                        let (stamp, deps) = d.resolve(key.clone());
-                        field(hash, &key.0);
-                        hash.update(stamp.hash);
-                        merge_facts(facts, &stamp.facts);
-                        dependencies.insert(key);
-                        dependencies.extend(stamp.dependencies);
-                        *resolved &= stamp.resolved;
-                        signals.merge(deps);
-                    }
-                    Err(()) => {
-                        *resolved = false;
-                        signals.unresolved = true;
+            if !n.package_xml {
+                *resolved &= !n.unresolved_links;
+                signals.unresolved |= n.unresolved_links;
+                signals.scan(n);
+                for reference in references(n) {
+                    match reference {
+                        Ok(key) => {
+                            let (stamp, deps) = d.resolve(key.clone());
+                            field(hash, &key.0);
+                            hash.update(stamp.hash);
+                            merge_facts(facts, &stamp.facts);
+                            dependencies.insert(key);
+                            dependencies.extend(stamp.dependencies);
+                            *resolved &= stamp.resolved;
+                            signals.merge(deps);
+                        }
+                        Err(()) => {
+                            *resolved = false;
+                            signals.unresolved = true;
+                        }
                     }
                 }
             }
@@ -784,7 +806,7 @@ impl PackageAnalysis {
         let mut master_owners: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
         let header_xml = package.read_text_entry("Contents/header.xml")?;
         let header = Node::parse(&header_xml)?;
-        let content = Node::parse(&package.read_text_entry("Contents/content.hpf")?)?;
+        let content = Node::parse_package_xml(&package.read_text_entry("Contents/content.hpf")?)?;
         let mut indexed = header.clone();
         index_package_targets(&package, &content, &mut indexed)?;
         let mut definitions = Definitions::new(&indexed);
@@ -1469,3 +1491,7 @@ mod unknown_identity_tests {
         assert_ne!(hash("<future id='1'/>"), hash("<future id='2'/>"));
     }
 }
+
+#[cfg(test)]
+#[path = "package_xml_tests.rs"]
+mod package_xml_tests;

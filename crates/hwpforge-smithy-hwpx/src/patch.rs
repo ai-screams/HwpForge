@@ -534,13 +534,7 @@ impl RawPackage {
     }
 
     pub(crate) fn read_text_entry(&self, path: &str) -> HwpxResult<String> {
-        let index = self
-            .index_by_path
-            .get(path)
-            .copied()
-            .ok_or_else(|| HwpxError::MissingFile { path: path.to_string() })?;
-        String::from_utf8(self.entries[index].bytes.clone())
-            .map_err(|e| HwpxError::Zip(format!("entry '{path}' is not valid UTF-8: {e}")))
+        crate::package_xml::text_entry(path, self.read_entry(path)?)
     }
 
     pub(crate) fn replace_text_entry(&mut self, path: &str, content: String) {

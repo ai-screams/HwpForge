@@ -28,7 +28,7 @@
 //! These sources describe format roles; no Hancom rendering experiment is claimed.
 
 use super::{collect_named, Node, RawPackage};
-use crate::{HwpxError, HwpxResult};
+use crate::HwpxResult;
 use sha2::{Digest, Sha256};
 
 const APP: &str = "{http://www.hancom.co.kr/hwpml/2011/app}";
@@ -74,6 +74,13 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
     collect_named(content, &["metadata"], &mut metadata);
     let mut global = Node::default();
     for path in package.entry_paths() {
+        if path == crate::decoder::package_order::CONTENT && !package.order.content_supported {
+            global.children.push(Node {
+                name: path.into(),
+                children: vec![content.clone()],
+                ..Node::default()
+            });
+        }
         if represented_part(path)
             || (path == "META-INF/container.xml" && package.order.container_supported)
             || matches!(
@@ -87,10 +94,12 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
         let bytes = package.read_entry(path)?;
         let mut info = Node { name: path.into(), ..Node::default() };
         if path.ends_with(".xml") || path.ends_with(".hpf") {
-            let parsed = Node::parse(
-                std::str::from_utf8(bytes)
-                    .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?,
-            )?;
+            let xml = crate::package_xml::text_entry(path, bytes)?;
+            let parsed = if path == crate::decoder::package_order::CONTAINER {
+                Node::parse_package_xml(&xml)?
+            } else {
+                Node::parse(&xml)?
+            };
             if path == "settings.xml" {
                 let Some(settings) = settings_input(parsed) else { continue };
                 info.children.push(settings);

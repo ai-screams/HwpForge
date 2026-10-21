@@ -68,6 +68,7 @@ mod layout_carry;
 pub mod layout_edit;
 mod list_bridge;
 mod package_path;
+mod package_xml;
 pub mod paragraph_measure;
 mod patch;
 pub mod presets;

@@ -240,10 +240,12 @@ impl<'a> PackageReader<'a> {
         self.archive.read(index).map_err(package_error)
     }
 
-    /// Reads a single entry as UTF-8 using the same byte budget as binary reads.
+    /// Reads XML text with package-part encoding support and bounded binary reads.
     fn read_entry(&mut self, path: &str) -> HwpxResult<String> {
-        String::from_utf8(self.read_binary_entry(path)?)
-            .map_err(|e| HwpxError::Zip(format!("read '{path}': {e}")))
+        let bytes = self.read_binary_entry(path)?;
+        #[cfg(test)]
+        tests::READ_ALLOCATION.set((bytes.as_ptr() as usize, bytes.capacity()));
+        crate::package_xml::text_entry(path, bytes)
     }
 
     fn entry_index(&self, path: &str) -> HwpxResult<usize> {
@@ -270,6 +272,43 @@ mod tests {
     use zip::write::SimpleFileOptions;
     use zip::ZipArchive;
     use zip::ZipWriter;
+
+    thread_local! {
+        pub(super) static READ_ALLOCATION: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    // 이것을 실패시키는 것: 소유한 압축 해제 버퍼를 빌려 UTF-8 전체를 복사하기.
+    #[test]
+    fn utf8_parts_reuse_read_allocation() {
+        let paths = [
+            "Contents/header.xml",
+            "Contents/section0.xml",
+            "Contents/masterpage0.xml",
+            "Chart/chart1.xml",
+            "settings.xml",
+            "Contents/content.hpf",
+            "META-INF/container.xml",
+        ];
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><r>가😀</r>";
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("mimetype", SimpleFileOptions::default()).unwrap();
+        zip.write_all(b"application/hwp+zip").unwrap();
+        for path in paths {
+            zip.start_file(path, SimpleFileOptions::default()).unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
+        }
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut reader = PackageReader::new(&bytes).unwrap();
+        for path in paths {
+            let text = reader.read_text_entry(path).unwrap();
+            assert_eq!(text, xml, "{path}");
+            assert_eq!(
+                (text.as_ptr() as usize, text.capacity()),
+                READ_ALLOCATION.get(),
+                "{path} must retain the decompression allocation"
+            );
+        }
+    }
 
     // 이것을 실패시키는 것: 원문 canonical prefix 대신 UTF-8 trim 정확 일치만 사용,
     // 또는 별칭/앞 공백/대소문자까지 prefix 허용 확대.
