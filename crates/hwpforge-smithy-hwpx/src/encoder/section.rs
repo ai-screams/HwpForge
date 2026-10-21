@@ -1208,7 +1208,11 @@ fn build_runs(
                 ledger.sec_pr();
                 result.push(HxRun {
                     origin: 0,
-                    char_pr_id_ref: sink.output_id("charPr", 0)?,
+                    // 이것을 실패시키는 것: secPr carrier에 글자 모양 0을 새로 지정하기.
+                    char_pr_id_ref: sink.output_id(
+                        "charPr",
+                        runs.first().map_or(0, |first| first.char_shape_id.get()),
+                    )?,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
                     tables: Vec::new(),
@@ -2031,7 +2035,11 @@ fn build_runs(
                 0,
                 HxRun {
                     origin: 0,
-                    char_pr_id_ref: sink.output_id("charPr", 0)?,
+                    // 이것을 실패시키는 것: secPr carrier에 글자 모양 0을 새로 지정하기.
+                    char_pr_id_ref: sink.output_id(
+                        "charPr",
+                        runs.first().map_or(0, |first| first.char_shape_id.get()),
+                    )?,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
                     tables: Vec::new(),
@@ -5050,6 +5058,32 @@ mod tests {
             sec_pr > first_run && sec_pr < new_num,
             "secPr 는 첫 run(carrier)에, newNum 은 그 뒤에: secPr@{sec_pr} newNum@{new_num}"
         );
+    }
+
+    // 이것을 실패시키는 것: control-only 첫 문단의 secPr carrier를 글자 모양 0으로 쓰기.
+    #[test]
+    fn secpr_carrier_inherits_first_control_character_shape() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        for with_text in [false, true] {
+            let mut runs = vec![Run::control(
+                Control::NewNumber { kind: NewNumberKind::Page, number: 1 },
+                CharShapeIndex::new(8),
+            )];
+            if with_text {
+                runs.push(Run::text("본문", CharShapeIndex::new(3)));
+            }
+            let section = Section::with_paragraphs(
+                vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+                PageSettings::a4(),
+            );
+            let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+            let start = xml.find("<hp:run").unwrap();
+            let end = start + xml[start..].find('>').unwrap();
+            assert_eq!(&xml[start..=end], r#"<hp:run charPrIDRef="8">"#);
+            assert!(
+                xml[start..].find("<hp:secPr").unwrap() < xml[start..].find("<hp:newNum").unwrap()
+            );
+        }
     }
 
     #[test]

@@ -1859,6 +1859,35 @@ mod tests {
         }
     }
 
+    // 이것을 실패시키는 것: 60% 줄 간격의 빈 첫 문단에 0번 글자 모양 carrier를 합성하기.
+    #[test]
+    fn empty_section_carrier_keeps_character_shape_at_sixty_percent_spacing() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let mut store = HwpxStyleStore::with_default_fonts("바탕");
+        for _ in 0..9 {
+            store.push_char_shape(HwpxCharShape::default());
+        }
+        store.push_para_shape(HwpxParaShape { line_spacing: 60, ..Default::default() });
+        let mut document = Document::new();
+        document.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number: 1 },
+                    CharShapeIndex::new(8),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        ));
+        let bytes =
+            HwpxEncoder::encode(&document.validate().unwrap(), &store, &ImageStore::new()).unwrap();
+        let mut reader = crate::PackageReader::new(&bytes).unwrap();
+        let xml = reader.read_section_xml(0).unwrap();
+        assert!(xml.contains(r#"<hp:run charPrIDRef="8"><hp:secPr"#), "{xml}");
+        let header = reader.read_header_xml().unwrap();
+        assert!(header.contains(r#"type="PERCENT" value="60""#), "{header}");
+    }
+
     #[test]
     fn fix5_memo_anchor_uses_fallible_output_ids() {
         // 이것을 실패시키는 것: 메모 앵커의 내부 0을 출력 0으로 쓰기,
