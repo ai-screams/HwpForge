@@ -310,6 +310,8 @@ trait Sink: Default + Sized {
     fn as_str(&self) -> &str;
     /// A table of `rows` written for this place.
     fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self;
+    /// Content-preserving fallback without a rectangular grid.
+    fn lines(rows: Vec<Vec<Cell>>, notice: &str) -> Self;
 }
 
 impl Sink for Md {
@@ -329,6 +331,9 @@ impl Sink for Md {
     }
     fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self {
         Cell::table(rows, width)
+    }
+    fn lines(rows: Vec<Vec<Cell>>, notice: &str) -> Self {
+        Cell::lines(rows, notice)
     }
 }
 
@@ -350,6 +355,9 @@ impl Sink for Cell {
     fn table(rows: Vec<Vec<Cell>>, width: usize) -> Self {
         Cell::nested_table(rows, width)
     }
+    fn lines(rows: Vec<Vec<Cell>>, notice: &str) -> Self {
+        Cell::cell_lines(rows, notice)
+    }
 }
 
 /// How many tables a lossy table may sit inside; past this depth the inner
@@ -358,6 +366,10 @@ impl Sink for Cell {
 /// once, where it is written, and a table in a cell is drawn cell-safe
 /// (`\|`, `<br>`) instead of being escaped again by every enclosing cell.
 const MAX_TABLE_NESTING: usize = 8;
+
+/// Bound both serialized padding and the GFM parser's implicit empty-cell
+/// allocation by actual input cells, even well below the absolute grid cap.
+const MAX_TABLE_GRID_EXPANSION: u64 = 16;
 
 /// Written in place of a table nested deeper than [`MAX_TABLE_NESTING`].
 const TABLE_TOO_DEEP: &str = "(중첩 표 생략)";
@@ -611,7 +623,7 @@ fn table_to_markdown<S: Sink>(
         warnings.push(super::MdWarning::MergedCellsFlattened { merged_cells });
     }
 
-    let mut rows: Vec<Vec<Cell>> = table
+    let rows: Vec<Vec<Cell>> = table
         .rows
         .iter()
         .map(|row| {
@@ -632,12 +644,49 @@ fn table_to_markdown<S: Sink>(
         .collect();
     // GFM always uses the first physical row as its header; row/cell title
     // markers do not change this existing readable projection.
-    // 이것을 실패시키는 것: 첫 행 너비로 복귀, 헤더/짧은 행 패딩 생략.
+    // 이것을 실패시키는 것: 첫 행 너비로 복귀하거나 헤더 너비 패딩 생략.
     let width = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-    for row in &mut rows {
-        row.resize_with(width, Cell::new);
+    render_table::<S>(rows, width, crate::decoder::MAX_MD_FILE_SIZE)
+}
+
+fn render_table<S: Sink>(rows: Vec<Vec<Cell>>, width: usize, byte_limit: u64) -> S {
+    // Check before materializing padding or asking the GFM parser to expand
+    // short rows. Byte count bounds characters too, including nested syntax.
+    // 이것을 실패시키는 것: 격자/출력 바이트 한도 중 하나를 생략.
+    let positions = (rows.len() as u64).saturating_mul(width as u64);
+    let cells = rows.iter().fold(0_u64, |count, row| count.saturating_add(row.len() as u64));
+    let bytes = table_bytes(&rows, width, !S::BLOCK_TABLES);
+    if positions > hwpforge_core::table::grid::MAX_GRID_POSITIONS
+        || positions > cells.saturating_mul(MAX_TABLE_GRID_EXPANSION)
+        || bytes > byte_limit
+    {
+        let notice = format!(
+            "(표 출력 한도 초과: 격자 {positions}칸, 실제 셀 {cells}개, 출력 {bytes}바이트; \
+             한도 {}칸 / 셀당 {MAX_TABLE_GRID_EXPANSION}칸 / {byte_limit}바이트. \
+             셀별 내용 표시)",
+            hwpforge_core::table::grid::MAX_GRID_POSITIONS,
+        );
+        // Preserve source order, closing each cell's inline syntax at its
+        // source and using separate paragraphs when outside a GFM cell.
+        return S::lines(rows, &notice);
     }
     S::table(rows, width)
+}
+
+/// Exact serialized byte count without constructing padding or the table.
+fn table_bytes(rows: &[Vec<Cell>], width: usize, nested: bool) -> u64 {
+    let bar = if nested { 2_u64 } else { 1 };
+    let newline = if nested { 4_u64 } else { 1 };
+    let mut bytes = (width as u64).saturating_mul(5 + bar) + bar;
+    for row in rows {
+        let columns = width;
+        bytes = bytes.saturating_add(newline + bar);
+        bytes = bytes.saturating_add((columns as u64).saturating_mul(2 + bar));
+        for cell in row {
+            bytes = bytes.saturating_add(cell.as_str().len() as u64);
+        }
+    }
+    bytes
 }
 
 fn image_alt_text(path: &str) -> String {
@@ -672,6 +721,456 @@ mod tests {
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(paragraphs, hwpforge_core::PageSettings::a4()));
         doc.validate().unwrap()
+    }
+
+    fn sparse_table(n: usize) -> Table {
+        let cell = || {
+            TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("KEEP", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hwpforge_foundation::HwpUnit::new(1000).unwrap(),
+            )
+        };
+        Table::new(
+            (0..n)
+                .map(|row| {
+                    TableRow::new((0..if row == 1 { n } else { 1 }).map(|_| cell()).collect())
+                })
+                .collect(),
+        )
+    }
+
+    /// 이것을 실패시키는 것: 격자 팽창률 제한 삭제 또는 파싱 전 셀 내용 손실.
+    #[test]
+    fn sparse_tables_keep_gfm_cells_with_linear_output() {
+        let mut lengths = Vec::new();
+        for n in [8, 16, 32, 64] {
+            let table = sparse_table(n);
+            let (md, warnings) =
+                encode_without_template_report(&validated_document(vec![Paragraph::with_runs(
+                    vec![Run::table(table, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )]))
+                .unwrap();
+            if n <= 16 {
+                assert!(warnings.is_empty(), "{warnings:?}");
+                let blocks = gfm_blocks(&md);
+                let GfmBlock::Table(rows) = &blocks[0] else { panic!("{blocks:?}") };
+                assert_eq!(rows.len(), n);
+                assert!(rows.iter().all(|r| r.len() == n));
+                assert_eq!(
+                    rows.iter().flatten().filter(|s| s.as_str() == "KEEP").count(),
+                    2 * n - 1
+                );
+            } else {
+                assert!(warnings.is_empty());
+                assert!(md.contains("표 출력 한도 초과"));
+                let text: String =
+                    pulldown_cmark::Parser::new_ext(&md, pulldown_cmark::Options::ENABLE_TABLES)
+                        .filter_map(|event| match event {
+                            pulldown_cmark::Event::Text(text) => Some(text.into_string()),
+                            _ => None,
+                        })
+                        .collect();
+                assert_eq!(text.matches("KEEP").count(), 2 * n - 1);
+                assert!(md.len() < (2 * n - 1) * 16, "{}", md.len());
+                lengths.push(md.len());
+            }
+        }
+        assert!(lengths[1] < lengths[0] * 3);
+    }
+
+    /// 이것을 실패시키는 것: 공용 격자 한도/위치 경고 생략, 셀 fallback 재escape.
+    #[test]
+    fn oversized_table_keeps_every_cell_in_body_container_and_cell() {
+        use hwpforge_foundation::HwpUnit;
+        let p = |run| Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        for host in 0..3 {
+            let table = Run::table(sparse_table(1025), CharShapeIndex::new(0));
+            let run = match host {
+                0 => table,
+                1 => Run::control(
+                    Control::text_box(
+                        vec![p(table)],
+                        HwpUnit::new(1000).unwrap(),
+                        HwpUnit::new(1000).unwrap(),
+                    ),
+                    CharShapeIndex::new(0),
+                ),
+                _ => Run::table(
+                    Table::new(vec![TableRow::new(vec![TableCell::new(
+                        vec![p(table)],
+                        HwpUnit::new(1000).unwrap(),
+                    )])]),
+                    CharShapeIndex::new(0),
+                ),
+            };
+            let (md, warnings) = encode_without_template_report(&validated_document(vec![
+                p(Run::text("LEAD", CharShapeIndex::new(0))),
+                p(run),
+            ]))
+            .unwrap();
+            assert!(md.len() < 25_000, "{}", md.len());
+            assert_eq!(md.matches("KEEP").count(), 2049);
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert!(md.contains("격자 1050625칸, 실제 셀 2049개"), "{md}");
+            let text: String =
+                pulldown_cmark::Parser::new_ext(&md, pulldown_cmark::Options::ENABLE_TABLES)
+                    .filter_map(|event| match event {
+                        pulldown_cmark::Event::Text(text) => Some(text.into_string()),
+                        _ => None,
+                    })
+                    .collect();
+            assert_eq!(text.matches("KEEP").count(), 2049);
+        }
+    }
+
+    /// 이것을 실패시키는 것: 절대 격자 한도/팽창률 한도 삭제 또는 경계 변경.
+    #[test]
+    fn table_grid_limits_are_inclusive_and_independent() {
+        // Keep the expansion below 16 so only the absolute grid cap fires.
+        let rows =
+            |count| (0..count).map(|i| vec![Cell::new(); if i == 0 { 1024 } else { 64 }]).collect();
+        let at = render_table::<Md>(rows(1024), 1024, crate::decoder::MAX_MD_FILE_SIZE);
+        assert!(!at.as_str().contains("표 출력 한도 초과"));
+        let over = render_table::<Md>(rows(1025), 1024, crate::decoder::MAX_MD_FILE_SIZE);
+        assert!(over.as_str().contains("표 출력 한도 초과"));
+        let rows = || vec![vec![Cell::new()]; 16];
+        assert!(!render_table::<Md>(rows(), 16, crate::decoder::MAX_MD_FILE_SIZE)
+            .as_str()
+            .contains("표 출력 한도 초과"));
+        assert!(render_table::<Md>(rows(), 17, crate::decoder::MAX_MD_FILE_SIZE)
+            .as_str()
+            .contains("표 출력 한도 초과"));
+    }
+
+    /// 이것을 실패시키는 것: 출력량 경계의 >를 >=로 변경/검사 삭제, fallback 재escape.
+    #[test]
+    fn table_byte_limit_is_inclusive_and_fallback_keeps_markup() {
+        let rows = || vec![vec![Cell::lossy_paragraph(vec![Piece::Text("a\\b|c".into())])]];
+        for nested in [false, true] {
+            let bytes = table_bytes(&rows(), 1, nested);
+            let exact = if nested {
+                render_table::<Cell>(rows(), 1, bytes).as_str().to_owned()
+            } else {
+                render_table::<Md>(rows(), 1, bytes).as_str().to_owned()
+            };
+            assert_eq!(exact.len() as u64, bytes);
+            let fallback = if nested {
+                render_table::<Cell>(rows(), 1, bytes - 1).as_str().to_owned()
+            } else {
+                render_table::<Md>(rows(), 1, bytes - 1).as_str().to_owned()
+            };
+            assert!(fallback.contains("표 출력 한도 초과"));
+            assert!(fallback.contains(r"a\\b\|c"), "{fallback}");
+            assert!(!fallback.contains("---"));
+        }
+    }
+
+    /// 이것을 실패시키는 것: 대체 표현에서 그림 참조 누락/셀 텍스트 재escape.
+    #[test]
+    fn table_fallback_preserves_images_and_text_after_gfm_parse() {
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        for nested in [false, true] {
+            let mut destinations = std::collections::HashSet::new();
+            let image = Md::image(Md::text("picture"), "image.png", &mut destinations).into_cell();
+            let rows = vec![vec![Cell::lossy_paragraph(vec![Piece::Text(r"a\b|c".into())]), image]];
+            let md = if nested {
+                Cell::table(vec![vec![render_table::<Cell>(rows, 2, 0)]], 1)
+            } else {
+                render_table::<Md>(rows, 2, 0)
+            };
+            let mut images = Vec::new();
+            let mut text = String::new();
+            for event in Parser::new_ext(md.as_str(), Options::ENABLE_TABLES) {
+                match event {
+                    Event::Start(Tag::Image { dest_url, .. }) => {
+                        images.push(dest_url.into_string())
+                    }
+                    Event::Text(value) => text.push_str(&value),
+                    _ => {}
+                }
+            }
+            assert_eq!(images, ["image.png"]);
+            assert!(text.contains(r"a\b|c"), "{text}");
+            assert!(!super::super::guard::foreign_markup(
+                md.as_str(),
+                &super::super::guard::Allowed {
+                    tags: super::super::guard::LOSSY_TAGS,
+                    destinations: &destinations,
+                }
+            ));
+        }
+    }
+
+    /// 이것을 실패시키는 것: 셀 원문 구문 보호 삭제, 대체 표현 문단/접두사 제거,
+    /// 생성된 그림/링크를 재escape하거나 정상 중첩 격자의 셀 경계를 무시하기.
+    #[test]
+    fn table_cell_inline_boundaries_survive_gfm_in_every_host() {
+        use hwpforge_core::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit;
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        let unit = HwpUnit::new(1000).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        for (open, close) in [
+            ("`", "`"),
+            ("``", "``"),
+            ("`OPEN", "CLOSE`"),
+            ("[OPEN", "CLOSE](https://foreign.invalid)"),
+            ("[OPEN", "CLOSE][ref]"),
+            ("*OPEN", "CLOSE*"),
+            ("_OPEN", "CLOSE_"),
+            ("~~OPEN", "CLOSE~~"),
+            ("<a title='OPEN", "CLOSE'>"),
+        ] {
+            for n in [8, 32] {
+                for host in 0..3 {
+                    let mut table = sparse_table(n);
+                    table.rows[0].cells[0].paragraphs = vec![p(vec![t(open)])];
+                    table.rows[1].cells[0].paragraphs = vec![p(vec![
+                        Run::image(
+                            Image::new("image.png", unit, unit, ImageFormat::Png),
+                            CharShapeIndex::new(0),
+                        ),
+                        Run::control(
+                            Control::Hyperlink {
+                                text: "LINK".into(),
+                                url: "https://example.invalid/".into(),
+                            },
+                            CharShapeIndex::new(0),
+                        ),
+                        t(r"RAW\a|b"),
+                    ])];
+                    table.rows[1].cells[1].paragraphs = vec![p(vec![t(close)])];
+                    // These become block openers only if fallback loses its inline prefix.
+                    for (cell, raw) in table.rows[1].cells[2..].iter_mut().zip([
+                        "# heading",
+                        "- list",
+                        "1. item",
+                        "> quote",
+                        "[ref]: https://foreign.invalid",
+                    ]) {
+                        cell.paragraphs = vec![p(vec![t(raw)])];
+                    }
+                    let expected: Vec<_> = table
+                        .rows
+                        .iter()
+                        .flat_map(|r| &r.cells)
+                        .flat_map(|c| &c.paragraphs)
+                        .flat_map(|p| &p.runs)
+                        .filter_map(|r| r.content.plain_text().map(|t| t.into_owned()))
+                        .collect();
+                    let run = Run::table(table, CharShapeIndex::new(0));
+                    let run = match host {
+                        0 => run,
+                        1 => Run::control(
+                            Control::text_box(vec![p(vec![run])], unit, unit),
+                            CharShapeIndex::new(0),
+                        ),
+                        _ => Run::table(
+                            Table::new(vec![TableRow::new(vec![TableCell::new(
+                                vec![p(vec![t("OUTER`"), run, t("`TAIL")])],
+                                unit,
+                            )])]),
+                            CharShapeIndex::new(0),
+                        ),
+                    };
+                    let (md, warnings) = encode_without_template_report(&validated_document(vec![
+                        p(vec![t("LEAD")]),
+                        p(vec![run]),
+                        p(vec![t("END")]),
+                    ]))
+                    .unwrap();
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                    assert_eq!(md.contains("표 출력 한도 초과"), n == 32, "{md}");
+                    let mut text = String::new();
+                    let mut images = Vec::new();
+                    let mut links = Vec::new();
+                    let mut paragraphs = Vec::<String>::new();
+                    let mut in_paragraph = false;
+                    for event in
+                        Parser::new_ext(&md, Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH)
+                    {
+                        match event {
+                            Event::Start(Tag::Paragraph) => {
+                                paragraphs.push(String::new());
+                                in_paragraph = true;
+                            }
+                            Event::End(pulldown_cmark::TagEnd::Paragraph) => in_paragraph = false,
+                            Event::Start(Tag::Image { dest_url, .. }) => {
+                                images.push(dest_url.into_string())
+                            }
+                            Event::Start(Tag::Link { dest_url, .. }) => {
+                                links.push(dest_url.into_string())
+                            }
+                            Event::Text(value) => {
+                                text.push_str(&value);
+                                if in_paragraph {
+                                    paragraphs.last_mut().unwrap().push_str(&value);
+                                }
+                            }
+                            Event::Code(_)
+                            | Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough) => {
+                                panic!("cross-cell syntax: {md}")
+                            }
+                            _ => {}
+                        }
+                    }
+                    assert_eq!(images, ["image.png"], "{md}");
+                    assert_eq!(links, ["https://example.invalid/"], "{md}");
+                    for raw in &expected {
+                        assert!(text.contains(raw), "missing {raw:?}: {text}");
+                    }
+                    assert_eq!(
+                        text.matches('`').count(),
+                        expected.iter().map(|raw| raw.matches('`').count()).sum::<usize>()
+                            + if host == 2 { 2 } else { 0 },
+                        "{text}"
+                    );
+                    assert_eq!(
+                        text.matches("KEEP").count(),
+                        expected.iter().filter(|t| t.as_str() == "KEEP").count()
+                    );
+                    assert!(text.starts_with("LEAD") && text.ends_with("END"), "{text}");
+                    if host == 2 {
+                        assert!(text.contains("OUTER`") && text.contains("`TAIL"), "{text}");
+                    }
+                    if n == 32 && host != 2 {
+                        assert!(paragraphs.iter().any(|s| s == open), "{paragraphs:?}");
+                        assert!(paragraphs.iter().any(|s| s == close), "{paragraphs:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: 셀 안 문단/컨테이너/캡션의 원문 구문 보호 삭제.
+    #[test]
+    fn cell_fragment_inline_boundaries_preserve_text_and_objects() {
+        use hwpforge_core::caption::{Caption, CaptionSide};
+        use hwpforge_core::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit;
+        use pulldown_cmark::{Event, Options, Parser, Tag};
+        let unit = HwpUnit::new(1000).unwrap();
+        let p = |runs| Paragraph::with_runs(runs, ParaShapeIndex::new(0));
+        let t = |text: &str| Run::text(text, CharShapeIndex::new(0));
+        for (open, close) in [
+            ("`OPEN", "CLOSE`"),
+            ("[OPEN", "CLOSE](https://foreign.invalid)"),
+            ("*OPEN", "CLOSE*"),
+            ("[OPEN", "CLOSE]"),
+        ] {
+            for fragment in 0..4 {
+                let mut image = Image::new("image.png", unit, unit, ImageFormat::Png);
+                if fragment == 2 {
+                    image.caption = Some(Caption::new(vec![p(vec![t(open)])], CaptionSide::Bottom));
+                }
+                if fragment == 3 {
+                    image.caption =
+                        Some(Caption::new(vec![p(vec![t(close)])], CaptionSide::Bottom));
+                }
+                let objects = vec![
+                    Run::image(image, CharShapeIndex::new(0)),
+                    Run::control(
+                        Control::Hyperlink {
+                            text: "LINK".into(),
+                            url: "https://example.invalid/".into(),
+                        },
+                        CharShapeIndex::new(0),
+                    ),
+                ];
+                let paragraphs = match fragment {
+                    0 => vec![p(vec![t(open)]), p(objects), p(vec![t(close)])],
+                    1 => vec![p(vec![Run::control(
+                        Control::text_box(
+                            vec![p(vec![t(open)]), p(objects), p(vec![t(close)])],
+                            unit,
+                            unit,
+                        ),
+                        CharShapeIndex::new(0),
+                    )])],
+                    2 => vec![p(objects), p(vec![t(close)])],
+                    _ => vec![p(vec![
+                        objects[1].clone(),
+                        t(open),
+                        objects[0].clone(),
+                        t("(https://foreign.invalid)"),
+                    ])],
+                };
+                let table = Table::new(vec![TableRow::new(vec![TableCell::new(paragraphs, unit)])]);
+                let md = encode_without_template(&validated_document(vec![p(vec![Run::table(
+                    table,
+                    CharShapeIndex::new(0),
+                )])]))
+                .unwrap();
+                let mut text = String::new();
+                let mut images = Vec::new();
+                let mut links = Vec::new();
+                for event in Parser::new_ext(&md, Options::ENABLE_TABLES) {
+                    match event {
+                        Event::Start(Tag::Image { dest_url, .. }) => {
+                            images.push(dest_url.into_string())
+                        }
+                        Event::Start(Tag::Link { dest_url, .. }) => {
+                            links.push(dest_url.into_string())
+                        }
+                        Event::Text(value) => text.push_str(&value),
+                        Event::Code(_) | Event::Start(Tag::Emphasis | Tag::Strong) => {
+                            panic!("cross-fragment syntax: {md}")
+                        }
+                        _ => {}
+                    }
+                }
+                assert_eq!(images, ["image.png"], "{md}");
+                assert_eq!(links, ["https://example.invalid/"], "{md}");
+                assert!(
+                    text.contains(open) && text.contains(close) && text.contains("LINK"),
+                    "{text}"
+                );
+            }
+        }
+        // A serialized caption's tail must not form an entity with later
+        // raw text, or turn a generated link into an image.
+        for (caption, tail, expected) in [("CAP&am", "p;", "CAP&amp;"), ("!", "", "!")] {
+            let mut image = Image::new("image.png", unit, unit, ImageFormat::Png);
+            image.caption = Some(Caption::new(vec![p(vec![t(caption)])], CaptionSide::Bottom));
+            let runs = vec![
+                Run::image(image, CharShapeIndex::new(0)),
+                t(tail),
+                Run::control(
+                    Control::Hyperlink {
+                        text: "LINK".into(),
+                        url: "https://example.invalid/".into(),
+                    },
+                    CharShapeIndex::new(0),
+                ),
+            ];
+            let table = Table::new(vec![TableRow::new(vec![TableCell::new(vec![p(runs)], unit)])]);
+            let (md, warnings) = encode_without_template_report(&validated_document(vec![p(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+            )]))
+            .unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let mut text = String::new();
+            let mut images = Vec::new();
+            let mut links = Vec::new();
+            for event in Parser::new_ext(&md, Options::ENABLE_TABLES) {
+                match event {
+                    Event::Start(Tag::Image { dest_url, .. }) => {
+                        images.push(dest_url.into_string())
+                    }
+                    Event::Start(Tag::Link { dest_url, .. }) => links.push(dest_url.into_string()),
+                    Event::Text(value) => text.push_str(&value),
+                    _ => {}
+                }
+            }
+            assert_eq!(images, ["image.png"], "{md}");
+            assert_eq!(links, ["https://example.invalid/"], "{md}");
+            assert!(text.contains(expected), "{text}");
+        }
     }
 
     #[test]

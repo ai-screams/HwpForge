@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- *(md)* lossy Markdown에 컨테이너 안 표·그림 참조를 포함하고 캡션·표를 독립 블록으로 분리한다. 표 너비는 가장 넓은 행을 기준으로 하며, lossy 모드는 이미지 바이트를 추출하지 않는다.
+
+- *(md)* 불균일 표의 빈 셀 객체 패딩을 제거하고 GFM 격자·출력 크기를 제한한다. 한도를 넘는 표는 셀별 대체 표현으로 바꾸고 해당 위치에 초과한 한도를 명시한다. 본문·컨테이너에서는 셀을 독립 문단으로, 외부 셀 안에서는 원문의 인라인 구문을 이스케이프하여 셀 간 결합 없이 텍스트·그림 참조·링크를 보존한다. 정상 중첩 표와 셀 안 문단·캡션에도 같은 구문 보호를 적용하며, 기존 중첩 깊이 제한은 유지한다.
+
 ## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.9...hwpforge-smithy-md-v0.16.10) - 2026-10-04
 
 ### Documentation

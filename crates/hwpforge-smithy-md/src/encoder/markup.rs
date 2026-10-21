@@ -254,7 +254,8 @@ impl Cell {
     }
 
     /// [`Md::lossy_paragraph`] in a lossy cell, with the cell's own escapes
-    /// in the same pass (every `\` doubled, `|`, line endings).
+    /// in the same pass (every `\` doubled, `|`, line endings). Raw inline
+    /// delimiters stay literal even when cells or paragraphs are flattened.
     pub(crate) fn lossy_paragraph(pieces: Vec<Piece<Cell>>) -> Self {
         Self(escape_pieces(pieces.into_iter().map(|p| p.map(|c| c.0)).collect(), true))
     }
@@ -274,7 +275,8 @@ impl Cell {
     pub(crate) fn table(rows: Vec<Vec<Cell>>, width: usize) -> Md {
         let mut lines = Vec::new();
         for (i, row) in rows.into_iter().enumerate() {
-            lines.push(row_line(row, "|"));
+            let columns = width;
+            lines.push(row_line(row, columns, "|"));
             if i == 0 {
                 lines.push(rule_line(width, "|"));
             }
@@ -286,12 +288,39 @@ impl Cell {
     pub(crate) fn nested_table(rows: Vec<Vec<Cell>>, width: usize) -> Cell {
         let mut lines = Vec::new();
         for (i, row) in rows.into_iter().enumerate() {
-            lines.push(row_line(row, "\\|"));
+            let columns = width;
+            lines.push(row_line(row, columns, "\\|"));
             if i == 0 {
                 lines.push(rule_line(width, "\\|"));
             }
         }
         Cell(lines.join("<br>"))
+    }
+
+    /// Each cell's raw inline delimiters were escaped at its source. `<br>`
+    /// alone would not stop code, links or emphasis spanning adjacent cells.
+    pub(crate) fn cell_lines(rows: Vec<Vec<Cell>>, notice: &str) -> Cell {
+        let mut out = notice.to_owned();
+        for cell in rows.into_iter().flatten() {
+            out.push_str("<br>");
+            out.push_str(cell.as_str());
+        }
+        Cell(out)
+    }
+
+    /// Content-preserving degradation without rectangular grid expansion.
+    pub(crate) fn lines(rows: Vec<Vec<Cell>>, notice: &str) -> Md {
+        let mut out = notice.to_owned();
+        for row in rows {
+            for cell in row {
+                // Separate parsing contexts; the inline prefix also keeps a
+                // cell starting with `#`, `-`, etc. from becoming a block.
+                // 이것을 실패시키는 것: 셀 문단 경계/블록 접두사 제거.
+                out.push_str("\n\n<br>");
+                out.push_str(cell.as_str());
+            }
+        }
+        Md(out)
     }
 
     /// The markup.
@@ -321,12 +350,20 @@ fn join(out: &mut String, next: &str) {
     out.push_str(next);
 }
 
-fn row_line(row: Vec<Cell>, bar: &str) -> String {
-    if row.is_empty() {
+fn row_line(row: Vec<Cell>, width: usize, bar: &str) -> String {
+    if row.is_empty() && width <= 1 {
         return format!("{bar} {bar}");
     }
-    let cells: Vec<String> = row.into_iter().map(|c| c.0).collect();
-    format!("{bar} {} {bar}", cells.join(&format!(" {bar} ")))
+    let mut out = String::from(bar);
+    for index in 0..width.max(1) {
+        out.push(' ');
+        if let Some(cell) = row.get(index) {
+            out.push_str(cell.as_str());
+        }
+        out.push(' ');
+        out.push_str(bar);
+    }
+    out
 }
 
 fn rule_line(width: usize, bar: &str) -> String {
@@ -530,7 +567,9 @@ impl<M> Piece<M> {
 /// A backslash run just before an escaped character is doubled, so it stays
 /// text and the escape still applies. With `cell`, the text is a GFM table
 /// cell's: every `\` is escaped, `|` is `\|` and a line break `<br>` — in
-/// one pass, so no escape is escaped again. The text has `\n` line endings.
+/// one pass, so no escape is escaped again. Raw backticks, brackets and
+/// emphasis delimiters are escaped too: separately serialized fragments can
+/// share a cell's final inline context. The text has `\n` line endings.
 /// 이것을 실패시키는 것: 규칙 하나씩 삭제 · 역슬래시 겹치기 삭제 · 칸에서 두 번
 /// escape 하기 · 링크 너머 글자를 따로 판정하기
 /// (`lossy_text_escapes_only_markup`, `markup_safety`).
@@ -588,6 +627,11 @@ fn escape_pieces_scanned(pieces: Vec<Piece<String>>, cell: bool) -> (String, Fen
         }
         let next = chars.get(i + 1).copied();
         let escape = match c {
+            // Cell paragraphs, captions and nested tables share one final
+            // inline context. Close raw syntax here, while text and generated
+            // markup are still distinct, never by re-escaping a finished Cell.
+            // 이것을 실패시키는 것: 셀 원문의 백틱/링크/강조 구문 보호 삭제.
+            '`' | '[' | ']' | '*' | '_' | '~' | '<' | '&' | '!' if cell => true,
             '\\' => cell,
             '|' => cell,
             '`' | '~' if !cell && fence => true,
@@ -899,7 +943,7 @@ mod tests {
                             cell,
                         );
                         let fenced = matches!(prefix, "" | "   " | "x\n") && !cell;
-                        let ticks = if fenced || !suffix.is_empty() {
+                        let ticks = if cell || fenced || !suffix.is_empty() {
                             "\\`".repeat(n)
                         } else {
                             "`".repeat(n)
