@@ -89,7 +89,11 @@ impl<'a> PackageReader<'a> {
 
     /// Validates the `mimetype` file in the archive.
     fn validate_mimetype(&mut self) -> HwpxResult<()> {
-        let content = self.read_entry(MIMETYPE_PATH)?;
+        let bytes = self.read_binary_entry(MIMETYPE_PATH)?;
+        if bytes.starts_with(b"application/hwp+zip") {
+            return Ok(());
+        }
+        let content = String::from_utf8_lossy(&bytes);
         let trimmed = content.trim();
 
         if !ACCEPTED_MIMETYPES.contains(&trimmed) {
@@ -266,6 +270,32 @@ mod tests {
     use zip::write::SimpleFileOptions;
     use zip::ZipArchive;
     use zip::ZipWriter;
+
+    // 이것을 실패시키는 것: 원문 canonical prefix 대신 UTF-8 trim 정확 일치만 사용,
+    // 또는 별칭/앞 공백/대소문자까지 prefix 허용 확대.
+    #[test]
+    fn w3_mimetype_bytes() {
+        use std::io::Write;
+        for (value, accepted) in [
+            (b"application/hwp+zip;x=1".as_slice(), true),
+            (b"application/hwp+zipFAKE\0\xff", true),
+            (b" application/hwp+zip ", true),
+            (b" application/haansofthwp+zip\n", true),
+            (b"application/vnd.hancom.hwp+zip\t", true),
+            (b"application/hwp+zi", false),
+            (b"APPLICATION/hwp+zip", false),
+            (b" application/hwp+zip;x=1", false),
+            (b"application/haansofthwp+zip;x=1", false),
+            (b"application/vnd.hancom.hwp+zip;x=1", false),
+            (b"\xef\xbb\xbfapplication/hwp+zip", false),
+        ] {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            zip.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(value).unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            assert_eq!(PackageReader::new(&bytes).is_ok(), accepted, "{value:?}");
+        }
+    }
 
     /// Helper: creates a minimal valid HWPX ZIP in memory.
     fn make_hwpx_zip(mimetype: &str, header_xml: &str, sections: &[&str]) -> Vec<u8> {
