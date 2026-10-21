@@ -6709,16 +6709,14 @@
         },
         "width_adjust": {
           "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+          "format": "int32"
         },
         "text_offset_type": {
           "type": "string"
         },
         "text_offset": {
           "type": "integer",
-          "format": "uint32",
-          "minimum": 0
+          "format": "int32"
         },
         "char_pr_id_ref": {
           "type": "integer",

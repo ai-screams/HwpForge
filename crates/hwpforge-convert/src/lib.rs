@@ -371,6 +371,16 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
         match slot.numbering.as_ref() {
             Some(raw) => {
                 out.push_numbering(raw.to_core_numbering_def(slot.id));
+                let position = out.numbering_count() as u32;
+                for head in &raw.paragraph_heads {
+                    style_store_convert::carry_head_metrics(
+                        &mut out,
+                        HeadingType::Number,
+                        position,
+                        head,
+                        &mut warnings,
+                    )?;
+                }
                 numbering_positions.push(Some(out.numbering_count() as u32));
             }
             None => {
@@ -406,6 +416,14 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
                     );
                 }
                 out.push_bullet(raw.to_core_bullet_def(slot.id));
+                let position = out.bullet_count() as u32;
+                style_store_convert::carry_head_metrics(
+                    &mut out,
+                    HeadingType::Bullet,
+                    position,
+                    &raw.paragraph_head,
+                    &mut warnings,
+                )?;
                 bullet_positions.push(Some(out.bullet_count() as u32));
             }
             None => {
@@ -498,26 +516,6 @@ pub(crate) fn hwp5_style_store_to_hwpx_with_image_ids(
     // Resolve source IDs before adding output-only definitions. Otherwise an
     // absent source border could accidentally resolve to the appended empty fill.
     references.validate(&out, false)?;
-    for (kind, id, heads) in store
-        .numberings
-        .iter()
-        .filter_map(|s| {
-            s.numbering.as_ref().map(|n| ("numbering", s.id, n.paragraph_heads.as_slice()))
-        })
-        .chain(store.bullets.iter().filter_map(|s| {
-            s.bullet.as_ref().map(|b| ("bullet", s.id, std::slice::from_ref(&b.paragraph_head)))
-        }))
-    {
-        for head in heads {
-            if head.char_shape_id != u32::MAX {
-                references.char_index(head.char_shape_id)?;
-                warnings.push(Hwp5Warning::ParserFallback {
-                    subject: "list_head.charPr",
-                    reason: format!("{kind} {id} level {}: validated charPr {} is not carried by Core; output inherits paragraph text style", head.level, head.char_shape_id),
-                });
-            }
-        }
-    }
     if border_fills.is_empty() {
         push_required_border_fills(&mut out);
     }

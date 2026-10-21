@@ -24,9 +24,9 @@ pub(crate) struct HeadMetrics {
     pub align: String,
     pub use_inst_width: u32,
     pub auto_indent: u32,
-    pub width_adjust: u32,
+    pub width_adjust: i32,
     pub text_offset_type: String,
-    pub text_offset: u32,
+    pub text_offset: i32,
     pub char_pr_id_ref: u32,
 }
 

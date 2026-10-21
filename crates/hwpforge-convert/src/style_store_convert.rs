@@ -737,3 +737,43 @@ fn font_groups_from_id_mappings<'a>(
         slice
     })))
 }
+
+/// Carry list-head layout through the destination's existing private fidelity store.
+/// 이것을 실패시키는 것: HWP5 paraHead metrics를 버리거나 unsigned로 감아 출력하기.
+pub(crate) fn carry_head_metrics(
+    out: &mut HwpxStyleStore,
+    kind: HeadingType,
+    position: u32,
+    head: &hwpforge_smithy_hwp5::schema::header::Hwp5RawNumberingParaHead,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> hwpforge_smithy_hwpx::HwpxResult<()> {
+    use hwpforge_foundation::Alignment;
+    let align = match head.attributes & 3 {
+        0 => Alignment::Left,
+        1 => Alignment::Center,
+        2 => Alignment::Right,
+        bits => {
+            push_projection_fallback(
+                warnings,
+                "list_head.align",
+                format!(
+                    "{kind:?} {position} level {}: unknown alignment {bits}; using LEFT",
+                    head.level
+                ),
+            );
+            Alignment::Left
+        }
+    };
+    out.set_paragraph_head_metrics(
+        kind,
+        position,
+        u32::from(head.level) + 1,
+        align,
+        head.attributes & 4 != 0,
+        head.attributes & 8 != 0,
+        i32::from(head.width_adjust),
+        i32::from(head.text_offset),
+        head.attributes & 16 != 0,
+        head.char_shape_id,
+    )
+}

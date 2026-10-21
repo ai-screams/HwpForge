@@ -1064,13 +1064,13 @@ pub struct HxBulletParaHead {
     pub auto_indent: u32,
     /// Width adjustment.
     #[serde(rename = "@widthAdjust", default)]
-    pub width_adjust: u32,
+    pub width_adjust: i32,
     /// Text offset type (e.g. "PERCENT").
     #[serde(rename = "@textOffsetType", default)]
     pub text_offset_type: String,
     /// Text offset value.
     #[serde(rename = "@textOffset", default)]
-    pub text_offset: u32,
+    pub text_offset: i32,
     /// Number format string.
     #[serde(rename = "@numFormat", default)]
     pub num_format: String,
@@ -1105,13 +1105,13 @@ pub struct HxParaHead {
     pub auto_indent: u32,
     /// Width adjustment.
     #[serde(rename = "@widthAdjust", default)]
-    pub width_adjust: u32,
+    pub width_adjust: i32,
     /// Text offset type (e.g. "PERCENT").
     #[serde(rename = "@textOffsetType", default)]
     pub text_offset_type: String,
     /// Text offset value.
     #[serde(rename = "@textOffset", default)]
-    pub text_offset: u32,
+    pub text_offset: i32,
     /// Number format string (e.g. "DIGIT", "HANGUL_SYLLABLE").
     #[serde(rename = "@numFormat", default)]
     pub num_format: String,

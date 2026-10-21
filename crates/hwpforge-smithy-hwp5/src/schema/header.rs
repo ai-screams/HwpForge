@@ -291,9 +291,16 @@ impl Hwp5RawIdMappings {
 ///
 /// HWP5 stores the semantic list identity here: a shared numbering ID with up
 /// to 10 paragraph heads. Only the fields needed to preserve ordered-list
-/// semantics are retained; layout-only attributes are parsed and discarded.
+/// semantics and paragraph-head layout are retained for the destination style store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5RawNumberingParaHead {
+    /// Paragraph-head attribute word (alignment, instance width, indent and offset unit).
+    pub attributes: u32,
+    /// Signed number/bullet width adjustment in HWPUNIT.
+    pub width_adjust: i16,
+    /// Signed distance from the number/bullet to its text, in the attribute-selected unit.
+    pub text_offset: i16,
+
     /// Original character definition ID; u32::MAX means inherit.
     pub char_shape_id: u32,
     /// Start number for this level.
@@ -1310,10 +1317,6 @@ fn parse_numbering_para_head(
     numbering: bool,
 ) -> Hwp5Result<Hwp5RawNumberingParaHead> {
     let attribute = cur.read_u32::<LittleEndian>()?;
-    let _align_bits = (attribute & 0b11) as u8;
-    let _use_instance_width = (attribute >> 2) & 1 != 0;
-    let _auto_indent = (attribute >> 3) & 1 != 0;
-    let _text_offset_kind = ((attribute >> 4) & 1) as u8;
     // Bit 5 of the paragraph-head attribute is the checkable (checkbox bullet)
     // flag. It is only meaningful for BULLET records — NUMBERING records leave
     // it clear — so reading it unconditionally is safe: numbering and
@@ -1321,8 +1324,8 @@ fn parse_numbering_para_head(
     // BULLET records (`sample-checkable-bullet-*.hwp` carry attribute 0x28 with
     // bit 5 set; `sample-bullet-list.hwp` carries 0x08 with bit 5 clear).
     let checkable = (attribute >> 5) & 1 != 0;
-    let _width_adjust = cur.read_i16::<LittleEndian>()?;
-    let _text_offset = cur.read_i16::<LittleEndian>()?;
+    let width_adjust = cur.read_i16::<LittleEndian>()?;
+    let text_offset = cur.read_i16::<LittleEndian>()?;
     let char_shape_id = cur.read_u32::<LittleEndian>()?;
     let (num_format, text) = if numbering {
         (numbering_attr_num_format(attribute).to_string(), read_utf16le_string(cur)?)
@@ -1330,7 +1333,11 @@ fn parse_numbering_para_head(
         (String::new(), String::new())
     };
 
+    // 이것을 실패시키는 것: signed 폭·간격과 공통 속성을 읽은 뒤 버리기.
     Ok(Hwp5RawNumberingParaHead {
+        attributes: attribute,
+        width_adjust,
+        text_offset,
         char_shape_id,
         start_number: 1,
         level,

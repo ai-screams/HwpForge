@@ -396,6 +396,9 @@ fn to_hwpx_style_store_projects_numberings_and_warns_on_bullets() {
     let numbering = Hwp5RawNumberingDef {
         start: 1,
         paragraph_heads: vec![Hwp5RawNumberingParaHead {
+            attributes: 12,
+            width_adjust: 0,
+            text_offset: 50,
             char_shape_id: u32::MAX,
             start_number: 1,
             level: 0,
@@ -2518,6 +2521,9 @@ fn numbering_count_mismatch_emits_projection_fallback_warning() {
     let numbering = Hwp5RawNumberingDef {
         start: 1,
         paragraph_heads: vec![Hwp5RawNumberingParaHead {
+            attributes: 12,
+            width_adjust: 0,
+            text_offset: 50,
             char_shape_id: u32::MAX,
             start_number: 1,
             level: 0,
@@ -3095,7 +3101,7 @@ fn fix3_output_only_border_cannot_satisfy_source_reference() {
 #[test]
 fn fix4_list_head_char_reference_survives_parsing_until_lookup() {
     // 이것을 실패시키는 것: 머리의 charShape ID 폐기/0 치환,
-    // numbering 또는 bullet의 공통 조회 생략, 비보존 경고 누락.
+    // numbering 또는 bullet의 공통 조회 생략, 보존된 참조를 다시 버리기.
     for kind in ["numbering", "bullet"] {
         for id in [0u32, 99, u32::MAX] {
             let mut bytes = make_bullet_def_bytes(false);
@@ -3117,12 +3123,16 @@ fn fix4_list_head_char_reference_survives_parsing_until_lookup() {
             if id == 99 {
                 assert!(result.unwrap_err().to_string().contains("charPr"));
             } else {
-                let (_, warnings) = result.unwrap();
+                let (converted, warnings) = result.unwrap();
+                assert!(!warnings.iter().any(|w| matches!(
+                    w,
+                    Hwp5Warning::ParserFallback { subject: "list_head.charPr", .. }
+                )));
+                let value = serde_json::to_value(&converted).unwrap();
                 assert_eq!(
-                    warnings.iter().any(|w| matches!(w,
-                    Hwp5Warning::ParserFallback { subject: "list_head.charPr", reason }
-                    if reason.contains(kind))),
-                    id != u32::MAX
+                    value["header_fidelity"][kind]["1"]
+                        [if kind == "numbering" { "1" } else { "0" }]["char_pr_id_ref"],
+                    id
                 );
             }
         }
@@ -3315,6 +3325,72 @@ fn next_style_recovery_matches_hwpx_and_preserves_valid_boundaries() {
             assert_eq!(losses[0].0, "style.nextStyleIDRef");
             assert_eq!(losses[0].1, format!("style position 17: nextStyleIDRef {next} out of range 19; replaced with self 17"));
             assert_eq!(decoded.style_store.iter_styles().nth(17).unwrap().next_style_id_ref, 17);
+        }
+    }
+}
+
+// 이것을 실패시키는 것: signed widthAdjust/textOffset 또는 같은 레코드 속성을 버리기,
+// source slot ID로 metrics를 연결하기, JSON에서 보존값을 잃기.
+#[test]
+fn paragraph_head_metrics_survive_hwp5_conversion_json_and_hwpx() {
+    use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore, PackageReader};
+    for kind in ["numbering", "bullet"] {
+        for attributes in [8u32, 2 | 4 | 16, 3 | 8] {
+            let mut bytes = make_bullet_def_bytes(false);
+            bytes[..4].copy_from_slice(&attributes.to_le_bytes());
+            bytes[4..6].copy_from_slice(&(-700i16).to_le_bytes());
+            bytes[6..8].copy_from_slice(&(-25i16).to_le_bytes());
+            bytes[8..12].copy_from_slice(&0u32.to_le_bytes());
+            let raw = Hwp5RawBulletDef::parse(&bytes).unwrap();
+            assert_eq!(raw.paragraph_head.width_adjust, -700);
+            assert_eq!(raw.paragraph_head.text_offset, -25);
+            assert_eq!(raw.paragraph_head.attributes, attributes);
+            let mut source = Hwp5StyleStore::from_doc_info(&empty_doc_info());
+            source.char_shapes.push(default_char_shape());
+            source.para_shapes.push(default_para_shape());
+            if kind == "numbering" {
+                source.numberings = vec![
+                    Hwp5DocInfoNumberingSlot { id: 1, numbering: None },
+                    numbering_slot(
+                        2,
+                        Hwp5RawNumberingDef { start: 1, paragraph_heads: vec![raw.paragraph_head] },
+                    ),
+                ];
+            } else {
+                source.bullets =
+                    vec![Hwp5DocInfoBulletSlot { id: 1, bullet: None }, bullet_slot(2, raw)];
+            }
+            let (store, warnings) = crate::hwp5_style_store_to_hwpx(&source).unwrap();
+            assert_eq!(
+                warnings.iter().any(|w| matches!(
+                    w,
+                    Hwp5Warning::ProjectionFallback { subject: "list_head.align", .. }
+                )),
+                attributes & 3 == 3
+            );
+            let stored: HwpxStyleStore =
+                serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+            let bytes = encode_test_header(&stored);
+            let header = PackageReader::new(&bytes).unwrap().read_header_xml().unwrap();
+            for attr in [
+                r#"widthAdjust="-700""#,
+                r#"textOffset="-25""#,
+                r#"charPrIDRef="0""#,
+                if attributes & 16 != 0 {
+                    r#"textOffsetType="HWPUNIT""#
+                } else {
+                    r#"textOffsetType="PERCENT""#
+                },
+                if attributes & 4 != 0 { r#"useInstWidth="1""# } else { r#"useInstWidth="0""# },
+                if attributes & 8 != 0 { r#"autoIndent="1""# } else { r#"autoIndent="0""# },
+                if attributes & 3 == 2 { r#"align="RIGHT""# } else { r#"align="LEFT""# },
+            ] {
+                assert!(header.contains(attr), "{kind}/{attr}: {header}");
+            }
+            let reread = HwpxDecoder::decode(&bytes).unwrap();
+            let output = encode_test_header(&reread.style_store);
+            let output_header = PackageReader::new(&output).unwrap().read_header_xml().unwrap();
+            assert_eq!(header, output_header);
         }
     }
 }

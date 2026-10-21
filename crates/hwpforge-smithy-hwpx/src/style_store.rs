@@ -1533,6 +1533,86 @@ impl HwpxStyleStore {
         self.bullets.push(bullet);
     }
 
+    /// Sets the preserved layout of one existing numbering or bullet paragraph head.
+    ///
+    /// `position` is the one-based definition position, not its public ID label.
+    /// `level` uses the Core head level (one-based for HWP5); bullet storage maps
+    /// it to the wire's zero-based level, just like the ordinary bullet writer.
+    /// Width and text distance are signed; `offset_in_hwpunit` selects HWPUNIT
+    /// instead of percent. `char_pr_id_ref == u32::MAX` means inherit.
+    /// Values are carried in the existing private fidelity/JSON path, without
+    /// adding fields to Core paragraph heads. Reference validation still applies.
+    ///
+    /// # Errors
+    /// Returns an error for an absent definition/level or unsupported heading/alignment.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_paragraph_head_metrics(
+        &mut self,
+        kind: HeadingType,
+        position: u32,
+        level: u32,
+        align: Alignment,
+        use_inst_width: bool,
+        auto_indent: bool,
+        width_adjust: i32,
+        text_offset: i32,
+        offset_in_hwpunit: bool,
+        char_pr_id_ref: u32,
+    ) -> HwpxResult<()> {
+        let invalid = || HwpxError::InvalidStructure {
+            detail: format!(
+                "paragraph head metrics: invalid {kind:?} position {position} level {level}"
+            ),
+        };
+        let index = position.checked_sub(1).ok_or_else(invalid)? as usize;
+        let (target, wire_level, default_width) = match kind {
+            HeadingType::Number | HeadingType::Outline => {
+                if !self
+                    .numberings
+                    .get(index)
+                    .is_some_and(|d| d.levels.iter().any(|h| h.level == level))
+                {
+                    return Err(invalid());
+                }
+                (&mut self.header_fidelity.numbering, level, 1)
+            }
+            HeadingType::Bullet => {
+                if self.bullets.get(index).is_none_or(|d| d.para_head.level != level) {
+                    return Err(invalid());
+                }
+                (&mut self.header_fidelity.bullet, level.saturating_sub(1), 0)
+            }
+            _ => return Err(invalid()),
+        };
+        let align = match align {
+            Alignment::Left => "LEFT",
+            Alignment::Center => "CENTER",
+            Alignment::Right => "RIGHT",
+            _ => return Err(invalid()),
+        };
+        let metrics = fidelity::HeadMetrics {
+            align: align.into(),
+            use_inst_width: u32::from(use_inst_width),
+            auto_indent: u32::from(auto_indent),
+            width_adjust,
+            text_offset_type: if offset_in_hwpunit { "HWPUNIT" } else { "PERCENT" }.into(),
+            text_offset,
+            char_pr_id_ref,
+        };
+        // 이것을 실패시키는 것: 새 값만 인코더에 직접 쓰거나 기존 JSON 보존 경로를 우회하기.
+        if metrics == fidelity::HeadMetrics::generated(default_width) {
+            if let Some(levels) = target.get_mut(&position) {
+                levels.remove(&wire_level);
+                if levels.is_empty() {
+                    target.remove(&position);
+                }
+            }
+        } else {
+            target.entry(position).or_default().insert(wire_level, metrics);
+        }
+        Ok(())
+    }
+
     /// Appends a tab property definition at the next zero-based position.
     /// References use this position; the supplied `id` is ignored and
     /// renumbered when encoding.
