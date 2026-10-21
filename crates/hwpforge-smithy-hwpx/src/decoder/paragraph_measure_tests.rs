@@ -457,3 +457,93 @@ fn w2fix1_tab_normalization_compares_encoder_payloads() {
         assert!(parsed.requires_header_normalization, "{change}");
     }
 }
+
+// 이것을 실패시키는 것: switch 개수 비교 / case·default의 단위·순서·branch 검사를 생략하기.
+#[test]
+fn split_tab_switches_compare_ordered_case_and_default_payloads() {
+    use crate::schema::header::{HxHead, HxTabSwitch, HxTabSwitchCase, HxTabSwitchDefault};
+    let mut store = HwpxStyleStore::new();
+    store.push_tab(hwpforge_core::TabDef {
+        id: 0,
+        auto_tab_left: false,
+        auto_tab_right: false,
+        stops: [1000, 2000, 3000]
+            .map(|value| hwpforge_core::TabStop {
+                position: ParagraphMeasure::from_char_count(CharCount::from_ticks(value)),
+                align: hwpforge_foundation::TabAlign::Left,
+                leader: hwpforge_foundation::TabLeader::none(),
+            })
+            .to_vec(),
+    });
+    let xml = crate::encoder::header::encode_header(&store, 1, None).unwrap();
+    let parsed = parse_header(&xml).unwrap();
+    assert!(!parsed.requires_header_normalization);
+    for change in [
+        "split",
+        "default-unit",
+        "case-unit",
+        "default-order",
+        "default-value",
+        "default-count",
+        "missing-default",
+        "unknown-case",
+        "unknown-only",
+        "duplicate-case",
+    ] {
+        let mut head: HxHead = crate::decoder::xml_from_str(&xml).unwrap();
+        let tab = &mut head.ref_list.as_mut().unwrap().tab_properties.as_mut().unwrap().items[0];
+        let original = tab.switches.remove(0);
+        tab.switches = original.cases[0]
+            .items
+            .iter()
+            .zip(&original.default.as_ref().unwrap().items)
+            .map(|(case, default)| HxTabSwitch {
+                cases: vec![HxTabSwitchCase {
+                    required_namespace: NS.into(),
+                    items: vec![case.clone()],
+                }],
+                default: Some(HxTabSwitchDefault { items: vec![default.clone()] }),
+            })
+            .collect();
+        match change {
+            "split" => {}
+            "default-unit" => {
+                tab.switches[0].default.as_mut().unwrap().items[0].unit = "HWPUNIT".into()
+            }
+            "case-unit" => tab.switches[0].cases[0].items[0].unit = String::new(),
+            "default-order" => {
+                let first = tab.switches[0].default.clone();
+                tab.switches[0].default = tab.switches[1].default.clone();
+                tab.switches[1].default = first;
+            }
+            "default-value" => tab.switches[0].default.as_mut().unwrap().items[0].pos += 1,
+            "default-count" => tab.switches[0].default.as_mut().unwrap().items.clear(),
+            "missing-default" => tab.switches[0].default = None,
+            "unknown-case" | "duplicate-case" => {
+                let mut extra = tab.switches[0].cases[0].clone();
+                if change == "unknown-case" {
+                    extra.required_namespace = "urn:unknown".into();
+                }
+                tab.switches[0].cases.push(extra);
+            }
+            "unknown-only" => tab.switches[0].cases[0].required_namespace = "urn:unknown".into(),
+            _ => unreachable!(),
+        }
+        #[allow(clippy::disallowed_methods)] // Normalize serialized test attributes below.
+        let xml = quick_xml::se::to_string(&head).unwrap();
+        let result = parse_header(&crate::wire_xml::normalize_attr_control_whitespace(&xml));
+        if change == "case-unit" {
+            // An unverified measure unit must never enter the original-return path.
+            assert!(result.is_err(), "{change}");
+        } else {
+            let result = result.unwrap();
+            assert_eq!(result.requires_header_normalization, change != "split", "{change}");
+            if change == "split" {
+                assert_eq!(
+                    result.style_store.iter_tabs().collect::<Vec<_>>(),
+                    parsed.style_store.iter_tabs().collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}

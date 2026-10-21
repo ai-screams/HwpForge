@@ -299,7 +299,25 @@ fn requires_header_normalization(refs: &HxRefList, store: &HwpxStyleStore) -> bo
                 }],
                 default: Some(crate::schema::header::HxTabSwitchDefault { items: items(true) }),
             };
-            if raw.switches != [expected] {
+            // 이것을 실패시키는 것: 의미가 같은 분할 switch를 구조 차이로 정규화하기.
+            // Each branch must be the supported case plus its packed fallback.
+            // Compare ordered payloads, allowing only the switch boundaries to differ.
+            if raw.switches.iter().any(|sw| {
+                sw.cases.len() != 1
+                    || sw.cases[0].required_namespace != MEASURE_NAMESPACE
+                    || sw.default.is_none()
+                    || sw.cases[0].items.len() != sw.default.as_ref().unwrap().items.len()
+            }) || !raw
+                .switches
+                .iter()
+                .flat_map(|sw| &sw.cases[0].items)
+                .eq(&expected.cases[0].items)
+                || !raw
+                    .switches
+                    .iter()
+                    .flat_map(|sw| &sw.default.as_ref().unwrap().items)
+                    .eq(&expected.default.as_ref().unwrap().items)
+            {
                 return true;
             }
         }
