@@ -576,6 +576,53 @@ impl FramePlan {
 /// assert!(frame_plan(&Control::bookmark("x"), &EmissionPolicy::exact()).is_none());
 /// ```
 pub fn frame_plan(control: &Control, policy: &EmissionPolicy) -> Option<FramePlan> {
+    control_frame_plan(control, policy)
+}
+
+/// The geometry of a group-child frame. Image brush candidates use exact
+/// Core geometry: only [`preserve_group_child`] may judge their stored error,
+/// after the ancestor chain and absolute translation are known.
+pub fn group_child_frame_plan(control: &Control, policy: &EmissionPolicy) -> Option<FramePlan> {
+    if has_image_fill(control) {
+        control_frame_plan(control, &EmissionPolicy::exact())
+    } else {
+        frame_plan(control, policy)
+    }
+}
+
+/// Geometry-only decision input for a group child. Image fills are judged in
+/// D with rounded defining points and no original box; their brush box is
+/// admitted separately by [`preserve_group_child`]. No content tree is copied.
+pub fn group_child_decision_frame(control: &Control, policy: &EmissionPolicy) -> Option<FramePlan> {
+    if !has_image_fill(control) {
+        return frame_plan(control, policy);
+    }
+    let b = shape_box(control)?;
+    let original = control.effective_original_size()?;
+    let (sx, sy) = (
+        axis_scale(b.width, original.width.as_i32()),
+        axis_scale(b.height, original.height.as_i32()),
+    );
+    let points = defining_points(control)
+        .into_iter()
+        .map(|p| ShapePoint {
+            x: round_i32(f64::from(p.x) * sx),
+            y: round_i32(f64::from(p.y) * sy),
+        })
+        .collect();
+    let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
+    // 이것을 실패시키는 것: 보존된 그림 O를 writer 재계획에 다시 넣어 형제를 접기.
+    Some(plan_box((b.width, b.height), (b.width, b.height), rotation, flip, points, policy))
+}
+
+fn has_image_fill(control: &Control) -> bool {
+    matches!(
+        shape_box(control).and_then(|b| b.style).and_then(|s| s.fill.as_ref()),
+        Some(Fill::Image { .. })
+    )
+}
+
+fn control_frame_plan(control: &Control, policy: &EmissionPolicy) -> Option<FramePlan> {
     let original = control.effective_original_size()?;
     let b = shape_box(control)?;
     let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
@@ -675,6 +722,7 @@ fn axis_scale(displayed: i32, original: i32) -> f64 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plan_box(
     (w, h): (i32, i32),
     (ow, oh): (i32, i32),
@@ -766,7 +814,8 @@ const IDENTITY_M: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 /// `L` = the node's own rotation and mirror (`ShapeStyle`) times
 /// `diag(width / O.width, height / O.height)`. When every enclosing pair is
 /// the identity only the node's own pair is written — the form groups were
-/// written in before S20.
+/// written in before S20. [`preserve_group_child`] adds all identity pairs for
+/// image-filled children: Hancom needs `groupLevel + 1` pairs for their brush.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GroupNodePlan {
@@ -836,7 +885,7 @@ impl GroupPlan {
         &self.nodes
     }
 
-    /// The frames did not survive and the plan stores displayed boxes.
+    /// The group decision falls back to displayed boxes.
     pub fn is_fallback(&self) -> bool {
         self.fallback
     }
@@ -845,6 +894,148 @@ impl GroupPlan {
     pub fn loss(&self) -> Option<&FoldLoss> {
         self.loss.as_ref()
     }
+}
+
+/// Tries to retain an image-filled child's original box after the group
+/// decision has finished. `folded` is that decision's node, and `level` is
+/// the number of enclosing groups. Other children are unchanged.
+///
+/// The candidate uses the actual ancestor pairs and is compared directly
+/// with exact Core coordinates. On loss, return the folded node with the same
+/// ancestor pair count and a diagnostic for this child; never feed preservation
+/// back into `GroupPlan`.
+pub fn preserve_group_child(
+    control: &Control,
+    folded: &GroupNodePlan,
+    level: usize,
+    policy: &EmissionPolicy,
+) -> (GroupNodePlan, Option<FoldLoss>) {
+    if !has_image_fill(control) {
+        return (folded.clone(), None);
+    }
+    let b = shape_box(control).expect("image-filled shape box");
+    let original = control.effective_original_size().expect("image-filled original box");
+    let (ow, oh) = (original.width.as_i32(), original.height.as_i32());
+    let mut ancestors = folded.pairs[..folded.pairs.len() - 1].to_vec();
+    // 이것을 실패시키는 것: 그림만 필요한 groupLevel+1 단위 쌍을 생략.
+    if ancestors.is_empty() {
+        ancestors.resize(level, (IDENTITY_M, IDENTITY_M));
+    }
+    let scale = ancestors.iter().fold((1.0, 1.0), |a, p| (a.0 * p.0[0], a.1 * p.0[4]));
+    let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
+    let (node, residual, _) = node_plan(
+        folded.translation,
+        (ow, oh),
+        (b.width, b.height),
+        (axis_scale(b.width, ow), axis_scale(b.height, oh)),
+        scale,
+        rotation,
+        flip,
+        defining_points(control),
+        &ancestors,
+        policy,
+    );
+    // 이것을 실패시키는 것: 이동 없는 로컬 잔차를 다시 재서 2.0의 반대쪽으로 판정하기.
+    // node_plan measures exact Core against the actual quantized ancestor chain,
+    // both including the same absolute translation. This is the only admission residual.
+    if exceeds_tolerance(residual) {
+        // 이것을 실패시키는 것: 거부된 그림만 단일 쌍으로 내어 다음 왕복에서 쌍 수가 바뀌기.
+        let mut rejected = folded.clone();
+        if rejected.pairs.len() == 1 {
+            rejected.pairs.splice(0..0, vec![(IDENTITY_M, IDENTITY_M); level]);
+        }
+        (rejected, Some(FoldLoss::new(FoldLossKind::Residual, format!(
+            "image-filled child's full stored transform is off by {residual:.6} HWPUNIT; original box folded for this child"
+        ))))
+    } else {
+        (node, None)
+    }
+}
+
+/// Applies source-box candidates only after the ordinary group decision.
+/// `candidates` contains preorder node indices and geometry-only frames; codecs
+/// build the group with folded decision geometry first. Aligned image children
+/// already carry their candidate in Core and are checked even without an entry.
+/// Returns child paths and losses for candidates that cannot be stored.
+pub fn preserve_group_original_boxes(
+    group: &mut Control,
+    candidates: &[(usize, FramePlan)],
+    policy: &EmissionPolicy,
+) -> Vec<(Vec<usize>, FoldLoss)> {
+    fn contains_image(control: &Control) -> bool {
+        has_image_fill(control)
+            || matches!(control, Control::Group { children, .. } if children.iter().any(|child| {
+                matches!(child, super::GroupChild::Shape(shape) if contains_image(shape))
+            }))
+    }
+    if candidates.is_empty() && !contains_image(group) {
+        return Vec::new();
+    }
+    let Some(plan) = group_plan(group, policy) else { return Vec::new() };
+    fn visit(
+        group: &mut Control,
+        path: &mut Vec<usize>,
+        index: &mut usize,
+        candidates: &[(usize, FramePlan)],
+        plan: &GroupPlan,
+        policy: &EmissionPolicy,
+        losses: &mut Vec<(Vec<usize>, FoldLoss)>,
+    ) {
+        let Control::Group { children, .. } = group else { return };
+        for (child_index, child) in children.iter_mut().enumerate() {
+            path.push(child_index);
+            if let super::GroupChild::Shape(control) = child {
+                if shape_box(control).is_none()
+                    || matches!(control, Control::Equation { .. } | Control::EmbeddedChart { .. })
+                {
+                    path.pop();
+                    continue;
+                }
+                // Ordinary fallback still folds every original box, but its image
+                // children must go through the same final emission check below.
+                // 이것을 실패시키는 것: 비그림 형제의 fallback을 이유로 그림 손실 검사를 생략.
+                if plan.is_fallback() {
+                    if has_image_fill(control) {
+                        drop_original_size(control);
+                    }
+                } else if let Ok(candidate_index) =
+                    candidates.binary_search_by_key(index, |(i, _)| *i)
+                {
+                    let candidate = &candidates[candidate_index].1;
+                    let (w, h) = candidate.original_size();
+                    let original = hwpforge_foundation::Size::new(
+                        HwpUnit::new(w).expect("candidate width"),
+                        HwpUnit::new(h).expect("candidate height"),
+                    );
+                    let b = shape_box(control).expect("candidate shape");
+                    let changed = (w, h) != (b.width, b.height);
+                    control.frame_mut().expect("candidate frame").original_size =
+                        changed.then_some(original);
+                    for (point, source) in
+                        defining_points_mut(control).into_iter().zip(candidate.points())
+                    {
+                        *point = *source;
+                    }
+                }
+                if has_image_fill(control) {
+                    let (_, loss) =
+                        preserve_group_child(control, &plan.nodes()[*index], path.len(), policy);
+                    if let Some(loss) = loss {
+                        drop_original_size(control);
+                        losses.push((path.clone(), loss));
+                    }
+                }
+                *index += 1;
+                visit(control, path, index, candidates, plan, policy, losses);
+            } else {
+                *index += 1;
+            }
+            path.pop();
+        }
+    }
+    let mut losses = Vec::new();
+    visit(group, &mut Vec::new(), &mut 0, candidates, &plan, policy, &mut losses);
+    losses
 }
 
 fn diag_scale(m: &[f64; 6]) -> (f64, f64) {
@@ -995,8 +1186,15 @@ fn plan_children(
                     parent_origin.0.saturating_add(b.offset.0),
                     parent_origin.1.saturating_add(b.offset.1),
                 );
-                let Some(o) = control.effective_original_size() else { continue };
-                let (ow, oh) = (o.width.as_i32(), o.height.as_i32());
+                // 이것을 실패시키는 것: 비그림의 정의점/잔차를 FramePlan에서 불필요하게 두 번 계산.
+                let ((ow, oh), points) = if has_image_fill(control) {
+                    let decision = group_child_decision_frame(control, &EmissionPolicy::exact())
+                        .expect("image-filled decision frame");
+                    (decision.original_size(), decision.points)
+                } else {
+                    let Some(original) = control.effective_original_size() else { continue };
+                    ((original.width.as_i32(), original.height.as_i32()), defining_points(control))
+                };
                 let lin = (axis_scale(b.width, ow), axis_scale(b.height, oh));
                 let (rotation, flip) = b.style.map_or((None, None), |s| (s.rotation, s.flip));
                 let node = node_plan(
@@ -1007,7 +1205,7 @@ fn plan_children(
                     (ax, ay),
                     rotation,
                     flip,
-                    defining_points(control),
+                    points,
                     &ancestor_pairs,
                     policy,
                 );
@@ -1022,7 +1220,9 @@ fn plan_children(
                     *worst = worst.max(node.1);
                 }
                 exact.push(counted.then_some(node.2));
-                if frames && frame_plan(control, policy).is_some_and(|p| p.is_fallback()) {
+                if frames
+                    && group_child_decision_frame(control, policy).is_some_and(|p| p.is_fallback())
+                {
                     *worst = f64::INFINITY;
                 }
                 let own = diag_scale(&node.0.pairs.last().map_or(IDENTITY_M, |p| p.0));
@@ -1893,7 +2093,19 @@ fn has_turning_content(control: &Control) -> bool {
 /// assert_eq!(width.as_i32(), 150);
 /// assert_eq!(placement.unwrap().horz_offset.as_i32(), 200);
 /// ```
-pub fn fold_group_child(mut control: Control, input: &FoldInput) -> FoldOutcome {
+pub fn fold_group_child(control: Control, input: &FoldInput) -> FoldOutcome {
+    fold_child(control, input, false)
+}
+
+/// Folds a group child while retaining the source box and defining points.
+/// Codecs select this for image-filled children: the image brush uses that
+/// box independently of the displayed extent. Invalid boxes and unrepresentable
+/// transforms retain the usual range, degeneracy, shear and residual diagnostics.
+pub fn fold_group_child_with_original_box(control: Control, input: &FoldInput) -> FoldOutcome {
+    fold_child(control, input, true)
+}
+
+fn fold_child(mut control: Control, input: &FoldInput, preserve_original: bool) -> FoldOutcome {
     let point_based = matches!(
         control,
         Control::Line { .. }
@@ -1914,10 +2126,10 @@ pub fn fold_group_child(mut control: Control, input: &FoldInput) -> FoldOutcome 
         return FoldOutcome::Dropped { losses: vec![loss] };
     }
     let turns = input.facts.content_turns_with_shape || has_turning_content(&control);
-    if point_based && !turns {
+    if point_based && !turns && !preserve_original {
         fold_points(control, input)
     } else {
-        fold_boxed(&mut control, input).map_or_else(
+        fold_boxed(&mut control, input, preserve_original).map_or_else(
             |losses| FoldOutcome::Dropped { losses },
             |losses| FoldOutcome::Kept { control: Box::new(control), losses },
         )
@@ -2093,7 +2305,11 @@ fn fold_points(mut control: Control, input: &FoldInput) -> FoldOutcome {
 }
 
 /// The box rule. `Err` = drop the child with these losses.
-fn fold_boxed(control: &mut Control, input: &FoldInput) -> Result<Vec<FoldLoss>, Vec<FoldLoss>> {
+fn fold_boxed(
+    control: &mut Control,
+    input: &FoldInput,
+    preserve_original: bool,
+) -> Result<Vec<FoldLoss>, Vec<FoldLoss>> {
     let (org_w, org_h) = input.original_size;
     let RawBoxFold { fold, sx, sy, shear } =
         fold_box_raw(org_w, org_h, input).map_err(|loss| vec![loss])?;
@@ -2101,9 +2317,21 @@ fn fold_boxed(control: &mut Control, input: &FoldInput) -> Result<Vec<FoldLoss>,
     let mut wire: Vec<(f64, f64)> =
         box_corners(org_w, org_h).iter().map(|&p| input.map.apply(p)).collect();
     wire.extend(wire_local.iter().map(|p| input.map.apply((f64::from(p.x), f64::from(p.y)))));
-    for (p, q) in defining_points_mut(control).into_iter().zip(&wire_local) {
-        p.x = round_i32(f64::from(q.x) * sx);
-        p.y = round_i32(f64::from(q.y) * sy);
+    // 이것을 실패시키는 것: 그림 채우기 정의점을 D로 접거나 O만 복원하여 이중 배율 적용.
+    if preserve_original {
+        let original = standalone_original(input).map_err(|loss| vec![loss])?;
+        let Some(frame) = control.frame_mut() else {
+            return Err(vec![FoldLoss::new(FoldLossKind::Unstorable, "child has no original box")]);
+        };
+        // 이것을 실패시키는 것: O=D도 명시적 frame으로 만들어 기존 기본값과 달라짐.
+        frame.original_size = ((original.width.as_i32(), original.height.as_i32())
+            != (fold.width, fold.height))
+            .then_some(original);
+    } else {
+        for (p, q) in defining_points_mut(control).into_iter().zip(&wire_local) {
+            p.x = round_i32(f64::from(q.x) * sx);
+            p.y = round_i32(f64::from(q.y) * sy);
+        }
     }
 
     let rotates = style_mut(control).is_some();
@@ -2158,8 +2386,11 @@ fn fold_boxed(control: &mut Control, input: &FoldInput) -> Result<Vec<FoldLoss>,
     )
     .then(l);
     let mut ours: Vec<(f64, f64)> = box_corners(w, h).iter().map(|&p| map.apply(p)).collect();
+    let (px, py) = if preserve_original { (w / org_w, h / org_h) } else { (1.0, 1.0) };
     ours.extend(
-        defining_points(control).iter().map(|p| map.apply((f64::from(p.x), f64::from(p.y)))),
+        defining_points(control)
+            .iter()
+            .map(|p| map.apply((f64::from(p.x) * px, f64::from(p.y) * py))),
     );
     Ok(residual_loss(max_residual(&wire, &ours)).into_iter().collect())
 }

@@ -30,8 +30,9 @@
 //! a group left with nothing.
 
 use hwpforge_core::control::geometry::{
-    emitted_corners, fold_aligned_child, fold_box, fold_group_child, group_bounds, Bounds,
-    EmissionPolicy, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
+    emitted_corners, fold_aligned_child, fold_box, fold_group_child,
+    fold_group_child_with_original_box, group_bounds, Bounds, EmissionPolicy, FoldInput,
+    FoldLossKind, FoldOutcome, GeometryFacts, ShapeTransform,
 };
 use hwpforge_core::control::{Control, GroupChild, ShapePoint};
 use hwpforge_core::run::{Run, RunContent};
@@ -99,20 +100,25 @@ fn aligned(render: &Hwp5ShapeRender) -> bool {
     m[1].abs() < 1e-9 && m[3].abs() < 1e-9 && m[0] > 0.0 && m[4] > 0.0
 }
 
-/// Whether every leaf under `children` (nested groups included) has an
-/// axis-aligned chain — the groups that keep their original box. A child
+/// Whether every non-image-filled leaf under `children` (nested groups
+/// included) has an axis-aligned chain — the groups that keep their original box. A child
 /// without a readable chain, or a kind Core groups do not hold, is not.
 /// 이것을 실패시키는 것: 중첩 묶음을 보지 않기(`hwp5_group_keeps_its_original_box`).
 fn all_aligned(children: &[Hwp5GroupChild]) -> bool {
     children.iter().all(|c| match &c.control {
         Hwp5Control::Group(g) => all_aligned(&g.children),
         other if unsupported_kind(other).is_some() => false,
-        _ => c.render.as_ref().is_ok_and(aligned),
+        // 이것을 실패시키는 것: 그림 채우기 자식의 회전이 그룹 frame 선택에 역류.
+        _ => {
+            shape_look(&c.control).is_some_and(|look| {
+                matches!(look.fill, Ok(crate::schema::border_fill::Hwp5RawBorderFillFill::Image(_)))
+            }) || c.render.as_ref().is_ok_and(aligned)
+        }
     })
 }
 
-/// The original box of a group: its render's initial size when every leaf
-/// under it is axis-aligned and the box can be a frame value.
+/// The original box of a group: its render's initial size when every
+/// non-image-filled leaf is axis-aligned and the box can be a frame value.
 fn group_frame(
     group: &Hwp5GroupControl,
     displayed: (i32, i32),
@@ -800,7 +806,8 @@ pub(super) fn project_group_run(
     };
     let plan = plan_children(&group.children, (0.0, 0.0), &pixels);
     let kept = plan.kept();
-    let children = emit(plan, &mut place, state);
+    let mut candidates = Vec::new();
+    let children = emit(plan, &mut place, state, &mut 0, &mut candidates);
     if kept == 0 {
         lost(state, &place, "group", "no group child can be represented in Core".to_string());
         return None;
@@ -810,21 +817,32 @@ pub(super) fn project_group_run(
         hwp_unit_from_u32(group.geometry.width).as_i32(),
         hwp_unit_from_u32(group.geometry.height).as_i32(),
     );
-    Some(Run::control(
-        Control::Group {
-            frame: group_frame(group, displayed, &mut state.warnings),
-            children,
-            width: hwp_unit_from_u32(group.geometry.width),
-            height: hwp_unit_from_u32(group.geometry.height),
-            placement: super::shapes::with_outer_margin(
-                offset_placement(group.geometry.x, group.geometry.y),
-                &group.geometry,
-                &mut state.warnings,
-            ),
-            inst_id,
-        },
-        CharShapeIndex::new(0),
-    ))
+    let mut control = Control::Group {
+        frame: group_frame(group, displayed, &mut state.warnings),
+        children,
+        width: hwp_unit_from_u32(group.geometry.width),
+        height: hwp_unit_from_u32(group.geometry.height),
+        placement: super::shapes::with_outer_margin(
+            offset_placement(group.geometry.x, group.geometry.y),
+            &group.geometry,
+            &mut state.warnings,
+        ),
+        inst_id,
+    };
+    let policy = EmissionPolicy::new(
+        hwpforge_core::control::geometry::AngleRounding::WholeDegrees,
+        hwpforge_core::control::geometry::CoefficientRounding::Decimals(6),
+        true,
+    );
+    for (path, loss) in hwpforge_core::control::geometry::preserve_group_original_boxes(
+        &mut control,
+        &candidates,
+        &policy,
+    ) {
+        place.path = path;
+        lost(state, &place, "shape_emission", loss.detail().to_string());
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 fn report(notes: Vec<PlanNote>, place: &Place, state: &mut ProjectionImageState<'_>) {
@@ -842,6 +860,8 @@ fn emit(
     plan: GroupPlan<'_>,
     place: &mut Place,
     state: &mut ProjectionImageState<'_>,
+    node_index: &mut usize,
+    candidates: &mut Vec<(usize, hwpforge_core::control::geometry::FramePlan)>,
 ) -> Vec<GroupChild> {
     let mut out = Vec::with_capacity(plan.children.len());
     for (i, c) in plan.children.into_iter().enumerate() {
@@ -849,7 +869,8 @@ fn emit(
         report(c.before, place, state);
         let control = match c.outcome {
             Outcome::Nested { plan, offset, size, group } => {
-                let children = emit(plan, place, state);
+                *node_index += 1;
+                let children = emit(plan, place, state, node_index, candidates);
                 Some(Control::Group {
                     frame: group_frame(group, size, &mut state.warnings),
                     children,
@@ -903,6 +924,47 @@ fn emit(
                         }
                     }
                 }
+                // 이것을 실패시키는 것: 원시 비정렬 그림 O를 HEAD 판정 입력에 섞기.
+                // Only geometry is copied; text projection still happens once below.
+                if let Ok(render) = &c.child.render {
+                    if super::shape_style_slot(&mut control).and_then(|s| s.as_ref()).is_some_and(
+                        |s| matches!(s.fill, Some(hwpforge_core::control::Fill::Image { .. })),
+                    ) && !aligned(render)
+                    {
+                        let mut notes = Vec::new();
+                        if let Some(mut raw) =
+                            wire_local_control(c.child, render, keeps_text, &mut notes)
+                        {
+                            if let (Some(source), Some(target)) = (
+                                super::shape_style_slot(&mut control),
+                                super::shape_style_slot(&mut raw),
+                            ) {
+                                *target = source.clone();
+                            }
+                            let input =
+                                FoldInput::new(chain(render), initial_size(render), (0., 0.))
+                                    .with_geometry_facts(GeometryFacts::new(true));
+                            if let FoldOutcome::Kept { control: candidate, .. } =
+                                fold_group_child_with_original_box(raw, &input)
+                            {
+                                if let Some(frame) =
+                                    hwpforge_core::control::geometry::group_child_frame_plan(
+                                        &candidate,
+                                        &EmissionPolicy::exact(),
+                                    )
+                                {
+                                    candidates.push((*node_index, frame));
+                                }
+                            }
+                        }
+                    }
+                }
+                if !matches!(
+                    control.as_ref(),
+                    Control::Equation { .. } | Control::EmbeddedChart { .. }
+                ) {
+                    *node_index += 1;
+                }
                 if keeps_text {
                     attach_text(&mut control, c.child, state);
                 }
@@ -922,6 +984,9 @@ fn emit(
                         super::shapes::original_box(Some(original), size, &mut state.warnings);
                 }
                 report(c.after, place, state);
+                if picture.is_some() {
+                    *node_index += 1;
+                }
                 out.extend(picture.map(GroupChild::Picture));
                 place.path.pop();
                 continue;
@@ -2346,6 +2411,45 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+    /// 이것을 실패시키는 것: 실제 Fill::Image가 되지 않는 누락 자산도 O 보존.
+    #[test]
+    fn image_fill_missing_asset_keeps_the_previous_fold() {
+        use crate::schema::border_fill::*;
+        use crate::schema::section::{Hwp5ShapeLine, Hwp5ShapeLook};
+        let mut wire = rect();
+        if let Hwp5Control::Rect(r) = &mut wire {
+            r.look = Some(Hwp5ShapeLook {
+                corner_ratio: 0,
+                line: Hwp5ShapeLine { color: 0, thickness: 33, properties: 0 },
+                fill_kind: Some(2),
+                fill: Ok(Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
+                    mode: Hwp5FillImageMode::Resize,
+                    brightness: 0,
+                    contrast: 0,
+                    effect: Hwp5FillImageEffect::RealPic,
+                    bindata_id: 1,
+                    extra_data: Vec::new(),
+                })),
+            });
+        }
+        let mut r = render((1000, 1000), tr(1000., 1000.), ([2., 0., 0., 0., 3., 0.], rot(30.)));
+        r.fill = Hwp5ShapeFill::Directional("picture");
+        let wire = child(wire, Ok(r));
+        // 이것을 실패시키는 것: 회전 그림이 부모의 배율 frame 선택을 바꾸기.
+        let parent = group(
+            geo(0, 0, 3000, 3000),
+            Ok(render((1000, 1000), ID, ([3., 0., 0., 0., 3., 0.], ID))),
+            vec![wire.clone()],
+        );
+        let frame = group_frame(&parent, (3000, 3000), &mut Vec::new());
+        assert_eq!(frame.original_size.unwrap().width.as_i32(), 1000);
+        for available in [false, true] {
+            let assets = |_: u16| if available { Ok(None) } else { Err("missing".into()) };
+            let plan = plan_child(&wire, (0., 0.), &assets);
+            let Outcome::Kept { control, .. } = plan.outcome else { panic!("dropped") };
+            assert!(control.frame().unwrap().original_size.is_none());
         }
     }
 }

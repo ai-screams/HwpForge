@@ -842,3 +842,349 @@ fn arc_definition_selects_active_points_and_defaults_for_old_json() {
     let Control::Arc { start1, end1, start2, end2, .. } = arc else { panic!() };
     assert_eq!([start1, end1, start2, end2], [unused; 4]);
 }
+
+fn image_filled(mut control: Control, mode: hwpforge_foundation::ImageFillMode) -> Control {
+    style_mut(&mut control).unwrap().get_or_insert_with(ShapeStyle::default).fill =
+        Some(Fill::Image { image_id: "BinData/brush".into(), mode });
+    control
+}
+
+fn image_group(children: Vec<Control>) -> Control {
+    Control::Group {
+        children: children.into_iter().map(super::super::GroupChild::Shape).collect(),
+        width: unit(5000),
+        height: unit(5000),
+        frame: Default::default(),
+        placement: None,
+        inst_id: None,
+    }
+}
+
+/// 이것을 실패시키는 것: 원래 정의점 접기, 점형 도형의 box 경로 우회,
+/// TOTAL만 보존, 회전/대칭에서 O 배율을 두 번 적용.
+#[test]
+fn image_fill_fold_keeps_original_points_for_all_shapes_and_modes() {
+    use hwpforge_foundation::{ArcType, ImageFillMode};
+    let points = vec![ShapePoint::new(10, 10), ShapePoint::new(100, 10), ShapePoint::new(20, 50)];
+    let shapes = vec![
+        rect(100, 50, None, None),
+        Control::ellipse(unit(100), unit(50)),
+        Control::arc(ArcType::Pie, unit(100), unit(50)),
+        Control::polygon(points.clone()).unwrap(),
+        Control::curve(points).unwrap(),
+        Control::text_box(Vec::new(), unit(100), unit(50)),
+    ];
+    for shape in shapes {
+        for mode in [
+            ImageFillMode::Stretch,
+            ImageFillMode::Tile,
+            ImageFillMode::Center,
+            ImageFillMode::FitAll,
+        ] {
+            for angle in [0.0, 30.0, 180.0] {
+                for flip in [None, Some(Flip::Horizontal), Some(Flip::Vertical), Some(Flip::Both)] {
+                    let shape = image_filled(shape.clone(), mode);
+                    let points = defining_points(&shape);
+                    let target = with_offset(rect(200, 150, Some(angle), flip), 700, 900);
+                    let map = local_transform(&target, &EmissionPolicy::exact())
+                        .unwrap()
+                        .then(ShapeTransform::from_matrix([2., 0., 0., 0., 3., 0.]));
+                    let input = FoldInput::new(map, (100., 50.), (0., 0.));
+                    let (got, losses) = kept(fold_group_child_with_original_box(shape, &input));
+                    assert!(losses.is_empty(), "{} {angle} {flip:?}: {losses:?}", got.kind_name());
+                    assert_eq!(defining_points(&got), points);
+                    let plan = group_child_frame_plan(&got, &HWPX_LIKE).unwrap();
+                    assert_eq!(plan.original_size(), (100, 50));
+                    assert_eq!(plan.scale(), (2., 3.));
+                    let b = shape_box(&got).unwrap();
+                    for (p, actual) in box_corners(100., 50.)
+                        .into_iter()
+                        .chain(points.iter().map(|p| (f64::from(p.x), f64::from(p.y))))
+                        .zip(plan.stored_positions())
+                    {
+                        assert!(close(
+                            map.apply(p),
+                            (actual.0 + f64::from(b.offset.0), actual.1 + f64::from(b.offset.1)),
+                            0.01
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 깊이 1만 보정, 비그림 형제까지 단위 쌍 추가,
+/// 조상 배율 역보정 누락 또는 중첩 origin 누락.
+#[test]
+fn image_fill_nested_pairs_keep_geometry_and_scope() {
+    use hwpforge_foundation::{ImageFillMode, Size};
+    for scaled in [false, true] {
+        let mut leaf =
+            image_filled(rect(100, 50, Some(30.), Some(Flip::Horizontal)), ImageFillMode::Tile);
+        leaf.resize(unit(200), unit(150));
+        leaf = with_offset(leaf, 70, 90);
+        let plain = rect(100, 50, None, None);
+        let mut nested = image_group(vec![leaf.clone(), plain]);
+        if let Control::Group { placement, .. } = &mut nested {
+            *placement = group_child_placement(200, 300);
+        }
+        if scaled {
+            nested.frame_mut().unwrap().original_size = Some(Size::new(unit(2500), unit(1250)));
+        }
+        let mut outer = image_group(vec![nested]);
+        if scaled {
+            outer.frame_mut().unwrap().original_size = Some(Size::new(unit(1250), unit(2500)));
+        }
+        let plan = group_plan(&outer, &HWPX_LIKE).unwrap();
+        assert!(!plan.is_fallback() && plan.loss().is_none(), "{plan:?}");
+        let (preserved, loss) = preserve_group_child(&leaf, &plan.nodes()[1], 2, &HWPX_LIKE);
+        assert!(loss.is_none(), "{loss:?}");
+        assert_eq!(preserved.pairs().len(), 3);
+        assert_eq!(plan.nodes()[2].pairs().len(), if scaled { 3 } else { 1 });
+        let expected = emitted_corners(&leaf, &EmissionPolicy::exact()).unwrap();
+        for (a, e) in preserved.stored_positions().iter().zip(expected) {
+            assert!(
+                close(*a, (e.0 + 200., e.1 + 300.), 0.01),
+                "scaled={scaled}, actual={a:?}, expected={e:?}, node={:?}",
+                plan.nodes()[1]
+            );
+        }
+    }
+}
+
+/// 이것을 실패시키는 것: 보존 후보 손실을 그룹에 넣거나 거부된 후보를 채택,
+/// 실패 잔차를 무경고로 통과, 독립 개체 fallback까지 변경.
+#[test]
+fn image_fill_failed_preservation_folds_only_the_child() {
+    use hwpforge_foundation::{ImageFillMode, Size};
+    let mut brush = image_filled(rect(49, 100, None, None), ImageFillMode::Stretch);
+    brush.frame_mut().unwrap().original_size = Some(Size::new(unit(100_000_000), unit(100)));
+    assert!(frame_plan(&brush, &HWPX_LIKE).unwrap().is_fallback(), "standalone unchanged");
+    let child = group_child_frame_plan(&brush, &HWPX_LIKE).unwrap();
+    assert!(!child.is_fallback());
+    assert_eq!(child.original_size(), (100_000_000, 100));
+    assert!(child.loss().is_none(), "only full-chain admission measures image loss");
+    let mut group = image_group(vec![brush.clone()]);
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    assert!(plan.loss().is_none());
+    let (node, loss) = preserve_group_child(&brush, &plan.nodes()[0], 1, &HWPX_LIKE);
+    let mut expected_node = plan.nodes()[0].clone();
+    if expected_node.pairs.len() == 1 {
+        expected_node.pairs.insert(0, (IDENTITY_M, IDENTITY_M));
+    }
+    assert_eq!(node, expected_node);
+    assert_eq!(node.original_size(), (49, 100));
+    assert!(loss.unwrap().detail().contains("49.000000"));
+    drop_original_sizes(&mut group);
+    let Control::Group { children, .. } = group else { panic!() };
+    drop_original_size(&mut brush);
+    assert_eq!(children, vec![super::super::GroupChild::Shape(brush)]);
+}
+
+/// 이것을 실패시키는 것: 보존 경로에서 원래 크기 범위/0축/전단 진단 생략.
+#[test]
+fn image_fill_fold_keeps_range_degeneracy_and_shear_diagnostics() {
+    let id = ShapeTransform::IDENTITY;
+    for (org, kind) in [
+        ((-100., 50.), FoldLossKind::OutOfRange),
+        ((0., 50.), FoldLossKind::Degenerate),
+        ((200_000_000., 50.), FoldLossKind::OutOfRange),
+    ] {
+        let outcome = fold_group_child_with_original_box(
+            rect(100, 50, None, None),
+            &FoldInput::new(id, org, (0., 0.)),
+        );
+        let FoldOutcome::Dropped { losses } = outcome else { panic!("{outcome:?}") };
+        assert_eq!(losses[0].kind(), kind);
+    }
+    let shear = ShapeTransform::from_matrix([1., 0.5, 0., 0., 1., 0.]);
+    let (got, losses) = kept(fold_group_child_with_original_box(
+        rect(100, 50, None, None),
+        &FoldInput::new(shear, (100., 50.), (0., 0.)),
+    ));
+    assert_eq!(kinds(&losses), [FoldLossKind::Shear]);
+    // 이것을 실패시키는 것: 전단 여부/정규화된 각도로 보존을 별도 판정하기.
+    // The source shear is already reported by the common fold. Group decisions
+    // still use the folded child, and preservation judges its exact Core geometry.
+    assert_eq!(
+        got.effective_original_size().unwrap(),
+        hwpforge_foundation::Size::new(unit(100), unit(50))
+    );
+    let got = image_filled(got, hwpforge_foundation::ImageFillMode::Tile);
+    let group = image_group(vec![got.clone()]);
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    let (node, loss) = preserve_group_child(&got, &plan.nodes()[0], 1, &HWPX_LIKE);
+    assert!(loss.is_none(), "{loss:?}");
+    assert_eq!(node.original_size(), (100, 50));
+}
+
+/// 이것을 실패시키는 것: 배율 1인 그림 채우기 자식의 기본 frame을 명시적 O로 변경.
+#[test]
+fn image_fill_unscaled_original_uses_the_existing_default() {
+    let original = rect(100, 50, Some(30.), Some(Flip::Horizontal));
+    let map = local_transform(&original, &EmissionPolicy::exact()).unwrap();
+    let (got, losses) = kept(fold_group_child_with_original_box(
+        rect(100, 50, None, None),
+        &FoldInput::new(map, (100., 50.), (0., 0.)),
+    ));
+    assert!(losses.is_empty());
+    assert!(got.frame().unwrap().original_size.is_none());
+    assert_eq!(got.effective_original_size(), original.effective_original_size());
+}
+
+/// 이것을 실패시키는 것: 그림 자식의 각도 손실로 비그림 형제의 O/점/배율 변경,
+/// 또는 그림을 무조건 제외하여 조상 배율 보정의 추가 오차까지 무시.
+#[test]
+fn image_fill_local_loss_does_not_fold_siblings_but_ancestors_still_do() {
+    use hwpforge_foundation::{ImageFillMode, Size};
+    let mut brush = image_filled(rect(5000, 500, Some(30.4), None), ImageFillMode::Stretch);
+    brush.resize(unit(10000), unit(1000));
+    let mut sibling = rect(100, 50, None, None);
+    sibling.resize(unit(200), unit(100));
+    let mut legacy_brush = brush.clone();
+    drop_original_size(&mut legacy_brush);
+    let group = image_group(vec![legacy_brush, sibling.clone()]);
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    assert!(plan.loss().is_none());
+    assert!(group_child_frame_plan(&brush, &HWPX_LIKE).unwrap().loss().is_none());
+    let plain = group_plan(&image_group(vec![sibling]), &HWPX_LIKE).unwrap();
+    assert_eq!(plan.nodes()[1], plain.nodes()[0]);
+
+    // Even an exactly representable ancestor scale keeps HEAD's counted
+    // contract: the old folded brush's angle loss was already judged here.
+    let mut ordinary_scale = group.clone();
+    if let Control::Group { width, height, frame, .. } = &mut ordinary_scale {
+        frame.original_size = Some(Size::new(unit(width.as_i32() / 2), unit(height.as_i32() / 2)));
+    }
+    assert!(group_plan(&ordinary_scale, &HWPX_LIKE).unwrap().is_fallback());
+
+    // A large ancestor scale makes inverse compensation round to zero.
+    // This is additional error, so the existing group fallback still runs.
+    let mut scaled = group;
+    if let Control::Group { width, height, frame, .. } = &mut scaled {
+        *width = unit(100_000_000);
+        *height = unit(100_000_000);
+        frame.original_size = Some(Size::new(unit(1), unit(1)));
+    }
+    let plan = group_plan(&scaled, &HWPX_LIKE).unwrap();
+    assert!(plan.is_fallback());
+    assert_eq!(plan.nodes()[1].original_size(), (200, 100));
+    assert_eq!(plan.nodes()[0].original_size(), (10000, 1000));
+}
+
+/// 이것을 실패시키는 것: 새 그림 O에서만 생긴 조상 보정 손실로 형제를 접기.
+#[test]
+fn image_fill_new_ancestor_error_does_not_request_group_fallback() {
+    use hwpforge_foundation::{ImageFillMode, Size};
+    let mut brush = image_filled(rect(100_000_000, 100, Some(30.), None), ImageFillMode::Stretch);
+    brush.resize(unit(100), unit(100));
+    assert!(group_child_frame_plan(&brush, &HWPX_LIKE).unwrap().loss().is_none());
+    let mut old_brush = brush.clone();
+    drop_original_size(&mut old_brush);
+    let mut sibling = rect(100, 50, None, None);
+    sibling.resize(unit(200), unit(100));
+    let scale = |c| {
+        let mut group = image_group(vec![c, sibling.clone()]);
+        if let Control::Group { width, height, frame, .. } = &mut group {
+            *width = unit(1000);
+            *height = unit(1000);
+            frame.original_size = Some(Size::new(unit(1), unit(1)));
+        }
+        group
+    };
+    let previous = group_plan(&scale(old_brush.clone()), &HWPX_LIKE).unwrap();
+    assert!(!previous.is_fallback());
+    let plan = group_plan(&scale(old_brush), &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback(), "preservation must not introduce a group fallback");
+    assert!(plan.loss().is_none(), "the writer reports the actual chain at the child");
+    assert_eq!(plan.nodes()[1], previous.nodes()[1]);
+    let (node, loss) = preserve_group_child(&brush, &plan.nodes()[0], 1, &HWPX_LIKE);
+    let mut expected_node = plan.nodes()[0].clone();
+    if expected_node.pairs.len() == 1 {
+        expected_node.pairs.insert(0, (IDENTITY_M, IDENTITY_M));
+    }
+    assert_eq!(node, expected_node);
+    assert!(loss.is_some());
+}
+
+/// 이것을 실패시키는 것: HEAD 접기 결과 뒤의 보존 비교에서 0.9+1.9를 따로 검사.
+#[test]
+fn image_fill_total_error_and_normalized_turn_are_child_only() {
+    use hwpforge_foundation::{ImageFillMode, Size};
+    for (ow, oh, w, h, angle, scale, expected) in [
+        (100_000_000, 100, 49, 100, None, 1, "49.000000"),
+        (1_900_000, 32, 94, 96, Some(90.), 3, "2.800001"),
+    ] {
+        let mut brush = image_filled(rect(ow, oh, angle, None), ImageFillMode::Stretch);
+        brush.resize(unit(w), unit(h));
+        let mut sibling = rect(100, 50, None, None);
+        sibling.resize(unit(200), unit(100));
+        let mut legacy_brush = brush.clone();
+        drop_original_size(&mut legacy_brush);
+        let mut group = image_group(vec![legacy_brush, sibling]);
+        if let Control::Group { width, height, frame, .. } = &mut group {
+            *width = unit(3000);
+            *height = unit(3000);
+            frame.original_size = Some(Size::new(unit(3000 / scale), unit(3000 / scale)));
+        }
+        let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+        assert!(!plan.is_fallback());
+        let (node, loss) = preserve_group_child(&brush, &plan.nodes()[0], 1, &HWPX_LIKE);
+        let mut expected_node = plan.nodes()[0].clone();
+        if expected_node.pairs.len() == 1 {
+            expected_node.pairs.insert(0, (IDENTITY_M, IDENTITY_M));
+        }
+        assert_eq!(node, expected_node);
+        let loss = loss.unwrap();
+        assert!(loss.detail().contains(expected), "{loss:?}");
+    }
+}
+
+/// 이것을 실패시키는 것: 축 정렬 그림 O를 판정에 포함해 형제까지 접기.
+#[test]
+fn aligned_image_uses_folded_decision_and_child_only_rejection() {
+    use hwpforge_foundation::ImageFillMode;
+    let mut brush = image_filled(rect(100_000_000, 100, None, None), ImageFillMode::Stretch);
+    brush.resize(unit(49), unit(100));
+    let mut sibling = rect(100, 50, None, None);
+    sibling.resize(unit(200), unit(100));
+    let mut group = image_group(vec![brush, sibling]);
+    let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+    assert!(!plan.is_fallback());
+    assert_eq!(plan.nodes()[0].original_size(), (49, 100));
+    assert_eq!(plan.nodes()[1].original_size(), (100, 50));
+    assert_eq!(plan.nodes()[1].pairs(), &[([2., 0., 0., 0., 2., 0.], IDENTITY_M)]);
+    let losses = preserve_group_original_boxes(&mut group, &[], &HWPX_LIKE);
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0].0, [0]);
+    assert!(losses[0].1.detail().contains("49.000000"));
+}
+
+/// 이것을 실패시키는 것: 이동을 뺀 잔차 재검사 또는 epsilon으로 경계 양쪽을 합치기.
+#[test]
+fn image_fill_admission_uses_one_absolute_boundary() {
+    use hwpforge_foundation::ImageFillMode;
+    for (shift, accepted) in [(0, false), (1000, true)] {
+        let mut brush = image_filled(rect(4_000_000, 100, None, None), ImageFillMode::Stretch);
+        brush.resize(unit(982), unit(100));
+        if let Control::Rect { placement, .. } = &mut brush {
+            let p = placement.get_or_insert_with(crate::ObjectPlacement::legacy_inline_defaults);
+            p.horz_offset = unit(shift);
+            p.vert_offset = unit(shift);
+        }
+        let group = image_group(vec![brush.clone()]);
+        let plan = group_plan(&group, &HWPX_LIKE).unwrap();
+        assert!(!plan.is_fallback());
+        let (node, loss) = preserve_group_child(&brush, &plan.nodes()[0], 1, &HWPX_LIKE);
+        assert_eq!(loss.is_none(), accepted);
+        assert_eq!(node.original_size(), if accepted { (4_000_000, 100) } else { (982, 100) });
+        if accepted {
+            // Frozen IEEE-754 boundary: actual absolute corner 1984 minus exact 1982 = 2.
+            assert_eq!(node.stored_positions()[1], (1984., 1000.));
+        }
+    }
+}

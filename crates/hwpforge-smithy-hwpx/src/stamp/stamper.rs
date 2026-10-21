@@ -1012,7 +1012,7 @@ fn align_shape(
     origins: Origins,
     group_child: bool,
 ) {
-    if !same_place(ca, &cb, origins) {
+    if !same_place(ca, &cb, origins, group_child) {
         return;
     }
     let aligned = with_geometry_of(cb, ca, group_child);
@@ -1023,9 +1023,35 @@ fn align_shape(
 
 /// Where a shape's box corners and defining points land in its parent's
 /// coordinates (exact Core definition).
-fn placed_points(c: &Control) -> Option<Vec<(f64, f64)>> {
+fn placed_points(c: &Control, group_child: bool) -> Option<Vec<(f64, f64)>> {
     use hwpforge_core::control::geometry::{emitted_corners, local_transform, EmissionPolicy};
     let exact = EmissionPolicy::exact();
+    let image_fill = match c {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Curve { style, .. }
+        | Control::Line { style, .. }
+        | Control::ConnectLine { style, .. } => matches!(
+            style.as_ref().and_then(|s| s.fill.as_ref()),
+            Some(hwpforge_core::control::Fill::Image { .. })
+        ),
+        _ => false,
+    };
+    // 이것을 실패시키는 것: 보존한 O 정의점을 D/O 없이 비교하여 정상 stamp 거부.
+    if group_child && image_fill {
+        let frame = hwpforge_core::control::geometry::group_child_frame_plan(c, &exact)?;
+        let (x, y) = shape_offset(c);
+        return Some(
+            frame
+                .stored_positions()
+                .iter()
+                .map(|p| (p.0 + f64::from(x), p.1 + f64::from(y)))
+                .collect(),
+        );
+    }
     let mut out = emitted_corners(c, &exact)?.to_vec();
     let l = local_transform(c, &exact)?;
     let (x, y) = shape_offset(c);
@@ -1036,11 +1062,16 @@ fn placed_points(c: &Control) -> Option<Vec<(f64, f64)>> {
     Some(out)
 }
 
-fn same_place(a: &Control, b: &Control, ((oax, oay), (obx, oby)): Origins) -> bool {
+fn same_place(
+    a: &Control,
+    b: &Control,
+    ((oax, oay), (obx, oby)): Origins,
+    group_child: bool,
+) -> bool {
     if std::mem::discriminant(a) != std::mem::discriminant(b) {
         return false;
     }
-    match (placed_points(a), placed_points(b)) {
+    match (placed_points(a, group_child), placed_points(b, group_child)) {
         (Some(pa), Some(pb)) if pa.len() == pb.len() => pa.iter().zip(&pb).all(|(p, q)| {
             ((p.0 + oax) - (q.0 + obx)).hypot((p.1 + oay) - (q.1 + oby))
                 <= crate::decoder::group_geometry::EXACT_TOLERANCE
@@ -1504,6 +1535,65 @@ mod tests {
             panic!("a styled rect child");
         }
         assert!(admission_compare(&d0, &recoloured).is_err());
+    }
+
+    /// 이것을 실패시키는 것: 그림 채우기 자식 정의점 비교에서 D/O 생략,
+    /// 동일 모서리를 이유로 브러시 O까지 정규화하여 변경을 무시하기.
+    #[test]
+    fn image_fill_admission_compares_displayed_points_but_keeps_brush_box() {
+        use hwpforge_core::control::{Fill, GroupChild, ShapeStyle};
+        use hwpforge_foundation::{HwpUnit, ImageFillMode, Size};
+        let (d0, d1) = no_op_round_trip(&shapes_fixture("fills.hwpx"));
+        admission_compare(&d0, &d1).unwrap();
+        let u = |v| HwpUnit::new(v).unwrap();
+        let shape = |angle| {
+            let mut c = Control::ellipse(u(100_000_000), u(100_000_000));
+            c.resize(u(1000), u(1000));
+            if let Control::Ellipse { style, .. } = &mut c {
+                *style = Some(ShapeStyle {
+                    rotation: Some(angle),
+                    fill: Some(Fill::Image {
+                        image_id: "BinData/brush".into(),
+                        mode: ImageFillMode::Tile,
+                    }),
+                    ..Default::default()
+                });
+            }
+            c
+        };
+        let group = |c| Control::Group {
+            children: vec![GroupChild::Shape(c)],
+            width: u(2000),
+            height: u(2000),
+            frame: Default::default(),
+            placement: None,
+            inst_id: None,
+        };
+        let a = serde_json::to_value(group(shape(30.00001))).unwrap();
+        let mut b = serde_json::to_value(group(shape(30.))).unwrap();
+        assert_ne!(a, b);
+        align_equivalent_shapes(&a, &mut b);
+        assert_eq!(
+            a, b,
+            "displayed error is below 2 although unscaled O points differ by more than 2"
+        );
+        // 이것을 실패시키는 것: 자식 손실을 그룹 fallback에서 분리한 뒤
+        // stamp가 30.4°→30°의 실제 손실까지 동등한 기하로 승인하기.
+        assert!(!same_place(&shape(30.4), &shape(30.), ((0., 0.), (0., 0.)), true));
+        let fractional = serde_json::to_value(group(shape(30.4))).unwrap();
+        let mut rounded = serde_json::to_value(group(shape(30.))).unwrap();
+        align_equivalent_shapes(&fractional, &mut rounded);
+        assert_ne!(fractional, rounded);
+        let mut changed = shape(30.);
+        changed.frame_mut().unwrap().original_size = Some(Size::new(u(50_000_000), u(50_000_000)));
+        for p in defining_points_mut(&mut changed) {
+            p.x /= 2;
+            p.y /= 2;
+        }
+        assert!(same_place(&shape(30.), &changed, ((0., 0.), (0., 0.)), true));
+        let mut b = serde_json::to_value(group(changed)).unwrap();
+        align_equivalent_shapes(&a, &mut b);
+        assert_ne!(a, b, "same outline must not erase an image brush box change");
     }
 
     fn first_group_mut(doc: &mut HwpxDocument) -> &mut Control {

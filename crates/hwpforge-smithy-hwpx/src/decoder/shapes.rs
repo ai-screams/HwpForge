@@ -4,6 +4,7 @@
 //! Functions here convert `HxRect`, `HxLine`, `HxEllipse`, and `HxPolygon`
 //! into Core `Run` values with the appropriate `Control` variant.
 
+use hwpforge_core::control::geometry::FramePlan;
 use hwpforge_core::control::{Control, GroupChild, ShapeStyle};
 use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
@@ -1963,15 +1964,40 @@ pub(crate) fn decode_container(
     ctx.group_frames = true;
     let mark = ctx.warnings.len();
     ctx.group_calls.push(super::section::GroupCalls::default());
-    let result =
-        decode_container_once(container, char_shape_id, depth, ctx).and_then(|run| match run {
-            Some(run) => settle_group_frames(container, run, char_shape_id, depth, mark, ctx),
+    let mut candidates = Vec::new();
+    let result = decode_container_once(container, char_shape_id, depth, ctx, &mut candidates)
+        .and_then(|run| match run {
+            Some(run) => settle_group_frames(
+                container,
+                run,
+                char_shape_id,
+                depth,
+                mark,
+                ctx,
+                &mut candidates,
+            ),
             None => Ok(None),
         });
     let frame = ctx.group_calls.pop().unwrap_or_default();
     ctx.group_sources = saved_sources;
     ctx.group_frames = saved_frames;
-    let run = result?;
+    let mut run = result?;
+    if let Some(Run { content: RunContent::Control(group), .. }) = &mut run {
+        // Source retry uses only folded image decision geometry; admission is child-local.
+        for (path, loss) in hwpforge_core::control::geometry::preserve_group_original_boxes(
+            group,
+            &candidates,
+            &crate::encoder::shapes::HWPX_POLICY,
+        ) {
+            for &index in &path {
+                ctx.enter(super::PathSeg::GroupChild(index));
+            }
+            ctx.content_lost("shape_emission", loss.detail().to_string());
+            for _ in &path {
+                ctx.leave();
+            }
+        }
+    }
     let own = ctx.warnings.split_off(mark);
     crate::work::tick_n(own.len());
     if !ctx.group_calls.is_empty() {
@@ -2152,8 +2178,9 @@ thread_local! {
 
 /// S20 (§19.23.17 M2, §19.23.20): a group decoded with its original boxes is
 /// checked as one — the writer's [`group_plan`] against the source, for every
-/// node that keeps an original box and the group's own box. Over 2 HWPUNIT
-/// anywhere: decoded again without original boxes (as before S20); if that
+/// node that keeps an original box and the group's own box. Preservation
+/// has not touched this tree. Over 2 HWPUNIT anywhere: decoded again without
+/// original boxes (as before S20); if that
 /// plan lands within 2 of the source, the boxes are dropped and reported
 /// (`object_original_size`). Otherwise the source draws a size its layout
 /// does not hold: `shape_drawn_extent`, and the boxes are kept (the drawn
@@ -2170,6 +2197,7 @@ fn settle_group_frames(
     depth: usize,
     mark: usize,
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> HwpxResult<Option<Run>> {
     use super::group_geometry::EXACT_TOLERANCE;
     let sources = std::mem::take(&mut ctx.group_sources);
@@ -2188,7 +2216,8 @@ fn settle_group_frames(
     if let Some(frame) = ctx.group_calls.last_mut() {
         frame.replay = Some(0);
     }
-    let plain = decode_container_once(container, char_shape_id, depth, ctx)?;
+    let first_candidates = std::mem::take(candidates);
+    let plain = decode_container_once(container, char_shape_id, depth, ctx, candidates)?;
     // A retry that made fewer calls leaves slots no tree places, which the
     // outermost group reports (`decode_container`).
     if let Some(frame) = ctx.group_calls.last_mut() {
@@ -2200,6 +2229,7 @@ fn settle_group_frames(
         _ => f64::INFINITY,
     };
     if without <= EXACT_TOLERANCE {
+        candidates.clear();
         ctx.content_lost(
             "object_original_size",
             format!(
@@ -2211,6 +2241,7 @@ fn settle_group_frames(
     }
     ctx.warnings.truncate(mark);
     ctx.warnings.extend(first_warnings);
+    *candidates = first_candidates;
     ctx.content_lost(
         "shape_drawn_extent",
         format!("a group's shapes land {with:.2} from where its matrices draw them"),
@@ -2269,6 +2300,7 @@ fn decode_container_once(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> HwpxResult<Option<Run>> {
     #[cfg(test)]
     CONTAINER_DECODES.with(|n| n.set(n.get() + 1));
@@ -2319,7 +2351,8 @@ fn decode_container_once(
         );
     }
 
-    let Some(children) = decode_group_children(container, origin, char_shape_id, depth, ctx)?
+    let Some(children) =
+        decode_group_children(container, origin, char_shape_id, depth, ctx, candidates)?
     else {
         return Ok(None);
     };
@@ -2419,8 +2452,8 @@ struct WireChild {
     control: Control,
     map: Option<super::group_geometry::Affine>,
     org: (f64, f64),
-    /// The wire shape has a picture fill (`<hc:imgBrush>`), which Core
-    /// cannot carry.
+    /// The wire shape has a picture fill (`<hc:imgBrush>`), so even an
+    /// unsupported brush participates in the existing turning-content rule.
     picture_fill: bool,
     /// `<hp:flip>` sets a mirror (S20: such a leaf is not axis-aligned).
     flipped: bool,
@@ -2438,11 +2471,12 @@ fn wire_aligned(map: Option<super::group_geometry::Affine>, flipped: bool) -> bo
     map.is_some_and(|m| m.b.abs() < 1e-9 && m.d.abs() < 1e-9 && m.a > 0.0 && m.e > 0.0) && !flipped
 }
 
-/// Whether every leaf under `container`, nested groups included, is
-/// axis-aligned ([`wire_aligned`]) — the groups that keep their original box
+/// Whether every non-image-filled leaf under `container`, nested groups
+/// included, is axis-aligned ([`wire_aligned`]) — the groups that keep their original box
 /// (§19.23.13). An OLE object counts as a leaf that is not.
 /// 이것을 실패시키는 것: 중첩 묶음을 보지 않기 / 잎 하나만 보기
 /// (`mixed_group_keeps_aligned_leaves_only`).
+// 이것을 실패시키는 것: 회전 그림 하나 때문에 부모 frame이 재디코드에서 사라지기.
 fn all_aligned(container: &crate::schema::section::HxContainer) -> bool {
     use crate::schema::section::HxContainerChildKind as K;
     let leaf = |ri: Option<&crate::schema::section::HxRenderingInfo>,
@@ -2453,27 +2487,33 @@ fn all_aligned(container: &crate::schema::section::HxContainer) -> bool {
     container.child_order.iter().all(|&(kind, idx)| match kind {
         K::Rect => {
             let s = &container.rects[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::Line => {
             let s = &container.lines[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::Ellipse => {
             let s = &container.ellipses[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::Polygon => {
             let s = &container.polygons[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::Curve => {
             let s = &container.curves[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::ConnectLine => {
             let s = &container.connect_lines[idx];
-            leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
+            has_picture_fill(s.fill_brush.as_ref())
+                || leaf(s.rendering_info.as_ref(), s.offset.as_ref(), s.flip.as_ref())
         }
         K::TextArt => {
             // HxTextArt keeps no `<hp:flip>`: the chain alone decides.
@@ -2502,6 +2542,7 @@ fn decode_group_children(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> HwpxResult<Option<Vec<GroupChild>>> {
     use crate::schema::section::HxContainerChildKind as K;
 
@@ -2521,7 +2562,8 @@ fn decode_group_children(
     for (wire_idx, &(kind, idx)) in container.child_order.iter().enumerate() {
         ctx.enter(super::PathSeg::GroupChild(wire_idx));
         ctx.enter_group_child();
-        let result = decode_group_child(container, kind, idx, origin, char_shape_id, depth, ctx);
+        let result =
+            decode_group_child(container, kind, idx, origin, char_shape_id, depth, ctx, candidates);
         ctx.leave_group_child();
         let decoded = match result {
             Ok(decoded) => decoded,
@@ -2555,6 +2597,7 @@ fn decode_group_children(
 
 /// Decodes one child of a group. `Ok(None)` = not represented (unsupported
 /// kind, or dropped with its own `ContentLost` already reported).
+#[allow(clippy::too_many_arguments)]
 fn decode_group_child(
     container: &crate::schema::section::HxContainer,
     kind: crate::schema::section::HxContainerChildKind,
@@ -2563,6 +2606,7 @@ fn decode_group_child(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> HwpxResult<Option<GroupChild>> {
     use crate::schema::section::HxContainerChildKind as K;
 
@@ -2662,16 +2706,18 @@ fn decode_group_child(
                 char_shape_id,
                 depth + 1,
                 ctx,
+                candidates,
             )?;
             if nested.is_none() {
                 ctx.group_sources.truncate(mark);
+                candidates.retain(|(index, _)| *index < mark);
             }
             return Ok(nested.map(GroupChild::Shape));
         }
         K::Unsupported(_) => return Ok(None),
     };
     let Some(wire) = wire else { return Ok(None) };
-    Ok(normalize_group_child(wire, origin, ctx).map(GroupChild::Shape))
+    Ok(normalize_group_child(wire, origin, ctx, candidates).map(GroupChild::Shape))
 }
 
 /// A picture in a group: its box folded like a shape's
@@ -2786,6 +2832,7 @@ fn decode_nested_container(
     char_shape_id: CharShapeIndex,
     depth: usize,
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> HwpxResult<Option<Control>> {
     use super::group_geometry::{bounds, corners, wire_chain};
 
@@ -2793,7 +2840,8 @@ fn decode_nested_container(
     let Some((min_x, min_y, max_x, max_y)) = leaf_box else {
         // No geometry to place: decode the children anyway so unsupported
         // ones are reported, then drop the group.
-        let _ = decode_group_children(nested, parent_origin, char_shape_id, depth, ctx)?;
+        let _ =
+            decode_group_children(nested, parent_origin, char_shape_id, depth, ctx, candidates)?;
         return Ok(None);
     };
     // The nested group's own matrices should describe the same box. A
@@ -2824,7 +2872,8 @@ fn decode_nested_container(
     }
 
     let provisional = (min_x.round(), min_y.round());
-    let Some(mut children) = decode_group_children(nested, provisional, char_shape_id, depth, ctx)?
+    let Some(mut children) =
+        decode_group_children(nested, provisional, char_shape_id, depth, ctx, candidates)?
     else {
         return Ok(None);
     };
@@ -2862,7 +2911,7 @@ fn decode_nested_container(
 }
 
 /// S20 (§19.23.13): a group's original box — its `orgSz` (or `curSz`) when
-/// every leaf under it is axis-aligned ([`all_aligned`]) and the box can be a
+/// every non-image-filled leaf is axis-aligned ([`all_aligned`]) and the box can be a
 /// frame value — and, for a top-level group, its size lock. A group that is
 /// not all aligned keeps no original box (its turned leaves are folded into
 /// the displayed space).
@@ -3060,9 +3109,11 @@ fn normalize_group_child(
     wire: WireChild,
     origin: (f64, f64),
     ctx: &mut DecodeCtx,
+    candidates: &mut Vec<(usize, FramePlan)>,
 ) -> Option<Control> {
     use hwpforge_core::control::geometry::{
-        fold_aligned_child, fold_group_child, FoldInput, FoldLossKind, FoldOutcome, GeometryFacts,
+        fold_aligned_child, fold_group_child, fold_group_child_with_original_box, FoldInput,
+        FoldLossKind, FoldOutcome, GeometryFacts,
     };
 
     let WireChild { control, map, org, picture_fill, flipped } = wire;
@@ -3071,8 +3122,24 @@ fn normalize_group_child(
         return None;
     };
     let mut control = control;
+    // Only the decoded image fill selects preservation. A raw imgBrush can
+    // lose to a gradient or lack a reference; its existing diagnostics remain.
+    let preserve_picture_fill = match &control {
+        Control::TextBox { style, .. }
+        | Control::Rect { style, .. }
+        | Control::Ellipse { style, .. }
+        | Control::Arc { style, .. }
+        | Control::Polygon { style, .. }
+        | Control::Curve { style, .. }
+        | Control::Line { style, .. }
+        | Control::ConnectLine { style, .. } => matches!(
+            style.as_ref().and_then(|s| s.fill.as_ref()),
+            Some(hwpforge_core::control::Fill::Image { .. })
+        ),
+        _ => false,
+    };
     // S20 (§19.23.13): an axis-aligned leaf keeps its points in its original
-    // box; the others fold as before (their original box is not kept).
+    // box. Non-aligned picture geometry is saved separately for the later trial.
     // 이것을 실패시키는 것: 이 갈래를 지우기(`aligned_leaves_keep_their_original_box`).
     // An aligned leaf whose `orgSz` cannot be a frame value is reported as
     // at the top level (§19.23.15) and folds without an original box.
@@ -3116,13 +3183,31 @@ fn normalize_group_child(
                 ctx.content_lost("group_child_transform", loss.detail().to_string());
             }
             if kept.is_some() {
-                ctx.group_sources.push(Some(source));
+                ctx.group_sources.push((!preserve_picture_fill).then_some(source));
             }
             return kept;
         }
     }
     let input = FoldInput::new(m.to_transform(), org, origin)
         .with_geometry_facts(GeometryFacts::new(picture_fill));
+    // 이것을 실패시키는 것: 보존 후보를 HEAD의 정렬/접기 입력 대신 전달하기.
+    // Copy the shell only. Paragraphs, captions and their source identities stay put.
+    let candidate = if preserve_picture_fill {
+        let contents = take_contents(&mut control);
+        let trial = control.clone();
+        put_contents(&mut control, contents);
+        match fold_group_child_with_original_box(trial, &input) {
+            FoldOutcome::Kept { control, .. } => {
+                hwpforge_core::control::geometry::group_child_frame_plan(
+                    &control,
+                    &hwpforge_core::control::geometry::EmissionPolicy::exact(),
+                )
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let (kept, losses) = match fold_group_child(control, &input) {
         FoldOutcome::Kept { control, losses } => (Some(*control), losses),
         FoldOutcome::Dropped { losses } => (None, losses),
@@ -3136,6 +3221,9 @@ fn normalize_group_child(
         ctx.content_lost(kind, loss.detail().to_string());
     }
     if kept.is_some() {
+        if let Some(candidate) = candidate {
+            candidates.push((ctx.group_sources.len(), candidate));
+        }
         ctx.group_sources.push(None);
     }
     kept
@@ -3220,6 +3308,57 @@ pub(super) fn with_object_out_margin(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 이것을 실패시키는 것: 축 정렬 그림 source를 그룹 잔차/retry에 포함하기.
+    #[test]
+    fn image_fill_retry_excludes_brush_sources_including_aligned_children() {
+        use crate::decoder::group_geometry::Affine;
+        use hwpforge_core::control::Fill;
+        use hwpforge_foundation::ImageFillMode;
+        let u = |v| HwpUnit::new(v).unwrap();
+        for frames in [false, true] {
+            for turned in [false, true] {
+                for image in [false, true] {
+                    let mut c = Control::rect(u(100), u(50)).unwrap();
+                    if let Control::Rect { style, .. } = &mut c {
+                        *style = Some(ShapeStyle {
+                            fill: image.then(|| Fill::Image {
+                                image_id: "BinData/brush".into(),
+                                mode: ImageFillMode::Tile,
+                            }),
+                            ..Default::default()
+                        });
+                    }
+                    let map = if turned {
+                        Affine { a: 0., b: -3., c: 200., d: 2., e: 0., f: 300. }
+                    } else {
+                        Affine { a: 2., b: 0., c: 200., d: 0., e: 3., f: 300. }
+                    };
+                    let mut ctx = DecodeCtx::new(0);
+                    ctx.group_frames = frames;
+                    let mut candidates = Vec::new();
+                    let got = normalize_group_child(
+                        WireChild {
+                            control: c,
+                            map: Some(map),
+                            org: (100., 50.),
+                            picture_fill: true,
+                            flipped: false,
+                        },
+                        (0., 0.),
+                        &mut ctx,
+                        &mut candidates,
+                    )
+                    .unwrap();
+                    assert!(ctx.warnings.is_empty(), "{:?}", ctx.warnings);
+                    assert_eq!(got.frame().unwrap().original_size.is_some(), frames && !turned);
+                    assert_eq!(ctx.group_sources.len(), 1);
+                    assert_eq!(ctx.group_sources[0].is_some(), frames && !turned && !image);
+                    assert_eq!(candidates.len(), usize::from(image && (!frames || turned)));
+                }
+            }
+        }
+    }
 
     fn decode_shape_style_full(
         line_shape: &Option<HxLineShape>,
@@ -4906,7 +5045,7 @@ mod group_tests {
         let rot = Affine::from_hx(
             &crate::encoder::shapes::build_shape_common(
                 c,
-                &crate::encoder::shapes::shape_frame_plan(c).unwrap(),
+                &crate::encoder::shapes::shape_frame_plan(c, false).unwrap(),
                 false,
             )
             .rendering_info
@@ -8510,7 +8649,7 @@ mod frame_tests {
 
         let mut circle = Control::ellipse(u(850), u(850));
         circle.frame_mut().unwrap().original_size = Some(Size::new(u(-1), u(560)));
-        assert!(crate::encoder::shapes::shape_frame_plan(&circle).is_err());
+        assert!(crate::encoder::shapes::shape_frame_plan(&circle, false).is_err());
         let mut picture = Image::new("BinData/a.png", u(850), u(850), ImageFormat::Png);
         picture.frame.original_size = Some(Size::new(u(560), u(-1)));
         let err = crate::encoder::section::build_picture(

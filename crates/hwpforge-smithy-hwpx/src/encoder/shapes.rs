@@ -5,8 +5,9 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::geometry::{
-    drop_original_sizes, frame_plan, group_plan, local_transform, AngleRounding,
-    CoefficientRounding, EmissionPolicy, FramePlan, GroupNodePlan,
+    drop_original_size, drop_original_sizes, frame_plan, group_child_frame_plan, group_plan,
+    local_transform, preserve_group_child, AngleRounding, CoefficientRounding, EmissionPolicy,
+    FramePlan, GroupNodePlan,
 };
 use hwpforge_core::control::{Control, Fill, GroupChild, ShapeStyle};
 use hwpforge_core::placement::ObjectPlacement;
@@ -212,7 +213,7 @@ fn report_shape_output(
 /// Core value never went through `validate`.
 /// 이것을 실패시키는 것: 이 거부를 지우기(`negative_original_size_is_not_written`
 /// — `orgSz` 가 감싼 값 `4294967295` 로 써진다).
-pub(crate) fn shape_frame_plan(ctrl: &Control) -> HwpxResult<FramePlan> {
+pub(crate) fn shape_frame_plan(ctrl: &Control, as_group_child: bool) -> HwpxResult<FramePlan> {
     if let Some(o) = ctrl.frame().and_then(|f| f.original_size) {
         if o.width.as_i32() < 0 || o.height.as_i32() < 0 {
             return Err(crate::error::HwpxError::InvalidStructure {
@@ -225,7 +226,12 @@ pub(crate) fn shape_frame_plan(ctrl: &Control) -> HwpxResult<FramePlan> {
             });
         }
     }
-    frame_plan(ctrl, &HWPX_POLICY).ok_or_else(|| crate::error::HwpxError::InvalidStructure {
+    let plan = if as_group_child {
+        group_child_frame_plan(ctrl, &HWPX_POLICY)
+    } else {
+        frame_plan(ctrl, &HWPX_POLICY)
+    };
+    plan.ok_or_else(|| crate::error::HwpxError::InvalidStructure {
         detail: format!("{} has no shape box", ctrl.kind_name()),
     })
 }
@@ -544,7 +550,7 @@ pub(crate) fn encode_textbox_to_rect(
     );
     sink.leave();
     let sub_list = sub_list_result?;
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (width_hwp, height_hwp) = sc.size;
@@ -637,7 +643,7 @@ pub(crate) fn encode_rect_to_hx(
 
     let _width_hwp = width.as_i32();
     let _height_hwp = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (width_hwp, height_hwp) = sc.size;
@@ -706,7 +712,7 @@ pub(crate) fn encode_line_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -805,7 +811,7 @@ pub(crate) fn encode_ellipse_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -918,7 +924,7 @@ pub(crate) fn encode_polygon_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -1038,7 +1044,7 @@ pub(crate) fn encode_arc_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -1136,7 +1142,7 @@ pub(crate) fn encode_curve_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -1237,7 +1243,7 @@ pub(crate) fn encode_connect_line_to_hx(
 
     let _w = width.as_i32();
     let _h = height.as_i32();
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let sc = build_shape_common(ctrl, &plan, as_group_child);
     report_shape_output(ctrl, as_group_child, &plan, sink);
     let (w, h) = sc.size;
@@ -1429,7 +1435,7 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control, as_group_child: bool) -> Hw
     // scaMatrix maps the original box (the 14173-HWPUNIT design box unless
     // the frame holds another) onto the rendered size.
     // 이것을 실패시키는 것: 14173 상수로 되돌리기(`textart_frame_round_trips`).
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_group_child)?;
     let (org_w, org_h) = plan.original_size();
     let sca_x = format!("{:.6}", plan.scale().0);
     let sca_y = format!("{:.6}", plan.scale().1);
@@ -1636,6 +1642,22 @@ fn encode_group_child_xml(
         let raw = zero_cur_sz(&raw);
         return Ok(Some(with_node_chain(raw, node)));
     }
+    let baseline = nodes.next();
+    // 이것을 실패시키는 것: fallback 뒤 그림의 30.4° 손실을 무경고로 방출.
+    let preserved =
+        baseline.map(|node| preserve_group_child(child, node, group_level as usize, &HWPX_POLICY));
+    let node = preserved.as_ref().map(|(node, _)| node);
+    let folded;
+    let child = if let Some((_, Some(loss))) = &preserved {
+        sink.content_lost("shape_emission", loss.detail().to_string());
+        let mut plain = child.clone();
+        drop_original_size(&mut plain);
+        super::section::traversal::rebind_group_notes(child, &plain, sink)?;
+        folded = plain;
+        &folded
+    } else {
+        child
+    };
     let raw = match child {
         Control::TextBox { .. } => {
             let mut hx =
@@ -1688,14 +1710,44 @@ fn encode_group_child_xml(
         // group plan has no node for it either.)
         _ => return Ok(None),
     };
-    let node = nodes.next();
     // 한컴 positions a container child by its transform-matrix translation;
     // `<hp:offset>` mirrors it (native carries both). Identity matrices render
     // every child at the group origin (overlap) — verified visually.
     let raw = set_group_child_offset(&raw, x, y);
     let raw = set_group_child_translate(&raw, x, y);
     let raw = zero_cur_sz(&raw);
+    let raw = match node {
+        Some(node)
+            if matches!(
+                shape_parts(child).2.and_then(|s| s.fill.as_ref()),
+                Some(Fill::Image { .. })
+            ) =>
+        {
+            with_image_center(raw, node)
+        }
+        _ => raw,
+    };
     Ok(Some(with_node_chain(set_group_level(&raw, group_level), node)))
+}
+
+/// Image metadata describes the integer displayed box obtained by decoding
+/// the quantized chain, including ancestor scales. The stored corner distances
+/// are already computed by Core's admission; no second loss calculation lives here.
+fn with_image_center(mut xml: String, node: &GroupNodePlan) -> String {
+    let corners = node.stored_positions();
+    let size =
+        |i: usize| (corners[i].0 - corners[0].0).hypot(corners[i].1 - corners[0].1).round() as i32;
+    // 이것을 실패시키는 것: 982→984 양자화 뒤에도 centerX=491을 써 재통과 때 492로 바뀌기.
+    for (key, value) in [("centerX", size(1) / 2), ("centerY", size(3) / 2)] {
+        let prefix = format!("{key}=\"");
+        if let Some(start) = xml.find(&prefix) {
+            let start = start + prefix.len();
+            if let Some(end) = xml[start..].find('"') {
+                xml.replace_range(start..start + end, &value.to_string());
+            }
+        }
+    }
+    xml
 }
 
 /// A coefficient as the plan stores it: `0` and `1` as Hancom writes them,
@@ -1713,7 +1765,8 @@ fn coefficient(v: f64) -> String {
 /// `xml` with its own (first) `<hp:renderingInfo>` replaced by the group
 /// plan's chain for this node — the translation, then every enclosing
 /// group's pair and its own (§19.23.13) — when an enclosing group stores a
-/// scale. With one pair the per-shape writer's block already is the plan.
+/// scale or an image-filled child needs its identity ancestor pairs. With
+/// one pair the per-shape writer's block already is the plan.
 /// 이것을 실패시키는 것: 이 교체를 지우기(묶음 배율이 있는 잎이 자기 쌍 하나만
 /// 써서 두 번 축소된다 — `parent_and_child_scales_land_where_hancom_draws`).
 fn with_node_chain(xml: String, node: Option<&GroupNodePlan>) -> String {
@@ -1795,9 +1848,8 @@ pub(crate) fn encode_group_to_xml(
     options: EncodeOptions,
     sink: &mut DocumentEncodeContext,
 ) -> HwpxResult<String> {
-    // S20: the group's emission plan, shared with the decoder's check. When
-    // its original boxes do not store within 2 HWPUNIT, the whole group is
-    // written without them (its displayed boxes, as before S20).
+    // group_plan uses Core's folded image decision input, including for JSON Core.
+    // Image admission below uses the same Core function as both decoders.
     // 이것을 실패시키는 것: 잎 하나만 fallback 하기 / fallback 뒤 재측정을 지우기
     // (`sibling_fallback_is_predicted`).
     let plan = group_plan(ctrl, &HWPX_POLICY).ok_or_else(|| {
@@ -1856,7 +1908,7 @@ fn encode_group_at(
     // Diagnostic slot before the children (document order, review W2 r1 LOW).
     let id_slot = super::object_ids::reserve();
 
-    let plan = shape_frame_plan(ctrl)?;
+    let plan = shape_frame_plan(ctrl, as_child)?;
     let sc = build_shape_common(ctrl, &plan, true);
 
     // Shape-common block (serialized via the same Hx* sub-structs the per-shape
@@ -2100,7 +2152,7 @@ mod tests {
         if let Control::Rect { style: s, .. } = &mut ctrl {
             *s = style.cloned();
         }
-        build_shape_common(&ctrl, &shape_frame_plan(&ctrl).unwrap(), false)
+        build_shape_common(&ctrl, &shape_frame_plan(&ctrl, false).unwrap(), false)
     }
 
     #[test]
