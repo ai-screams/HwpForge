@@ -83,31 +83,10 @@ pub(super) fn outer_margin(
     })
 }
 
-/// `placement` with the outer margin of `geometry` (S18), on the inline
-/// default when there was no placement.
-pub(super) fn with_outer_margin(
-    placement: Option<ObjectPlacement>,
-    geometry: &Hwp5ShapeComponentGeometry,
-    warnings: &mut Vec<Hwp5Warning>,
-) -> Option<ObjectPlacement> {
-    match outer_margin(geometry, warnings) {
-        None => placement,
-        Some(margin) => {
-            let mut placement = placement.unwrap_or_else(ObjectPlacement::legacy_inline_defaults);
-            placement.out_margin = Some(margin);
-            Some(placement)
-        }
-    }
-}
-
-/// Placement for shape families whose `gso ` 속성 word (bit0) is not threaded
-/// into the decoder model — the group container, `EmbeddedChart`, and
-/// `TextArt`. Falls back to the pre-placement offset heuristic: a non-zero
-/// offset floats (`PAPER`, `IN_FRONT_OF_TEXT` — the established shape floating
-/// convention), a zero offset stays inline (`None`). The chart/textart encoders
-/// read only the offset (their `<hp:pos>` is a fixed template); the group
-/// container encoder derives numbering/wrap/pos from these fields exactly as it
-/// did from the old non-zero-offset heuristic.
+/// Offset-only placement for group children (local geometry, no CtrlHeader)
+/// and the legacy EmbeddedChart/TextArt paths, whose encoders still consume
+/// offsets through fixed placement templates. Top-level groups use
+/// [`shape_placement`] and their existing `ctrl_properties` instead.
 pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
     if x == 0 && y == 0 {
         return None;

@@ -822,9 +822,10 @@ pub(super) fn project_group_run(
         children,
         width: hwp_unit_from_u32(group.geometry.width),
         height: hwp_unit_from_u32(group.geometry.height),
-        placement: super::shapes::with_outer_margin(
-            offset_placement(group.geometry.x, group.geometry.y),
+        // 이것을 실패시키는 것: 속성 word 대신 비영 offset으로 PAPER 배치를 추정하기.
+        placement: super::shapes::shape_placement(
             &group.geometry,
+            group.ctrl_properties,
             &mut state.warnings,
         ),
         inst_id,
@@ -1325,6 +1326,40 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn top_level_group_uses_boiler_ctrl_properties() {
+        use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+        // 이것을 실패시키는 것: 묶음의 원시 속성을 버리고 PAPER/글 앞으로 추정하기.
+        // 원본 CtrlHeader 상수만 사용하며 문서나 자식 기하를 복제하지 않는다.
+        let mut top = group(
+            geo(-408, -62, 5000, 6000),
+            at(5000, 6000, 0.0, 0.0),
+            vec![child(rect(), at(100, 100, 0.0, 0.0))],
+        );
+        top.ctrl_properties = 0x040a_2210;
+        let (control, lost) = project(&top);
+        assert!(lost.is_empty(), "{lost:?}");
+        let Control::Group { placement: Some(p), .. } = control.unwrap() else { panic!() };
+        assert_eq!(p.text_wrap, ObjectTextWrap::Square);
+        assert_eq!(p.vert_rel_to, ObjectRelativeTo::Para);
+        assert_eq!(p.horz_rel_to, ObjectRelativeTo::Column);
+        assert!(p.flow_with_text);
+        assert!(!p.treat_as_char);
+        assert_eq!((p.horz_offset.as_i32(), p.vert_offset.as_i32()), (-408, -62));
+
+        // 이것을 실패시키는 것: 좌표 0을 무조건 inline으로, 비영 좌표를 무조건 floating으로 판정하기.
+        top.geometry.x = 0;
+        top.geometry.y = 0;
+        let (control, _) = project(&top);
+        let Control::Group { placement: Some(p), .. } = control.unwrap() else { panic!() };
+        assert!(!p.treat_as_char);
+        top.ctrl_properties |= 1;
+        top.geometry.x = -408;
+        let (control, _) = project(&top);
+        let Control::Group { placement, .. } = control.unwrap() else { panic!() };
+        assert!(placement.is_none_or(|p| p.treat_as_char));
     }
 
     /// HWP5 places every shape of a group, nested groups included, in the
