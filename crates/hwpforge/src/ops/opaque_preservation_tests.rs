@@ -1,5 +1,6 @@
 //! Ops-level save contract; synthetic HWPX keeps the tests independent of corpus paths.
-use super::*;
+use super::ensure_opaque_carried;
+use crate::ops::*;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::zip_package::open_package;
@@ -144,19 +145,19 @@ fn check_regenerating(op: impl Fn(&[u8]) -> Result<Vec<u8>, OpsError>) {
 
 // 이것을 실패시키는 것: patch 최종 게이트 호출 제거 (구형 일반 재생성 우회).
 #[test]
-fn w2_gate_legacy_patch() {
+fn opaque_gate_legacy_patch() {
     check_regenerating(|b| patch_bytes(b, true));
 }
 
 // 이것을 실패시키는 것: from_json+base 최종 게이트 호출 제거 (구형 분기).
 #[test]
-fn w2_gate_legacy_from_json() {
+fn opaque_gate_legacy_from_json() {
     check_regenerating(|b| json_bytes(b, true));
 }
 
 // 이것을 실패시키는 것: restyle 최종 게이트 호출 제거.
 #[test]
-fn w2_gate_restyle() {
+fn opaque_gate_restyle() {
     check_regenerating(|b| {
         restyle(b, &RestyleOptions::default().with_preset("default")).map(|o| o.bytes)
     });
@@ -176,19 +177,19 @@ fn check_preserving(op: impl Fn(&[u8]) -> Result<Vec<u8>, OpsError>) {
 // 이것을 실패시키는 것: 보존 patch 최종 게이트 호출 제거; opaque 이름·payload·판정 손실.
 // 게이트가 정상 항목까지 바이트 비교 대상으로 삼아도 section 편집이 거부되어 실패한다.
 #[test]
-fn w2_gate_preserving_patch() {
+fn opaque_gate_preserving_patch() {
     check_preserving(|b| patch_bytes(b, false));
 }
 
 // 이것을 실패시키는 것: from_json+base 신형 편집 encoder 분기의 최종 게이트 호출 제거.
 #[test]
-fn w2_gate_edit_encoder() {
+fn opaque_gate_edit_encoder() {
     check_preserving(|b| json_bytes(b, false));
 }
 
 // 이것을 실패시키는 것: fill 최종 게이트 호출 제거; 보존 출력의 opaque 손실.
 #[test]
-fn w2_gate_fill() {
+fn opaque_gate_fill() {
     check_preserving(|b| {
         fill(b, &[("field".into(), "filled".into())], &Default::default()).map(|o| o.bytes)
     });
@@ -196,7 +197,7 @@ fn w2_gate_fill() {
 
 // 이것을 실패시키는 것: insert_para 최종 게이트 호출 제거.
 #[test]
-fn w2_gate_insert_para() {
+fn opaque_gate_insert_para() {
     check_admission(|b| {
         insert_para(b, &InsertParaOptions::default().with_text(vec!["inserted".into()]))
             .map(|o| o.bytes)
@@ -205,7 +206,7 @@ fn w2_gate_insert_para() {
 
 // 이것을 실패시키는 것: delete_para 최종 게이트 호출 제거.
 #[test]
-fn w2_gate_delete_para() {
+fn opaque_gate_delete_para() {
     check_admission(|b| {
         delete_para(b, &DeleteParaOptions::default().with_indexes(vec![1])).map(|o| o.bytes)
     });
@@ -228,7 +229,7 @@ fn check_admission(op: impl Fn(&[u8]) -> Result<Vec<u8>, OpsError>) {
 
 // 이것을 실패시키는 것: stamp 최종 게이트 호출 제거 (v1·v2 합류 뒤).
 #[test]
-fn w2_gate_stamp() {
+fn opaque_gate_stamp() {
     check_admission(|b| stamp(b, &StampMap::Legacy(vec![]), &Default::default()).map(|o| o.bytes));
     check_admission(|b| {
         let request = StampMap::V2(StampRequestV2 {
@@ -243,7 +244,7 @@ fn w2_gate_stamp() {
 
 // 이것을 실패시키는 것: set_cell 최종 게이트 호출 제거.
 #[test]
-fn w2_gate_cell_edit() {
+fn opaque_gate_cell_edit() {
     check_admission(|b| {
         set_cell(
             b,
@@ -255,7 +256,7 @@ fn w2_gate_cell_edit() {
 
 // 이것을 실패시키는 것: 게이트의 바이트 비교 생략 (이름·판정은 같은 nonempty 폴더).
 #[test]
-fn w2_gate_changed_payload() {
+fn opaque_gate_changed_payload() {
     let input = rewrite(&base(), &[("Unused/", b"x")], &[]);
     let output = rewrite(&input, &[("Unused/", b"y")], &[]);
     ensure_opaque_carried(&input, &input).unwrap();
@@ -267,7 +268,7 @@ fn w2_gate_changed_payload() {
 // 입력은 빈 폴더의 비압축 크기를 1로 광고한다. 출력이 실제 크기 0으로 쓰면
 // metadata 판정만 정상으로 바뀐다. ZIP reader는 상한 초과는 막지만 짧은 payload는 허용한다.
 #[test]
-fn w2_gate_changed_classification() {
+fn opaque_gate_changed_classification() {
     let output = rewrite(&base(), &[("Unused/", b"")], &[]);
     let mut input = output.clone();
     // This is the last appended entry; alter only its advertised size in both
@@ -293,7 +294,7 @@ fn w2_gate_changed_classification() {
 
 // 이것을 실패시키는 것: 이름 검사 생략 또는 정상 입력에서도 출력 재개방하기.
 #[test]
-fn w2_gate_missing_and_no_opaque_fast_path() {
+fn opaque_gate_missing_and_no_opaque_fast_path() {
     let normal = base();
     ensure_opaque_carried(&normal, b"not a ZIP").unwrap();
     for shape in shapes() {
