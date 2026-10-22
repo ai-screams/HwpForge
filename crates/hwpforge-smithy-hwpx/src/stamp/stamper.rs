@@ -1274,6 +1274,7 @@ fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, StamperError> {
         .iter()
         .enumerate()
         .filter(|(index, entry)| {
+            // Retain this crate-boundary guard even though core classifies nonempty directories as opaque.
             archive.is_opaque(*index) || !entry.path.ends_with('/') || entry.size != 0
         })
         .map(|(_, entry)| entry.path.clone())

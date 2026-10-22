@@ -188,7 +188,7 @@ fn w1_reference_position_comment_and_cd_padding_cross_product() {
     }
 }
 
-/// 이것을 실패시키는 것: count sentinel이면 신규 경로의 참조 해석 대조 생략.
+/// 기준선 ZIP64 수용 유지 / 후행 바이트가 붙은 입력은 새 경로에서 거부.
 #[test]
 fn w1_count_sentinel_other_document_in_zip64_extension() {
     let a = include_bytes!("../../../tests/fixtures/user_samples/text/sample-fwspace.hwpx");

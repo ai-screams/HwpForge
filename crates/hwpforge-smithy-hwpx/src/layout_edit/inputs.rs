@@ -2,16 +2,17 @@
 //!
 //! | Input | Dependency / disposition | Evidence and conservative boundary |
 //! | --- | --- | --- |
+//! | Opaque entries, regardless of path | Global raw-byte hash takes precedence | The classifications and exclusions below apply only to normal entries. |
 //! | header font/char/para/style, numbering, bullets, tabs, borders | Typed transitive definitions | `schema::header`, `Definitions::reference`; font metrics and paragraph heads affect line width/height. |
 //! | header outside refList, including layoutCompatibility | Global | `schema::header::HxHead`; compatibility can change layout despite equal text/styles. Only derived `head@secCnt` is removed. |
 //! | section/page/column settings, headers/footers, master pages | Section/host graph | `schema::section`, `PackageAnalysis::read`; page and flow geometry. |
 //! | content.hpf metadata | Document-field consumers | `Signals::scan`: fieldBegin, page fields, `$` stringParam, including `$lastsaveby`. |
-//! | content.hpf spine | Ordered section paths; changed common prefix invalidates globally | Decoder PackageOrder resolves manifest once; unsupported structures invalidate every section. |
-//! | content.hpf manifest | Target resolution, not a global serialization fingerprint | OPF item ids/hrefs locate resources; `index_package_targets` still fingerprints referenced payload AND media-type. Manifest order/spelling alone is not layout. |
+//! | content.hpf spine | Ordered section paths; changed common prefix invalidates globally | Spine itemref order determines section order; manifest IDs resolve target paths; unsupported structures or extension attributes retain the entire content.hpf tree globally. |
+//! | content.hpf manifest | Target resolution for supported content.hpf | OPF item ids/hrefs locate resources; referenced payload AND media-type remain inputs. Manifest order/spelling alone is not layout; unsupported extension attributes retain the entire tree globally. |
 //! | META-INF/manifest.xml | Excluded package inventory | ODF manifest describes package entries; referenced payloads are still compared after decoding. |
 //! | BinData, Chart | Referenced target bytes/canonical XML | `index_package_targets`; missing/changed targets cannot prove equality. |
 //! | version.xml | Excluded packaging provenance | Hancom format guide: file-format/writer environment version, not document compatibility (which stays in header). |
-//! | META-INF/container.xml | Excluded only after decoder validates supported rootfiles | Exactly one Contents/content.hpf package root; known preview/RDF roots allowed. Unsupported structures fail closed globally. |
+//! | META-INF/container.xml | Excluded only after supported rootfiles are validated | Exactly one Contents/content.hpf package root; known preview/RDF roots allowed. Unsupported structures or extension attributes retain the entire container tree globally. |
 //! | META-INF/container.rdf | Excluded package description | Resolved document parts remain inputs. |
 //! | mimetype, Preview/* | Excluded signature/derived preview | Hancom format guide; not source content for line layout. |
 //! | settings.xml ha:CaretPosition (listIDRef, paraIDRef, pos) | Excluded ONLY in the known application namespace | KS X 6101 table 14: saved insertion point, not paragraph properties. Unknown attributes/children/namespaces stay global. |
