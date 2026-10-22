@@ -124,6 +124,23 @@ fn decode(bytes: Cow<'_, [u8]>, limit: usize) -> Result<String, String> {
 }
 
 #[cfg(test)]
+pub(crate) fn utf16(xml: &str, le: bool, bom: bool) -> Vec<u8> {
+    let mut bytes = if bom {
+        if le {
+            vec![0xff, 0xfe]
+        } else {
+            vec![0xfe, 0xff]
+        }
+    } else {
+        vec![]
+    };
+    for unit in xml.encode_utf16() {
+        bytes.extend(if le { unit.to_le_bytes() } else { unit.to_be_bytes() });
+    }
+    bytes
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -164,22 +181,6 @@ mod tests {
             assert_eq!(text, "<r/>");
             assert_eq!((text.as_ptr(), text.capacity()), allocation);
         }
-    }
-
-    fn utf16(xml: &str, le: bool, bom: bool) -> Vec<u8> {
-        let mut bytes = if bom {
-            if le {
-                vec![0xff, 0xfe]
-            } else {
-                vec![0xfe, 0xff]
-            }
-        } else {
-            vec![]
-        };
-        for unit in xml.encode_utf16() {
-            bytes.extend(if le { unit.to_le_bytes() } else { unit.to_be_bytes() });
-        }
-        bytes
     }
 
     // 이것을 실패시키는 것: UTF-16/BOM 분기 제거, 선언을 UTF-8로 정규화하지 않기.

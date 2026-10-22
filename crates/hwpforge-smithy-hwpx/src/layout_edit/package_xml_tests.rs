@@ -43,11 +43,7 @@ fn encoded(xml: &str, encoding: usize) -> Vec<u8> {
         return xml.as_bytes().to_vec();
     }
     let xml = xml.replace("UTF-8", "UTF-16");
-    let mut bytes = if encoding == 1 { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
-    for u in xml.encode_utf16() {
-        bytes.extend(if encoding == 1 { u.to_le_bytes() } else { u.to_be_bytes() });
-    }
-    bytes
+    crate::package_xml::utf16(&xml, encoding == 1, true)
 }
 
 // 이것을 실패시키는 것: 세 byte→XML 소비처 중 하나를 UTF-8 전용으로 복원,

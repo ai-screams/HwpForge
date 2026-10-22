@@ -5,6 +5,14 @@ use hwpforge_core::{Document, ImageStore, PageSettings, Paragraph, Run, Section}
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{style_store_for_preset, HwpxDecoder, HwpxEncoder};
 
+fn u16_at(bytes: &[u8], p: usize) -> u16 {
+    u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap())
+}
+
+fn u32_at(bytes: &[u8], p: usize) -> u32 {
+    u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap())
+}
+
 /// 이것을 실패시키는 것: EOF 정확 일치 복원 / 앞 payload EOCD 중복·개수 제한 복원.
 #[test]
 fn w1_generated_hwpx_tails_and_payload_have_no_loss() {
@@ -73,8 +81,6 @@ fn w1_last_raw_other_hwpx_directory_is_rejected_with_or_without_tail() {
     assert_eq!(HwpxDecoder::decode(&b).unwrap().document.sections()[0].paragraphs.len(), 1);
     let a_end = a.len() - 22;
     let b_end = b.len() - 22;
-    let u16_at = |bytes: &[u8], p| u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
-    let u32_at = |bytes: &[u8], p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
     let b_cd = u32_at(&b, b_end + 16) as usize;
     // B remains a complete HWPX: rebase every local offset to the combined input.
     let mut p = b_cd;
@@ -121,8 +127,6 @@ fn w1_reference_position_comment_and_cd_padding_cross_product() {
     // 이것을 실패시키는 것: 기존 경로의 다중 적격 후보 판정을 생략.
     let a = include_bytes!("../../../tests/fixtures/user_samples/text/sample-fwspace.hwpx");
     let b = include_bytes!("../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
-    let u16_at = |bytes: &[u8], p| u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
-    let u32_at = |bytes: &[u8], p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
     let a_end = a.len() - 22;
     let mut input = a.to_vec();
     // An unreadable candidate between A and B must not replace reference evidence.
@@ -189,8 +193,6 @@ fn w1_reference_position_comment_and_cd_padding_cross_product() {
 fn w1_count_sentinel_other_document_in_zip64_extension() {
     let a = include_bytes!("../../../tests/fixtures/user_samples/text/sample-fwspace.hwpx");
     let b = include_bytes!("../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
-    let u16_at = |bytes: &[u8], p| u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
-    let u32_at = |bytes: &[u8], p| u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
     let ae = a.len() - 22;
     let be = b.len() - 22;
     let acd = u32_at(a, ae + 16) as usize;
