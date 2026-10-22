@@ -96,8 +96,7 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
         total: limits.total.min(MAX_TOTAL_SIZE),
         entries: limits.entries.min(MAX_ENTRIES),
     };
-    let directory = directory::preflight(bytes, limits.entries)?;
-    let archive = directory.open(Cursor::new(bytes))?;
+    let archive = directory::open(bytes, limits.entries)?;
     let mut entries = Vec::with_capacity(archive.len());
     let mut keys = BTreeSet::new();
     let metadata = archive.metadata();

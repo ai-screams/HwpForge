@@ -1,9 +1,12 @@
 //! Bounded ZIP framing before zip merges effective-name keys.
 //!
+//! First return the unchanged 5f3e214e path on success (see `legacy`).
+//! Only its failures reach the bounded recovery below.
 //! Selection follows zip 9.0.4 `format/find_central_directory.rs`: EOCD
 //! backwards (comment end <= EOF), ZIP32's first CDFH at/after its relative
-//! offset, ZIP64 forwards from the locator's relative offset. We fail closed
-//! on ambiguous EOCDs instead of allowing zip's recovery to switch footers.
+//! offset. ZIP64 recovery is deferred; existing ZIP64 acceptance stays in
+//! `legacy`. We fail closed when the selected directory disagrees with our
+//! framing policy.
 //! `read/zip_archive.rs::get_metadata` uses the in-memory EOCD size for its
 //! tail window (not the 22-byte on-disk header); see EOCD_WINDOW below.
 //!
@@ -11,8 +14,10 @@
 //! declared size, original names or unmerged count (`format` is private).
 //! Keep only framing/original names here; zip decodes extras and contents.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::rc::Rc;
 
 use zip::read::{ArchiveOffset, Config};
 use zip::ZipArchive;
@@ -24,7 +29,26 @@ use crate::error::{CoreError, CoreResult};
 // Its private struct has four u16s, two u32s and a Box<[u8]> (no padding).
 // Thus 65572 bytes on 64-bit, 65564 on 32-bit; do not substitute disk size 22.
 const EOCD_WINDOW: usize = 20 + std::mem::size_of::<Box<[u8]>>() + 65536;
-const MAX_END_CANDIDATES: usize = 64;
+// OWPML unzlocal_SearchCentralDir: uMaxBack = 0xffff (including the footer).
+const REFERENCE_WINDOW: usize = 65_535;
+// Preserve A3's existing boundary for newly accepted trailing bytes.
+const TAIL_WINDOW: usize = 65_535;
+
+mod legacy;
+
+/// Preserve the complete 0.17.0 acceptance path before trying any new rules.
+pub(super) fn open(bytes: &[u8], limit: usize) -> CoreResult<ZipArchive<Cursor<&[u8]>>> {
+    let baseline =
+        legacy::preflight(bytes, limit).and_then(|directory| directory.open(Cursor::new(bytes)));
+    match baseline {
+        // 이것을 실패시키는 것: 기존 성공 뒤 새 예산/위치 규칙 적용 또는 기존 경로 생략.
+        Ok(archive) => Ok(archive),
+        Err(error) => preflight(bytes, limit)
+            .and_then(|directory| directory.open(Cursor::new(bytes)))
+            // 이것을 실패시키는 것: 두 경로 실패 시 기준선 오류 대신 새 오류 반환.
+            .map_err(|_| error),
+    }
+}
 
 #[derive(Debug)]
 pub(super) struct Directory {
@@ -33,22 +57,68 @@ pub(super) struct Directory {
     pub count: usize,
     pub base: usize,
     pub eocd: usize,
+    comment: Vec<u8>,
+    reference: Option<ReferenceEnd>,
+    work: Rc<RefCell<MetadataWork>>,
+}
+
+/// Raw reference selection, independent of zip candidate eligibility.
+#[derive(Debug)]
+struct ReferenceEnd {
+    eocd: usize,
+    header: [u8; 22],
 }
 
 impl Directory {
     pub(super) fn open<R: Read + Seek + Clone>(&self, mut reader: R) -> CoreResult<ZipArchive<R>> {
-        // 이것을 실패시키는 것: Detect로 되돌려 겹치는 ZIP64 후보를 다시 복사하기.
         let file_len = reader.seek(SeekFrom::End(0)).map_err(|e| zip_error(e.to_string()))?;
+        let mut reader = MetadataReader {
+            reader,
+            end: file_len,
+            footer: None,
+            work: self.work.clone(),
+            record_probe: false,
+        };
+        let comment_start = self.eocd + 22;
+        reader
+            .seek(SeekFrom::Start((self.eocd + 20) as u64))
+            .map_err(|e| zip_error(e.to_string()))?;
+        let mut length = [0; 2];
+        reader.read_exact(&mut length).map_err(|e| invalid_structure(e.to_string()))?;
+        if usize::from(u16::from_le_bytes(length)) != self.comment.len() {
+            return Err(invalid());
+        }
+        let comment_end = comment_start + self.comment.len();
+        let reference = self.reference.as_ref().ok_or_else(invalid)?;
+        if reference.eocd != self.eocd
+            || (comment_end < file_len as usize && file_len as usize - reference.eocd > TAIL_WINDOW)
+        {
+            return Err(invalid());
+        }
+        let count = u16_at(&reference.header, 10)?;
+        let size = u32_at(&reference.header, 12)?;
+        let offset = u32_at(&reference.header, 16)?;
+        // Literal ZIP32 interpretation; candidate already excludes ZIP64.
+        let start = reference.eocd.checked_sub(size as usize);
+        let base = start.and_then(|start| start.checked_sub(offset as usize));
+        // 이것을 실패시키는 것: count / CD 시작 / base 대조 제거.
+        if usize::from(count) != self.count || start != Some(self.start) || base != Some(self.base)
+        {
+            return Err(invalid());
+        }
         let config = Config { archive_offset: ArchiveOffset::Known(self.base as u64) };
-        let archive =
-            ZipArchive::with_config(config, reader).map_err(|e| zip_error(e.to_string()))?;
-        // zip 9.0.4 read_central_header finishes at the last physical record's
-        // end. Cloning shares metadata (Arc), and only clones the reader here.
-        // zip does not retain/use the declared CD size, so compare the consumed
-        // span, not a reconstructed size from decoded names/extras.
+        let result = ZipArchive::with_config(config, reader);
+        self.work.borrow().check()?;
+        let archive = result.map_err(|e| zip_error(e.to_string()))?;
         let consumed_end =
             archive.clone().into_inner().stream_position().map_err(|e| zip_error(e.to_string()))?;
         self.verify(&archive, consumed_end, file_len)?;
+        // SAFETY: this is the very same original reader that produced metadata;
+        // only the accounting wrapper is removed. A virtual footer is never used here.
+        let metadata = archive.metadata();
+        let reader = archive.into_inner().reader;
+        #[allow(unsafe_code)]
+        let archive = unsafe { ZipArchive::unsafe_new_with_metadata(reader, metadata) };
         Ok(archive)
     }
 
@@ -59,17 +129,31 @@ impl Directory {
         file_len: u64,
     ) -> CoreResult<()> {
         // 이것을 실패시키는 것: 시작/크기/base/EOCD 위치 중 하나의 대조를 삭제하기.
-        if file_len.checked_sub(22 + archive.comment().len() as u64) != Some(self.eocd as u64)
-            || archive.central_directory_start() != self.start as u64
-            || archive.offset() != self.base as u64
-            || (self.count != 0
-                && consumed_end.checked_sub(archive.central_directory_start())
-                    != Some(self.size as u64))
+        if (self.eocd + 22 + self.comment.len()) as u64 > file_len
+            || archive.comment() != self.comment
+            || !self.matches_directory(archive, consumed_end)
         {
             return Err(zip_error("central directory interpretation mismatch"));
         }
+        self.verify_count(archive.len())
+    }
+
+    // One comparison for candidate recovery and the final original-file open.
+    fn matches_directory<R: Read + Seek>(
+        &self,
+        archive: &ZipArchive<R>,
+        consumed_end: u64,
+    ) -> bool {
+        archive.central_directory_start() == self.start as u64
+            && archive.offset() == self.base as u64
+            && (self.count == 0
+                || consumed_end.checked_sub(archive.central_directory_start())
+                    == Some(self.size as u64))
+    }
+
+    fn verify_count(&self, count: usize) -> CoreResult<()> {
         // 이것을 실패시키는 것: Unicode extra 적용 후 병합된 개수를 허용하기.
-        if archive.len() != self.count {
+        if count != self.count {
             return Err(invalid_structure("duplicate effective ZIP entry name"));
         }
         Ok(())
@@ -93,12 +177,6 @@ fn u16_at(bytes: &[u8], offset: usize) -> CoreResult<u16> {
 fn u32_at(bytes: &[u8], offset: usize) -> CoreResult<u32> {
     Ok(u32::from_le_bytes(field(bytes, offset)?))
 }
-fn u64_at(bytes: &[u8], offset: usize) -> CoreResult<u64> {
-    Ok(u64::from_le_bytes(field(bytes, offset)?))
-}
-fn size(value: u64) -> CoreResult<usize> {
-    usize::try_from(value).map_err(|_| invalid())
-}
 fn check_count(count: u64, limit: usize) -> CoreResult<()> {
     // 이것을 실패시키는 것: 병합 후 len()만 검사하거나 >를 >=로 바꾸기.
     if count > limit as u64 {
@@ -110,11 +188,14 @@ fn check_count(count: u64, limit: usize) -> CoreResult<()> {
 }
 
 /// Accounts for every four-byte signature probe, including unsuccessful ones.
-/// One bounded tail pass and at most one forward pass: <= 4*(file_len+EOCD_WINDOW).
+/// The tail and all candidate forward scans share 4*(file_len+EOCD_WINDOW).
 #[derive(Default, Debug)]
 pub(super) struct Work {
     pub scanned_bytes: usize,
     pub candidates: usize,
+    #[cfg(test)]
+    visited: Vec<usize>,
+    metadata: Rc<RefCell<MetadataWork>>,
 }
 impl Work {
     fn signature(
@@ -127,17 +208,109 @@ impl Work {
         self.scanned_bytes = self.scanned_bytes.checked_add(4).ok_or_else(invalid)?;
         // 이것을 실패시키는 것: 스캔 바이트 예산을 제거하거나 반복 스캔을 추가하기.
         if self.scanned_bytes > budget {
-            return Err(zip_error("ZIP end-record scan budget exceeded"));
+            return Err(invalid_structure("ZIP end-record scan budget exceeded"));
         }
         Ok(bytes.get(p..p + 4) == Some(magic.as_slice()))
     }
-    fn candidate(&mut self) -> CoreResult<()> {
-        self.candidates += 1;
-        // 이것을 실패시키는 것: 후보 상한 삭제 또는 경계 >를 >=로 바꾸기.
-        if self.candidates > MAX_END_CANDIDATES {
-            return Err(zip_error("too many ZIP end-record candidates"));
+}
+
+/// Shared by clones, failed probes and the final original-file metadata pass.
+#[derive(Debug)]
+struct MetadataWork {
+    read: usize,
+    records: usize,
+    read_limit: usize,
+    record_limit: usize,
+    exhausted: bool,
+}
+impl Default for MetadataWork {
+    fn default() -> Self {
+        Self {
+            read: 0,
+            records: 0,
+            read_limit: usize::MAX,
+            record_limit: 4 * super::MAX_ENTRIES,
+            exhausted: false,
+        }
+    }
+}
+impl MetadataWork {
+    fn charge(&mut self, bytes: usize, records: usize) -> io::Result<()> {
+        self.read = self.read.saturating_add(bytes);
+        self.records = self.records.saturating_add(records);
+        self.exhausted |= self.read > self.read_limit || self.records > self.record_limit;
+        if self.exhausted {
+            return Err(io::Error::other("ZIP metadata work budget exceeded"));
         }
         Ok(())
+    }
+    fn check(&self) -> CoreResult<()> {
+        if self.exhausted {
+            return Err(invalid_structure("ZIP metadata work budget exceeded"));
+        }
+        Ok(())
+    }
+}
+
+/// A candidate-only view: the original bytes up to EOCD, with a zero comment
+/// length. This is deliberately not a general overlay or a returned package.
+#[derive(Clone)]
+struct MetadataReader<R> {
+    reader: R,
+    end: u64,
+    footer: Option<u64>,
+    work: Rc<RefCell<MetadataWork>>,
+    record_probe: bool,
+}
+impl<R: Read + Seek> Read for MetadataReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.record_probe = false;
+        self.work.borrow_mut().charge(0, 0)?;
+        let position = self.reader.stream_position()?;
+        let available = self.end.saturating_sub(position).min(buf.len() as u64) as usize;
+        let n = self.reader.read(&mut buf[..available])?;
+        self.work.borrow_mut().charge(n, 0)?;
+        if let Some(footer) = self.footer {
+            for (i, byte) in buf[..n].iter_mut().enumerate() {
+                if (footer + 20..footer + 22).contains(&(position + i as u64)) {
+                    *byte = 0;
+                }
+            }
+        }
+        Ok(n)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        // zip 9.0.4 read_central_header asks stream_position immediately
+        // before FixedSizeBlock::parse (46 bytes), but seeks to Start for
+        // variable fields. Do not charge a 46-byte filename as a record.
+        let record_probe = self.record_probe;
+        if record_probe && buf.len() == 46 {
+            self.work.borrow_mut().charge(0, 1)?;
+        }
+        let mut rest = &mut *buf;
+        while !rest.is_empty() {
+            let n = self.read(rest)?;
+            if n == 0 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            rest = &mut rest[n..];
+        }
+        Ok(())
+    }
+}
+impl<R: Seek> Seek for MetadataReader<R> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.record_probe = matches!(pos, SeekFrom::Current(0));
+        match pos {
+            SeekFrom::End(offset) => {
+                let at = self
+                    .end
+                    .checked_add_signed(offset)
+                    .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+                self.reader.seek(SeekFrom::Start(at))
+            }
+            _ => self.reader.seek(pos),
+        }
     }
 }
 
@@ -151,130 +324,81 @@ pub(super) fn preflight_with_work(
     work: &mut Work,
 ) -> CoreResult<Directory> {
     let budget = bytes.len().saturating_add(EOCD_WINDOW).saturating_mul(4);
-    // Same window/order/comment inequality as zip 9.0.4. Do not prefer a
-    // terminal outer EOCD over a parseable EOCD in its comment (r2 M1).
-    let mut selected = None;
+    let read_limit = work
+        .metadata
+        .borrow()
+        .read_limit
+        .min(bytes.len().saturating_add(EOCD_WINDOW).saturating_mul(8));
+    work.metadata.borrow_mut().read_limit = read_limit;
     for p in (bytes.len().saturating_sub(EOCD_WINDOW)..bytes.len().saturating_sub(3)).rev() {
         if !work.signature(bytes, p, b"PK\x05\x06", budget)? {
             continue;
         }
-        work.candidate()?;
+        work.candidates += 1;
+        #[cfg(test)]
+        work.visited.push(p);
         let Ok(comment) = u16_at(bytes, p + 20) else { continue };
         let end = p + 22 + usize::from(comment);
         if end > bytes.len() {
             continue;
         }
-        // 이것을 실패시키는 것: 두 EOCD 중 터미널 후보를 우선해 다른 base를 허용하기.
-        if selected.replace(p).is_some() {
-            return Err(zip_error("ambiguous ZIP end records"));
-        }
-    }
-    let eocd = selected.ok_or_else(invalid)?;
-    // This is an acceptance check AFTER selection, never a candidate filter.
-    // 이것을 실패시키는 것: 후행 쓰레기를 허용해 주석 속 EOCD를 열기.
-    if eocd + 22 + usize::from(u16_at(bytes, eocd + 20)?) != bytes.len() {
-        return Err(invalid());
-    }
-    if u16_at(bytes, eocd + 4)? != 0 || u16_at(bytes, eocd + 6)? != 0 {
-        return Err(invalid());
-    }
-    let count32 = u16_at(bytes, eocd + 10)?;
-    if u16_at(bytes, eocd + 8)? != count32 {
-        return Err(invalid());
-    }
-    let size32 = u32_at(bytes, eocd + 12)?;
-    let offset32 = u32_at(bytes, eocd + 16)?;
-    let locator = eocd.checked_sub(20).filter(|&p| bytes[p..].starts_with(b"PK\x06\x07"));
-    let may_be_zip64 = count32 == u16::MAX || size32 == u32::MAX || offset32 == u32::MAX;
-    let (count, directory_size, start, base, directory_end) = if let Some(locator) = locator {
-        // zip consults a locator only when may_be_zip64 is true. Never silently
-        // choose ZIP64 ourselves when zip would choose ZIP32.
-        // 이것을 실패시키는 것: sentinel 없는 ZIP64 locator를 별도 규칙으로 선택하기.
-        if !may_be_zip64 || u32_at(bytes, locator + 4)? != 0 || u32_at(bytes, locator + 16)? != 1 {
-            return Err(invalid());
-        }
-        let relative = size(u64_at(bytes, locator + 8)?)?;
-        if relative >= locator {
-            return Err(invalid());
-        }
-        let mut selected64 = None;
-        // zip's Detect order, but inspect fixed fields BEFORE extensible data
-        // allocation. Known(base) below prevents zip from repeating this scan.
-        for p in relative..locator.saturating_sub(3) {
-            if !work.signature(bytes, p, b"PK\x06\x06", budget)? {
-                continue;
-            }
-            work.candidate()?;
-            let Ok(header) = field::<56>(bytes, p) else { continue };
-            let record_size = u64_at(&header, 4)?;
-            let count = u64_at(&header, 32)?;
-            let offset = u64_at(&header, 48)?;
-            // Matches try_candidate/try_read_eocd64 and blocks::parse in 9.0.4.
-            // zip's parser admits 40..44; our framing check below requires 44.
-            if record_size < 40
-                || record_size.checked_add(12) != Some((locator - p) as u64)
-                || u32_at(&header, 20)? != u32_at(bytes, locator + 4)?
-                || (p as u64) < count.saturating_mul(46).saturating_add(offset)
-            {
-                continue;
-            }
-            selected64 = Some(p);
-            break;
-        }
-        let zip64 = selected64.ok_or_else(invalid)?;
-        if u64_at(bytes, zip64 + 4)? < 44
-            || u32_at(bytes, zip64 + 16)? != 0
-            || u32_at(bytes, zip64 + 20)? != 0
-        {
-            return Err(invalid());
-        }
-        let count = u64_at(bytes, zip64 + 32)?;
-        if u64_at(bytes, zip64 + 24)? != count {
-            return Err(invalid());
-        }
-        let size64 = u64_at(bytes, zip64 + 40)?;
-        let offset64 = u64_at(bytes, zip64 + 48)?;
-        // 이것을 실패시키는 것: ZIP32의 non-sentinel count/size/offset 대조 중 하나 삭제.
-        if (count32 != u16::MAX && u64::from(count32) != count)
-            || (size32 != u32::MAX && u64::from(size32) != size64)
-            || (offset32 != u32::MAX && u64::from(offset32) != offset64)
-        {
-            return Err(invalid());
-        }
-        let base = zip64 - relative;
-        let start = size(offset64)?.checked_add(base).ok_or_else(invalid)?;
-        (count, size(size64)?, start, base, zip64)
-    } else {
-        if may_be_zip64 {
-            return Err(invalid());
-        }
-        let relative = offset32 as usize;
-        let start = if count32 == 0 {
-            if relative > eocd {
-                return Err(invalid());
-            }
-            eocd
-        } else {
-            let mut first = None;
-            for p in relative..eocd.saturating_sub(3) {
-                if work.signature(bytes, p, b"PK\x01\x02", budget)? {
-                    first = Some(p);
-                    break;
-                }
-            }
-            first.ok_or_else(invalid)?
+        work.metadata.borrow_mut().charge(22, 0).map_err(|e| invalid_structure(e.to_string()))?;
+        let Some(mut directory) = candidate(bytes, limit, work, p, budget)? else { continue };
+        let reader = MetadataReader {
+            reader: Cursor::new(bytes),
+            end: (p + 22) as u64,
+            footer: Some(p as u64),
+            work: work.metadata.clone(),
+            record_probe: false,
         };
-        (u64::from(count32), size32 as usize, start, start - relative, eocd)
-    };
-    check_count(count, limit)?;
-    // 이것을 실패시키는 것: zip이 고른 첫 CDFH 대신 끝에서 size만 빼서 읽기.
-    if start.checked_add(directory_size) != Some(directory_end) {
-        return Err(invalid());
+        let config = Config { archive_offset: ArchiveOffset::Known(directory.base as u64) };
+        let probe = ZipArchive::with_config(config, reader);
+        work.metadata.borrow().check()?;
+        let Ok(probe) = probe else { continue };
+        let consumed =
+            probe.clone().into_inner().stream_position().map_err(|e| zip_error(e.to_string()))?;
+        // A probe may recover to an earlier footer; that is not this candidate.
+        if !directory.matches_directory(&probe, consumed) {
+            continue;
+        }
+        directory.verify_count(probe.len())?;
+        directory.reference = reference_end(bytes, work, budget)?;
+        return Ok(directory);
     }
-    let directory = &bytes[start..directory_end];
+    Err(invalid())
+}
+
+/// Last raw signature in OWPML's 65,535 byte position window.
+/// Only the fixed footer is retained: no CD read, comment eligibility, disk/count
+/// validation or fallback can suppress a complete last raw position.
+fn reference_end(bytes: &[u8], work: &mut Work, budget: usize) -> CoreResult<Option<ReferenceEnd>> {
+    for eocd in (bytes.len().saturating_sub(REFERENCE_WINDOW)..bytes.len().saturating_sub(3)).rev()
+    {
+        if !work.signature(bytes, eocd, b"PK\x05\x06", budget)? {
+            continue;
+        }
+        let Ok(header) = field::<22>(bytes, eocd) else { return Ok(None) };
+        work.metadata.borrow_mut().charge(22, 0).map_err(|e| invalid_structure(e.to_string()))?;
+        return Ok(Some(ReferenceEnd { eocd, header }));
+    }
+    Ok(None)
+}
+
+/// Physical framing of the selected candidate only.
+fn directory_names<'a>(
+    bytes: &'a [u8],
+    start: usize,
+    directory_end: usize,
+    count: u64,
+    limit: usize,
+    work: &mut Work,
+) -> CoreResult<Vec<&'a [u8]>> {
+    check_count(count, limit)?;
+    let directory = bytes.get(start..directory_end).ok_or_else(invalid)?;
     let mut position = 0;
     let mut names = Vec::new();
     while position < directory.len() {
+        work.metadata.borrow_mut().charge(46, 1).map_err(|e| invalid_structure(e.to_string()))?;
         let header = directory
             .get(position..position.checked_add(46).ok_or_else(invalid)?)
             .ok_or_else(invalid)?;
@@ -290,6 +414,10 @@ pub(super) fn preflight_with_work(
         if position > directory.len() {
             return Err(invalid());
         }
+        work.metadata
+            .borrow_mut()
+            .charge(name_len, 0)
+            .map_err(|e| invalid_structure(e.to_string()))?;
         names.push(&directory[name_start..name_start + name_len]);
         // Count the actual records too: a forged EOCD count must not hide them.
         check_count(names.len() as u64, limit)?;
@@ -297,6 +425,61 @@ pub(super) fn preflight_with_work(
     if names.len() as u64 != count {
         return Err(invalid());
     }
+    Ok(names)
+}
+
+fn candidate(
+    bytes: &[u8],
+    limit: usize,
+    work: &mut Work,
+    eocd: usize,
+    budget: usize,
+) -> CoreResult<Option<Directory>> {
+    if u16_at(bytes, eocd + 4)? != 0 || u16_at(bytes, eocd + 6)? != 0 {
+        return Err(invalid());
+    }
+    let count32 = u16_at(bytes, eocd + 10)?;
+    if u16_at(bytes, eocd + 8)? != count32 {
+        return Err(invalid());
+    }
+    let size32 = u32_at(bytes, eocd + 12)?;
+    let offset32 = u32_at(bytes, eocd + 16)?;
+    // ZIP64 recovery is deferred, including a locator without ZIP32 sentinels.
+    // 이것을 실패시키는 것: sentinel/locator 조기 거부 제거 — 보류 후보를 더 읽게 됨.
+    if count32 == u16::MAX
+        || size32 == u32::MAX
+        || offset32 == u32::MAX
+        || eocd.checked_sub(20).is_some_and(|p| bytes[p..].starts_with(b"PK\x06\x07"))
+    {
+        return Err(invalid());
+    }
+    let relative = offset32 as usize;
+    let start = if count32 == 0 {
+        if relative > eocd {
+            return Ok(None);
+        }
+        eocd
+    } else {
+        let mut first = None;
+        for p in relative..eocd.saturating_sub(3) {
+            if work.signature(bytes, p, b"PK\x01\x02", budget)? {
+                first = Some(p);
+                break;
+            }
+        }
+        let Some(first) = first else { return Ok(None) };
+        first
+    };
+    let count = u64::from(count32);
+    let directory_size = size32 as usize;
+    let base = start - relative;
+    let directory_end = eocd;
+    check_count(count, limit)?;
+    // 이것을 실패시키는 것: zip이 고른 첫 CDFH 대신 끝에서 size만 빼서 읽기.
+    if start.checked_add(directory_size) != Some(directory_end) {
+        return Err(invalid());
+    }
+    let names = directory_names(bytes, start, directory_end, count, limit, work)?;
     let mut raw_names = BTreeSet::new();
     for name in &names {
         // 이것을 실패시키는 것: Unicode extra 적용 후 이름만 검사하기.
@@ -304,7 +487,21 @@ pub(super) fn preflight_with_work(
             return Err(invalid_structure("duplicate original ZIP entry name"));
         }
     }
-    Ok(Directory { start, size: directory_size, count: names.len(), base, eocd })
+    let comment = &bytes[eocd + 22..eocd + 22 + usize::from(u16_at(bytes, eocd + 20)?)];
+    work.metadata
+        .borrow_mut()
+        .charge(comment.len(), 0)
+        .map_err(|e| invalid_structure(e.to_string()))?;
+    Ok(Some(Directory {
+        start,
+        size: directory_size,
+        count: names.len(),
+        base,
+        eocd,
+        comment: comment.to_vec(),
+        reference: None,
+        work: work.metadata.clone(),
+    }))
 }
 
 #[cfg(test)]
@@ -314,19 +511,594 @@ mod tests {
     fn open(bytes: &[u8]) -> CoreResult<super::super::Package<'_>> {
         open_package(bytes, PackageLimits::default())
     }
-    use std::cell::Cell;
-    use std::io::{self, Cursor};
+    use std::io::Cursor;
     use std::rc::Rc;
-    use std::time::Instant;
 
     const FIXTURE: &[u8] =
         include_bytes!("../../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
     const LIMIT: usize = 10_000;
 
+    fn synthetic() -> Vec<u8> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("mimetype", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"application/hwp+zip").unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    /// 이것을 실패시키는 것: 원시 위치에 주석·CD 적격성 추가 / 잘린 서명에서 앞 후보로 복구 / 창 경계 변경.
+    #[test]
+    fn w1_reference_position_and_budget() {
+        let bytes = synthetic();
+        let eocd = bytes.len() - 22;
+        let inspect =
+            |bytes: &[u8]| reference_end(bytes, &mut Work::default(), usize::MAX).unwrap();
+        for comment in [0u16, 1, u16::MAX] {
+            let mut input = bytes.clone();
+            input[eocd + 20..eocd + 22].copy_from_slice(&comment.to_le_bytes());
+            assert_eq!(inspect(&input).unwrap().eocd, eocd);
+        }
+        // Even garbage fixed fields must retain the last complete raw position.
+        let mut input = bytes.clone();
+        input.extend(b"PK\x05\x06");
+        input.extend([255; 18]);
+        assert_eq!(inspect(&input).unwrap().eocd, bytes.len());
+        for len in [4, 21] {
+            let mut input = bytes.clone();
+            input.extend(b"PK\x05\x06");
+            input.resize(bytes.len() + len, 0);
+            assert!(inspect(&input).is_none());
+        }
+        for n in [65_513, 65_514] {
+            let input = [bytes.clone(), vec![0; n]].concat();
+            assert_eq!(inspect(&input).is_some(), n == 65_513);
+        }
+        let mut work = Work::default();
+        assert_eq!(reference_end(&bytes, &mut work, usize::MAX).unwrap().unwrap().eocd, eocd);
+        assert_eq!(work.scanned_bytes, 19 * 4);
+        assert_eq!(work.metadata.borrow().records, 0);
+        assert_eq!(work.metadata.borrow().read, 22);
+        let mut work = Work::default();
+        work.metadata.borrow_mut().read_limit = 21;
+        assert!(reference_end(&bytes, &mut work, usize::MAX).is_err());
+        assert!(reference_end(&bytes, &mut Work::default(), 0).is_err());
+    }
+
+    /// 이것을 실패시키는 것: base 대조 제거.
+    #[test]
+    fn w1_reference_base_must_match_even_at_same_position() {
+        let bytes = [synthetic(), vec![0; 11]].concat();
+        let mut selected = preflight(&bytes, LIMIT).unwrap();
+        selected.open(Cursor::new(&bytes)).unwrap();
+        let reference = selected.reference.as_mut().unwrap();
+        assert_eq!(reference.eocd, selected.eocd);
+        // With the selected candidate's exact span check this equality is normally
+        // implied. Perturb only the retained reference evidence to isolate the guard.
+        let offset = u32_at(&reference.header, 16).unwrap();
+        reference.header[16..20].copy_from_slice(&(offset - 1).to_le_bytes());
+        assert!(selected.open(Cursor::new(&bytes)).is_err());
+    }
+
+    /// 이것을 실패시키는 것: 기존 경로에도 위치 규칙 적용 / 주석 적격성을 참조 탐색에 추가.
+    #[test]
+    fn w1_legacy_comment_footer_cross_product() {
+        for garbage in [false, true] {
+            for comment in [0u16, 1, u16::MAX] {
+                let mut bytes = FIXTURE.to_vec();
+                let outer = bytes.len() - 22;
+                let mut footer = bytes[outer..].to_vec();
+                footer[20..22].copy_from_slice(&comment.to_le_bytes());
+                if garbage {
+                    footer[8..20].fill(0xff);
+                }
+                bytes[outer + 20..outer + 22].copy_from_slice(&22u16.to_le_bytes());
+                bytes.extend(footer);
+                let reference =
+                    reference_end(&bytes, &mut Work::default(), usize::MAX).unwrap().unwrap();
+                assert_eq!(reference.eocd, outer + 22);
+                assert_eq!(
+                    open(&bytes).is_ok(),
+                    comment != 0,
+                    "garbage={garbage}, comment={comment}"
+                );
+                if comment != 0 {
+                    let selected = legacy::preflight(&bytes, LIMIT).unwrap();
+                    assert_eq!(selected.eocd, outer);
+                    assert_eq!(selected.open(Cursor::new(&bytes)).unwrap().len(), 11);
+                }
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: 기존 성공 뒤 새 읽기 예산 적용 / 기존 경로 생략.
+    #[test]
+    fn w1_legacy_max_comment_invalid_signatures() {
+        for (original, max_fakes) in [(FIXTURE.to_vec(), 63), (zip64(), 62)] {
+            for n in [0, 1, 12, 13, 62, 63, 64] {
+                let mut bytes = original.clone();
+                let end = bytes.len() - 22;
+                bytes[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
+                for _ in 0..n {
+                    bytes.extend(b"PK\x05\x06");
+                    bytes.extend([0; 16]);
+                    bytes.extend([255; 2]);
+                }
+                bytes.resize(original.len() + usize::from(u16::MAX), b'x');
+                let baseline = legacy::preflight(&bytes, LIMIT)
+                    .and_then(|directory| directory.open(Cursor::new(&bytes)));
+                assert_eq!(baseline.is_ok(), n <= max_fakes);
+                let result = super::open(&bytes, LIMIT);
+                assert_eq!(result.is_ok(), n <= max_fakes, "max_fakes={max_fakes}, n={n}");
+                match (baseline, result) {
+                    (Ok(before), Ok(after)) => {
+                        assert_eq!(before.len(), after.len());
+                        assert_eq!(before.offset(), after.offset());
+                        assert_eq!(
+                            before.central_directory_start(),
+                            after.central_directory_start()
+                        );
+                        assert_eq!(before.comment(), after.comment());
+                    }
+                    (Err(before), Err(after)) => assert_eq!(before.to_string(), after.to_string()),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: 기존 후보 상한 64→65 / ZIP64 후보 비용 누락.
+    #[test]
+    fn w1_legacy_candidate_cap() {
+        for (original, max_fakes) in [(FIXTURE.to_vec(), 63), (zip64(), 62)] {
+            for n in [max_fakes, max_fakes + 1] {
+                let mut bytes = original.clone();
+                let end = bytes.len() - 22;
+                bytes[end + 20..end + 22].copy_from_slice(&((n * 22) as u16).to_le_bytes());
+                for _ in 0..n {
+                    bytes.extend(b"PK\x05\x06");
+                    bytes.extend([0; 16]);
+                    bytes.extend([255; 2]);
+                }
+                assert_eq!(open(&bytes).is_ok(), n == max_fakes);
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: ZIP64 조기 거부 삭제 / 기존 ZIP64에도 새 경계 적용 /
+    /// 두 경로 실패 시 legacy 오류 대신 새 오류 반환.
+    #[test]
+    fn w1_zip64_sentinel_tail_cross_product() {
+        let old = FIXTURE.len() - 22;
+        for sentinel in [8, 12, 16] {
+            let mut bytes = zip64();
+            let end = bytes.len() - 22;
+            bytes[end + 8..end + 20].copy_from_slice(&FIXTURE[old + 8..old + 20]);
+            bytes[end + sentinel..end + sentinel + 4].fill(0xff);
+            assert!(open(&bytes).is_ok());
+            let mut fake = b"PK\x05\x06".to_vec();
+            fake.extend([0; 16]);
+            fake.extend([255; 2]);
+            // An over-limit candidate tail distinguishes legacy's error from
+            // the new ZIP64 boundary error, even though both reject the file.
+            for tail in [vec![0; 11], fake.repeat(65)] {
+                let input = [bytes.as_slice(), tail.as_slice()].concat();
+                assert!(preflight(&input, LIMIT).is_err());
+                let expected = legacy::preflight(&input, LIMIT).unwrap_err();
+                let actual = open(&input).unwrap_err();
+                assert_eq!(std::mem::discriminant(&actual), std::mem::discriminant(&expected));
+                assert_eq!(actual.to_string(), expected.to_string());
+            }
+        }
+    }
+
+    /// 이것을 실패시키는 것: count/size/offset sentinel 또는 locator 조기 거부 제거.
+    #[test]
+    fn w1_zip64_recovery_stops_before_directory_scan() {
+        for field in [8, 12, 16, 20] {
+            let mut bytes = FIXTURE.to_vec();
+            let end = bytes.len() - 22;
+            if field == 20 {
+                bytes[end - 20..end - 16].copy_from_slice(b"PK\x06\x07");
+            } else {
+                bytes[end + field..end + field + 4].fill(0xff);
+            }
+            let mut work = Work::default();
+            assert!(candidate(&bytes, LIMIT, &mut work, end, usize::MAX).is_err());
+            assert_eq!(work.scanned_bytes, 0);
+            assert_eq!(work.metadata.borrow().read, 0);
+        }
+    }
+
+    /// 이것을 실패시키는 것: 거부 전에 참조 디렉터리를 읽을 수 있어야 한다는 조건 추가.
+    #[test]
+    fn w1_complete_comment_footer_positions() {
+        let original = synthetic();
+        let outer = original.len() - 22;
+        for same_cd in [false, true] {
+            for at_eof in [false, true] {
+                let mut bytes = original.clone();
+                let mut footer = original[outer..].to_vec();
+                if !same_cd {
+                    footer[8..12].copy_from_slice(&[7, 0, 7, 0]);
+                    footer[12..16].copy_from_slice(&1000u32.to_le_bytes());
+                    footer[16..20].copy_from_slice(&5u32.to_le_bytes());
+                }
+                bytes[outer + 20..outer + 22]
+                    .copy_from_slice(&(if at_eof { 22u16 } else { 24u16 }).to_le_bytes());
+                bytes.extend(footer);
+                if !at_eof {
+                    bytes.extend(b"xx");
+                }
+                let zip = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+                assert_eq!(
+                    zip.central_directory_start(),
+                    u64::from(u32_at(&original, outer + 16).unwrap())
+                );
+                // Empty comment identifies the inner footer; the outer has 22/24 bytes.
+                assert_eq!(zip.comment().is_empty(), same_cd);
+                // These exact duplicate-CD fixtures retain the old size: even if
+                // zip chooses the inner footer, its physical span/base disagrees.
+                assert!(open(&bytes).is_err(), "same_cd={same_cd}, at_eof={at_eof}");
+            }
+        }
+        // A structurally valid same-CD inner footer: the outer EOCD occupies the
+        // last CDFH's comment. Both name the same start; the inner span includes it.
+        for at_eof in [false, true] {
+            let mut bytes = original.clone();
+            let cd = u32_at(&bytes, outer + 16).unwrap() as usize;
+            bytes[cd + 32..cd + 34].copy_from_slice(&22u16.to_le_bytes());
+            bytes[outer + 20..outer + 22]
+                .copy_from_slice(&(if at_eof { 22u16 } else { 24u16 }).to_le_bytes());
+            let mut footer = original[outer..].to_vec();
+            let size = u32_at(&footer, 12).unwrap() + 22;
+            footer[12..16].copy_from_slice(&size.to_le_bytes());
+            bytes.extend(footer);
+            if !at_eof {
+                bytes.extend(b"xx");
+            }
+            let zip = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            assert!(zip.comment().is_empty());
+            let selected = preflight(&bytes, LIMIT).unwrap();
+            assert_eq!(selected.eocd, original.len());
+            assert_eq!(selected.start, cd);
+            selected.open(Cursor::new(&bytes)).unwrap();
+            assert!(open(&bytes).is_ok());
+        }
+    }
+
+    /// 이것을 실패시키는 것: EOCD 끝=EOF 강제 / 앞 payload 후보 중복·64 상한 복원.
+    #[test]
+    fn w1_short_tails_and_unused_candidates() {
+        let original = synthetic();
+        for tail in [b"abcdefghijk".as_slice(), &[0; 11], b"PK\x06\x06", b"PK\x06\x07"] {
+            let bytes = [original.as_slice(), tail].concat();
+            assert!(open(&bytes).is_ok(), "tail={tail:?}");
+        }
+        for n in [1, 65] {
+            let mut prefix = Vec::new();
+            for _ in 0..n {
+                prefix.extend(b"PK\x05\x06");
+                prefix.extend([0; 16]);
+                prefix.extend(if n == 65 { [255; 2] } else { [0; 2] });
+            }
+            use std::io::Write;
+            let mut writer = zip::ZipWriter::new_append(Cursor::new(original.clone())).unwrap();
+            writer
+                .start_file(
+                    "Unused/probe.bin",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(&prefix).unwrap();
+            let bytes = writer.finish().unwrap().into_inner();
+            assert!(open(&bytes).is_ok(), "payload={n}");
+        }
+    }
+
+    /// 이것을 실패시키는 것: 조기 종료만 추가하고 후보 64 상한을 유지하기.
+    #[test]
+    fn w1_failed_candidate_visits() {
+        for n in [63, 64, 65, 128] {
+            let mut bytes = synthetic();
+            let end = bytes.len() - 22;
+            for _ in 0..n {
+                let at = bytes.len();
+                bytes.extend(b"PK\x05\x06");
+                bytes.extend([0; 4]);
+                bytes.extend([1, 0, 1, 0]);
+                bytes.extend(46u32.to_le_bytes());
+                bytes.extend(((at + 1) as u32).to_le_bytes());
+                bytes.extend([0; 2]);
+            }
+            let mut work = Work::default();
+            let selected = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
+            assert_eq!(selected.eocd, end);
+            assert_eq!(work.candidates, n + 1);
+            assert_eq!(
+                work.visited,
+                (0..n)
+                    .rev()
+                    .map(|i| end + 22 + i * 22)
+                    .chain(std::iter::once(end))
+                    .collect::<Vec<_>>()
+            );
+            assert!(!work.metadata.borrow().exhausted);
+            assert!(open(&bytes).is_err());
+        }
+    }
+
+    /// 이것을 실패시키는 것: 꼬리에만 서명을 찾기 / 참조 창 경계를 한 바이트 늘리기 / 기존 주석에도 참조 제한 적용.
+    /// 이것을 실패시키는 것: 잘린 마지막 서명을 완전한 EOCD 위치로 취급하기.
+    #[test]
+    fn w1_reference_tail_boundary() {
+        for n in [65_513, 65_514] {
+            let bytes = [synthetic(), vec![0; n]].concat();
+            assert_eq!(open(&bytes).is_ok(), n == 65_513);
+        }
+        let mut bytes = synthetic();
+        let end = bytes.len() - 22;
+        bytes[end + 20..end + 22].copy_from_slice(&3u16.to_le_bytes());
+        bytes.extend(b"PK\x05");
+        assert!(open(&bytes).is_ok());
+        bytes.push(6);
+        assert!(open(&bytes).is_err());
+        bytes[end + 20..end + 22].copy_from_slice(&4u16.to_le_bytes());
+        assert!(open(&bytes).is_ok());
+    }
+
+    /// 이것을 실패시키는 것: 예산 >= 변이 / read·record 누적·clone 공유 삭제 / 일반 필드를 레코드로 과금.
+    #[test]
+    fn w1_metadata_budget_edges_and_clones() {
+        for (bytes, records) in [(8, 0), (0, 4)] {
+            let mut budget = MetadataWork { read_limit: 8, record_limit: 4, ..Default::default() };
+            budget.charge(bytes, records).unwrap();
+            assert!(budget.charge(usize::from(bytes != 0), usize::from(records != 0)).is_err());
+            assert!(budget.charge(0, 0).is_err());
+            assert!(budget.check().is_err());
+        }
+        let work = Rc::new(RefCell::new(MetadataWork { read_limit: 4, ..Default::default() }));
+        let mut reader = MetadataReader {
+            reader: Cursor::new(b"12345678"),
+            end: 8,
+            footer: None,
+            work: work.clone(),
+            record_probe: false,
+        };
+        reader.read_exact(&mut [0; 4]).unwrap();
+        let mut clone = reader.clone();
+        assert!(clone.read_exact(&mut [0; 1]).is_err());
+        assert!(reader.read_exact(&mut [0; 1]).is_err());
+        assert_eq!(work.borrow().read, 5);
+        let mut reader = MetadataReader {
+            reader: Cursor::new(b"1234"),
+            end: 3,
+            footer: Some(0),
+            work: Rc::new(RefCell::new(MetadataWork::default())),
+            record_probe: false,
+        };
+        assert_eq!(reader.seek(SeekFrom::End(-1)).unwrap(), 2);
+        assert!(reader.seek(SeekFrom::End(-4)).is_err());
+        assert!(reader.read_exact(&mut [0; 2]).is_err());
+        // A 46-byte variable field, even one beginning PK0102, is not a record.
+        for (len, probe, expected) in [(46, false, 0), (47, true, 0), (46, true, 1)] {
+            let mut bytes = vec![0; len];
+            bytes[..4].copy_from_slice(b"PK\x01\x02");
+            let work = Rc::new(RefCell::new(MetadataWork::default()));
+            let mut reader = MetadataReader {
+                reader: Cursor::new(bytes),
+                end: len as u64,
+                footer: None,
+                work: work.clone(),
+                record_probe: false,
+            };
+            if probe {
+                reader.stream_position().unwrap();
+            }
+            reader.read_exact(&mut vec![0; len]).unwrap();
+            assert_eq!(work.borrow().records, expected);
+        }
+        // A failed fixed-header read still visits a record and spends its bytes.
+        let work = Rc::new(RefCell::new(MetadataWork::default()));
+        let mut reader = MetadataReader {
+            reader: Cursor::new(b"PK"),
+            end: 2,
+            footer: None,
+            work: work.clone(),
+            record_probe: false,
+        };
+        reader.stream_position().unwrap();
+        assert!(reader.read_exact(&mut [0; 46]).is_err());
+        assert_eq!(work.borrow().records, 1);
+        assert_eq!(work.borrow().read, 2);
+    }
+
+    /// 이것을 실패시키는 것: 최종 metadata 읽기 과금 / 고정 필드·레코드 방문 과금 삭제, 정상 예산 축소.
+    #[test]
+    fn w1_normal_metadata_budget_and_final_charge() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..LIMIT {
+            writer
+                .start_file(format!("entry{i}"), zip::write::SimpleFileOptions::default())
+                .unwrap();
+        }
+        let many = writer.finish().unwrap().into_inner();
+        for original in [synthetic(), many] {
+            let mut bytes = original;
+            let end = bytes.len() - 22;
+            bytes[end + 20..end + 22].copy_from_slice(&100u16.to_le_bytes());
+            bytes.extend(vec![b'x'; 100]);
+            let mut work = Work::default();
+            let directory = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
+            assert_eq!(work.metadata.borrow().records, directory.count * 2);
+            let before = work.metadata.borrow().read;
+            directory.open(Cursor::new(&bytes)).unwrap();
+            let budget = work.metadata.borrow();
+            assert_eq!(budget.records, directory.count * 3);
+            assert!(budget.read > before);
+            assert!(budget.read <= 8 * (bytes.len() + EOCD_WINDOW));
+            eprintln!(
+                "W1_NORMAL len={} count={} read={} records={}",
+                bytes.len(),
+                directory.count,
+                budget.read,
+                budget.records
+            );
+        }
+        let bytes = synthetic();
+        let directory = preflight(&bytes, LIMIT).unwrap();
+        let used = directory.work.borrow().read;
+        directory.work.borrow_mut().read_limit = used + 2;
+        assert!(
+            matches!(directory.open(Cursor::new(&bytes)), Err(CoreError::InvalidStructure { context, reason })
+            if context == "ZIP package" && reason == "ZIP metadata work budget exceeded")
+        );
+        let mut work = Work::default();
+        work.metadata.borrow_mut().read_limit = 80;
+        assert!(
+            matches!(preflight_with_work(&bytes, LIMIT, &mut work), Err(CoreError::InvalidStructure { context, reason })
+            if context == "ZIP package" && reason == "ZIP metadata work budget exceeded")
+        );
+    }
+
+    // Every candidate has one physically complete CDFH with overlapping, large
+    // variable data. zip reads that data, then rejects its invalid extra field.
+    fn repeated_variable_reads(n: usize) -> Vec<u8> {
+        let mut bytes = vec![0; 60_000];
+        let original = synthetic();
+        let original_end = original.len() - 22;
+        let cd = u32_at(&original, original_end + 16).unwrap() as usize;
+        for i in 0..n {
+            let start = i * 100;
+            let end = bytes.len();
+            bytes[start..start + 46].copy_from_slice(&original[cd..cd + 46]);
+            bytes[start + 28..start + 34].fill(0);
+            bytes[start + 30..start + 32]
+                .copy_from_slice(&((end - start - 46) as u16).to_le_bytes());
+            bytes[start + 46..start + 50].copy_from_slice(&[0x75, 0x70, 0, 0]);
+            bytes.extend(b"PK\x05\x06");
+            bytes.extend([0; 4]);
+            bytes.extend(1u16.to_le_bytes());
+            bytes.extend(1u16.to_le_bytes());
+            bytes.extend(((end - start) as u32).to_le_bytes());
+            bytes.extend((start as u32).to_le_bytes());
+            bytes.extend([0; 2]);
+        }
+        bytes
+    }
+
+    /// 이것을 실패시키는 것: 실패 프로브 읽기 비용을 초기화 / 누적 읽기 상한 삭제 / 자원 오류를 fallback으로 삼키기.
+    #[test]
+    fn w1_repeated_large_variable_reads_exhaust_budget() {
+        let bytes = repeated_variable_reads(16);
+        let mut work = Work::default();
+        let result = preflight_with_work(&bytes, LIMIT, &mut work);
+        assert!(
+            matches!(&result, Err(CoreError::InvalidStructure { context, reason })
+            if context == "ZIP package" && reason == "ZIP metadata work budget exceeded"),
+            "{result:?} {work:?}"
+        );
+        assert!(work.metadata.borrow().read > 8 * (bytes.len() + EOCD_WINDOW));
+        eprintln!(
+            "W1_EXHAUST read={} candidates={} records={}",
+            work.metadata.borrow().read,
+            work.candidates,
+            work.metadata.borrow().records
+        );
+    }
+
+    /// 이것을 실패시키는 것: extra 파싱 전에 선택 완료 / 프로브 fallback을 현재 후보 성공으로 취급 / 정책 오류를 건너뛰기.
+    #[test]
+    fn w1_extra_failure_recovers_but_policy_does_not() {
+        for prefix in [0, 6] {
+            let base = [vec![0; prefix], synthetic()].concat();
+            let good_end = base.len() - 22;
+            let mut bytes = base.clone();
+            let cd = u32_at(&base, good_end + 16).unwrap() as usize + prefix;
+            let start = bytes.len();
+            bytes.extend(&base[cd..good_end]);
+            let extra_at = bytes.len();
+            bytes[start + 30..start + 32].copy_from_slice(&4u16.to_le_bytes());
+            bytes.extend([0x75, 0x70, 0, 0]);
+            let bad_end = bytes.len();
+            bytes.extend(&base[good_end..]);
+            bytes[bad_end + 12..bad_end + 16]
+                .copy_from_slice(&((bad_end - start) as u32).to_le_bytes());
+            bytes[bad_end + 16..bad_end + 20].copy_from_slice(&(start as u32).to_le_bytes());
+            let mut work = Work::default();
+            let selected = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
+            assert_eq!(selected.eocd, good_end);
+            assert_eq!(work.visited, [bad_end, good_end]);
+            assert!(open(&bytes).is_err());
+            // Fix the extra, but lie about CD size. A readable last CD's policy
+            // failure must never fall back to the earlier good archive.
+            bytes[extra_at..extra_at + 4].copy_from_slice(&[0, 0, 0, 0]);
+            bytes[bad_end + 12..bad_end + 16].copy_from_slice(&1u32.to_le_bytes());
+            assert!(ZipArchive::new(Cursor::new(&bytes)).is_ok());
+            assert!(preflight(&bytes, LIMIT).is_err());
+        }
+    }
+
+    /// 이것을 실패시키는 것: 선택 위치의 주석 길이/바이트 대조 생략 / 빈 CD 소비 위치까지 강제.
+    #[test]
+    fn w1_selected_comment_and_empty_directory() {
+        let mut bytes = synthetic();
+        let end = bytes.len() - 22;
+        bytes[end + 20..end + 22].copy_from_slice(&3u16.to_le_bytes());
+        bytes.extend(b"abc");
+        bytes.extend([0; 11]);
+        let mut directory = preflight(&bytes, LIMIT).unwrap();
+        let archive = directory.open(Cursor::new(&bytes)).unwrap();
+        let consumed = archive.clone().into_inner().position();
+        directory.comment[0] = b'z';
+        assert!(directory.verify(&archive, consumed, bytes.len() as u64).is_err());
+        directory.comment[0] = b'a';
+        directory.eocd += 1;
+        directory.reference.as_mut().unwrap().eocd += 1;
+        assert!(directory.open(Cursor::new(&bytes)).is_err());
+        let empty = zip::ZipWriter::new(Cursor::new(Vec::new())).finish().unwrap().into_inner();
+        assert!(open(&empty).is_ok());
+    }
+
+    /// 이것을 실패시키는 것: 빈 ZIP32 후보의 fallback 제거 / ZIP64 보류 뒤 앞 후보 복구.
+    #[test]
+    fn w1_unreadable_fixed_candidates() {
+        for zip64 in [false, true] {
+            let mut bytes = synthetic();
+            let selected = bytes.len() - 22;
+            if zip64 {
+                let mut broken = as_zip64(&synthetic());
+                let fixed = broken.len() - 98;
+                broken[fixed..fixed + 4].fill(0);
+                bytes.extend(broken);
+            } else {
+                let at = bytes.len();
+                bytes.extend(b"PK\x05\x06");
+                bytes.extend([0; 12]);
+                bytes.extend(((at + 1) as u32).to_le_bytes());
+                bytes.extend([0; 2]);
+            }
+            let mut work = Work::default();
+            let result = preflight_with_work(&bytes, LIMIT, &mut work);
+            if zip64 {
+                assert!(result.is_err());
+                assert_eq!(work.candidates, 1);
+            } else {
+                assert_eq!(result.unwrap().eocd, selected);
+                assert_eq!(work.candidates, 2);
+            }
+            assert!(open(&bytes).is_err());
+        }
+    }
+
     fn zip64() -> Vec<u8> {
-        let end = FIXTURE.len() - 22;
-        let mut bytes = FIXTURE[..end].to_vec();
-        let mut footer = FIXTURE[end..].to_vec();
+        as_zip64(FIXTURE)
+    }
+
+    fn as_zip64(original: &[u8]) -> Vec<u8> {
+        let end = original.len() - 22;
+        let mut bytes = original[..end].to_vec();
+        let mut footer = original[end..].to_vec();
         bytes.extend_from_slice(b"PK\x06\x06");
         bytes.extend_from_slice(&44u64.to_le_bytes());
         bytes.extend_from_slice(&[45, 0, 45, 0]);
@@ -346,292 +1118,5 @@ mod tests {
         footer[8..20].fill(0xff);
         bytes.extend(footer);
         bytes
-    }
-
-    fn overlapping_candidates(n: usize) -> Vec<u8> {
-        let original = zip64();
-        let prefix = n * 56;
-        let locator = prefix + original.len() - 42;
-        let mut bytes = vec![0; prefix];
-        for p in (0..prefix).step_by(56) {
-            bytes[p..p + 4].copy_from_slice(b"PK\x06\x06");
-            bytes[p + 4..p + 12].copy_from_slice(&((locator - p - 12) as u64).to_le_bytes());
-            bytes[p + 24..p + 40].fill(0xff);
-        }
-        bytes.extend(original);
-        bytes
-    }
-
-    #[derive(Clone)]
-    struct Counted<'a> {
-        cursor: Cursor<&'a [u8]>,
-        read: Rc<Cell<usize>>,
-    }
-    impl Read for Counted<'_> {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let n = self.cursor.read(buf)?;
-            self.read.set(self.read.get() + n);
-            Ok(n)
-        }
-    }
-    impl Seek for Counted<'_> {
-        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-            self.cursor.seek(pos)
-        }
-    }
-
-    /// 이것을 실패시키는 것: 후보 상한/고정 base를 없애 zip이 겹친 확장 데이터를 반복 복사하기.
-    #[test]
-    fn zip9_fix2_overlapping_zip64_candidates_have_linear_work() {
-        for n in [0, 450, 480, 32_000, 64_000, 128_000] {
-            let bytes = overlapping_candidates(n);
-            let mut work = Work::default();
-            let timer = Instant::now();
-            let result = preflight_with_work(&bytes, LIMIT, &mut work);
-            let read = Rc::new(Cell::new(0));
-            if n < 500 {
-                let directory = result.unwrap();
-                directory
-                    .open(Counted { cursor: Cursor::new(&bytes), read: read.clone() })
-                    .unwrap();
-                assert!(open(&bytes).is_ok());
-                // Fixed ZIP metadata I/O independent of the number/size of the
-                // rejected ZIP64 candidates. Detect mutation exceeds this.
-                assert!(read.get() < 8_192, "n={n} read={}", read.get());
-            } else {
-                assert!(
-                    matches!(result, Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "too many ZIP end-record candidates")
-                );
-                assert!(matches!(open(&bytes), Err(CoreError::InvalidStructure { .. })));
-                assert_eq!(read.get(), 0);
-            }
-            assert!(work.candidates <= MAX_END_CANDIDATES + 1);
-            assert!(work.scanned_bytes <= 4 * (bytes.len() + EOCD_WINDOW));
-            eprintln!(
-                "ZIP9_WORK n={n} len={} probes_bytes={} candidates={} zip_read={} elapsed_us={}",
-                bytes.len(),
-                work.scanned_bytes,
-                work.candidates,
-                read.get(),
-                timer.elapsed().as_micros()
-            );
-        }
-        // Accepted, increasingly long prefixes force the full forward pass.
-        let mut previous = None;
-        for n in [32_000, 64_000, 128_000] {
-            let bytes = [vec![0; n * 56], zip64()].concat();
-            let timer = Instant::now();
-            let mut work = Work::default();
-            let directory = preflight_with_work(&bytes, LIMIT, &mut work).unwrap();
-            let read = Rc::new(Cell::new(0));
-            directory.open(Counted { cursor: Cursor::new(&bytes), read: read.clone() }).unwrap();
-            assert_eq!(directory.base, n * 56);
-            if let Some((old_n, old_bytes)) = previous {
-                assert_eq!(work.scanned_bytes - old_bytes, 4 * 56 * (n - old_n));
-            }
-            previous = Some((n, work.scanned_bytes));
-            assert!(work.scanned_bytes <= 4 * (bytes.len() + EOCD_WINDOW));
-            assert!(read.get() < 8_192);
-            eprintln!(
-                "ZIP9_LINEAR n={n} len={} probes_bytes={} zip_read={} elapsed_us={}",
-                bytes.len(),
-                work.scanned_bytes,
-                read.get(),
-                timer.elapsed().as_micros()
-            );
-        }
-    }
-
-    /// 이것을 실패시키는 것: 후보/바이트 상한 삭제 또는 허용 경계에서 >=로 거부하기.
-    #[test]
-    fn zip9_fix2_work_budget_boundaries() {
-        let mut work = Work::default();
-        for _ in 0..MAX_END_CANDIDATES {
-            work.candidate().unwrap();
-        }
-        assert!(work.candidate().is_err());
-        assert!(work.signature(b"PK\x05\x06", 0, b"PK\x05\x06", 4).unwrap());
-        assert!(work.signature(b"PK\x05\x06", 0, b"PK\x05\x06", 4).is_err());
-    }
-
-    /// 이것을 실패시키는 것: 터미널 EOCD 우선 선택 또는 archive base 대조 생략.
-    #[test]
-    fn zip9_fix2_comment_eocd_cannot_redirect_to_prefix() {
-        let end = FIXTURE.len() - 22;
-        let start = u32_at(FIXTURE, end + 16).unwrap() as usize;
-        assert_eq!(start, 23_630);
-        let mut bytes = [FIXTURE[..start].to_vec(), FIXTURE.to_vec()].concat();
-        bytes[start..start + 4].copy_from_slice(b"BAD!");
-        // Opening is lazy; the damaged first local header fails on content access.
-        assert!(open(&bytes).unwrap().read(0).is_err());
-        let outer = start + end;
-        bytes[outer + 20..outer + 22].copy_from_slice(&23u16.to_le_bytes());
-        let mut fake = FIXTURE[end..].to_vec();
-        fake[16..20].copy_from_slice(&((start * 2) as u32).to_le_bytes());
-        bytes.extend(fake);
-        bytes.push(0);
-        let zip = ZipArchive::new(Cursor::new(&bytes)).unwrap();
-        assert_eq!(zip.central_directory_start(), (start * 2) as u64);
-        assert_eq!(zip.offset(), 0);
-        assert_eq!(zip.len(), 11);
-        assert!(
-            matches!(open(&bytes), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
-        );
-        // Even if the embedded footer ends at EOF, two parseable EOCDs are ambiguous.
-        *bytes.get_mut(outer + 20).unwrap() = 22;
-        bytes.pop();
-        assert!(
-            matches!(preflight(&bytes, LIMIT), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
-        );
-    }
-
-    /// 이것을 실패시키는 것: ZIP32 non-sentinel count/size/offset 중 하나의 대조 삭제.
-    #[test]
-    fn zip9_fix2_zip32_zip64_conflicts_are_rejected() {
-        let valid = zip64();
-        let end = valid.len() - 22;
-        for (field, value) in [(8, 10_001u32), (10, 10_001), (12, 1), (16, 1)] {
-            let mut bytes = valid.clone();
-            if field < 12 {
-                // Both disk and total counts: do not let their equality check
-                // accidentally cover up a missing ZIP32-vs-ZIP64 check.
-                bytes[end + 8..end + 10].copy_from_slice(&(value as u16).to_le_bytes());
-                bytes[end + 10..end + 12].copy_from_slice(&(value as u16).to_le_bytes());
-            } else {
-                bytes[end + field..end + field + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            assert!(ZipArchive::new(Cursor::new(&bytes)).is_ok());
-            assert!(
-                matches!(open(&bytes), Err(CoreError::InvalidStructure { .. })),
-                "field {field}"
-            );
-        }
-    }
-
-    /// 이것을 실패시키는 것: ZIP64/일치하는 non-sentinel 값/확장 데이터/접두부를 일괄 거부하기.
-    #[test]
-    fn zip9_fix2_normal_zip64_and_matching_zip32_values() {
-        for field in [8, 12, 16] {
-            let mut bytes = zip64();
-            let end = bytes.len() - 22;
-            let old = FIXTURE.len() - 22;
-            let length = 4;
-            bytes[end + field..end + field + length]
-                .copy_from_slice(&FIXTURE[old + field..old + field + length]);
-            // Also exercise a legitimate extensible data sector.
-            let zip64_pos = end - 76;
-            bytes[zip64_pos + 4..zip64_pos + 12].copy_from_slice(&52u64.to_le_bytes());
-            bytes.splice(end - 20..end - 20, *b"ext-data");
-            let bytes = [b"prefix".as_slice(), bytes.as_slice()].concat();
-            let directory = preflight(&bytes, LIMIT).unwrap();
-            let archive = directory.open(Cursor::new(&bytes)).unwrap();
-            assert_eq!(archive.raw_zip64_extensible_data_sector(), Some(b"ext-data".as_slice()));
-            assert_eq!(archive.offset(), 6);
-            assert!(open(&bytes).is_ok());
-        }
-    }
-
-    /// 이것을 실패시키는 것: 시작/소비 크기/개수/base/EOCD 위치 대조를 개별 삭제하기.
-    #[test]
-    fn zip9_fix2_all_opened_directory_values_must_match() {
-        let archive = ZipArchive::new(Cursor::new(FIXTURE)).unwrap();
-        let end = archive.clone().into_inner().position();
-        for field in ["start", "size", "count", "base", "eocd"] {
-            let mut directory = preflight(FIXTURE, LIMIT).unwrap();
-            directory.verify(&archive, end, FIXTURE.len() as u64).unwrap();
-            match field {
-                "start" => directory.start += 1,
-                "size" => directory.size += 1,
-                "count" => directory.count += 1,
-                "base" => directory.base += 1,
-                "eocd" => directory.eocd += 1,
-                _ => unreachable!(),
-            }
-            assert!(directory.verify(&archive, end, FIXTURE.len() as u64).is_err(), "{field}");
-        }
-    }
-
-    /// 이것을 실패시키는 것: zip이 무시할 sentinel 없는 locator를 별도로 신뢰하기.
-    #[test]
-    fn zip9_fix2_locator_requires_zip64_selection() {
-        let mut bytes = zip64();
-        let end = bytes.len() - 22;
-        let old = FIXTURE.len() - 22;
-        bytes[end + 8..end + 20].copy_from_slice(&FIXTURE[old + 8..old + 20]);
-        assert!(matches!(preflight(&bytes, LIMIT), Err(CoreError::InvalidStructure { .. })));
-    }
-
-    /// 이것을 실패시키는 것: 후보 선택 후 terminal 검사 삭제, 또는 ZIP64 역방향 선택.
-    #[test]
-    fn zip9_fix2_selection_order_and_trailing_data() {
-        let mut trailing = FIXTURE.to_vec();
-        trailing.push(0);
-        assert!(ZipArchive::new(Cursor::new(&trailing)).is_ok());
-        assert!(preflight(&trailing, LIMIT).is_err());
-        // An earlier ZIP64 candidate passes zip's fixed-header checks but has
-        // a conflicting count. Do not skip it in favour of the final footer.
-        let mut bytes = overlapping_candidates(480);
-        let p = 450 * 56;
-        bytes[p + 24..p + 32].copy_from_slice(&10u64.to_le_bytes());
-        bytes[p + 32..p + 40].copy_from_slice(&11u64.to_le_bytes());
-        assert!(preflight(&bytes, LIMIT).is_err());
-    }
-
-    /// 이것을 실패시키는 것: EOCD 탐색 창 축소 또는 잘린 후보를 상한 계산에서 제외하기.
-    #[test]
-    fn zip9_fix2_eocd_window_and_candidate_limits() {
-        // zip's in-memory window includes signatures just BEFORE the maximum
-        // on-disk comment window. A 22-byte-based scan misses this ambiguity.
-        let mut edge = FIXTURE.to_vec();
-        let end = edge.len() - 22;
-        edge[end - 4..end].copy_from_slice(b"PK\x05\x06");
-        edge[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
-        edge.extend(vec![b'x'; u16::MAX as usize]);
-        assert!(
-            matches!(preflight(&edge, LIMIT), Err(CoreError::InvalidStructure { ref reason, .. }) if reason == "ambiguous ZIP end records")
-        );
-        for original in [FIXTURE.to_vec(), zip64()] {
-            let mut bytes = original.clone();
-            let end = bytes.len() - 22;
-            bytes[end + 20..end + 22].copy_from_slice(&u16::MAX.to_le_bytes());
-            bytes.extend(vec![b'x'; u16::MAX as usize]);
-            assert!(open(&bytes).is_ok());
-            for n in [63, 64] {
-                let mut bytes = original.clone();
-                bytes[end + 20..end + 22].copy_from_slice(&((n * 22) as u16).to_le_bytes());
-                for _ in 0..n {
-                    let mut fake = [0u8; 22];
-                    fake[..4].copy_from_slice(b"PK\x05\x06");
-                    fake[20..].fill(0xff);
-                    bytes.extend(fake);
-                }
-                // ZIP64 contributes one additional candidate after the tail scan.
-                let expected = n == 63 && original.len() == FIXTURE.len();
-                assert_eq!(open(&bytes).is_ok(), expected);
-            }
-        }
-    }
-
-    /// 이것을 실패시키는 것: zip의 길이/디스크/포화 개수 판정을 생략해 잘못된 앞 후보를 선택하기.
-    #[test]
-    fn zip9_fix2_invalid_earlier_zip64_candidates_are_skipped() {
-        for reason in ["length", "disk", "count", "overflow"] {
-            let mut bytes = overlapping_candidates(450);
-            let p = 440 * 56;
-            bytes[p + 24..p + 32].copy_from_slice(&11u64.to_le_bytes());
-            bytes[p + 32..p + 40].copy_from_slice(&11u64.to_le_bytes());
-            match reason {
-                "length" => bytes[p + 4..p + 12].copy_from_slice(&44u64.to_le_bytes()),
-                "disk" => bytes[p + 20..p + 24].copy_from_slice(&1u32.to_le_bytes()),
-                "count" => bytes[p + 32..p + 40].copy_from_slice(&u64::MAX.to_le_bytes()),
-                "overflow" => {
-                    bytes[p + 32..p + 40].copy_from_slice(&((1u64 << 63) + 1).to_le_bytes())
-                }
-                _ => unreachable!(),
-            }
-            let directory = preflight(&bytes, LIMIT).unwrap();
-            assert_eq!(directory.base, 450 * 56, "{reason}");
-            assert!(open(&bytes).is_ok(), "{reason}");
-        }
     }
 }
