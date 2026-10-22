@@ -8,6 +8,29 @@ use zip::ZipArchive;
 use super::{directory, invalid_structure, normalize_part_name, zip_error, PackageEntry};
 use crate::CoreResult;
 
+/// Reference implementation's fixed name buffer boundary for opaque names:
+/// at most 259 bytes are accepted; 260 bytes or more are rejected.
+const OPAQUE_REFERENCE_NAME_BUFFER_SIZE: usize = 260;
+
+// Bound each preview before escaping, including the two-name mismatch error.
+// UTF-8 previews end at a character boundary; invalid UTF-8 retains byte identity.
+fn display_name(name: &[u8]) -> String {
+    let mut end = name.len().min(64);
+    let mut display = match std::str::from_utf8(name) {
+        Ok(text) => {
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{:?}", &text[..end])
+        }
+        Err(_) => format!("b\"{}\" (not UTF-8)", name[..end].escape_ascii()),
+    };
+    if end < name.len() {
+        display.push_str(&format!("... ({} bytes total)", name.len()));
+    }
+    display
+}
+
 // T only removes prefixes/suffixes or replaces backslashes. Thus T(n) == n
 // exactly when none of these operations applies; constructing a second path
 // is unnecessary. ASCII folding below is K because every name is T-invariant.
@@ -66,16 +89,26 @@ pub(super) fn classify(
         // Writers retain the effective name only. Relaxation is lossless only
         // when it is also the raw name, including late slash-collision flags.
         if opaque[index] && pair[0] != pair[1] {
-            return Err(invalid_structure("opaque ZIP entry has different raw/effective names"));
+            return Err(invalid_structure(format!(
+                "opaque ZIP entry has different raw/effective names: raw {}, effective {}",
+                display_name(pair[0]),
+                display_name(pair[1]),
+            )));
         }
         let distinct = if pair[0] == pair[1] { &pair[..1] } else { &pair[..] };
         for name in distinct {
             // Newly relaxed names need portable evidence. Existing unique
             // non-ASCII names keep their original encoding contract.
-            if opaque[index] && (!name.is_ascii() || name.len() >= 260) {
-                return Err(invalid_structure(
-                    "opaque ZIP name exceeds portable reference evidence",
-                ));
+            if opaque[index]
+                && (!name.is_ascii() || name.len() >= OPAQUE_REFERENCE_NAME_BUFFER_SIZE)
+            {
+                return Err(invalid_structure(format!(
+                    "opaque ZIP name exceeds portable reference evidence: non-ASCII={}; length={} bytes, maximum={} bytes; raw/effective {}",
+                    !name.is_ascii(),
+                    name.len(),
+                    OPAQUE_REFERENCE_NAME_BUFFER_SIZE - 1,
+                    display_name(name),
+                )));
             }
             keys.push((name.to_ascii_lowercase(), index));
         }

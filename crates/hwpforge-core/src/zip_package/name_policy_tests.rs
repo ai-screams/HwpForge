@@ -16,17 +16,153 @@ fn crc32(bytes: &[u8]) -> u32 {
 fn zip(entries: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     for (raw, effective, payload) in entries {
+        let case = format!("raw={raw:?}, effective={:?}", effective.unwrap_or(raw));
         let mut options = FullFileOptions::default().compression_method(CompressionMethod::Stored);
         if let Some(effective) = effective {
             let mut extra = vec![1];
             extra.extend(crc32(raw.as_bytes()).to_le_bytes());
             extra.extend(effective.as_bytes());
-            options.add_extra_field(0x7075, extra, false).unwrap();
+            options
+                .add_extra_field(0x7075, extra, false)
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
         }
-        writer.start_file(*raw, options).unwrap();
-        writer.write_all(payload).unwrap();
+        writer.start_file(*raw, options).unwrap_or_else(|error| panic!("{case}: {error}"));
+        writer.write_all(payload).unwrap_or_else(|error| panic!("{case}: {error}"));
     }
-    writer.finish().unwrap().into_inner()
+    writer.finish().unwrap_or_else(|error| panic!("ZIP fixture finish: {error}")).into_inner()
+}
+
+fn zip_raw_name(raw: &[u8], effective: Option<&str>) -> Vec<u8> {
+    // Patch a small fixture: ZipWriter limits the combined local header size,
+    // while ZIP's name and extra-field lengths are separate u16 fields.
+    let mut bytes = zip(&[("raw", None, b"x")]);
+    let central = bytes.windows(4).position(|w| w == b"PK\x01\x02").expect("central header");
+    let mut fields = raw.to_vec();
+    if let Some(effective) = effective {
+        fields.extend(0x7075u16.to_le_bytes());
+        fields.extend(u16::try_from(5 + effective.len()).unwrap().to_le_bytes());
+        fields.push(1);
+        fields.extend(crc32(raw).to_le_bytes());
+        fields.extend(effective.as_bytes());
+    }
+    bytes.splice(central + 46..central + 49, fields.iter().copied());
+    bytes.splice(30..33, fields.iter().copied());
+    let central = central + fields.len() - 3;
+    let footer = central + 46 + fields.len();
+    for start in [26, central + 28] {
+        bytes[start..start + 2].copy_from_slice(&u16::try_from(raw.len()).unwrap().to_le_bytes());
+        bytes[start + 2..start + 4]
+            .copy_from_slice(&u16::try_from(fields.len() - raw.len()).unwrap().to_le_bytes());
+    }
+    bytes[footer + 12..footer + 16]
+        .copy_from_slice(&u32::try_from(footer - central).unwrap().to_le_bytes());
+    bytes[footer + 16..footer + 20].copy_from_slice(&u32::try_from(central).unwrap().to_le_bytes());
+    bytes
+}
+
+// 이것을 실패시키는 것: lossy로 되돌림, 비UTF-8 표시 제거, raw/effective 표시 혼동.
+#[test]
+fn name_policy_diagnostics_distinguish_invalid_utf8_and_replacement_character() {
+    let mut messages = Vec::new();
+    for raw in [b"Unused/./\xff".as_slice(), b"Unused/./\xfe", "Unused/./�".as_bytes()] {
+        for effective in [None, Some("Unused/./�")] {
+            let case = format!("raw={raw:?}, effective={effective:?}");
+            let bytes = zip_raw_name(raw, effective);
+            let error = open_package(&bytes, Default::default()).expect_err(&case).to_string();
+            let expected = match std::str::from_utf8(raw) {
+                Ok(text) => format!("{text:?}"),
+                Err(_) => format!("b\"{}\" (not UTF-8)", raw.escape_ascii()),
+            };
+            assert!(error.contains(&expected), "{case}: {error}");
+            if effective.is_some() && raw != "Unused/./�".as_bytes() {
+                assert!(error.contains(&format!(
+                    "opaque ZIP entry has different raw/effective names: raw {expected}, effective \"Unused/./�\""
+                )), "{case}: {error}");
+            } else {
+                assert!(
+                    error.contains("opaque ZIP name exceeds portable reference evidence:"),
+                    "{case}: {error}"
+                );
+            }
+            messages.push(error);
+        }
+    }
+    // The last two cases both have the same valid U+FFFD raw/effective name.
+    for left in 0..4 {
+        for right in left + 1..messages.len() {
+            assert_ne!(messages[left], messages[right], "left={left}, right={right}");
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 따옴표/개행/ESC 이스케이프 제거, 짧은 이름 생략, 같은 이름 중복 출력.
+#[test]
+fn name_policy_diagnostics_escape_and_show_short_names_once() {
+    for name in ["Unused/./한글", "Unused/./한'\"\n\x1b"] {
+        for effective in [None, Some("Other/한'\"\n\x1b")] {
+            let case = format!("raw={name:?}, effective={effective:?}");
+            let bytes = zip(&[(name, effective, b"x")]);
+            let error = open_package(&bytes, Default::default()).expect_err(&case);
+            let crate::CoreError::InvalidStructure { reason: detail, .. } = error else {
+                panic!("{case}: {error}");
+            };
+            let expected = if let Some(effective) = effective {
+                format!("opaque ZIP entry has different raw/effective names: raw {name:?}, effective {effective:?}")
+            } else {
+                format!("opaque ZIP name exceeds portable reference evidence: non-ASCII=true; length={} bytes, maximum=259 bytes; raw/effective {name:?}", name.len())
+            };
+            assert_eq!(detail, expected, "{case}");
+            assert_eq!(detail.matches("Unused/./").count(), 1, "{case}: {detail}");
+            assert!(!detail.contains(['\n', '\x1b']), "{case}: {detail}");
+        }
+    }
+}
+
+// 이것을 실패시키는 것: 표시 상한 제거, 전체 길이/생략 표시 제거, UTF-8 문자 중간 자르기.
+#[test]
+fn name_policy_diagnostics_bound_maximum_length_names() {
+    for unit in ["a", "\x1b", "한"] {
+        let name = format!("Unused/./{}", unit.repeat((65_535 - 9) / unit.len()));
+        assert_eq!(name.len(), 65_535);
+        // A Unicode Path extra field also needs its version, CRC, and field header.
+        let alias = format!("Other/./{}", unit.repeat((65_520 - 8) / unit.len()));
+        for effective in [None, Some(alias.as_str())] {
+            let case = format!("unit={unit:?}, alias={}", effective.is_some());
+            let bytes = zip_raw_name(name.as_bytes(), effective);
+            let error = open_package(&bytes, Default::default()).expect_err(&case).to_string();
+            assert!(error.len() <= 1024, "{case}: message length={}", error.len());
+            assert!(error.contains("... (65535 bytes total)"), "{case}: {error}");
+            assert_eq!(error.matches("Unused/./").count(), 1, "{case}: {error}");
+            if let Some(effective) = effective {
+                assert!(
+                    error.contains(&format!("... ({} bytes total)", effective.len())),
+                    "{case}: {error}"
+                );
+                assert!(
+                    error.contains("opaque ZIP entry has different raw/effective names: raw "),
+                    "{case}: {error}"
+                );
+            } else {
+                assert!(error.contains(&format!("opaque ZIP name exceeds portable reference evidence: non-ASCII={}; length=65535 bytes, maximum=259 bytes;", !name.is_ascii())), "{case}: {error}");
+            }
+            if unit == "한" {
+                // 9 ASCII bytes + 18 complete Hangul scalars = 63 bytes.
+                assert!(
+                    error.contains(&format!("\"Unused/./{}\"...", "한".repeat(18))),
+                    "{case}: {error}"
+                );
+                assert!(!error.contains("not UTF-8"), "{case}: {error}");
+            }
+        }
+    }
+    // The invalid byte is beyond the preview: validity concerns the whole name.
+    let mut raw = b"Unused/./".to_vec();
+    raw.resize(65_535, b'a');
+    raw[65_534] = 0xff;
+    let bytes = zip_raw_name(&raw, None);
+    let error = open_package(&bytes, Default::default()).unwrap_err().to_string();
+    assert!(error.len() <= 1024, "message length={}", error.len());
+    assert!(error.contains("(not UTF-8)... (65535 bytes total)"), "{error}");
 }
 
 // 이것을 실패시키는 것: 정상 이름 쌍 검사 제거, 순서/정확 일치/확장자/폴더 성분에 따른 검사 생략.
@@ -46,17 +182,19 @@ fn casefold_normal_pairs_rejected_before_payload() {
         ("Unused/", "UNUSED/"),
     ] {
         for (first, second) in [(left, right), (right, left)] {
+            let case = format!("ordered raw/effective pair: first={first:?}, second={second:?}");
             let mut bytes = zip(&[(first, None, b"x"), (second, None, b"y")]);
             // A bad payload CRC must not mask the metadata-only collision error.
             bytes[30 + first.len()] ^= 1;
-            let err = open_package(&bytes, Default::default()).unwrap_err();
+            let err = open_package(&bytes, Default::default()).expect_err(&case);
             assert!(
-                matches!(&err, crate::CoreError::InvalidStructure { context, .. } if context == "ZIP package")
+                matches!(&err, crate::CoreError::InvalidStructure { context, .. } if context == "ZIP package"),
+                "{case}"
             );
             let message = err.to_string();
-            assert!(message.contains("case-insensitive name collision"), "{message}");
-            assert!(message.contains(left) && message.contains(right), "{message}");
-            assert!(message.contains("Hancom and this reader"), "{message}");
+            assert!(message.contains("case-insensitive name collision"), "{case}: {message}");
+            assert!(message.contains(left) && message.contains(right), "{case}: {message}");
+            assert!(message.contains("Hancom and this reader"), "{case}: {message}");
         }
     }
 }
@@ -73,21 +211,32 @@ fn casefold_normal_alias_crosses_rejected() {
             ("Other/right", Some("Contents/SECTION0.XML")),
         ] {
             for (first, second) in [(left, right), (right, left)] {
+                let case =
+                    format!("ordered raw/effective pair: first={first:?}, second={second:?}");
                 let bytes = zip(&[(first.0, first.1, b"x"), (second.0, second.1, b"y")]);
-                let error = open_package(&bytes, Default::default()).unwrap_err().to_string();
-                assert!(error.contains("case-insensitive name collision"), "{error}");
-                for name in [first.0, first.1.unwrap(), second.0, second.1.unwrap()] {
-                    assert!(error.contains(name), "{error}");
+                let error = open_package(&bytes, Default::default()).expect_err(&case).to_string();
+                assert!(error.contains("case-insensitive name collision"), "{case}: {error}");
+                for name in [
+                    first.0,
+                    first.1.unwrap_or_else(|| panic!("{case}: missing first effective name")),
+                    second.0,
+                    second.1.unwrap_or_else(|| panic!("{case}: missing second effective name")),
+                ] {
+                    assert!(error.contains(name), "{case}: {error}");
                 }
             }
         }
     }
     // Previously accepted raw/effective equality across two physical owners.
+    let case = "raw/effective: alias/normal, other/alias".to_owned();
     let bytes = zip(&[("alias", Some("normal"), b"x"), ("other", Some("alias"), b"y")]);
-    assert!(open_package(&bytes, Default::default())
-        .unwrap_err()
-        .to_string()
-        .contains("case-insensitive name collision"));
+    assert!(
+        open_package(&bytes, Default::default())
+            .expect_err(&case)
+            .to_string()
+            .contains("case-insensitive name collision"),
+        "{case}"
+    );
 }
 
 // 이것을 실패시키는 것: dot/빈 성분/끝 slash 축약 충돌/내용 있는 폴더의 전역 거부 복원.
@@ -102,14 +251,21 @@ fn name_policy_isolated_names_and_directory_payloads_are_readable() {
         vec!["Unused/a.bin/", "Unused/a.bin"],
         vec!["Unused/"],
     ] {
+        let case = format!("raw/effective names={names:?}");
         let specs: Vec<_> = names.iter().map(|n| (*n, None, b"x".as_slice())).collect();
         let bytes = zip(&specs);
-        let mut package = open_package(&bytes, Default::default()).unwrap();
+        let mut package = open_package(&bytes, Default::default())
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
         for (index, name) in names.iter().enumerate() {
-            assert!(package.is_opaque(index));
-            assert!(!package.is_opaque(usize::MAX));
-            assert_eq!(package.entries()[index].path, *name);
-            assert_eq!(package.read(index).unwrap(), b"x");
+            let case = format!("{case}, index={index}, name={name:?}");
+            assert!(package.is_opaque(index), "{case}");
+            assert!(!package.is_opaque(usize::MAX), "{case}");
+            assert_eq!(package.entries()[index].path, *name, "{case}");
+            assert_eq!(
+                package.read(index).unwrap_or_else(|error| panic!("{case}: {error}")),
+                b"x",
+                "{case}"
+            );
         }
     }
 }
@@ -139,13 +295,20 @@ fn name_policy_transform_rejected_for_every_entry_before_payload() {
             ("Unused/./c.bin", Some(name)),
             (name, Some("Unused/c.bin")),
         ] {
+            let case = format!("raw={raw:?}, effective={:?}", effective.unwrap_or(raw));
             let mut bytes = zip(&[(raw, effective, b"x")]);
             // Corrupt only payload: rejection must be metadata-only, before CRC reading.
-            let payload =
-                30 + raw.len() + u16::from_le_bytes(bytes[28..30].try_into().unwrap()) as usize;
+            let payload = 30
+                + raw.len()
+                + u16::from_le_bytes(
+                    bytes[28..30].try_into().unwrap_or_else(|error| panic!("{case}: {error}")),
+                ) as usize;
             bytes[payload] ^= 1;
-            let err = open_package(&bytes, Default::default()).unwrap_err();
-            assert!(err.to_string().contains("invalid package part name"), "{raw:?}: {err}");
+            let err = open_package(&bytes, Default::default()).expect_err(&case);
+            assert!(
+                err.to_string().contains("invalid package part name"),
+                "{case}: {raw:?}: {err}"
+            );
         }
     }
 }
@@ -169,11 +332,15 @@ fn name_policy_collisions_cover_all_raw_effective_crosses_and_orders() {
                     (upper.as_str(), Some("Unused/./right"), b"x".as_slice())
                 };
                 for entries in [[left, right], [right, left]] {
+                    let case = format!("path={path:?}, left_extra={left_extra}, right_extra={right_extra}, ordered raw/effective entries={entries:?}");
                     let bytes = zip(&entries);
-                    assert!(open_package(&bytes, Default::default())
-                        .unwrap_err()
-                        .to_string()
-                        .contains("opaque ZIP entry has different raw/effective names"));
+                    assert!(
+                        open_package(&bytes, Default::default())
+                            .expect_err(&case)
+                            .to_string()
+                            .contains("opaque ZIP entry has different raw/effective names"),
+                        "{case}"
+                    );
                 }
             }
         }
@@ -184,11 +351,15 @@ fn name_policy_collisions_cover_all_raw_effective_crosses_and_orders() {
             [(path, None, b"".as_slice()), (upper.as_str(), None, b"x".as_slice())],
             [(upper.as_str(), None, b"x".as_slice()), (path, None, b"".as_slice())],
         ] {
+            let case = format!("ordered raw/effective entries={entries:?}");
             let bytes = zip(&entries);
-            assert!(open_package(&bytes, Default::default())
-                .unwrap_err()
-                .to_string()
-                .contains("case-insensitive name collision"));
+            assert!(
+                open_package(&bytes, Default::default())
+                    .expect_err(&case)
+                    .to_string()
+                    .contains("case-insensitive name collision"),
+                "{case}"
+            );
         }
     }
 }
@@ -197,21 +368,29 @@ fn name_policy_collisions_cover_all_raw_effective_crosses_and_orders() {
 #[test]
 fn name_policy_normal_alias_keys_collide_with_opaque_pair_in_both_orders() {
     for (raw, effective) in [("UNUSED/A", "Other/normal"), ("Other/normal", "UNUSED/A")] {
+        let case = format!("raw={raw:?}, effective={effective:?}");
         let normal = (raw, Some(effective), b"normal".as_slice());
         let file = ("Unused/a", None, b"x".as_slice());
         let directory = ("Unused/a/", None, b"".as_slice());
         // The alias alone is normal; the slash pair alone is accepted and opaque.
         let normal_bytes = zip(&[normal]);
-        assert!(!open_package(&normal_bytes, Default::default()).unwrap().is_opaque(0));
+        assert!(
+            !open_package(&normal_bytes, Default::default())
+                .unwrap_or_else(|error| panic!("{case}: {error}"))
+                .is_opaque(0),
+            "{case}"
+        );
         let pair_bytes = zip(&[file, directory]);
-        let pair = open_package(&pair_bytes, Default::default()).unwrap();
-        assert!(pair.is_opaque(0) && pair.is_opaque(1));
+        let pair = open_package(&pair_bytes, Default::default())
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert!(pair.is_opaque(0) && pair.is_opaque(1), "{case}");
         for entries in [[normal, file, directory], [directory, file, normal]] {
+            let case = format!("ordered raw/effective entries={entries:?}");
             let bytes = zip(&entries);
-            let error = open_package(&bytes, Default::default()).unwrap_err();
+            let error = open_package(&bytes, Default::default()).expect_err(&case);
             assert!(
                 error.to_string().contains("case-insensitive name collision"),
-                "{raw} -> {effective}: {error}"
+                "{case}: {raw} -> {effective}: {error}"
             );
         }
     }
@@ -227,8 +406,9 @@ fn name_policy_mimetype_case_group_and_self_keys_stay_accepted() {
         vec![("Unused/./a", Some("Unused/./a"), b"x".as_slice())],
         vec![("한글/정상", None, b"x".as_slice())],
     ] {
+        let case = format!("ordered raw/effective entries={entries:?}");
         let bytes = zip(&entries);
-        assert!(open_package(&bytes, Default::default()).is_ok());
+        assert!(open_package(&bytes, Default::default()).is_ok(), "{case}");
     }
 }
 
@@ -252,17 +432,33 @@ fn name_policy_opaque_flags_keep_raw_evidence_and_normal_aliases() {
 // 이것을 실패시키는 것: opaque 비ASCII 또는 참조 고정 버퍼 경계 보류를 제거하기.
 #[test]
 fn name_policy_new_names_require_portable_evidence() {
-    for name in ["Unused/./한글".to_owned(), format!("Unused/./{}", "a".repeat(251))] {
+    for (case, name, reason) in [
+        (
+            "non-ASCII",
+            "Unused/./한글".to_owned(),
+            "non-ASCII=true; length=15 bytes, maximum=259 bytes",
+        ),
+        (
+            "length",
+            format!("Unused/./{}", "a".repeat(251)),
+            "non-ASCII=false; length=260 bytes, maximum=259 bytes",
+        ),
+    ] {
+        let case = format!("{case}, raw={name:?}, effective={name:?}");
         let bytes = zip(&[(&name, None, b"x")]);
-        assert!(open_package(&bytes, Default::default())
-            .unwrap_err()
-            .to_string()
-            .contains("portable reference evidence"));
+        let error = open_package(&bytes, Default::default()).expect_err(&case).to_string();
+        assert!(
+            error.contains(&format!(
+                "opaque ZIP name exceeds portable reference evidence: {reason}; raw/effective "
+            )),
+            "{case}: {error}"
+        );
     }
+    let case = "ASCII opaque boundary: 259 bytes".to_owned();
     let short = format!("Unused/./{}", "a".repeat(250));
-    assert_eq!(short.len(), 259);
+    assert_eq!(short.len(), 259, "{case}");
     let bytes = zip(&[(&short, None, b"x")]);
-    assert!(open_package(&bytes, Default::default()).is_ok());
+    assert!(open_package(&bytes, Default::default()).is_ok(), "{case}");
 }
 
 // 이것을 실패시키는 것: source_xml에서 opaque 표시 검사를 제거하기.
@@ -286,10 +482,12 @@ fn name_policy_empty_directory_file_collision_marks_both_owners() {
         [("Unused/a/", None, b"".as_slice()), ("Unused/a", None, b"x".as_slice())],
         [("Unused/a", None, b"x".as_slice()), ("Unused/a/", None, b"".as_slice())],
     ] {
+        let case = format!("ordered raw/effective entries={entries:?}");
         let bytes = zip(&entries);
-        let p = open_package(&bytes, Default::default()).unwrap();
-        assert!(p.is_opaque(0));
-        assert!(p.is_opaque(1));
+        let p = open_package(&bytes, Default::default())
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert!(p.is_opaque(0), "{case}");
+        assert!(p.is_opaque(1), "{case}");
     }
 }
 
@@ -303,8 +501,9 @@ fn name_policy_alias_target_orders_and_empty_directory_do_not_escape() {
                 [(alias.as_str(), None, b"".as_slice()), (target, None, b"x".as_slice())],
                 [(target, None, b"x".as_slice()), (alias.as_str(), None, b"".as_slice())],
             ] {
+                let case = format!("ordered raw/effective entries={entries:?}");
                 let bytes = zip(&entries);
-                assert!(open_package(&bytes, Default::default()).is_err());
+                assert!(open_package(&bytes, Default::default()).is_err(), "{case}");
             }
         }
     }
@@ -321,12 +520,14 @@ fn name_policy_equal_names_build_one_folded_key() {
         (vec![("normal", None, b"".as_slice()), ("alias", Some("effective"), b"")], 3),
         (vec![("mimetype", None, b"".as_slice()), ("MIMETYPE", None, b"")], 2),
     ] {
+        let case = format!("raw/effective specs={specs:?}, expected keys={expected}");
         let bytes = zip(&specs);
-        let package = open_package(&bytes, Default::default()).unwrap();
+        let package = open_package(&bytes, Default::default())
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
         let (records, keys, _) = names::WORK.get();
-        assert_eq!(records, specs.len());
-        assert_eq!(keys, expected);
-        assert!((0..records).all(|i| !package.is_opaque(i)));
+        assert_eq!(records, specs.len(), "{case}");
+        assert_eq!(keys, expected, "{case}");
+        assert!((0..records).all(|i| !package.is_opaque(i)), "{case}");
     }
 }
 
@@ -368,18 +569,28 @@ fn name_policy_utf16_second_unit_matches_reference() {
         for (raw, effective) in
             [(name, None), ("Unused/alias", Some(name)), (name, Some("Unused/alias"))]
         {
+            let case = format!("raw={raw:?}, effective={:?}", effective.unwrap_or(raw));
             let bytes = zip(&[(raw, effective, b"x")]);
-            let mut package = open_package(&bytes, Default::default()).unwrap();
-            assert!(!package.is_opaque(0));
-            assert_eq!(package.read(0).unwrap(), b"x");
+            let mut package = open_package(&bytes, Default::default())
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            assert!(!package.is_opaque(0), "{case}");
+            assert_eq!(
+                package.read(0).unwrap_or_else(|error| panic!("{case}: {error}")),
+                b"x",
+                "{case}"
+            );
         }
     }
     for name in ["1:Unused", "한:Unused", "a:x"] {
+        let case = format!("raw={name:?}, effective={name:?}");
         let bytes = zip(&[(name, None, b"x")]);
-        assert!(open_package(&bytes, Default::default())
-            .unwrap_err()
-            .to_string()
-            .contains("invalid package part name"));
+        assert!(
+            open_package(&bytes, Default::default())
+                .expect_err(&case)
+                .to_string()
+                .contains("invalid package part name"),
+            "{case}"
+        );
     }
 }
 
@@ -394,26 +605,43 @@ fn name_policy_opaque_requires_identical_raw_effective_names() {
         ("Unused/", "Unused/normal"),
         ("Unused/normal", "Unused/"),
     ] {
+        let case = format!("raw={raw:?}, effective={effective:?}");
         let bytes = zip(&[(raw, Some(effective), b"x")]);
         assert!(open_package(&bytes, Default::default())
-            .unwrap_err()
+            .expect_err(&case)
             .to_string()
-            .contains("different raw/effective names"));
+            .contains(&format!("opaque ZIP entry has different raw/effective names: raw {raw:?}, effective {effective:?}")), "{case}");
     }
     // Empty directory/file collision marks the earlier owner only after its visit.
     for entries in [
         [("alias", Some("Unused"), b"x".as_slice()), ("Unused/", None, b"".as_slice())],
         [("Unused/", None, b"".as_slice()), ("alias", Some("Unused"), b"x".as_slice())],
     ] {
-        assert!(open_package(&zip(&entries), Default::default())
-            .unwrap_err()
-            .to_string()
-            .contains("different raw/effective names"));
+        let case = format!("ordered raw/effective entries={entries:?}");
+        assert!(
+            open_package(&zip(&entries), Default::default())
+                .expect_err(&case)
+                .to_string()
+                .contains("different raw/effective names"),
+            "{case}"
+        );
     }
     for name in ["Unused/./a", "Unused/"] {
+        let case = format!("raw={name:?}, effective={name:?}");
         let bytes = zip(&[(name, Some(name), b"x")]);
-        assert!(open_package(&bytes, Default::default()).unwrap().is_opaque(0));
+        assert!(
+            open_package(&bytes, Default::default())
+                .unwrap_or_else(|error| panic!("{case}: {error}"))
+                .is_opaque(0),
+            "{case}"
+        );
     }
+    let case = "raw=Unused/original, effective=Unused/normal".to_owned();
     let bytes = zip(&[("Unused/original", Some("Unused/normal"), b"x")]);
-    assert!(!open_package(&bytes, Default::default()).unwrap().is_opaque(0));
+    assert!(
+        !open_package(&bytes, Default::default())
+            .unwrap_or_else(|error| panic!("{case}: {error}"))
+            .is_opaque(0),
+        "{case}"
+    );
 }
