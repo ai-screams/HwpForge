@@ -135,4 +135,4 @@ pub use style_store::{
 mod reading_order_edits;
 
 #[cfg(test)]
-mod w2_tests;
+mod package_name_policy_tests;

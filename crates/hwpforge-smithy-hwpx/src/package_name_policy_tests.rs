@@ -88,7 +88,7 @@ fn casefold_mimetype_keeps_exact_selection() {
 
 // 이것을 실패시키는 것: PackageReader/RawPackage의 opaque 게이트 생략 또는 파일/빈 폴더 충돌의 표시 누락.
 #[test]
-fn w2_semantic_lookup_and_enumeration_reject_opaque() {
+fn package_name_policy_semantic_lookup_and_enumeration_reject_opaque() {
     for path in [
         "mimetype",
         "Contents/content.hpf",
@@ -129,7 +129,7 @@ fn w2_semantic_lookup_and_enumeration_reject_opaque() {
 // 이것을 실패시키는 것: 빈 opaque 폴더를 patch/encoder 복사 또는 diff 비교 목록에서 제외하기.
 // 이번 보강을 실패시키는 것: opaque payload 복사 대신 빈 바이트를 저장하기.
 #[test]
-fn w2_opaque_copy_diff_patch_and_encoder_matrix() {
+fn package_name_policy_opaque_copy_diff_patch_and_encoder_matrix() {
     for names in [
         vec!["Unused/./a.bin"],
         vec!["Unused/./"],
@@ -197,7 +197,7 @@ fn w2_opaque_copy_diff_patch_and_encoder_matrix() {
 
 // 이것을 실패시키는 것: 쓰기 뒤 새 CD 검증 제거, 생성 항목과 opaque의 같은 path 덮어쓰기 허용.
 #[test]
-fn w2_output_rechecks_collisions() {
+fn package_name_policy_output_rechecks_collisions() {
     let bytes = rewrite(&base(), &[("Preview/./image.png", None, b"x")]);
     let input = RawPackage::read(&bytes).unwrap();
     let same = rewrite(&base(), &[("Preview/./image.png", None, b"y")]);
@@ -210,7 +210,7 @@ fn w2_output_rechecks_collisions() {
 
 // 이것을 실패시키는 것: layout manifest 조회의 opaque 오류를 MissingFile처럼 삼키기.
 #[test]
-fn w2_layout_manifest_semantic_selection_rejects_opaque() {
+fn package_name_policy_layout_manifest_semantic_selection_rejects_opaque() {
     let original = base();
     let raw = RawPackage::read(&original).unwrap();
     let content=raw.read_text_entry("Contents/content.hpf").unwrap().replace("</opf:manifest>",
@@ -225,7 +225,7 @@ fn w2_layout_manifest_semantic_selection_rejects_opaque() {
 
 // 이것을 실패시키는 것: stamp carry 목록에서 내용 있는 폴더 항목을 빼기.
 #[test]
-fn w2_stamp_carry_keeps_nonempty_directory_accounted() {
+fn package_name_policy_stamp_carry_keeps_nonempty_directory_accounted() {
     let original = base();
     let bytes = rewrite(&original, &[("Unused/", None, b"x")]);
     assert!(crate::stamp::check_zip_carry(&bytes, &original).is_err());
@@ -233,7 +233,7 @@ fn w2_stamp_carry_keeps_nonempty_directory_accounted() {
 
 // 이것을 실패시키는 것: 캐시 정렬 실패 fallback이 opaque 의미 읽기 오류까지 삼키기.
 #[test]
-fn w2_layout_carry_propagates_opaque_selection() {
+fn package_name_policy_layout_carry_propagates_opaque_selection() {
     let original = base();
     let decoded = HwpxDecoder::decode(&original).unwrap();
     let source = crate::layout_carry::cache_source(
@@ -268,7 +268,7 @@ fn w2_layout_carry_propagates_opaque_selection() {
 
 // 이것을 실패시키는 것: mimetype 의미 조회를 대문자 항목으로 바꾸기(R3는 추가하지 않음).
 #[test]
-fn w2_mimetype_keeps_existing_effective_exact_selection() {
+fn package_name_policy_mimetype_keeps_existing_effective_exact_selection() {
     let original = base();
     for entries in [
         vec![
@@ -287,7 +287,7 @@ fn w2_mimetype_keeps_existing_effective_exact_selection() {
 
 // 이것을 실패시키는 것: layout carry가 출력 패키지 대신 캐시 source 패키지를 저장하거나 빈 opaque 폴더를 제외하기.
 #[test]
-fn w2_layout_carry_resave_preserves_opaque_names_bytes_and_flags() {
+fn package_name_policy_layout_carry_resave_preserves_opaque_names_bytes_and_flags() {
     use hwpforge_core::layout::{LayoutCache, LineSeg};
     for names in
         [vec!["Unused/./a.bin"], vec!["Unused/./"], vec!["Unused", "Unused/"], vec!["Unused/"]]
@@ -339,7 +339,7 @@ fn w2_layout_carry_resave_preserves_opaque_names_bytes_and_flags() {
 
 // 이것을 실패시키는 것: stamp의 carry 이름 목록에서 dot 이름을 제외하기.
 #[test]
-fn w2_stamp_rejects_uncarried_opaque_probe_shapes() {
+fn package_name_policy_stamp_rejects_uncarried_opaque_probe_shapes() {
     for names in [vec!["Unused/./a.bin"], vec!["Unused", "Unused/"], vec!["Unused/"]] {
         let specs: Vec<_> = names.iter().map(|n| (*n, None, b"x".as_slice())).collect();
         let bytes = rewrite(&base(), &specs);
@@ -351,7 +351,7 @@ fn w2_stamp_rejects_uncarried_opaque_probe_shapes() {
 // 이것을 실패시키는 것: carry 목록에서 is_opaque 우선 검사를 제거하거나 정상 빈 폴더까지 필수화하기.
 // stamp v1/v2 또는 cell-edit의 공용 carry 게이트 호출을 제거해도 실패한다.
 #[test]
-fn w2_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_edit() {
+fn package_name_policy_empty_directory_carry_gate_covers_stamp_v1_v2_and_cell_edit() {
     use crate::cell_edit::{CellEditError, HwpxCellEditor};
     use crate::stamp::{HwpxStamper, StampRequestV2, StamperError, STAMP_MAP_VERSION};
     let original = base();

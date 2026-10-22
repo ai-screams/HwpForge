@@ -303,4 +303,4 @@ mod tests {
 }
 
 #[cfg(test)]
-mod w2_tests;
+mod name_policy_tests;

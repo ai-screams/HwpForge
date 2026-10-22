@@ -92,7 +92,7 @@ fn casefold_normal_alias_crosses_rejected() {
 
 // 이것을 실패시키는 것: dot/빈 성분/끝 slash 축약 충돌/내용 있는 폴더의 전역 거부 복원.
 #[test]
-fn w2_isolated_names_and_directory_payloads_are_readable() {
+fn name_policy_isolated_names_and_directory_payloads_are_readable() {
     for names in [
         vec!["Unused/./a.bin"],
         vec!["./Unused/a.bin"],
@@ -116,7 +116,7 @@ fn w2_isolated_names_and_directory_payloads_are_readable() {
 
 // 이것을 실패시키는 것: raw 또는 effective T 불변 검사 생략, NUL/숫자 drive/부모/구분자 검사 제거.
 #[test]
-fn w2_transform_rejected_for_every_entry_before_payload() {
+fn name_policy_transform_rejected_for_every_entry_before_payload() {
     for name in [
         "Unused/../Contents/section0.xml",
         "Unused/../Preview/image1.png",
@@ -153,7 +153,7 @@ fn w2_transform_rejected_for_every_entry_before_payload() {
 // 이것을 실패시키는 것: opaque raw/effective 불일치 거부 삭제 또는 K 검사 삭제.
 // alias 행렬은 선행 불일치 오류, dot 행렬은 K 충돌 오류를 각각 단언한다.
 #[test]
-fn w2_collisions_cover_all_raw_effective_crosses_and_orders() {
+fn name_policy_collisions_cover_all_raw_effective_crosses_and_orders() {
     for path in ["Preview/image1.png", "Preview/app.xml", "Unused/"] {
         let upper = path.to_ascii_uppercase();
         for left_extra in [false, true] {
@@ -195,7 +195,7 @@ fn w2_collisions_cover_all_raw_effective_crosses_and_orders() {
 
 // 이것을 실패시키는 것: 정상 항목의 raw 키 색인 누락 또는 effective 키 색인 누락.
 #[test]
-fn w2_normal_alias_keys_collide_with_opaque_pair_in_both_orders() {
+fn name_policy_normal_alias_keys_collide_with_opaque_pair_in_both_orders() {
     for (raw, effective) in [("UNUSED/A", "Other/normal"), ("Other/normal", "UNUSED/A")] {
         let normal = (raw, Some(effective), b"normal".as_slice());
         let file = ("Unused/a", None, b"x".as_slice());
@@ -219,7 +219,7 @@ fn w2_normal_alias_keys_collide_with_opaque_pair_in_both_orders() {
 
 // 이것을 실패시키는 것: mimetype 예외 제거 또는 같은 물리 소유자의 두 키를 충돌로 세기.
 #[test]
-fn w2_mimetype_case_group_and_self_keys_stay_accepted() {
+fn name_policy_mimetype_case_group_and_self_keys_stay_accepted() {
     for entries in [
         vec![("mimetype", None, b"x".as_slice()), ("MIMETYPE", None, b"y".as_slice())],
         vec![("MIMETYPE", None, b"y".as_slice()), ("mimetype", None, b"x".as_slice())],
@@ -234,7 +234,7 @@ fn w2_mimetype_case_group_and_self_keys_stay_accepted() {
 
 // 이것을 실패시키는 것: raw 문법 판정을 제거하거나 고립된 정상 alias를 opaque로 세기.
 #[test]
-fn w2_opaque_flags_keep_raw_evidence_and_normal_aliases() {
+fn name_policy_opaque_flags_keep_raw_evidence_and_normal_aliases() {
     let bytes = zip(&[
         ("Unused/./a", None, b"x"),
         ("alias", Some("normal"), b"x"),
@@ -251,7 +251,7 @@ fn w2_opaque_flags_keep_raw_evidence_and_normal_aliases() {
 
 // 이것을 실패시키는 것: opaque 비ASCII 또는 참조 고정 버퍼 경계 보류를 제거하기.
 #[test]
-fn w2_new_names_require_portable_evidence() {
+fn name_policy_new_names_require_portable_evidence() {
     for name in ["Unused/./한글".to_owned(), format!("Unused/./{}", "a".repeat(251))] {
         let bytes = zip(&[(&name, None, b"x")]);
         assert!(open_package(&bytes, Default::default())
@@ -267,7 +267,7 @@ fn w2_new_names_require_portable_evidence() {
 
 // 이것을 실패시키는 것: source_xml에서 opaque 표시 검사를 제거하기.
 #[test]
-fn w2_source_provenance_rejects_opaque() {
+fn name_policy_source_provenance_rejects_opaque() {
     use crate::node_path::CorePath;
     use crate::source_xml::{UnclosedOrigin, XmlSource};
     let xml = "<sec><p><run><fieldBegin id=\"open\"/></run></p></sec>";
@@ -281,7 +281,7 @@ fn w2_source_provenance_rejects_opaque() {
 
 // 이것을 실패시키는 것: 끝 slash 축약 충돌에서 어느 한 소유자의 opaque 표시를 빼기.
 #[test]
-fn w2_empty_directory_file_collision_marks_both_owners() {
+fn name_policy_empty_directory_file_collision_marks_both_owners() {
     for entries in [
         [("Unused/a/", None, b"".as_slice()), ("Unused/a", None, b"x".as_slice())],
         [("Unused/a", None, b"x".as_slice()), ("Unused/a/", None, b"".as_slice())],
@@ -295,7 +295,7 @@ fn w2_empty_directory_file_collision_marks_both_owners() {
 
 // 이것을 실패시키는 것: target 부재/빈 payload/폴더 속성/CD 뒤 순서에서 T 검사를 생략하기.
 #[test]
-fn w2_alias_target_orders_and_empty_directory_do_not_escape() {
+fn name_policy_alias_target_orders_and_empty_directory_do_not_escape() {
     for target in ["Contents/section0.xml", "Preview/image1.png", "Preview/app.xml"] {
         for suffix in ["", "/"] {
             let alias = format!("Unused/../{target}{suffix}");
@@ -312,14 +312,14 @@ fn w2_alias_target_orders_and_empty_directory_do_not_escape() {
 
 // 이것을 실패시키는 것: 내용 있는 폴더를 정상 항목으로 분류하기.
 #[test]
-fn w2_raw_nonempty_directory_is_opaque() {
+fn name_policy_raw_nonempty_directory_is_opaque() {
     let bytes = zip(&[("Unused/", None, b"x")]);
     assert!(open_package(&bytes, Default::default()).unwrap().is_opaque(0));
 }
 
 // 이것을 실패시키는 것: raw == effective에도 K 키를 두 개 생성하거나 alias 키를 생략하기.
 #[test]
-fn w2_equal_names_build_one_folded_key() {
+fn name_policy_equal_names_build_one_folded_key() {
     let prefix = "a".repeat(4091);
     let long = format!("{prefix}00000");
     for (specs, expected) in [
@@ -339,7 +339,7 @@ fn w2_equal_names_build_one_folded_key() {
 
 // 이것을 실패시키는 것: K 구축을 첫 4,500개로 제한하거나 끝의 충돌을 검사하지 않기.
 #[test]
-fn w2_name_work_is_bounded_for_long_prefixes() {
+fn name_policy_name_work_is_bounded_for_long_prefixes() {
     for count in [4500, 9000] {
         let prefix = "a".repeat(180);
         let names: Vec<_> = (0..count).map(|i| format!("{prefix}/raw{i:05}")).collect();
@@ -370,7 +370,7 @@ fn w2_name_work_is_bounded_for_long_prefixes() {
 
 // 이것을 실패시키는 것: UTF-16 코드 단위 대신 char 위치로 두 번째 콜론을 검사하기.
 #[test]
-fn w2_utf16_second_unit_matches_reference() {
+fn name_policy_utf16_second_unit_matches_reference() {
     for name in ["😀:Unused", "😀", "한글/정상", "Unused/😀:x"] {
         for (raw, effective) in
             [(name, None), ("Unused/alias", Some(name)), (name, Some("Unused/alias"))]
@@ -393,7 +393,7 @@ fn w2_utf16_second_unit_matches_reference() {
 // 이것을 실패시키는 것: opaque raw/effective 동등 검사 삭제, 정상 alias까지 거부,
 // 또는 끝 slash 충돌 표시가 확정되기 전에만 검사하기.
 #[test]
-fn w2_opaque_requires_identical_raw_effective_names() {
+fn name_policy_opaque_requires_identical_raw_effective_names() {
     for (raw, effective) in [
         ("Unused/original.bin", "Unused/./opaque.bin"), // 리뷰 반례 A
         ("Unused/./alias", "Unused/normal"),            // 리뷰 반례 B
