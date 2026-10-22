@@ -13,10 +13,12 @@ pub(crate) const CONTAINER: &str = "META-INF/container.xml";
 pub(crate) struct PackageOrder {
     /// Core section indices always index this list, also during cache analysis.
     pub sections: Vec<String>,
-    /// Unknown/missing rootfiles must never be excluded as packaging syntax.
-    pub container_supported: bool,
-    /// Exclude content only when its newly accepted extensions are represented.
-    pub content_supported: bool,
+    /// Whether the entire container XML can be excluded from the global layout fingerprint.
+    /// Unknown/missing rootfiles or unrepresented extensions prevent exclusion.
+    pub container_excludable: bool,
+    /// Whether the entire content XML can be excluded from the global layout fingerprint.
+    /// Unrepresented extensions prevent exclusion even when reading order is resolved.
+    pub content_excludable: bool,
     /// Decoder reports these as document-wide ContentLost; analysis fails closed.
     pub problems: Vec<String>,
 }
@@ -38,7 +40,7 @@ impl PackageOrder {
             .ok_or_else(|| "missing container.xml".to_string())
             .and_then(|xml| validate_container(xml, paths))
         {
-            Ok(excludable) => result.container_supported = excludable,
+            Ok(excludable) => result.container_excludable = excludable,
             Err(reason) => result.problems.push(format!("container: {reason}")),
         }
         match content
@@ -47,7 +49,7 @@ impl PackageOrder {
         {
             Ok((sections, excludable)) => {
                 result.sections = sections;
-                result.content_supported = excludable;
+                result.content_excludable = excludable;
             }
             Err(reason) => {
                 result.problems.push(format!("spine: {reason}; using file-number fallback"))
@@ -312,7 +314,7 @@ mod tests {
             let result = PackageOrder::resolve(&paths(), Some(&content), Some(&xml));
             assert!(result.problems.is_empty(), "{:?}", result.problems);
             assert_eq!(result.sections, ["Contents/section1.xml", "Contents/section0.xml"]);
-            assert_eq!(result.container_supported, !extra.contains("future"));
+            assert_eq!(result.container_excludable, !extra.contains("future"));
         }
     }
 
@@ -329,7 +331,7 @@ mod tests {
             let xml = CONTAINER_XML.replace(tag, replacement);
             let result = PackageOrder::resolve(&paths(), Some(CONTENT_XML), Some(&xml));
             assert!(result.problems.is_empty());
-            assert!(!result.container_supported);
+            assert!(!result.container_excludable);
         }
         for (from, to) in [
             ("full-path=", "x:full-path="),
@@ -372,7 +374,7 @@ mod tests {
             let xml = CONTAINER_XML.replace("<c:container ", &format!("<c:container {extra} "));
             let result = PackageOrder::resolve(&paths(), Some(CONTENT_XML), Some(&xml));
             assert!(!result.problems.is_empty(), "{extra}");
-            assert!(!result.container_supported);
+            assert!(!result.container_excludable);
         }
     }
 
@@ -383,7 +385,7 @@ mod tests {
         let container = CONTAINER_XML.replace("</c:rootfiles>", "<c:rootfile full-path='Preview/PrvText.txt' media-type='text/plain'/><c:rootfile full-path='META-INF/container.rdf' media-type='application/rdf+xml'/></c:rootfiles>");
         let result = PackageOrder::resolve(&paths(), Some(CONTENT_XML), Some(&container));
         assert!(result.problems.is_empty(), "{:?}", result.problems);
-        assert!(result.container_supported);
+        assert!(result.container_excludable);
         assert_eq!(result.sections, ["Contents/section1.xml", "Contents/section0.xml"]);
         let encoded = CONTENT_XML
             .replace("id='beta'", "id='b&#101;ta'")
@@ -443,7 +445,7 @@ mod tests {
         let missing = PackageOrder::resolve(&paths(), None, None);
         assert_eq!(missing.sections, sections);
         assert_eq!(missing.problems.len(), 2);
-        assert!(!missing.container_supported);
+        assert!(!missing.container_excludable);
     }
 
     // 이것을 실패시키는 것: rootfile을 실제로 해석하지 않고 container.xml을

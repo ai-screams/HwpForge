@@ -235,8 +235,10 @@ impl MetadataWork {
     }
 }
 
-/// A candidate-only view: the original bytes up to EOCD, with a zero comment
-/// length. This is deliberately not a general overlay or a returned package.
+/// A metadata reader sharing a work budget across candidate probes and final opening.
+/// Only with `footer: Some(_)` does it provide a candidate view through EOCD
+/// with a zero comment length. With `footer: None`, bytes remain unchanged.
+/// This is deliberately not a general overlay or a returned package.
 #[derive(Clone)]
 struct MetadataReader<R> {
     reader: R,

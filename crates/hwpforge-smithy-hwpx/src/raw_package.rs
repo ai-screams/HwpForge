@@ -104,6 +104,11 @@ impl RawPackage {
         self.entries.iter().map(|e| (e.path.as_str(), e.bytes.as_slice(), e.opaque))
     }
 
+    /// Preserves opaque entries from `base` in a generated `output` package.
+    /// If base metadata has no opaque entries, returns `output` unchanged,
+    /// without validating or rewriting it. Otherwise both packages must be
+    /// readable; read, duplicate-path, and final write/name-policy errors propagate.
+    /// Failure discards the temporary package; `base` is never modified.
     pub(crate) fn preserve_opaque(base: &[u8], output: Vec<u8>) -> HwpxResult<Vec<u8>> {
         let package = open_package(base, PackageLimits::default()).map_err(package_error)?;
         // 이것을 실패시키는 것: opaque 없음 조기 반환 제거 — 전체 읽기·쓰기가 추가됨.
@@ -116,6 +121,11 @@ impl RawPackage {
         preserved.write()
     }
 
+    /// Copies already classified opaque entries from `base` into this package.
+    /// An existing identical path returns `HwpxError::InvalidStructure`; callers
+    /// must use `write()` to validate the merged package's complete name policy.
+    /// This is not transactional: entries copied before a later conflict remain
+    /// in `self` on failure. `base` is never modified.
     pub(crate) fn carry_opaque_from(&mut self, base: &Self) -> HwpxResult<()> {
         for entry in base.entries.iter().filter(|e| e.opaque) {
             if self.index_by_path.contains_key(&entry.path) {

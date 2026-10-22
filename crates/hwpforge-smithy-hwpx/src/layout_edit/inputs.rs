@@ -86,7 +86,7 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
             });
             continue;
         }
-        if path == crate::decoder::package_order::CONTENT && !package.order.content_supported {
+        if path == crate::decoder::package_order::CONTENT && !package.order.content_excludable {
             global.children.push(Node {
                 name: path.into(),
                 children: vec![content.clone()],
@@ -94,7 +94,7 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
             });
         }
         if represented_part(path)
-            || (path == "META-INF/container.xml" && package.order.container_supported)
+            || (path == "META-INF/container.xml" && package.order.container_excludable)
             || matches!(
                 path,
                 "version.xml" | "META-INF/container.rdf" | "META-INF/manifest.xml" | "mimetype"

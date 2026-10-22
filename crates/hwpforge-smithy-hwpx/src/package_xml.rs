@@ -3,6 +3,13 @@ use std::borrow::Cow;
 
 use crate::{HwpxError, HwpxResult};
 
+/// Decodes entry bytes already selected by their exact package path.
+/// Only `META-INF/container.xml` and `Contents/content.hpf` accept UTF-16
+/// (BOM or a compatible declaration required), strip a BOM, and normalize an
+/// existing XML declaration to UTF-8. All other paths require UTF-8.
+/// Invalid encoding/declarations or an oversized decoded package XML return
+/// `HwpxError::Zip`; XML structure validation belongs to the caller.
+/// No package state is mutated, including on failure.
 pub(crate) fn text_entry<'a>(path: &str, bytes: impl Into<Cow<'a, [u8]>>) -> HwpxResult<String> {
     let bytes = bytes.into();
     let result = match path {
