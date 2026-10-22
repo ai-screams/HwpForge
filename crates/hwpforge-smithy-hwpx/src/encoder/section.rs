@@ -1034,9 +1034,12 @@ fn build_paragraph(
                 }
                 Ok((map, tokens)) => {
                     // 자가검증 (독립 리뷰 hardening — 디코더·HWP5 choke 와
-                    // 3중 대칭): ledger 의 Core 총길이 == 문단 가시 텍스트.
+                    // 3중 대칭): ledger 의 Core 총길이 == 접힌 필드 밖 텍스트.
                     // 누락된 zero-core span(미계측 방출 사이트)을 방어한다.
-                    let expected_core: u32 = hwpforge_core::field_view::display_runs(&para.runs)
+                    // Memo anchor도 folded_field의 core 0 계약을 따른다.
+                    let expected_core: u32 = para
+                        .runs
+                        .iter()
                         .filter_map(|r| r.content.plain_text())
                         .map(|t| t.encode_utf16().count() as u32)
                         .sum();

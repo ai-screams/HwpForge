@@ -521,7 +521,7 @@ impl DecodeCtx {
 fn build_paragraph_wire_map(
     hx: &HxParagraph,
 ) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String> {
-    build_wire_map_over_runs(&hx.runs, 0)
+    build_wire_map_over_runs(&hx.runs, 0, &Default::default(), &[])
 }
 
 /// 필드 경계와 일반 run 으로 남길 시작을 wire 구조로 고른다.
@@ -695,17 +695,24 @@ fn fold_closed_memos(runs: &mut Vec<Run>, origins: &mut Vec<super::source_map::R
     }
 }
 
-/// [`build_paragraph_wire_map`] 의 본체 — 인코더도 **방출한 run 트리**에
-/// 동일 맵을 적용해 왕복 대칭을 구성적으로 보장한다 (§1g v5 변경 4:
-/// 방출-통합). `injected_leading_ctrls` = 인코더가 직렬화 후 문자열로
+/// [`build_paragraph_wire_map`] 의 본체. 실제 접힌 컨트롤의 원문 경계를
+/// 받아 본문과 토큰을 함께 core 0으로 계측한다. run-local 필드와 후속
+/// Memo 접힘 모두 같은 계약을 사용한다. `injected_leading_ctrls` = 직렬화 후 문자열로
 /// 주입하는 선행 ctrl 수 (colPr/머리말/꼬리말/쪽번호 — 트리에 없어
 /// 맵이 못 보는 (8,0) 유닛; 전부 영-core 라 상호 순서는 무관).
 pub(crate) fn build_wire_map_over_runs(
     runs: &[crate::schema::section::HxRun],
     injected_leading_ctrls: usize,
+    source: &super::source_map::SourceRecorder,
+    folded_fields: &[(usize, usize)],
 ) -> Result<(crate::wire_text_map::WireTextMap, crate::wire_text_map::TokenLedger), String> {
     use crate::schema::section::{HxRunChildKind as K, HxTextPart};
     use hwpforge_core::layout::WireTokenKind as T;
+    if folded_fields.iter().any(|&(begin, end)| begin == 0 || end == 0) {
+        return Err("folded field source boundaries are not recorded".into());
+    }
+    let mut folds = folded_fields.iter().peekable();
+    let mut folded_end = None;
     let mut b = crate::wire_text_map::WireMapBuilder::new();
     let mut tokens = crate::wire_text_map::TokenLedger::default();
     // S22: a zero-length token of `kind` — recorded with its kind, then
@@ -728,6 +735,9 @@ pub(crate) fn build_wire_map_over_runs(
         // convert_run 의 run-local field 접힘 상태 미러.
         let mut in_field = false;
         for &(kind, idx) in &order {
+            if folded_end.is_some() && !matches!(kind, K::Text | K::Ctrl) {
+                return Err("non-text element inside a folded field".into());
+            }
             match kind {
                 K::Text => {
                     for part in &hx_run.texts[idx].parts {
@@ -740,14 +750,14 @@ pub(crate) fn build_wire_map_over_runs(
                                 if n == 0 {
                                     continue;
                                 }
-                                if in_field {
+                                if in_field || folded_end.is_some() {
                                     zero(&mut b, n, T::Text);
                                 } else {
                                     b.advance_identity(n);
                                 }
                             }
                             HxTextPart::Tab { .. } => {
-                                if in_field {
+                                if in_field || folded_end.is_some() {
                                     zero(&mut b, 8, T::Text);
                                 } else {
                                     b.push_span(8, 1);
@@ -756,7 +766,7 @@ pub(crate) fn build_wire_map_over_runs(
                             HxTextPart::LineBreak {}
                             | HxTextPart::NbSpace {}
                             | HxTextPart::FwSpace {} => {
-                                if in_field {
+                                if in_field || folded_end.is_some() {
                                     zero(&mut b, 1, T::Text);
                                 } else {
                                     b.advance_identity(1);
@@ -764,7 +774,12 @@ pub(crate) fn build_wire_map_over_runs(
                             }
                             // 한컴 titleMark 는 `<t>` 내부 — HWP5 0x08
                             // 미러 = wire 8·가시 0.
-                            HxTextPart::TitleMark { .. } => zero(&mut b, 8, T::Silent),
+                            HxTextPart::TitleMark { .. } => {
+                                if folded_end.is_some() {
+                                    return Err("titleMark inside a folded field".into());
+                                }
+                                zero(&mut b, 8, T::Silent);
+                            }
                             // markpen 은 HWP5 range-tag (스트림 유닛 0) —
                             // corpus 프로브: native 327본 중 markpen 1본,
                             // 전부 한 줄 (§1g v3).
@@ -777,6 +792,17 @@ pub(crate) fn build_wire_map_over_runs(
                 }
                 K::Ctrl => {
                     let ctrl = &hx_run.ctrls[idx];
+                    let node = source.child(hx_run.origin, "ctrl", idx);
+                    let begin = source.child(node, "fieldBegin", 0);
+                    let end = source.child(node, "fieldEnd", 0);
+                    if folded_end.is_some() {
+                        if folded_end != Some(end) {
+                            return Err("non-text control inside a folded field".into());
+                        }
+                        folded_end = None;
+                    } else if folds.peek().is_some_and(|&&(start, _)| start == begin) {
+                        folded_end = folds.next().map(|&(_, end)| end);
+                    }
                     let payloads = usize::from(ctrl.col_pr.is_some())
                         + usize::from(ctrl.header.is_some())
                         + usize::from(ctrl.footer.is_some())
@@ -862,6 +888,9 @@ pub(crate) fn build_wire_map_over_runs(
                 K::StrayText => return Err("stray run-level text".into()),
             }
         }
+    }
+    if folded_end.is_some() || folds.next().is_some() {
+        return Err("folded field source boundaries do not match the wire tree".into());
     }
     let map = b.finish().map_err(|e| e.to_string())?;
     // The paragraph end: a virtual token (wire 1, core 0), as the encoder
@@ -1028,7 +1057,17 @@ fn convert_paragraph_from(
             );
             return None;
         }
-        let (map, tokens) = match build_wire_map_over_runs(hx_runs, 0) {
+        // Conversion records the exact source boundaries when it folds a field,
+        // including Memo spans across runs. Do not infer folding from its kind:
+        // unrepresentable/open memos still carry their anchor as ordinary text.
+        let folded_fields: Vec<_> = origins
+            .iter()
+            .filter_map(|origin| match origin.boundaries.as_slice() {
+                &[begin, end] => Some((begin, end)),
+                _ => None,
+            })
+            .collect();
+        let (map, tokens) = match build_wire_map_over_runs(hx_runs, 0, &ctx.source, &folded_fields) {
             Ok(ledger) => ledger,
             Err(reason) => {
                 ctx.cache_dropped(reason);
@@ -1041,7 +1080,7 @@ fn convert_paragraph_from(
         // lost before deserialization. Raw mixed-text fixtures independently
         // assert wire lengths, Core text and cache boundaries below; comparing
         // another tree-derived total here would retain the same blind spot.
-        let emitted_core: u32 = hwpforge_core::field_view::display_runs(&runs)
+        let emitted_core: u32 = runs.iter()
             .filter_map(|r| r.content.plain_text())
             .map(|t| t.encode_utf16().count() as u32)
             .sum();
@@ -4050,6 +4089,14 @@ mod tests {
             .read_text_entry("Contents/section0.xml")
             .unwrap();
         assert!(out.contains("그림 3"), "{out}");
+    }
+
+    #[test]
+    fn memo_cache_requires_proven_fold_boundaries() {
+        let source = super::super::source_map::SourceRecorder::default();
+        for boundaries in [vec![(0, 0)], vec![(999, 1000)]] {
+            assert!(build_wire_map_over_runs(&[], 0, &source, &boundaries).is_err());
+        }
     }
 
     #[test]

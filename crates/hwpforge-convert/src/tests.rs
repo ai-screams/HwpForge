@@ -1023,6 +1023,108 @@ fn hwp5_to_hwpx_user_sample_equation_carries_script() {
 }
 
 #[test]
+fn memo_layout_cache_keeps_folded_coordinates_and_styled_field_pairs() {
+    use quick_xml::events::Event;
+    // 이것을 실패시키는 것: encoder expected_core를 display_runs로 되돌림.
+    // 162c4335 이전 네 본문 문단의 wire 캐시 값 (감사 보고서 §5.2).
+    for (fixture, rows) in [
+        (
+            "../../crates/hwpforge-smithy-hwpx/tests/fixtures/paragraph_measure/field-mix.hwp",
+            vec![(2, 3200, "검토 필요", vec![(7, "긁은글자 "), (0, "보통글자")])],
+        ),
+        (
+            "user_samples/sample-memo-basic.hwp",
+            vec![(0, 0, "쇠부리야 여기가 메모야", vec![(0, "메모 대상 문장")])],
+        ),
+        (
+            "user_samples/sample-memo-multiple.hwp",
+            vec![(0, 0, "첫 번째", vec![(0, "메모1")]), (1, 1600, "두번째", vec![(0, "메모2")])],
+        ),
+    ] {
+        let (bytes, warnings) =
+            hwp5_to_hwpx_bytes(&std::fs::read(fixture_path(fixture)).unwrap()).unwrap();
+        assert!(
+            !warnings.iter().any(|w| matches!(w, ConvertWarning::HwpxEncode(_))),
+            "{fixture}: {warnings:?}"
+        );
+        let xml = PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
+        // Select top-level paragraphs, not the memo's nested subList paragraphs.
+        let mut reader = quick_xml::Reader::from_str(&xml);
+        let (mut depth, mut start) = (0, 0);
+        let mut paragraphs = Vec::new();
+        loop {
+            let pos = reader.buffer_position() as usize;
+            match reader.read_event().unwrap() {
+                Event::Start(e) if e.local_name().as_ref() == "p" => {
+                    if depth == 0 {
+                        start = pos;
+                    }
+                    depth += 1;
+                }
+                Event::End(e) if e.local_name().as_ref() == "p" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        paragraphs.push(&xml[start..reader.buffer_position() as usize]);
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        for (index, vertpos, body, anchors) in rows {
+            let p = paragraphs[index];
+            let cache = format!(
+                r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="{vertpos}" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray>"#
+            );
+            assert!(p.contains(&cache), "{fixture} p[{index}]: {p}");
+            assert!(p.contains(&format!(r#"<hp:run charPrIDRef="4"><hp:t>{body}</hp:t></hp:run>"#)));
+            let mut begin = None;
+            let mut ends = 0;
+            let mut reader = quick_xml::Reader::from_str(p);
+            loop {
+                match reader.read_event().unwrap() {
+                    Event::Start(e) | Event::Empty(e) => {
+                        let attr = |key| {
+                            e.attributes()
+                                .map(Result::unwrap)
+                                .find(|a| a.key.as_ref() == key)
+                                .unwrap()
+                                .value
+                                .into_owned()
+                        };
+                        match e.local_name().as_ref() {
+                            "fieldBegin" => {
+                                assert!(begin.is_none());
+                                assert_eq!(attr("type"), "MEMO");
+                                begin = Some((attr("id"), attr("fieldid")));
+                            }
+                            "fieldEnd" => {
+                                assert_eq!(
+                                    begin.as_ref(),
+                                    Some(&(attr("beginIDRef"), attr("fieldid")))
+                                );
+                                ends += 1;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+            }
+            assert_eq!(ends, 1);
+            let mut previous = p.find("</hp:fieldBegin>").unwrap();
+            for (style, text) in anchors {
+                let run = format!(r#"<hp:run charPrIDRef="{style}"><hp:t>{text}</hp:t></hp:run>"#);
+                let at = p.find(&run).unwrap();
+                assert!(previous < at && at < p.find("<hp:fieldEnd ").unwrap());
+                previous = at;
+            }
+        }
+    }
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_memo_basic_preserves_body_and_carries_memo() {
     // Wave 12e-Memo: the inline `%unk MEMO/.../.../...` ctrl + its
     // `HWPTAG_MEMO_LIST` (0x5D) cluster at the section's last body

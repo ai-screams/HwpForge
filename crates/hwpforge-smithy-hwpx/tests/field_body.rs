@@ -1679,3 +1679,170 @@ fn every_acceptance_and_output_reparses_original_parts_once() {
         }
     }
 }
+
+fn memo_cache_body(middle: &str, starts: &[u32]) -> String {
+    para(&(run("<hp:t>a</hp:t>") + middle + &run("<hp:t>bcdefghij</hp:t>")), starts)
+}
+
+fn cached_wire_positions(bytes: &[u8]) -> Vec<u32> {
+    let xml = section_xml(bytes);
+    xml.match_indices("textpos=\"")
+        .map(|(at, key)| {
+            let value = &xml[at + key.len()..];
+            value[..value.find('"').unwrap()].parse().unwrap()
+        })
+        .collect()
+}
+
+/// Independent wire positions, including both sides of a folded field, must
+/// survive actual re-encoding (the unchanged-base byte shortcut is insufficient).
+/// Mutation: remove decoder folded-field normalization; these assertions fail.
+#[test]
+fn memo_cache_normalizes_core_and_token_boundaries_before_roundtrip() {
+    let memo = |id, text: &str| run(&(memo_begin(id) + text + &end(id)));
+    let cases = [
+        (memo(7, "<hp:t>XY</hp:t>"), vec![0, 1, 19, 20], vec![0, 1, 1, 2], 1),
+        // Adjacent memos share a Core coordinate. The second anchor uses both
+        // a surrogate pair and a tab: 1 + 2 + 8 + 1 = 12 wire units.
+        (
+            memo(7, "<hp:t>XY</hp:t>") + &memo(8, "<hp:t>Z😀<hp:tab/>Q</hp:t>"),
+            vec![0, 19, 47, 48],
+            vec![0, 1, 1, 2],
+            2,
+        ),
+        // Memo spans cross runs; a run-local folded field lies between them.
+        (
+            run(&memo_begin(7))
+                + &run("<hp:t>X</hp:t>")
+                + &run("<hp:t>Y</hp:t>")
+                + &run(&end(7))
+                + &run(&(begin(9, "CLICK_HERE") + "<hp:t>123</hp:t>" + &end(9)))
+                + &memo(8, "<hp:t>K</hp:t>"),
+            vec![0, 19, 38, 55, 56],
+            vec![0, 1, 1, 1, 2],
+            2,
+        ),
+    ];
+    for (middle, wire, core, memo_count) in cases {
+        let original = package(
+            &(memo_cache_body(&middle, &wire)
+                + &para(&run("<hp:t>edit target</hp:t>"), &[])
+                    .replace("pageBreak=\"0\"", "pageBreak=\"1\"")),
+        );
+        assert_eq!(cached_wire_positions(&original), wire);
+        let decoded = HwpxDecoder::decode(&original).unwrap();
+        assert!(decoded.warnings.is_empty(), "{:?}", decoded.warnings);
+        let p = &decoded.document.sections()[0].paragraphs[1];
+        assert_eq!(
+            p.runs
+                .iter()
+                .filter(|r| matches!(r.content.as_control(), Some(Control::Memo { .. })))
+                .count(),
+            memo_count
+        );
+        let cache = p.layout_cache.as_ref().expect("folded cache");
+        assert_eq!(cache.lines.iter().map(|l| l.textpos).collect::<Vec<_>>(), core);
+        // The position immediately after the first Memo must name all three
+        // folded tokens, not just the field end at an expanded Core position.
+        let after = wire.iter().position(|&w| w == 19).unwrap();
+        assert_eq!(
+            cache.lines[after].boundary.as_ref().unwrap().skip,
+            [
+                hwpforge_core::layout::WireTokenKind::FieldBegin,
+                hwpforge_core::layout::WireTokenKind::Text,
+                hwpforge_core::layout::WireTokenKind::FieldEnd
+            ]
+        );
+        for edited in [false, true] {
+            let mut doc = decoded.document.clone();
+            if edited {
+                // Edit a different paragraph; the memo's layout inputs stay
+                // unchanged for full re-encoding of the supplied Core cache.
+                doc.sections_mut()[0].paragraphs[2].runs[0] =
+                    Run::text("edited target", CharShapeIndex::new(0));
+            }
+            let doc = doc.validate().unwrap();
+            let options = EncodeOptions::default().with_emit_layout_cache(true);
+            let full = HwpxEncoder::encode_with_diagnostics(
+                &doc,
+                &decoded.style_store,
+                &decoded.image_store,
+                options,
+            )
+            .unwrap();
+            let saved = HwpxEncoder::encode_with_base(
+                &original,
+                &doc,
+                &decoded.style_store,
+                &decoded.image_store,
+                options,
+            )
+            .unwrap();
+            let outputs = if edited {
+                // The base-aware editor deliberately invalidates all field
+                // caches on text edits (numbering/backwards dependency policy).
+                // Preserve that safety contract; never resurrect these caches.
+                assert!(cached_wire_positions(&saved.bytes).is_empty());
+                assert!(saved.warnings.iter().any(|w| matches!(w,
+                    hwpforge_smithy_hwpx::EncodeWarning::LayoutCacheDropped { reason, .. }
+                        if reason.contains("policy: numbering/page dependencies"))));
+                vec![full]
+            } else {
+                vec![full, saved]
+            };
+            for output in outputs {
+                assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+                assert_eq!(cached_wire_positions(&output.bytes), wire, "edited={edited}");
+                let again = HwpxDecoder::decode(&output.bytes).unwrap();
+                assert_eq!(
+                    again.document.sections()[0].paragraphs[1].layout_cache.as_ref(),
+                    Some(cache)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn memo_cache_rejects_lines_inside_folded_anchors() {
+    let middle = run(&(memo_begin(7) + "<hp:t>XY</hp:t>" + &end(7)))
+        + &run(&(memo_begin(8) + "<hp:t>Z</hp:t>" + &end(8)));
+    // 10 is the review's Y counterexample; also check the begin/end token
+    // boundaries and the second memo, where cumulative contraction matters.
+    for wire in [10, 9, 11, 2, 20, 27, 28] {
+        let decoded = HwpxDecoder::decode(&package(&memo_cache_body(&middle, &[0, wire]))).unwrap();
+        assert!(decoded.document.sections()[0].paragraphs[1].layout_cache.is_none(), "wire {wire}");
+        assert!(
+            decoded.warnings.iter().any(|w| matches!(w,
+            hwpforge_smithy_hwpx::DecodeWarning::LayoutCacheDropped { path, reason }
+            if path.to_string() == "section[0].para[1]"
+                && reason == &format!("lineseg textpos {wire} is inside a field"))),
+            "{:?}",
+            decoded.warnings
+        );
+    }
+}
+
+#[test]
+fn memo_cache_drops_unproven_folded_wire_content() {
+    for anchor in [
+        r#"<hp:t>X<hp:titleMark ignore="1"/>Y</hp:t>"#,
+        r#"<hp:t>X</hp:t><hp:titleMark ignore="1"/><hp:t>Y</hp:t>"#,
+    ] {
+        let middle = run(&(memo_begin(7) + anchor + &end(7)));
+        let decoded = HwpxDecoder::decode(&package(&memo_cache_body(&middle, &[0, 28]))).unwrap();
+        let paragraph = &decoded.document.sections()[0].paragraphs[1];
+        assert!(paragraph
+            .runs
+            .iter()
+            .any(|r| matches!(r.content.as_control(), Some(Control::Memo { .. }))));
+        assert!(paragraph.layout_cache.is_none());
+        assert!(
+            decoded.warnings.iter().any(|w| matches!(w,
+            hwpforge_smithy_hwpx::DecodeWarning::LayoutCacheDropped { reason, .. }
+                if reason.contains("inside a folded field"))),
+            "{:?}",
+            decoded.warnings
+        );
+    }
+}
