@@ -87,9 +87,15 @@ pub fn normalize_part_name(name: &str) -> CoreResult<&str> {
 
 /// The single ZIP package read entrance, shared by all library consumers.
 ///
-/// Validates framing, physical entry count, original/effective/decoded name
-/// uniqueness and reference-invariant names before exposing metadata.
-/// Isolated noncanonical names are retained as opaque entries.
+/// Validates framing, physical entry count, exact original/effective/decoded
+/// name uniqueness and reference-invariant name transformations before exposing
+/// metadata. ZIP32 recovery also checks agreement with the reference directory.
+/// Isolated noncanonical names are retained as opaque entries. Raw and effective
+/// names of distinct entries must not collide under ASCII case folding, except
+/// for the `mimetype` key, which Hancom looks up separately with case sensitivity.
+/// Case-only collisions are rejected; selecting the same entry as Hancom from
+/// such collisions is deferred. Lookups that do not follow
+/// manifest hrefs (images, master pages and settings) are a separate limitation.
 /// Decompression is lazy, with actual byte limits enforced by [`Package::read`].
 ///
 /// # Errors
