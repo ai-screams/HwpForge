@@ -171,7 +171,7 @@ fn field<const N: usize>(bytes: &[u8], offset: usize) -> CoreResult<[u8; N]> {
         .try_into()
         .map_err(|_| invalid())
 }
-fn u16_at(bytes: &[u8], offset: usize) -> CoreResult<u16> {
+pub(super) fn u16_at(bytes: &[u8], offset: usize) -> CoreResult<u16> {
     Ok(u16::from_le_bytes(field(bytes, offset)?))
 }
 fn u32_at(bytes: &[u8], offset: usize) -> CoreResult<u32> {

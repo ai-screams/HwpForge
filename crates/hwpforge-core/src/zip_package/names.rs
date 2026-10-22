@@ -5,7 +5,7 @@ use std::io::Cursor;
 
 use zip::ZipArchive;
 
-use super::{invalid_structure, normalize_part_name, zip_error, PackageEntry};
+use super::{directory, invalid_structure, normalize_part_name, zip_error, PackageEntry};
 use crate::CoreResult;
 
 // T only removes prefixes/suffixes or replaces backslashes. Thus T(n) == n
@@ -35,7 +35,7 @@ pub(super) fn classify(
         // Join by the metadata's physical central-header offset, never by an
         // assumed equality of the zip iterator and physical record order.
         let start = meta.central_header_start() as usize;
-        let len = u16::from_le_bytes(bytes[start + 28..start + 30].try_into().unwrap()) as usize;
+        let len = directory::u16_at(bytes, start + 28)? as usize;
         let raw = &bytes[start + 46..start + 46 + len];
         let effective = meta.name_raw();
         for name in [raw, effective] {
