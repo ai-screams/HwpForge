@@ -194,6 +194,7 @@ pub fn fill(
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value.bytes)?;
     Ok(FillOutput { bytes: diagnosed.value.bytes, filled: diagnosed.value.filled, warnings })
 }
 
@@ -343,6 +344,7 @@ pub fn set_cell(hwpx: &[u8], opts: &SetCellOptions) -> Result<SetCellOutput, Ops
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value.bytes)?;
     Ok(SetCellOutput {
         bytes: diagnosed.value.bytes,
         results: diagnosed.value.outcome.cells,
@@ -573,6 +575,7 @@ pub fn insert_para(hwpx: &[u8], opts: &InsertParaOptions) -> Result<StructuralOu
     let mut warnings: Vec<OpsWarning> =
         diagnosed.decode_warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(diagnosed.encode_warnings.into_iter().map(OpsWarning::Encode));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value)?;
     Ok(StructuralOutput { bytes: diagnosed.value, inserted: opts.text.len(), deleted: 0, warnings })
 }
 
@@ -626,6 +629,7 @@ pub fn delete_para(hwpx: &[u8], opts: &DeleteParaOptions) -> Result<StructuralOu
     let mut warnings: Vec<OpsWarning> =
         diagnosed.warnings.into_iter().map(OpsWarning::Decode).collect();
     warnings.extend(advisories.into_iter().map(OpsWarning::Structural));
+    super::ensure_opaque_carried(hwpx, &diagnosed.value)?;
     Ok(StructuralOutput {
         bytes: diagnosed.value,
         inserted: 0,

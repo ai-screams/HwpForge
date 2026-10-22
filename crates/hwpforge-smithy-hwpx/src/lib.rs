@@ -132,3 +132,6 @@ pub use style_store::{
 
 #[cfg(test)]
 mod reading_order_edits;
+
+#[cfg(test)]
+mod w2_tests;

@@ -6,6 +6,7 @@
 //! framing/I/O errors, and `ZIP package` denotes names or resource limits.
 
 mod directory;
+mod names;
 
 use std::collections::BTreeSet;
 use std::io::{Cursor, Read};
@@ -40,7 +41,8 @@ impl Default for PackageLimits {
 /// Validated entry metadata, retaining physical ZIP order and directory records.
 #[derive(Debug, Clone)]
 pub struct PackageEntry {
-    /// Decoded, validated name (directories retain their trailing slash).
+    /// Decoded name (directories retain their trailing slash).
+    /// Check [`Package::is_opaque`] before selecting it for semantic use.
     pub path: String,
     /// Advertised size; never used to allocate decompression buffers.
     pub size: u64,
@@ -55,6 +57,7 @@ pub struct PackageEntry {
 pub struct Package<'a> {
     archive: ZipArchive<Cursor<&'a [u8]>>,
     entries: Vec<PackageEntry>,
+    opaque: Vec<bool>,
     limits: PackageLimits,
     total_read: u64,
 }
@@ -85,7 +88,8 @@ pub fn normalize_part_name(name: &str) -> CoreResult<&str> {
 /// The single ZIP package read entrance, shared by all library consumers.
 ///
 /// Validates framing, physical entry count, original/effective/decoded name
-/// uniqueness, part names and empty directory records before exposing metadata.
+/// uniqueness and reference-invariant names before exposing metadata.
+/// Isolated noncanonical names are retained as opaque entries.
 /// Decompression is lazy, with actual byte limits enforced by [`Package::read`].
 ///
 /// # Errors
@@ -102,15 +106,11 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
     let metadata = archive.metadata();
     for (index, name) in archive.file_names().enumerate() {
         let path = name.map_err(|e| zip_error(e.to_string()))?.into_owned();
-        let directory = path.strip_suffix('/');
-        let key = normalize_part_name(directory.unwrap_or(&path))?;
+        let key = &path;
         if !keys.insert(key.to_string()) {
             return Err(invalid_structure(format!("duplicate decoded ZIP entry name '{key}'")));
         }
         let entry = metadata.entry(index).map_err(|e| zip_error(e.to_string()))?;
-        if directory.is_some() && entry.size() != 0 {
-            return Err(invalid_structure(format!("nonempty ZIP directory entry '{path}'")));
-        }
         entries.push(PackageEntry {
             path,
             size: entry.size(),
@@ -118,13 +118,24 @@ pub fn open_package(bytes: &[u8], limits: PackageLimits) -> CoreResult<Package<'
             compression: entry.compression(),
         });
     }
-    Ok(Package { archive, entries, limits, total_read: 0 })
+    let opaque = names::classify(bytes, &archive, &entries)?;
+    Ok(Package { archive, entries, opaque, limits, total_read: 0 })
 }
 
 impl Package<'_> {
     /// Validated metadata in physical order.
     pub fn entries(&self) -> &[PackageEntry] {
         &self.entries
+    }
+
+    /// Whether an entry is retained only for physical preservation or comparison.
+    ///
+    /// Consumers must reject semantic lookup or enumeration selecting an opaque
+    /// entry. [`Self::read`] still permits bounded byte copying/comparison.
+    /// Classification includes original and effective ZIP names; the displayed
+    /// path alone cannot reproduce it. Returns `false` for an out-of-range index.
+    pub fn is_opaque(&self, index: usize) -> bool {
+        self.opaque.get(index).copied().unwrap_or(false)
     }
 
     /// Read an entry, bounded by actual output rather than header sizes.
@@ -284,3 +295,6 @@ mod tests {
         assert_eq!(package.total_read, 1);
     }
 }
+
+#[cfg(test)]
+mod w2_tests;

@@ -1267,12 +1267,16 @@ pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), Stamper
 fn zip_entry_names(bytes: &[u8]) -> Result<Vec<String>, StamperError> {
     let archive = hwpforge_core::zip_package::open_package(bytes, Default::default())
         .map_err(|e| StamperError::Codec(format!("zip: {e}")))?;
-    // Directory placeholders are packaging detail, not content.
+    // Only normal empty directory placeholders are packaging detail. Opaque
+    // entries must be accounted for even when their payload is empty.
     Ok(archive
         .entries()
         .iter()
-        .filter(|entry| !entry.path.ends_with('/'))
-        .map(|entry| entry.path.clone())
+        .enumerate()
+        .filter(|(index, entry)| {
+            archive.is_opaque(*index) || !entry.path.ends_with('/') || entry.size != 0
+        })
+        .map(|(_, entry)| entry.path.clone())
         .collect())
 }
 

@@ -1300,6 +1300,7 @@ impl HwpxEncoder {
             options,
         )?;
         let mut outcome = crate::layout_carry::carry_prepared(&output.bytes, source)?;
+        outcome.bytes = crate::patch::RawPackage::preserve_opaque(base, outcome.bytes)?;
         outcome.warnings.splice(0..0, warnings);
         Ok(outcome)
     }

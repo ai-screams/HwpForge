@@ -1147,12 +1147,15 @@ fn index_package_targets(
     collect_named(content, &["item"], &mut items);
     for item in items {
         let href = item.attr("href");
-        if let Ok(bytes) = package.read_entry(href) {
-            let mut attrs = item.attrs.clone();
-            attrs.remove("href");
-            attrs.insert("payload".into(), format!("{:x?}", Sha256::digest(bytes).as_slice()));
-            header.children.push(Node { name: "binary".into(), attrs, ..Node::default() });
-        }
+        let bytes = match package.read_entry(href) {
+            Ok(bytes) => bytes,
+            Err(HwpxError::MissingFile { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        let mut attrs = item.attrs.clone();
+        attrs.remove("href");
+        attrs.insert("payload".into(), format!("{:x?}", Sha256::digest(bytes).as_slice()));
+        header.children.push(Node { name: "binary".into(), attrs, ..Node::default() });
     }
     for path in
         package.entry_paths().filter(|p| p.starts_with("Chart/") || p.starts_with("BinData/"))

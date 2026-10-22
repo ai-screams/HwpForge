@@ -33,7 +33,7 @@
 //! carry for that section — the result is the current (reflowed) behavior,
 //! never a stale cache attached to changed content.
 
-use crate::error::HwpxResult;
+use crate::error::{HwpxError, HwpxResult};
 use crate::patch::RawPackage;
 
 /// One `<hp:p>` occurrence in a section XML, in open order.
@@ -315,6 +315,14 @@ pub(crate) fn carry_line_segs(
 
     let mut changed = false;
     for path in section_paths {
+        // Alignment/decoding fallback must not suppress a semantic selection
+        // error. These borrowed reads do not decompress or reparse metadata.
+        for package in [&orig_pkg, &base_pkg, &out_pkg, &src_pkg] {
+            match package.read_entry(&path) {
+                Ok(_) | Err(HwpxError::MissingFile { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
         let (Ok(orig_xml), Ok(base_xml), Ok(out_xml), Ok(src_xml)) = (
             orig_pkg.read_text_entry(&path),
             base_pkg.read_text_entry(&path),

@@ -42,13 +42,14 @@ use hwpforge_core::section::Section;
 use hwpforge_core::table::grid::TableGrid;
 use hwpforge_core::table::Table;
 
-use crate::decoder::package::PackageReader;
 use crate::error::HwpxResult;
 use crate::fill::FieldInfo;
+use crate::package_path::package_error;
 use crate::read::ParaLocator;
 use crate::stamp::first_diff_path;
 use crate::table_inventory::{tables_in_document, TableEntry};
 use crate::{HwpxDecoder, HwpxDocument, HwpxFiller};
+use hwpforge_core::zip_package::open_package;
 
 /// Explicit statement of what each channel does and does not compare.
 pub const COMPARISON_NOTE: &str = "semantic = decoded Core structure; package = ZIP entries \
@@ -659,10 +660,12 @@ fn cell_text(paragraphs: &[Paragraph]) -> String {
 }
 
 fn diff_package(base: &[u8], revised: &[u8]) -> HwpxResult<PackageDiff> {
-    let mut b_reader = PackageReader::new(base)?;
-    let mut r_reader = PackageReader::new(revised)?;
-    let b_entries: Vec<String> = b_reader.list_entries()?.into_iter().map(|e| e.path).collect();
-    let r_entries: Vec<String> = r_reader.list_entries()?.into_iter().map(|e| e.path).collect();
+    let mut b_reader = open_package(base, Default::default()).map_err(package_error)?;
+    let mut r_reader = open_package(revised, Default::default()).map_err(package_error)?;
+    let b_entries: Vec<String> = b_reader.entries().iter().map(|e| e.path.clone()).collect();
+    let r_entries: Vec<String> = r_reader.entries().iter().map(|e| e.path.clone()).collect();
+    let r_indices: std::collections::BTreeMap<_, _> =
+        r_entries.iter().enumerate().map(|(i, p)| (p, i)).collect();
 
     let b_set: std::collections::BTreeSet<&String> = b_entries.iter().collect();
     let r_set: std::collections::BTreeSet<&String> = r_entries.iter().collect();
@@ -673,10 +676,12 @@ fn diff_package(base: &[u8], revised: &[u8]) -> HwpxResult<PackageDiff> {
             diff.added.push(path.clone());
         }
     }
-    for path in &b_entries {
+    for (index, path) in b_entries.iter().enumerate() {
         if !r_set.contains(path) {
             diff.removed.push(path.clone());
-        } else if b_reader.read_binary_entry(path)? != r_reader.read_binary_entry(path)? {
+        } else if b_reader.read(index).map_err(package_error)?
+            != r_reader.read(r_indices[path]).map_err(package_error)?
+        {
             diff.changed.push(path.clone());
         }
     }

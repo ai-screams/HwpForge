@@ -249,10 +249,17 @@ impl<'a> PackageReader<'a> {
     }
 
     fn entry_index(&self, path: &str) -> HwpxResult<usize> {
-        self.index_by_path
+        let index = self
+            .index_by_path
             .get(path)
             .copied()
-            .ok_or_else(|| HwpxError::MissingFile { path: path.to_string() })
+            .ok_or_else(|| HwpxError::MissingFile { path: path.to_string() })?;
+        if self.archive.is_opaque(index) {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!("opaque ZIP entry selected semantically: '{path}'"),
+            });
+        }
+        Ok(index)
     }
 }
 
@@ -700,20 +707,15 @@ mod tests {
             if detail == "duplicate effective ZIP entry name"));
     }
 
-    /// 이것을 실패시키는 것: BinData만 검사하거나 '..'/'.'/빈 성분/역슬래시/절대 경로 조건 삭제.
+    /// 이것을 실패시키는 것: 모든 항목 T 불변 검사에서 부모 접두부/역슬래시/절대 경로 검사를 삭제.
     #[test]
     fn zip9_fix1_rejects_noncanonical_parts_before_payload_reads() {
         for name in [
             "BinData/../a.png",
-            "Contents/./section0.xml",
-            "Chart//a.xml",
-            "META-INF//",
             "Contents\\section0.xml",
             "/Contents/header.xml",
             "C:/header.xml",
             "C:header.xml",
-            "..",
-            ".",
             "//server/share/file",
         ] {
             let bytes = raw_names_zip(&[(name.as_bytes(), b"unread")], false);
@@ -756,23 +758,6 @@ mod tests {
             reader.read_binary_entry("Contents/"),
             Err(HwpxError::MissingFile { .. })
         ));
-    }
-
-    /// 이것을 실패시키는 것: 디렉터리 표시는 내용·정규 키 충돌·내부 성분 검사에서 제외하기.
-    #[test]
-    fn zip9_fix1_directory_markers_cannot_hide_parts() {
-        let bytes = raw_names_zip(&[(b"BinData/a.png/", b"image")], false);
-        assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::InvalidStructure { detail })
-            if detail == "nonempty ZIP directory entry 'BinData/a.png/'"));
-        for entries in [
-            vec![(b"a/".as_slice(), b"".as_slice()), (b"a", b"file")],
-            vec![(b"a/../", b"")],
-            vec![(b"a//", b"")],
-            vec![(b"/", b"")],
-        ] {
-            let bytes = raw_names_zip(&entries, false);
-            assert!(matches!(PackageReader::new(&bytes), Err(HwpxError::InvalidStructure { .. })));
-        }
     }
 
     /// 이것을 실패시키는 것: EOCD 선언 개수만 검사해 추가 물리 레코드를 숨기기.

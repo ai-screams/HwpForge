@@ -73,7 +73,18 @@ pub(super) fn package_inputs(package: &RawPackage, content: &Node) -> HwpxResult
     let mut metadata = Vec::new();
     collect_named(content, &["metadata"], &mut metadata);
     let mut global = Node::default();
-    for path in package.entry_paths() {
+    for (path, bytes, opaque) in package.preserved_entries() {
+        if opaque {
+            global.children.push(Node {
+                name: path.into(),
+                attrs: std::collections::BTreeMap::from([(
+                    "bytes".into(),
+                    format!("{:x?}", Sha256::digest(bytes).as_slice()),
+                )]),
+                ..Node::default()
+            });
+            continue;
+        }
         if path == crate::decoder::package_order::CONTENT && !package.order.content_supported {
             global.children.push(Node {
                 name: path.into(),
@@ -190,5 +201,34 @@ mod tests {
         ] {
             assert!(settings_input(Node::parse(&wrap(inner)).unwrap()).is_some(), "{inner}");
         }
+    }
+}
+
+#[cfg(test)]
+mod w2_tests {
+    use super::*;
+    // 이것을 실패시키는 것: opaque unknown payload를 해시에서 누락하거나 XML로 정준화하기.
+    #[test]
+    fn w2_opaque_unknown_inputs_use_exact_bytes() {
+        use std::io::Write;
+        let input = |payload: &[u8]| {
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for (name, bytes) in
+                [("mimetype", b"application/hwp+zip".as_slice()), ("Unused/./future.xml", payload)]
+            {
+                zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                zip.write_all(bytes).unwrap();
+            }
+            let bytes = zip.finish().unwrap().into_inner();
+            package_inputs(&RawPackage::read(&bytes).unwrap(), &Node::default())
+                .unwrap()
+                .0
+                .children
+                .into_iter()
+                .map(|n| (n.name, n.attrs))
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(input(b"<x />"), input(b"<x/>"));
+        assert_ne!(input(b"not xml"), input(b"other"));
     }
 }

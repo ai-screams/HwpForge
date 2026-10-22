@@ -39,6 +39,7 @@ struct RawPackage {
 
 #[derive(Debug, Clone)]
 struct RawPackageEntry {
+    opaque: bool,
     path: String,
     bytes: Vec<u8>,
     compression: CompressionMethod,
@@ -105,6 +106,7 @@ impl RawPackage {
             let bytes = archive.read(index).map_err(package_error)?;
             index_by_path.insert(entry.path.clone(), entries.len());
             entries.push(RawPackageEntry {
+                opaque: archive.is_opaque(index),
                 path: entry.path,
                 bytes,
                 compression: entry.compression,
@@ -120,6 +122,11 @@ impl RawPackage {
             .get(path)
             .copied()
             .ok_or_else(|| LayoutPatchError::MissingEntry { name: path.to_string() })?;
+        if self.entries[index].opaque {
+            return Err(LayoutPatchError::Package {
+                detail: format!("opaque ZIP entry selected semantically: '{path}'"),
+            });
+        }
         String::from_utf8(self.entries[index].bytes.clone()).map_err(|e| {
             LayoutPatchError::Package { detail: format!("entry '{path}' is not valid UTF-8: {e}") }
         })
@@ -519,6 +526,36 @@ mod tests {
         assert!(matches!(patch_hwpx_layout_hints(&bytes, &[]),
             Err(LayoutPatchError::Package { detail })
             if detail == "invalid package part name 'Contents/../unused.xml'"));
+    }
+
+    // 이것을 실패시키는 것: convert RawPackage에서 core opaque 표시 전달 또는 의미 읽기 검사를 제거.
+    // 이것을 실패시키는 것: convert 복사 목록에서 빈 opaque 폴더를 제외하기.
+    // 이번 보강을 실패시키는 것: opaque payload 대신 빈 바이트를 저장하기.
+    #[test]
+    fn w2_convert_raw_opaque_semantic_gate_and_copy() {
+        for names in
+            [vec!["Unused/./a.bin"], vec!["Unused/./"], vec!["Unused", "Unused/"], vec!["Unused/"]]
+        {
+            let payload = if names[0] == "Unused/./" { b"".as_slice() } else { b"x".as_slice() };
+            let specs: Vec<_> = names.iter().map(|name| (*name, payload)).collect();
+            let bytes = make_zip(&specs);
+            let package = RawPackage::read(&bytes).unwrap();
+            for name in &names {
+                assert!(package
+                    .read_text_entry(name)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("opaque ZIP"));
+            }
+            let output = patch_hwpx_layout_hints(&bytes, &[]).unwrap();
+            let mut copy = open_package(&output, Default::default()).unwrap();
+            assert_eq!(copy.entries().len(), names.len());
+            for (index, name) in names.iter().enumerate() {
+                assert_eq!(copy.entries()[index].path, *name);
+                assert_eq!(copy.read(index).unwrap(), payload);
+                assert!(copy.is_opaque(index));
+            }
+        }
     }
 
     #[test]

@@ -468,9 +468,16 @@ pub(crate) struct RawPackage {
 
 #[derive(Debug, Clone)]
 struct RawPackageEntry {
+    opaque: bool,
     path: String,
     bytes: Vec<u8>,
     compression: CompressionMethod,
+}
+
+#[cfg(test)]
+thread_local! {
+    // Full-package reads and writes on this test thread, excluding metadata opens.
+    static PACKAGE_IO: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 impl RawPackage {
@@ -501,6 +508,8 @@ impl RawPackage {
     /// the reader is limited with `take(max_entry + 1)` so a bomb stops one
     /// byte past the limit.
     fn read_capped(bytes: &[u8], max_entry: u64, max_total: u64) -> HwpxResult<Self> {
+        #[cfg(test)]
+        PACKAGE_IO.with(|count| count.set((count.get().0 + 1, count.get().1)));
         let mut archive = open_package(
             bytes,
             PackageLimits { entry: max_entry, total: max_total, ..Default::default() },
@@ -513,6 +522,7 @@ impl RawPackage {
             let data = archive.read(index).map_err(package_error)?;
             index_by_path.insert(entry.path.clone(), entries.len());
             entries.push(RawPackageEntry {
+                opaque: archive.is_opaque(index),
                 path: entry.path,
                 bytes: data,
                 compression: entry.compression,
@@ -527,10 +537,46 @@ impl RawPackage {
     }
 
     pub(crate) fn read_entry(&self, path: &str) -> HwpxResult<&[u8]> {
-        self.index_by_path
+        let index = *self
+            .index_by_path
             .get(path)
-            .map(|&i| self.entries[i].bytes.as_slice())
-            .ok_or_else(|| HwpxError::MissingFile { path: path.into() })
+            .ok_or_else(|| HwpxError::MissingFile { path: path.into() })?;
+        if self.entries[index].opaque {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!("opaque ZIP entry selected semantically: '{path}'"),
+            });
+        }
+        Ok(&self.entries[index].bytes)
+    }
+
+    /// Already bounded physical bytes, for unknown-input hashing only.
+    pub(crate) fn preserved_entries(&self) -> impl Iterator<Item = (&str, &[u8], bool)> {
+        self.entries.iter().map(|e| (e.path.as_str(), e.bytes.as_slice(), e.opaque))
+    }
+
+    pub(crate) fn preserve_opaque(base: &[u8], output: Vec<u8>) -> HwpxResult<Vec<u8>> {
+        let package = open_package(base, PackageLimits::default()).map_err(package_error)?;
+        // 이것을 실패시키는 것: opaque 없음 조기 반환 제거 — 전체 읽기·쓰기가 추가됨.
+        if !(0..package.entries().len()).any(|index| package.is_opaque(index)) {
+            return Ok(output);
+        }
+        let original = Self::read(base)?;
+        let mut preserved = Self::read(&output)?;
+        preserved.carry_opaque_from(&original)?;
+        preserved.write()
+    }
+
+    pub(crate) fn carry_opaque_from(&mut self, base: &Self) -> HwpxResult<()> {
+        for entry in base.entries.iter().filter(|e| e.opaque) {
+            if self.index_by_path.contains_key(&entry.path) {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!("generated part replaces opaque ZIP entry '{}'", entry.path),
+                });
+            }
+            self.index_by_path.insert(entry.path.clone(), self.entries.len());
+            self.entries.push(entry.clone());
+        }
+        Ok(())
     }
 
     pub(crate) fn read_text_entry(&self, path: &str) -> HwpxResult<String> {
@@ -544,6 +590,8 @@ impl RawPackage {
     }
 
     pub(crate) fn write(&self) -> HwpxResult<Vec<u8>> {
+        #[cfg(test)]
+        PACKAGE_IO.with(|count| count.set((count.get().0, count.get().1 + 1)));
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
 
@@ -557,7 +605,11 @@ impl RawPackage {
         }
 
         let cursor = zip.finish().map_err(|e| HwpxError::Zip(e.to_string()))?;
-        Ok(cursor.into_inner())
+        let bytes = cursor.into_inner();
+        // New bytes require new core name evidence (including collisions with
+        // generated parts). Do not reuse the input's opaque flags as approval.
+        open_package(&bytes, PackageLimits::default()).map_err(package_error)?;
+        Ok(bytes)
     }
 }
 
@@ -948,6 +1000,23 @@ mod tests {
         assert!(
             matches!(error, HwpxError::XmlParse { file, .. } if file == "Contents/section2.xml")
         );
+    }
+
+    // 이것을 실패시키는 것: opaque 없음 조기 반환 제거, 전체 읽기·쓰기 추가, 출력 바이트 변경.
+    #[test]
+    fn opaque_free_carry_keeps_bytes_without_package_io() {
+        let base = include_bytes!("../../../tests/fixtures/user_samples/text/sample-empty.hwpx");
+        let package = open_package(base, Default::default()).unwrap();
+        assert!((0..package.entries().len()).all(|index| !package.is_opaque(index)));
+        // A comment makes a redundant rewrite observable in the bytes as well.
+        let mut output = base.to_vec();
+        let end = output.len() - 22;
+        output[end + 20..end + 22].copy_from_slice(&4u16.to_le_bytes());
+        output.extend(b"keep");
+        PACKAGE_IO.with(|count| count.set((0, 0)));
+        let actual = RawPackage::preserve_opaque(base, output.clone()).unwrap();
+        assert_eq!(PACKAGE_IO.with(|count| count.get()), (0, 0));
+        assert_eq!(actual, output);
     }
 
     /// Builds an in-memory ZIP whose entries are `(name, size)` runs of zeros.

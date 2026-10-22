@@ -160,6 +160,9 @@ impl UnclosedOrigin {
         for origin in origins {
             parts.entry(origin.part.as_str()).or_insert_with(|| {
                 let index = *indices.get(&origin.part)?;
+                if archive.is_opaque(index) {
+                    return None;
+                }
                 let xml = String::from_utf8(archive.read(index).ok()?).ok()?;
                 let (_, source) = XmlSource::read(&xml).ok()?;
                 let starts: HashSet<_> = source

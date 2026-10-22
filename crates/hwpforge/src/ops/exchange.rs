@@ -562,6 +562,9 @@ pub fn from_json(json: &str, opts: &FromJsonOptions) -> Result<FromJsonOutput, O
             .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
     );
 
+    if let Some(input) = &opts.base {
+        super::ensure_opaque_carried(input, &outcome.bytes)?;
+    }
     Ok(FromJsonOutput {
         bytes: outcome.bytes,
         sections: validated.section_count(),
@@ -970,6 +973,7 @@ pub fn patch(hwpx: &[u8], opts: &PatchOptions) -> Result<PatchOutput, OpsError> 
             .map(|w| OpsWarning::LegacyParagraphMeasures { message: w.message }),
     );
 
+    super::ensure_opaque_carried(hwpx, &bytes)?;
     Ok(PatchOutput { bytes, section: patched_section, sections, warnings })
 }
 

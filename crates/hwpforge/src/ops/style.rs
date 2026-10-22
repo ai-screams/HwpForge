@@ -250,6 +250,7 @@ pub fn restyle(hwpx: &[u8], opts: &RestyleOptions) -> Result<RestyleOutput, OpsE
     let mut warnings = decode_warnings;
     warnings.extend(encode_warnings);
 
+    super::ensure_opaque_carried(hwpx, &bytes)?;
     Ok(RestyleOutput { bytes, preset: opts.preset.clone(), sections, paragraphs, warnings })
 }
 
