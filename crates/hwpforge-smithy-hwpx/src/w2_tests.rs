@@ -60,6 +60,32 @@ fn rewrite(base: &[u8], entries: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
     zip.finish().unwrap().into_inner()
 }
 
+// 이것을 실패시키는 것: 디코더/편집 패키지가 공통 이름 충돌 검사를 우회하기.
+#[test]
+fn casefold_consumers_reject_normal_collisions() {
+    let original = base();
+    for (raw, effective) in
+        [("Contents/SECTION0.XML", None), ("Other/alias.xml", Some("Contents/SECTION0.XML"))]
+    {
+        let bytes = rewrite(&original, &[(raw, effective, b"invalid XML")]);
+        let decoded = HwpxDecoder::decode(&bytes).unwrap_err();
+        assert!(matches!(&decoded, crate::HwpxError::InvalidStructure { .. }));
+        assert!(decoded.to_string().contains("case-insensitive name collision"));
+        let patched = RawPackage::read(&bytes).unwrap_err();
+        assert!(patched.to_string().contains("case-insensitive name collision"));
+    }
+}
+
+// 이것을 실패시키는 것: mimetype 예외 제거 또는 mimetype 조회를 대소문자 무시로 바꾸기.
+#[test]
+fn casefold_mimetype_keeps_exact_selection() {
+    let bytes = rewrite(&base(), &[("MIMETYPE", None, b"not a valid mimetype")]);
+    assert!(HwpxDecoder::decode(&bytes).is_ok());
+    let raw = RawPackage::read(&bytes).unwrap();
+    assert_eq!(raw.read_entry("MIMETYPE").unwrap(), b"not a valid mimetype");
+    assert!(raw.read_entry("mimetype").unwrap().starts_with(b"application/hwp+zip"));
+}
+
 // 이것을 실패시키는 것: PackageReader/RawPackage의 opaque 게이트 생략 또는 파일/빈 폴더 충돌의 표시 누락.
 #[test]
 fn w2_semantic_lookup_and_enumeration_reject_opaque() {
@@ -179,7 +205,7 @@ fn w2_output_rechecks_collisions() {
     let other = rewrite(&base(), &[("Preview/./IMAGE.PNG", None, b"y")]);
     let mut output = RawPackage::read(&other).unwrap();
     output.carry_opaque_from(&input).unwrap();
-    assert!(output.write().unwrap_err().to_string().contains("opaque name collision"));
+    assert!(output.write().unwrap_err().to_string().contains("case-insensitive name collision"));
 }
 
 // 이것을 실패시키는 것: layout manifest 조회의 opaque 오류를 MissingFile처럼 삼키기.

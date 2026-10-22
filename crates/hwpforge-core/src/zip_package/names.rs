@@ -97,8 +97,17 @@ pub(super) fn classify(
     for pair in keys.windows(2) {
         let (left, a) = &pair[0];
         let (right, b) = &pair[1];
-        if left == right && a != b && (opaque[*a] || opaque[*b]) {
-            return Err(invalid_structure("opaque name collision in ZIP package"));
+        // Hancom looks up mimetype separately by its case-sensitive raw name.
+        if left == right && a != b && left != b"mimetype" {
+            let a_meta = metadata.entry(*a).map_err(|e| zip_error(e.to_string()))?;
+            let b_meta = metadata.entry(*b).map_err(|e| zip_error(e.to_string()))?;
+            return Err(invalid_structure(format!(
+                "case-insensitive name collision in ZIP package: '{}' (effective '{}') and '{}' (effective '{}') (Hancom and this reader could use different parts)",
+                String::from_utf8_lossy(names[*a]),
+                String::from_utf8_lossy(a_meta.name_raw()),
+                String::from_utf8_lossy(names[*b]),
+                String::from_utf8_lossy(b_meta.name_raw()),
+            )));
         }
     }
     Ok(opaque)

@@ -29,6 +29,67 @@ fn zip(entries: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
+// 이것을 실패시키는 것: 정상 이름 쌍 검사 제거, 순서/정확 일치/확장자/폴더 성분에 따른 검사 생략.
+#[test]
+fn casefold_normal_pairs_rejected_before_payload() {
+    for (left, right) in [
+        ("Contents/section0.xml", "Contents/SECTION0.XML"), // c1/c2
+        ("Contents/Section0.xml", "Contents/SECTION0.XML"), // c3: no exact match
+        ("BinData/a.png", "BinData/A.PNG"),
+        ("Contents/x.xml", "CONTENTS/x.xml"),
+        ("Contents/header.xml", "Contents/HEADER.XML"),
+        ("Contents/content.hpf", "Contents/CONTENT.HPF"),
+        ("META-INF/container.xml", "META-INF/CONTAINER.XML"),
+        ("Contents/masterpage0.xml", "Contents/MASTERPAGE0.XML"),
+        ("Chart/a.xml", "Chart/A.XML"),
+        ("settings.xml", "SETTINGS.XML"),
+        ("Unused/", "UNUSED/"),
+    ] {
+        for (first, second) in [(left, right), (right, left)] {
+            let mut bytes = zip(&[(first, None, b"x"), (second, None, b"y")]);
+            // A bad payload CRC must not mask the metadata-only collision error.
+            bytes[30 + first.len()] ^= 1;
+            let err = open_package(&bytes, Default::default()).unwrap_err();
+            assert!(
+                matches!(&err, crate::CoreError::InvalidStructure { context, .. } if context == "ZIP package")
+            );
+            let message = err.to_string();
+            assert!(message.contains("case-insensitive name collision"), "{message}");
+            assert!(message.contains(left) && message.contains(right), "{message}");
+            assert!(message.contains("Hancom and this reader"), "{message}");
+        }
+    }
+}
+
+// 이것을 실패시키는 것: effective 키 색인 누락 또는 raw 키 색인 누락, 정상 alias 교차 허용.
+#[test]
+fn casefold_normal_alias_crosses_rejected() {
+    for left in [
+        ("Contents/section0.xml", Some("Other/left")),
+        ("Other/left", Some("Contents/section0.xml")),
+    ] {
+        for right in [
+            ("Contents/SECTION0.XML", Some("Other/right")),
+            ("Other/right", Some("Contents/SECTION0.XML")),
+        ] {
+            for (first, second) in [(left, right), (right, left)] {
+                let bytes = zip(&[(first.0, first.1, b"x"), (second.0, second.1, b"y")]);
+                let error = open_package(&bytes, Default::default()).unwrap_err().to_string();
+                assert!(error.contains("case-insensitive name collision"), "{error}");
+                for name in [first.0, first.1.unwrap(), second.0, second.1.unwrap()] {
+                    assert!(error.contains(name), "{error}");
+                }
+            }
+        }
+    }
+    // Previously accepted raw/effective equality across two physical owners.
+    let bytes = zip(&[("alias", Some("normal"), b"x"), ("other", Some("alias"), b"y")]);
+    assert!(open_package(&bytes, Default::default())
+        .unwrap_err()
+        .to_string()
+        .contains("case-insensitive name collision"));
+}
+
 // 이것을 실패시키는 것: dot/빈 성분/끝 slash 축약 충돌/내용 있는 폴더의 전역 거부 복원.
 #[test]
 fn w2_isolated_names_and_directory_payloads_are_readable() {
@@ -127,7 +188,7 @@ fn w2_collisions_cover_all_raw_effective_crosses_and_orders() {
             assert!(open_package(&bytes, Default::default())
                 .unwrap_err()
                 .to_string()
-                .contains("opaque name collision"));
+                .contains("case-insensitive name collision"));
         }
     }
 }
@@ -149,16 +210,16 @@ fn w2_normal_alias_keys_collide_with_opaque_pair_in_both_orders() {
             let bytes = zip(&entries);
             let error = open_package(&bytes, Default::default()).unwrap_err();
             assert!(
-                error.to_string().contains("opaque name collision"),
+                error.to_string().contains("case-insensitive name collision"),
                 "{raw} -> {effective}: {error}"
             );
         }
     }
 }
 
-// 이것을 실패시키는 것: 정상 이름끼리 K 충돌 거부 또는 같은 물리 소유자의 두 키를 충돌로 세기.
+// 이것을 실패시키는 것: mimetype 예외 제거 또는 같은 물리 소유자의 두 키를 충돌로 세기.
 #[test]
-fn w2_normal_case_groups_and_self_keys_stay_accepted() {
+fn w2_mimetype_case_group_and_self_keys_stay_accepted() {
     for entries in [
         vec![("mimetype", None, b"x".as_slice()), ("MIMETYPE", None, b"y".as_slice())],
         vec![("MIMETYPE", None, b"y".as_slice()), ("mimetype", None, b"x".as_slice())],
@@ -171,13 +232,13 @@ fn w2_normal_case_groups_and_self_keys_stay_accepted() {
     }
 }
 
-// 이것을 실패시키는 것: raw 문법 판정을 제거하거나 기존 정상 raw/effective 교차를 폴더 축약 충돌로 세기.
+// 이것을 실패시키는 것: raw 문법 판정을 제거하거나 고립된 정상 alias를 opaque로 세기.
 #[test]
 fn w2_opaque_flags_keep_raw_evidence_and_normal_aliases() {
     let bytes = zip(&[
         ("Unused/./a", None, b"x"),
         ("alias", Some("normal"), b"x"),
-        ("other", Some("alias"), b"x"),
+        ("other", Some("separate"), b"x"),
         ("Empty/", None, b""),
     ]);
     let p = open_package(&bytes, Default::default()).unwrap();
