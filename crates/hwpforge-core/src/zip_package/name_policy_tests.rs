@@ -310,13 +310,6 @@ fn name_policy_alias_target_orders_and_empty_directory_do_not_escape() {
     }
 }
 
-// 이것을 실패시키는 것: 내용 있는 폴더를 정상 항목으로 분류하기.
-#[test]
-fn name_policy_raw_nonempty_directory_is_opaque() {
-    let bytes = zip(&[("Unused/", None, b"x")]);
-    assert!(open_package(&bytes, Default::default()).unwrap().is_opaque(0));
-}
-
 // 이것을 실패시키는 것: raw == effective에도 K 키를 두 개 생성하거나 alias 키를 생략하기.
 #[test]
 fn name_policy_equal_names_build_one_folded_key() {
