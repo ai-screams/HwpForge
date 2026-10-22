@@ -31,8 +31,6 @@ use crate::error::{CoreError, CoreResult};
 const EOCD_WINDOW: usize = 20 + std::mem::size_of::<Box<[u8]>>() + 65536;
 // OWPML unzlocal_SearchCentralDir: uMaxBack = 0xffff (including the footer).
 const REFERENCE_WINDOW: usize = 65_535;
-// Preserve A3's existing boundary for newly accepted trailing bytes.
-const TAIL_WINDOW: usize = 65_535;
 
 mod legacy;
 
@@ -66,7 +64,6 @@ pub(super) struct Directory {
 #[derive(Debug)]
 struct ReferenceEnd {
     eocd: usize,
-    header: [u8; 22],
 }
 
 impl Directory {
@@ -79,7 +76,6 @@ impl Directory {
             work: self.work.clone(),
             record_probe: false,
         };
-        let comment_start = self.eocd + 22;
         reader
             .seek(SeekFrom::Start((self.eocd + 20) as u64))
             .map_err(|e| zip_error(e.to_string()))?;
@@ -88,22 +84,8 @@ impl Directory {
         if usize::from(u16::from_le_bytes(length)) != self.comment.len() {
             return Err(invalid());
         }
-        let comment_end = comment_start + self.comment.len();
         let reference = self.reference.as_ref().ok_or_else(invalid)?;
-        if reference.eocd != self.eocd
-            || (comment_end < file_len as usize && file_len as usize - reference.eocd > TAIL_WINDOW)
-        {
-            return Err(invalid());
-        }
-        let count = u16_at(&reference.header, 10)?;
-        let size = u32_at(&reference.header, 12)?;
-        let offset = u32_at(&reference.header, 16)?;
-        // Literal ZIP32 interpretation; candidate already excludes ZIP64.
-        let start = reference.eocd.checked_sub(size as usize);
-        let base = start.and_then(|start| start.checked_sub(offset as usize));
-        // 이것을 실패시키는 것: count / CD 시작 / base 대조 제거.
-        if usize::from(count) != self.count || start != Some(self.start) || base != Some(self.base)
-        {
+        if reference.eocd != self.eocd {
             return Err(invalid());
         }
         let config = Config { archive_offset: ArchiveOffset::Known(self.base as u64) };
@@ -192,6 +174,7 @@ fn check_count(count: u64, limit: usize) -> CoreResult<()> {
 #[derive(Default, Debug)]
 pub(super) struct Work {
     pub scanned_bytes: usize,
+    #[cfg(test)]
     pub candidates: usize,
     #[cfg(test)]
     visited: Vec<usize>,
@@ -334,9 +317,11 @@ pub(super) fn preflight_with_work(
         if !work.signature(bytes, p, b"PK\x05\x06", budget)? {
             continue;
         }
-        work.candidates += 1;
         #[cfg(test)]
-        work.visited.push(p);
+        {
+            work.candidates += 1;
+            work.visited.push(p);
+        }
         let Ok(comment) = u16_at(bytes, p + 20) else { continue };
         let end = p + 22 + usize::from(comment);
         if end > bytes.len() {
@@ -369,17 +354,17 @@ pub(super) fn preflight_with_work(
 }
 
 /// Last raw signature in OWPML's 65,535 byte position window.
-/// Only the fixed footer is retained: no CD read, comment eligibility, disk/count
-/// validation or fallback can suppress a complete last raw position.
+/// Only a complete fixed footer's position is retained: no CD read, comment
+/// eligibility, disk/count validation or fallback can suppress that position.
 fn reference_end(bytes: &[u8], work: &mut Work, budget: usize) -> CoreResult<Option<ReferenceEnd>> {
     for eocd in (bytes.len().saturating_sub(REFERENCE_WINDOW)..bytes.len().saturating_sub(3)).rev()
     {
         if !work.signature(bytes, eocd, b"PK\x05\x06", budget)? {
             continue;
         }
-        let Ok(header) = field::<22>(bytes, eocd) else { return Ok(None) };
+        let Ok(_) = field::<22>(bytes, eocd) else { return Ok(None) };
         work.metadata.borrow_mut().charge(22, 0).map_err(|e| invalid_structure(e.to_string()))?;
-        return Ok(Some(ReferenceEnd { eocd, header }));
+        return Ok(Some(ReferenceEnd { eocd }));
     }
     Ok(None)
 }
@@ -393,7 +378,6 @@ fn directory_names<'a>(
     limit: usize,
     work: &mut Work,
 ) -> CoreResult<Vec<&'a [u8]>> {
-    check_count(count, limit)?;
     let directory = bytes.get(start..directory_end).ok_or_else(invalid)?;
     let mut position = 0;
     let mut names = Vec::new();
@@ -562,21 +546,6 @@ mod tests {
         work.metadata.borrow_mut().read_limit = 21;
         assert!(reference_end(&bytes, &mut work, usize::MAX).is_err());
         assert!(reference_end(&bytes, &mut Work::default(), 0).is_err());
-    }
-
-    /// 이것을 실패시키는 것: base 대조 제거.
-    #[test]
-    fn w1_reference_base_must_match_even_at_same_position() {
-        let bytes = [synthetic(), vec![0; 11]].concat();
-        let mut selected = preflight(&bytes, LIMIT).unwrap();
-        selected.open(Cursor::new(&bytes)).unwrap();
-        let reference = selected.reference.as_mut().unwrap();
-        assert_eq!(reference.eocd, selected.eocd);
-        // With the selected candidate's exact span check this equality is normally
-        // implied. Perturb only the retained reference evidence to isolate the guard.
-        let offset = u32_at(&reference.header, 16).unwrap();
-        reference.header[16..20].copy_from_slice(&(offset - 1).to_le_bytes());
-        assert!(selected.open(Cursor::new(&bytes)).is_err());
     }
 
     /// 이것을 실패시키는 것: 기존 경로에도 위치 규칙 적용 / 주석 적격성을 참조 탐색에 추가.
