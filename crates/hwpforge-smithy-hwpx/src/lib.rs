@@ -72,6 +72,7 @@ mod package_xml;
 pub mod paragraph_measure;
 mod patch;
 pub mod presets;
+mod raw_package;
 mod read;
 mod registry_bridge;
 mod schema;

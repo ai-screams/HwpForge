@@ -10,7 +10,7 @@
 //!
 //! Scope: only packages this encoder writes. The preserve-first editors that
 //! write the original package back with some parts replaced (`fill`, `patch`,
-//! structural insert/delete, through `RawPackage::write` in `patch.rs`) are
+//! structural insert/delete, through `RawPackage::write` in `raw_package.rs`) are
 //! not checked — they add no reference and no manifest item, so they carry
 //! over whatever the input had.
 
