@@ -7,10 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.11...hwpforge-smithy-md-v0.17.0) - 2026-10-23
 
-### Added
+### Changed (BREAKING)
 
-- **BREAKING** keep the HWPX and HWP5 values that conversion and rewriting silently lost ([#249](https://github.com/ai-screams/HwpForge/pull/249))
+- `MdOutput` 에 `warnings: Vec<MdWarning>` 가 생겨 `#[non_exhaustive]` 가 되었다. `MdWarning::ContainerTooDeep` 이 생겼다.
 
+### Changed
+
+- 읽기용 출력의 이스케이프를 하나의 타입 있는 계층으로 모으고, CommonMark 가 마크업으로 읽을 글자만 이스케이프한다. 링크는 `http://`, `https://`, `mailto:` 만 링크로 쓴다. 표가 8겹을 넘으면 `(중첩 표 생략)` 으로 쓰고 경고한다. 컨테이너가 32겹을 넘으면 읽기용 출력은 오류로 거부하고, 스타일 출력은 그 아래를 생략하며 경고한다.
+- 글상자·각주·도형 안의 표와 그림, 묶음, 표·그림 캡션, 한컴이 저장한 필드의 표시값이 출력에 나온다.
+- 무손실 Markdown 이 묶음과 그 그림, 도형 여덟 가지, 본문 그림의 배치와 캡션, 개체 틀, 표 캡션 속성·셀 구역·고정 셀 크기·셀 줄 바꿈, 그림 하이퍼링크를 왕복한다. 이전 판은 이 요소들을 읽지 못한다.
+
+### Fixed
+
+- 중첩 표 출력이 층마다 두 배로 불어나던 문제, 코드 펜스 검사의 이차 비용, 묶음 안 그림 링크와 캡션 속 그림 바이트가 빠지던 문제.
 
 ## [0.16.10](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.9...hwpforge-smithy-md-v0.16.10) - 2026-10-04
 

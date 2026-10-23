@@ -55,7 +55,7 @@ print(lossy.report["mode"], list(lossy.report["images"].keys()))
 import json
 
 exported = doc.to_json()                            # styles=True 가 기본
-document = json.loads(exported.text)                # 키: document, styles
+document = json.loads(exported.text)                # 키: format_version, document, styles
 print(exported.report["document"] == document)      # 같은 내용을 dict 로도 줍니다
 
 rebuilt = hwpforge.from_json(exported.text, base=doc)
@@ -68,6 +68,7 @@ print(rebuilt.report["paragraphs"], [w["code"] for w in rebuilt.report["warnings
 - 생성은 fail-closed가 아닙니다: 의미가 손실돼도 거부하지 않고 `warnings`에 실어 돌려줍니다. 위의 `LAYOUT_CACHE_DROPPED`는 원본이 가진 줄 조판 캐시를 재인코드가 싣지 않는다는 뜻입니다(한컴에서 다시 저장하면 복원).
 - 한컴 저장 문서의 `Preview/*`·`container.rdf` 엔트리는 `base`를 줘도 승계되지 않습니다(경고 없음). 텍스트만 바꿀 거라면 `export_section` → `patch`가 문서를 온전히 보존합니다.
 - JSON이 문서가 아니면 `JSON_PARSE_FAILED`. 스키마는 `hwpforge.schema(kind="exported-document")`.
+- 0.17.0 부터 JSON 에 `"format_version": 2` 가 붙고 문단 여백과 탭 위치는 `{"unit": "hwpunit" | "char", "value": 정수}` 입니다. 이전 판이 내보낸 버전 없는 JSON 은 탭 위치가 있으면 `LEGACY_JSON_TABS` 로 거부되고, 없으면 여백을 풀어 읽으며 `LEGACY_PARAGRAPH_MEASURES` 경고를 냅니다. 원본에서 `to_json` 을 다시 실행하십시오. 자세한 규칙은 CLI 레퍼런스의 `to-json` 절에 있습니다.
 
 전체 JSON(`document`/`styles`)과 구역 JSON(`section_index`/`section`/`styles`/`preservation`)은 서로 다른 스키마입니다 — 전자는 `from_json`, 후자는 `patch`가 읽습니다.
 

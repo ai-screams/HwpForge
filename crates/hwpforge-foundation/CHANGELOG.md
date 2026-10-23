@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **BREAKING** keep the HWPX and HWP5 values that conversion and rewriting silently lost ([#249](https://github.com/ai-screams/HwpForge/pull/249))
-
+- 글자 그림자를 종류·색·오프셋으로 담는 `CharShadow`, `ShadowOffset` 과 연속(`Continuous`) 그림자 종류.
+- 진단 코드 `LEGACY_JSON_TABS` 등 0.17.0 의 JSON 교환과 경고에 쓰이는 코드.
 
 ## [0.16.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.16.5...hwpforge-foundation-v0.16.6) - 2026-09-22
 

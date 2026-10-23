@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.11...hwpforge-bindings-mcp-v0.17.0) - 2026-10-23
 
-### Added
+### Changed (BREAKING)
 
-- **BREAKING** keep the HWPX and HWP5 values that conversion and rewriting silently lost ([#249](https://github.com/ai-screams/HwpForge/pull/249))
+- `to_json` 이 `format_version: 2` JSON 을 내보내고 문단 여백·탭을 `{"unit", "value"}` 로 쓴다. `from_json`·`patch` 는 버전 없는 JSON 에 탭 위치가 있으면 `LEGACY_JSON_TABS` 로 거부하고, 없으면 `LEGACY_PARAGRAPH_MEASURES` 경고와 함께 읽는다.
 
+### Changed
+
+- 도구 결과가 0.17.0 라이브러리의 새 경고(`CONTENT_LOST`, `OBJECT_ID_CONFLICT`, `PACKAGE_ID_CONFLICT`, `IMAGE_REFERENCE_UNRESOLVED`, `BEGIN_NUM_REPAIRED`, `CONTAINER_TOO_DEEP`, `XML_FORBIDDEN_CHARS_REMOVED`)를 그대로 전한다. `restyle`, `set_cell`, `stamp` 는 내용을 잃은 입력을 거부한다.
 
 ## [0.16.11](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.10...hwpforge-bindings-mcp-v0.16.11) - 2026-10-13
 

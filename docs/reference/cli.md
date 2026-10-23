@@ -130,6 +130,21 @@ hwpforge to-json [OPTIONS] --output <OUTPUT> <FILE>
 
 `--section` 없이 내보낸 **문서 전체 JSON은** `from-json`이, `--section N`으로 내보낸 **섹션 JSON은** `patch`가 읽습니다. 두 JSON은 서로 다른 형식입니다.
 
+0.17.0 부터 두 JSON 모두 맨 위에 `"format_version": 2` 를 쓰고, 문단 여백 다섯 가지(`margin_left`, `margin_right`, `indent`, `spacing_before`, `spacing_after`)와 탭 위치(`position`)를 단위와 값으로 씁니다. `hwpunit` 은 1/100 pt, `char` 는 1/500 글자입니다.
+
+```json
+"margin_left": { "unit": "hwpunit", "value": 2000 },
+"indent": { "unit": "char", "value": -1000 }
+```
+
+`from-json` 과 `patch` 는 이전 판이 쓴 버전 없는 JSON 을 이렇게 다룹니다.
+
+- 탭 위치가 하나라도 있으면 `LEGACY_JSON_TABS` 로 거부합니다. 옛 JSON 에는 탭 단위가 남아 있지 않아 추측하지 않습니다.
+- 탭 위치가 없으면 문단 여백을 옛 표현에서 풀어 읽고 `LEGACY_PARAGRAPH_MEASURES` 경고를 냅니다. 옛 JSON 이 이미 잃은 단위는 되살리지 못합니다.
+- 다른 버전 번호나 정수가 아닌 `format_version` 은 거부합니다.
+
+어느 경우든 원본 HWPX 또는 HWP5 에서 새 판의 `to-json` 을 다시 실행하는 것이 가장 정확합니다.
+
 스타일 글자 모양의 그림자는 0.17.0 부터 `shadow` 객체로 나옵니다(이전 키 `shadow_type` 은 종류만 담았습니다).
 
 ```json
