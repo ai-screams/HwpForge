@@ -131,6 +131,7 @@ Keep it minimal.
 We use [Conventional Commits](https://www.conventionalcommits.org/).
 [release-plz](https://release-plz.ieni.dev/) uses these prefixes to determine release scope.
 If you need to force a breaking release on a non-standard type, use `type!:` in the subject.
+PRs are squash-merged, so release-plz reads the **PR title**: give it the type, and the `!` when the PR breaks the public API.
 
 ### Release-triggering prefixes
 
@@ -177,7 +178,7 @@ Use the PR template. At minimum, include:
 - [ ] Public API changes are documented (rustdoc)
 - [ ] Doc changes verified with `mdbook build`
 - [ ] No MSRV regression (or documented if intentional)
-- [ ] Commits follow Conventional Commits
+- [ ] PR title follows Conventional Commits (it becomes the squashed commit on `main`)
 
 ### Impact flags
 
@@ -193,7 +194,7 @@ If any of these apply, call them out in the PR description:
 
 - Branch protection does not require a minimum number of approving reviews (`required_approving_review_count: 0`), but a review is still strongly encouraged before merge.
 - Merge happens through the merge queue only, gated on the nine required status checks (format, clippy, test, docs lint, dependency policy, workflow lint, coverage ≥ 90%, Python, MSRV).
-- The merge queue merges with a merge commit (merge method `MERGE`), so each PR lands as a `Merge pull request #N` commit and its individual commits stay in `main`.
+- The merge queue squashes each PR (merge method `SQUASH`, linear history). The PR title becomes the commit subject on `main` and the PR description its body, so the PR title must itself follow Conventional Commits; the `PR Title` check verifies it.
 
 ## Testing
 

@@ -41,6 +41,7 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 - 실제 산출물을 `examples/hwp5_review/_verify/` 에 생성하고 `open <절대경로>` 로 제시한다.
 - 레이아웃에 닿는 편집(재인코드 경로 포함)은 **PDF 대조**(쪽수·줄바꿈)까지 한다 —
   admission 은 Core 비교라 wire 캐시(linesegarray 등) 소실을 못 본다.
+- 원본과 우리 산출물을 나란히 볼 때 한컴 상태 표시줄의 쪽·글자 수도 비교한다. 화면이 같아도 글자 수 차이는 필드 범위·숨은 글자 손실 신호다(줄·칸 값은 커서 위치라 제외).
 - **사용자 판정 없이 통과 처리 금지.**
 - 예외: 사용자가 판정을 명시 위임한 경우 — 정량 근거(bbox Δ·동일 배율
   PNG 대조)를 제시하고 위임 판정으로 통과할 수 있다. 근거 없는 자체
@@ -57,7 +58,8 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 - push 전 `make ci` (플래그 일치: `--all-targets`·`--all-features`·fmt `--all`).
 - coverage 게이트 ≥90% — **linux 가 macOS 보다 ~0.02–0.06% 낮게** 나오므로 마진을 확보한다.
-- PR 제목은 **English**, 본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (`RELEASING.md` §8 canonical).
+- PR 제목은 **English conventional**(squash 머지라 main 커밋 제목이 된다, breaking 은 `type!:`), 본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (`RELEASING.md` §8 canonical).
+- PR 본문·릴리스 노트는 main 대비 변화만 쓴다. 브랜치 안에서 생기고 고친 회귀는 넣지 않는다(검증 표의 게이트 기록은 유지).
 
 ## 8. 릴리스 (release-plz 소유)
 
