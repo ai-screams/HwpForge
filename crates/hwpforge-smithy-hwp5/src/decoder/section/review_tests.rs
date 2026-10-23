@@ -2290,6 +2290,41 @@ fn body_style_references_check_original_definitions_in_every_container() {
     }
 }
 
+/// 이것을 실패시키는 것: 긴 겹글자 거부 / 길이 일치 검사 삭제 /
+/// 긴 입력 전용 조건(count > 3)을 없애 기존의 미지원 짧은 입력까지 허용하기.
+#[test]
+fn hancom_compose_long_text_requires_consistent_wire_length() {
+    let bytes = include_bytes!("../../../../../tests/fixtures/hancom_controls/f2-compose-links.hwp");
+    let package = PackageReader::open(bytes).unwrap();
+    let records = Record::parse_stream(&mut Cursor::new(&package.sections_data()[0])).unwrap();
+    let record = records
+        .iter()
+        .filter(|r| {
+            TagId::from(r.header.tag_id) == TagId::CtrlHeader
+                && parse_ctrl_id(&r.data) == CTRL_ID_COMPOSE
+        })
+        .nth(2)
+        .unwrap();
+    // f2's third tcps: 8-byte header + e/f/g UTF-16 + 44-byte fixed trailer.
+    // The independent Hancom HWPX comparison lives in hancom_controls.rs.
+    assert_eq!(record.data.len(), 58);
+    assert_eq!(
+        &record.data[..14],
+        &[0x73, 0x70, 0x63, 0x74, 4, 0, 0xc6, 0x25, 0x65, 0, 0x66, 0, 0x67, 0]
+    );
+    let parsed = Hwp5ComposeControl::parse(CTRL_ID_COMPOSE, &record.data).unwrap();
+    assert_eq!(parsed.compose_text, "efg");
+
+    let mut inconsistent = record.data.clone();
+    inconsistent[4..6].copy_from_slice(&5u16.to_le_bytes());
+    assert!(Hwp5ComposeControl::parse(CTRL_ID_COMPOSE, &inconsistent).is_none());
+
+    let mut unsupported_short = record.data.clone();
+    unsupported_short.drain(8..14);
+    unsupported_short[4..6].copy_from_slice(&1u16.to_le_bytes());
+    assert!(Hwp5ComposeControl::parse(CTRL_ID_COMPOSE, &unsupported_short).is_none());
+}
+
 // 이것을 실패시키는 것: compose charPr 검사 생략, 중첩 깊이 필터, MAX 상속값 거부.
 #[test]
 fn compose_references_check_original_char_definitions_in_every_container() {

@@ -569,8 +569,8 @@ warning. Source: `schema/section.rs::Hwp5DutmalControl`.
 ### Compose (`tcps`) layouts + decoration glyph (task #74)
 
 The full 14-circleType × 2-composeType matrix
-(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) confirmed
-exactly **two** layouts discriminated by `properties.low`:
+(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) observed
+two layouts with two-character inputs:
 
 - `0x0003` (unpacked) — text fully in body; `properties.high` holds a
   decoration glyph that is a pure 1:1 function of the body-trailer
@@ -579,8 +579,15 @@ exactly **two** layouts discriminated by `properties.low`:
 - `0x0002` (packed) — `composeText[0]` in `properties.high`; observed
   on exactly one matrix cell (`CHAR + OVERLAP`).
 
-No third layout exists, so an unknown discriminator is genuinely
-malformed. Source: `schema/section.rs::Hwp5ComposeControl`.
+The purpose-made `tests/fixtures/hancom_controls/f2-compose-links.hwp`
+also has unpacked `efg`: `properties.low=4`, `properties.high=0x25C6`
+(◆), followed by three UTF-16 units and the fixed 44-byte trailer.
+Its Hancom HWPX twin has `composeText="efg"` and
+`circleType="SHAPE_REVERSAL_RHOMBUS"`. For values above 3, the decoder
+requires `properties.low == body_text_utf16_units + 1` (the decoration
+glyph contributes one unit). Existing 2/3 behavior is preserved;
+inconsistent longer lengths still fall back to Unknown.
+Source: `schema/section.rs::Hwp5ComposeControl`.
 
 ### IndexMark (`idxm`) surrogate split + trailer (task #75)
 

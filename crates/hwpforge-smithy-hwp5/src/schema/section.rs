@@ -1882,7 +1882,7 @@ impl Hwp5DutmalControl {
 /// | `[N+3..N+4]` | `0A` | `char_pr_cnt` | u8 — fixed `10` per HWPX schema |
 /// | `[N+4..N+4+40]` | `07 00 00 00 …` | `char_pr_ids[0..10]` | 10 × LE u32 (`u32::MAX` = no-override sentinel) |
 ///
-/// `compose_text` has no length prefix on the wire. We infer
+/// The body has no separate `compose_text` length prefix. We infer
 /// `N = payload_len - 44` (4 metadata bytes + 40 charPr bytes) given the
 /// `charPrCnt = 10` invariant. If the result is negative, odd, or
 /// `char_pr_cnt` is not exactly `10`, the payload is treated as
@@ -1930,7 +1930,7 @@ impl Hwp5ComposeControl {
     /// `properties` low half (`data[4..6]` as LE u16). Task #74 ran the
     /// full 14-circleType × 2-composeType matrix
     /// (`sample-compose-all-shapes.hwp`, `probe_compose_variants`) and
-    /// confirmed these are the **only** layouts 한컴 emits:
+    /// observed the following layouts with two-character inputs:
     ///
     /// - **`0x0003` (unpacked)** — `composeText` is fully in the body
     ///   (`data[8..]`). `properties[2..4]` is a decoration glyph that is
@@ -1953,10 +1953,11 @@ impl Hwp5ComposeControl {
     ///   body trailer layout is unchanged; only the leading
     ///   char-region shrinks by one `u16`.
     ///
-    /// Any other `properties.low` value falls through to `None`
-    /// (treated as malformed) — the full-matrix probe found no third
-    /// layout, so an unknown discriminator really is malformed rather
-    /// than an unobserved variant.
+    /// The purpose-made `hancom_controls/f2-compose-links.hwp` additionally
+    /// stores `efg` with low half 4 and the decoration glyph U+25C6 in the
+    /// high half. Longer unpacked text counts its UTF-16 units plus that
+    /// glyph; accept it only when the payload length agrees. Preserve the
+    /// already supported 2/3 layouts and reject other inconsistent values.
     pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
         // CtrlHeader payload is `[0..8] = ctrl_id + properties`, then
         // the compose-specific data lives in `[8..]`. We mirror the
@@ -1975,13 +1976,12 @@ impl Hwp5ComposeControl {
             return None;
         }
 
-        // Layout discriminator: `0x0003` = unpacked (default), `0x0002`
-        // = packed (one char carried in properties.high; len encoded
-        // in properties.low). See struct doc for the empirical
-        // rationale and which fixture surfaced the variant.
+        // Legacy two-character layouts, plus a length-checked longer
+        // unpacked layout (f2: 4 = decoration glyph + e/f/g).
         let packed_first_char: Option<u16> = match props_low {
             0x0003 => None,
             0x0002 => Some(props_high),
+            count if count > 3 && usize::from(count) == text_bytes_end / 2 + 1 => None,
             _ => return None,
         };
 
