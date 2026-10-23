@@ -494,7 +494,8 @@ impl std::fmt::Display for DecodeWarning {
 /// 확인하는 데 쓴다. 표본 목록 옆의 와일드카드 없는 `match` 가 변형 추가 시
 /// 컴파일을 깨뜨려 목록 갱신을 강제한다. 디코드(`decode`)와
 /// 인코드(`encode`) 경고를 함께 둔다.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "__test-support"))]
+#[doc(hidden)]
 pub mod warning_samples {
     use super::{DecodeWarning, ParagraphPath, PathSeg};
     use crate::EncodeWarning;
