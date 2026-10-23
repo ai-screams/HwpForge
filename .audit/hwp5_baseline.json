@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 198,
-  "fixtures_decoded": 198,
+  "fixtures_scanned": 192,
+  "fixtures_decoded": 192,
   "fixtures_failed": 0,
-  "total_warnings": 113,
+  "total_warnings": 53,
   "categories": {
     "ContentLost:group_child_picture": {
-      "count": 2,
+      "count": 3,
       "fixtures": {
+        "tests/fixtures/hancom_controls/f3-group-tables.hwp": 1,
         "tests/fixtures/shapes/group-f3d-rotated-pic.hwp": 1,
         "tests/fixtures/shapes/group-f3e-gray.hwp": 1
       }
@@ -16,12 +17,6 @@
       "count": 1,
       "fixtures": {
         "tests/fixtures/shapes/group-f10-rot-then-scale.hwp": 1
-      }
-    },
-    "ContentLost:nested_group_placement": {
-      "count": 2,
-      "fixtures": {
-        "tests/fixtures/nested_controls/group-table-page.hwp": 2
       }
     },
     "ContentLost:shape_transform": {
@@ -39,9 +34,8 @@
       }
     },
     "DroppedControl:nested_section_settings": {
-      "count": 47,
+      "count": 1,
       "fixtures": {
-        "tests/fixtures/tables/mixedhdr-original.hwp": 46,
         "tests/fixtures/user_samples/tabs/sample-table-tab.hwp": 1
       }
     },
@@ -128,25 +122,6 @@
       "count": 2,
       "fixtures": {
         "tests/fixtures/mixed/full_report.hwp": 2
-      }
-    },
-    "ProjectionFallback:style.char_shape.script_scalars": {
-      "count": 2,
-      "fixtures": {
-        "tests/fixtures/nested_controls/group-table-page.hwp": 2
-      }
-    },
-    "ProjectionFallback:style.font.type_info": {
-      "count": 3,
-      "fixtures": {
-        "tests/fixtures/nested_controls/group-table-page.hwp": 3
-      }
-    },
-    "ProjectionFallback:style.para_shape.auto_spacing": {
-      "count": 8,
-      "fixtures": {
-        "tests/fixtures/nested_controls/compose-link.hwp": 4,
-        "tests/fixtures/tables/mixedhdr-original.hwp": 4
       }
     }
   },
