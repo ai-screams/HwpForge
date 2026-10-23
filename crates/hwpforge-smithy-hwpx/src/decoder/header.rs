@@ -197,8 +197,7 @@ fn normalize_definition_ids(
                 count,
             ) {
                 changed = true;
-                // Hancom opens a Hancom-saved public document and even its
-                // resave retains old nextStyleIDRef 58..60 beyond 57 styles.
+                // A stale next-style reference falls back to the owning style.
                 // This recovery applies ONLY to nextStyleIDRef, with explicit loss.
                 warnings.push(super::DecodeWarning::ContentLost {
                     part: "Contents/header.xml".into(),
@@ -668,7 +667,7 @@ fn collect_tab_items(
             )));
         }
         // 12 original HWPX/HWP5 twins, 24 direct definitions: positions equal
-        // HWP5 packed raw. Evidence: tests/fixtures/paragraph_measure/direct-twin-evidence.json.
+        // HWP5 packed raw; preserve that unit conversion for direct definitions.
         normalized(
             warnings,
             "tabPr",

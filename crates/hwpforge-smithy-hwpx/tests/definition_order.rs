@@ -97,22 +97,32 @@ fn para_and_char_order_follow_hancom_pdf_observations() {
 }
 
 #[test]
-fn hancom_stale_next_style_uses_self_with_explicit_loss() {
-    // 이것을 실패시키는 것: nextStyle 범위 밖 거부/무음 대체/다른 참조까지 허용.
-    for name in ["p7-corpus-style-gap", "p7-corpus-style-gap-hancom"] {
-        let d = decode(name);
-        let losses: Vec<_> = d.warnings.iter().filter(|w| matches!(w, DecodeWarning::ContentLost { kind, reason, .. } if kind == "style.nextStyleIDRef" && reason.contains("replaced with self"))).collect();
-        assert!(!losses.is_empty());
-        for (i, style) in d.style_store.iter_styles().enumerate() {
-            if i >= 54 {
-                assert_eq!(style.next_style_id_ref as usize, i);
-            }
-        }
-        let out =
-            HwpxEncoder::encode(&d.document.validate().unwrap(), &d.style_store, &d.image_store)
-                .unwrap();
-        assert!(!HwpxDecoder::decode(&out).unwrap().warnings.iter().any(|w| matches!(w, DecodeWarning::ContentLost { kind, .. } if kind == "style.nextStyleIDRef")));
-    }
+fn synthetic_stale_next_style_uses_self_with_explicit_loss() {
+    // 이것을 실패시키는 것: nextStyle을 자기 자신 대신 0으로 복구 또는 ContentLost kind 변조.
+    let original = bytes("e23-orig-nocache");
+    let mut header = PackageReader::new(&original).unwrap().read_header_xml().unwrap();
+    // Pick a nonzero style so a hard-coded fallback to zero cannot pass.
+    let style = header.match_indices("<hh:style ").nth(1).unwrap().0;
+    let start =
+        style + header[style..].find("nextStyleIDRef=\"").unwrap() + "nextStyleIDRef=\"".len();
+    let end = start + header[start..].find('"').unwrap();
+    header.replace_range(start..end, "65535");
+    let d = HwpxDecoder::decode(&replace_header(&original, &header)).unwrap();
+    let losses: Vec<_> = d
+        .warnings
+        .iter()
+        .filter(|w| {
+            matches!(w,
+        DecodeWarning::ContentLost { kind, reason, .. }
+        if kind == "style.nextStyleIDRef" && reason.contains("replaced with self"))
+        })
+        .collect();
+    assert_eq!(losses.len(), 1);
+    assert_eq!(d.style_store.iter_styles().nth(1).unwrap().next_style_id_ref, 1);
+    let out = HwpxEncoder::encode(&d.document.validate().unwrap(), &d.style_store, &d.image_store)
+        .unwrap();
+    assert!(!HwpxDecoder::decode(&out).unwrap().warnings.iter().any(|w| matches!(w,
+        DecodeWarning::ContentLost { kind, .. } if kind == "style.nextStyleIDRef")));
     assert!(HwpxDecoder::decode(&bytes("u5-id-gap")).is_err());
 }
 

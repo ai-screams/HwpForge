@@ -206,29 +206,6 @@
       ]
     },
     {
-      "source": "hancom-probe/p7-corpus-style-gap-hancom.hwpx",
-      "original_bytes": 207159,
-      "original_sha256": "00be69bef7c0470778629962419e5eab1a6df97dd895e29159789c7d1e689c40",
-      "fixture": "p7-corpus-style-gap-hancom.hwpx",
-      "fixture_bytes": 35833,
-      "fixture_sha256": "d87d609e245d83df5a7a7c5be20177cc71a4b211fac5a05e9f138278b6598663",
-      "removed_parts": [
-        "Preview/PrvText.txt",
-        "Preview/PrvImage.png"
-      ]
-    },
-    {
-      "source": "hancom-probe/p7-corpus-style-gap.hwpx",
-      "original_bytes": 39070,
-      "original_sha256": "cbb56dd89c334f83ad921d926481123c8cef5e6626d586d27f436739b974d00d",
-      "fixture": "p7-corpus-style-gap.hwpx",
-      "fixture_bytes": 34396,
-      "fixture_sha256": "9449fd6f40596a145cbc3b3c57370facc541e5a9cff11c2091b056a57ef3398d",
-      "removed_parts": [
-        "Preview/PrvText.txt"
-      ]
-    },
-    {
       "source": "hancom-probe/u5-id-gap-hancom-resave.hwpx",
       "original_bytes": 63574,
       "original_sha256": "08348d7fe599b9d7ae9f654bc4c929bc79920ad3000a6e5b3da37b5c77c84a21",

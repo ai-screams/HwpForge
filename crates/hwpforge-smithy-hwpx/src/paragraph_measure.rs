@@ -26,7 +26,7 @@ pub fn unpack_margin(raw: i32) -> HwpxResult<ParagraphMeasure> {
 }
 /// Decodes HWP5 tab bits: signed HWPUNIT or unsigned CHAR, retaining the unit bit.
 pub fn unpack_tab(raw: u32) -> HwpxResult<ParagraphMeasure> {
-    // Hancom's FSC twin and MOE/MSS counterparts retain negative HWPUNIT positions.
+    // HWPUNIT positions use the signed interpretation of the packed bits.
     unpack(if raw & 1 == 0 { i64::from(raw as i32) } else { i64::from(raw) })
 }
 

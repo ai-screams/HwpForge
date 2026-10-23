@@ -571,30 +571,43 @@ fn parse_gradation_fill_payload(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5RawGr
     })
 }
 
+/// Synthetic no-fill, short color and two-stop gradient records with distinct line slots.
+#[cfg(test)]
+pub(crate) fn synthetic_border_fills() -> Vec<Vec<u8>> {
+    let mut prefix = 0x2003u16.to_le_bytes().to_vec();
+    for slot in 0..5u8 {
+        prefix.extend([slot, slot + 2]);
+        prefix.extend((0x0012_3456 + u32::from(slot)).to_le_bytes());
+    }
+    let mut none = prefix.clone();
+    none.extend(0u32.to_le_bytes());
+    none.extend(0u32.to_le_bytes());
+    let mut color = prefix.clone();
+    for word in [1u32, 0x0012_ABCD, 0x0056_789A, u32::MAX, 0] {
+        color.extend(word.to_le_bytes());
+    }
+    let mut gradient = prefix;
+    gradient.extend(4u32.to_le_bytes());
+    gradient.push(1);
+    for word in [45u32, (-20i32) as u32, 30, 60, 2, 0x0011_2233, 0x0044_5566, 1] {
+        gradient.extend(word.to_le_bytes());
+    }
+    gradient.push(50);
+    vec![none, color, gradient]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn r3_records() -> Vec<crate::schema::record::Record> {
-        crate::schema::record::Record::parse_stream(&mut Cursor::new(include_bytes!(
-            "../../tests/fixtures/border_fill/r3-border-fills.bin"
-        )))
-        .unwrap()
-    }
-
     #[test]
-    fn border_fill_r3_wire_values_survive_all_41_definitions() {
-        // 이것을 실패시키는 것: 52바이트 alpha 강제 읽기, 색/선 순서 변경,
-        // 그러데이션 70바이트 꼬리에 alpha 강제 읽기.
-        let records = r3_records();
-        assert_eq!(records.len(), 41);
-        let mut color_ids = Vec::new();
-        let mut gradient_count = 0;
-        for (index, record) in records.iter().enumerate() {
-            let data = &record.data;
+    fn border_fill_synthetic_wire_values_survive_all_variants() {
+        // 이것을 실패시키는 것: 짧은 color의 alpha 강제 읽기 또는 gradient blur_center 누락.
+        let records = synthetic_border_fills();
+        for data in &records {
             let word = |at| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
             let fill = Hwp5RawBorderFill::parse(data).unwrap();
-            assert_eq!(fill.property, u16::from_le_bytes([data[0], data[1]]));
+            assert_eq!(fill.property, 0x2003);
             for (slot, line) in
                 [fill.left, fill.right, fill.top, fill.bottom, fill.diagonal].iter().enumerate()
             {
@@ -606,38 +619,34 @@ mod tests {
             match fill.fill {
                 Hwp5RawBorderFillFill::Color(color) => {
                     assert_eq!(data.len(), 52);
-                    color_ids.push(index + 1);
-                    assert_eq!(color.background_color, word(36));
-                    assert_eq!(color.pattern_color, word(40));
+                    assert_eq!(color.background_color, 0x0012_ABCD);
+                    assert_eq!(color.pattern_color, 0x0056_789A);
                     assert_eq!(color.pattern_kind, Hwp5FillPatternKind::None);
                     assert_eq!(color.alpha, 0);
                     assert!(color.extra_data.is_empty());
                 }
                 Hwp5RawBorderFillFill::Gradation(gradient) => {
-                    gradient_count += 1;
                     assert_eq!(data.len(), 70);
-                    assert_eq!(gradient.colors, vec![word(57), word(61)]);
-                    assert_eq!(gradient.angle, word(37));
-                    assert_eq!(gradient.center_x, word(41) as i32);
-                    assert_eq!(gradient.center_y, word(45) as i32);
-                    assert_eq!(gradient.blur, word(49));
+                    assert_eq!(gradient.colors, [0x0011_2233, 0x0044_5566]);
+                    assert_eq!(gradient.angle, 45);
+                    assert_eq!(gradient.center_x, -20);
+                    assert_eq!(gradient.center_y, 30);
+                    assert_eq!(gradient.blur, 60);
                     assert_eq!(gradient.shape, Some(1));
                     assert_eq!(gradient.blur_center, Some(50));
                     assert!(gradient.extra_data.is_empty());
                 }
                 Hwp5RawBorderFillFill::None => assert_eq!(data.len(), 40),
-                other => panic!("unexpected r3 fill: {other:?}"),
+                other => panic!("unexpected synthetic fill: {other:?}"),
             }
         }
-        assert_eq!(color_ids, [1, 6, 7, 11, 12, 25, 26, 27, 39, 40, 41]);
-        assert_eq!(gradient_count, 5);
     }
 
     #[test]
     fn border_fill_color_alpha_and_length_boundaries() {
-        // 이것을 실패시키는 것: 길이만 보고 임의 절단 수용, 네 zero 조건 삭제,
+        // 이것을 실패시키는 것: 짧은 color에도 alpha 강제 읽기, 네 zero 조건 삭제,
         // 현대 alpha 무시, 선언한 extra 길이 검사 제거.
-        let legacy = r3_records()[5].data.clone();
+        let legacy = synthetic_border_fills()[1].clone();
         for len in 0..52 {
             assert!(Hwp5RawBorderFill::parse(&legacy[..len]).is_err(), "length {len}");
         }
@@ -656,7 +665,7 @@ mod tests {
                 panic!("color expected")
             };
             assert_eq!(color.alpha, alpha);
-            assert_eq!(color.background_color, 0x00CC_FFFF);
+            assert_eq!(color.background_color, 0x0012_ABCD);
             assert!(color.extra_data.is_empty());
             // With alpha=0, a 52-byte prefix is byte-identical to the valid
             // legacy form; length/flags cannot distinguish its provenance.
@@ -679,8 +688,8 @@ mod tests {
     #[test]
     fn border_fill_gradient_and_image_layout_boundaries() {
         // 이것을 실패시키는 것: color 전용 짧은 형식을 다른 플래그에 적용,
-        // 이미지 ID/효과 위치 변경, gradient 색 개수 길이 검사 제거.
-        let gradient = r3_records()[13].data.clone();
+        // 이미지 ID/효과 위치 변경, gradient blur_center 변경 또는 색 개수 길이 검사 제거.
+        let gradient = synthetic_border_fills()[2].clone();
         assert_eq!(gradient.len(), 70);
         for len in 36..65 {
             assert!(Hwp5RawBorderFill::parse(&gradient[..len]).is_err(), "gradient {len}");

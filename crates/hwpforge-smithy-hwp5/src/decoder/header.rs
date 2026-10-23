@@ -314,13 +314,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn border_fill_r3_doc_info_keeps_ids_without_warnings() {
+    fn border_fill_synthetic_doc_info_keeps_ids_without_warnings() {
         // 이것을 실패시키는 것: 레거시 채우기 placeholder 대체 또는 ID 재배열.
-        let bytes = include_bytes!("../../tests/fixtures/border_fill/r3-border-fills.bin");
+        let bytes: Vec<u8> = crate::schema::border_fill::synthetic_border_fills()
+            .iter()
+            .flat_map(|data| make_record_bytes(20, data))
+            .collect();
         for version in [HwpVersion::new(5, 0, 1, 7), HwpVersion::new(5, 1, 0, 0)] {
-            let result = parse_doc_info(bytes, &version).unwrap();
+            let result = parse_doc_info(&bytes, &version).unwrap();
             assert!(result.warnings.is_empty(), "{:?}", result.warnings);
-            assert_eq!(result.border_fills.len(), 41);
+            assert_eq!(result.border_fills.len(), 3);
             for (index, slot) in result.border_fills.iter().enumerate() {
                 assert_eq!(slot.id as usize, index + 1);
                 assert!(slot.fill.is_some());

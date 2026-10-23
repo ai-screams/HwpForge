@@ -232,7 +232,14 @@ fn r1_subtree_controls_use_the_body_interpreter_in_every_host() {
 }
 
 fn r1_clickhere() -> Vec<u8> {
-    let command = "Clickhere:set:0:Direction:wstring:1:힌 HelpState:wstring:0:  ";
+    r1_clickhere_with_direction("힌")
+}
+
+fn r1_clickhere_with_direction(direction: &str) -> Vec<u8> {
+    let command = format!(
+        "Clickhere:set:0:Direction:wstring:{}:{direction} HelpState:wstring:0:  ",
+        direction.encode_utf16().count()
+    );
     let mut data = CTRL_ID_CLICK_HERE.to_le_bytes().to_vec();
     data.extend([0; 4]);
     data.push(9);
@@ -1802,33 +1809,18 @@ fn r5_auto_field_truncation_reports_exact_utf16_loss() {
     }
 }
 
-/// 표본 130번의 원본 Section0
-/// 레코드 349·355 PARA_TEXT payload. 본문은 원본 그대로, 메타데이터만 최소 합성.
-/// 이것을 실패시키는 것: 실제 누름틀 본문을 안내 문구로 대체하거나 두 번째 형제 필드 누락.
+/// 이것을 실패시키는 것: 채워진 누름틀의 display_text 삭제 또는 두 번째 형제 필드 누락.
 #[test]
-fn r5_sample_130_contact_records_preserve_filled_clickhere() {
-    let address = "가상시 가상구 가상로 1 가상청사 가상과";
-    let email = "user@example.com";
-    let fax = "000-0000-0000";
-    assert_eq!([address.chars().count(), email.chars().count(), fax.chars().count()], [37, 18, 12]);
-    for (payload, expected) in [
-        (
-            include_bytes!(
-                "../../../../../tests/fixtures/nested_controls/clickhere-contact-349.bin"
-            )
-            .as_slice(),
-            vec![address],
-        ),
-        (
-            include_bytes!(
-                "../../../../../tests/fixtures/nested_controls/clickhere-contact-355.bin"
-            )
-            .as_slice(),
-            vec![email, fax],
-        ),
-    ] {
+fn synthetic_contact_fields_preserve_filled_clickhere() {
+    for expected in [vec!["가상시 별빛로 7 탐험대"], vec!["user@example.com", "가상 연락처"]] {
+        let mut payload = Vec::new();
+        for body in &expected {
+            payload.extend(r4_marker(3, CTRL_ID_CLICK_HERE));
+            payload.extend(para_text_data(body));
+            payload.extend(r4_marker(4, 0));
+        }
         let controls = make_record(TagId::CtrlHeader, 1, &r1_clickhere()).repeat(expected.len());
-        let parsed = parse_body_text(&r4_para(payload, &controls, false), &version()).unwrap();
+        let parsed = parse_body_text(&r4_para(&payload, &controls, false), &version()).unwrap();
         let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
         let actual: Vec<_> = doc.sections()[0].paragraphs[0]
             .runs
@@ -1968,15 +1960,46 @@ fn ck_mixed_clickhere_ids_avoid_preserved_picture_id() {
     }
 }
 
-/// 원본 레코드의 byte offset에서 기대값을 추출한다. 투영/왕복 결과를 oracle로 쓰지 않는다.
-/// 이것을 실패시키는 것: editable을 0으로 / 이름·Command·Direction 변경 /
-/// 본문 run의 서식·텍스트·순서 변경 (같은 잘못을 인코더/디코더가 운반해도 실패).
+const SYNTHETIC_FIELD_SPANS: [(u32, &str); 6] = [
+    (1, "출발"), (2, "별빛을 모은다 "), (3, "😀"),
+    (4, "상자에 담는다 "), (5, "새로운 길을 찾는다 "), (6, "끝으로 돌아온다."),
+];
+
+fn synthetic_unclosed_clickhere() -> Vec<u8> {
+    let mut text = r4_marker(3, CTRL_ID_CLICK_HERE);
+    let mut shapes = Vec::new();
+    for (i, (shape, body)) in SYNTHETIC_FIELD_SPANS.iter().enumerate() {
+        let position = if i == 0 { 0 } else { (text.len() / 2) as u32 };
+        shapes.extend(position.to_le_bytes());
+        shapes.extend(shape.to_le_bytes());
+        text.extend(para_text_data(body));
+    }
+    shapes.extend(((text.len() / 2) as u32).to_le_bytes());
+    shapes.extend(9u32.to_le_bytes());
+    let page_id = u32::from_be_bytes(*b"pgnp");
+    text.extend(r4_marker(0x15, page_id)); // deliberately no field-end marker
+    let mut header = r1_clickhere_with_direction("가상 안내문을 입력");
+    header[4..8].copy_from_slice(&0x8001u32.to_le_bytes());
+    let mut controls = make_record(TagId::ParaCharShape, 1, &shapes);
+    controls.extend(make_record(TagId::CtrlHeader, 1, &header));
+    let name = Record::parse_stream(&mut Cursor::new(r4_bookmark("가상필드", false).1)).unwrap();
+    controls.extend(make_record(TagId::CtrlData, 2, &name[1].data));
+    let mut page = page_id.to_le_bytes().to_vec();
+    page.extend(0x500u32.to_le_bytes());
+    page.extend([0; 6]);
+    page.extend(('-' as u16).to_le_bytes());
+    controls.extend(make_record(TagId::CtrlHeader, 1, &page));
+    r4_para(&text, &controls, true)
+}
+
+/// 합성 레코드의 바이트와 비교하여 투영 결과를 정답으로 재사용하지 않는다.
+/// 이것을 실패시키는 것: editable을 0으로 또는 본문 run의 서식·텍스트·순서 변경.
+/// 실제 변이 실행: Direction을 첫 글자로 자르면 "가" != "가상 안내문을 입력"으로 실패한다.
 #[test]
-fn ck_sample_156_metadata_and_body_match_hwp5_records() {
+fn synthetic_clickhere_metadata_and_body_match_wire() {
     use hwpforge_core::control::{Control, FieldBoundary, FieldParameter};
-    let wire =
-        include_bytes!("../../../../../tests/fixtures/nested_controls/clickhere-mixed-156.bin");
-    let records = Record::parse_stream(&mut Cursor::new(wire)).unwrap();
+    let wire = synthetic_unclosed_clickhere();
+    let records = Record::parse_stream(&mut Cursor::new(&wire)).unwrap();
     let data =
         |tag| records.iter().find(|r| TagId::from(r.header.tag_id) == tag).unwrap().data.as_slice();
     let units = |bytes: &[u8]| {
@@ -1988,18 +2011,16 @@ fn ck_sample_156_metadata_and_body_match_hwp5_records() {
     assert_eq!(properties, 0x8001);
     let command_len = u16::from_le_bytes(header[9..11].try_into().unwrap()) as usize;
     let command = String::from_utf16(&units(&header[11..11 + command_len * 2])).unwrap();
-    // This fixture's length-delimited Direction occupies 26 UTF-16 units.
-    let direction_tail = command.split_once(":Direction:wstring:26:").unwrap().1;
-    let direction =
-        String::from_utf16(&direction_tail.encode_utf16().take(26).collect::<Vec<_>>()).unwrap();
+    let direction = "가상 안내문을 입력".to_string();
+    assert_eq!(command, "Clickhere:set:0:Direction:wstring:10:가상 안내문을 입력 HelpState:wstring:0:  ");
     let name_data = data(TagId::CtrlData);
     let name_len = u16::from_le_bytes(name_data[10..12].try_into().unwrap()) as usize;
     let name = String::from_utf16(&units(&name_data[12..12 + name_len * 2])).unwrap();
-    assert_eq!(name, "본문");
+    assert_eq!(name, "가상필드");
 
     let text = units(data(TagId::ParaText));
     assert_eq!(text[0], 3); // 8-unit field-begin marker
-    assert_eq!(text[259], 0x15); // following page-number control, outside the body
+    assert_eq!(text[text.len() - 8], 0x15); // following page-number control, outside the body
     let spans: Vec<_> = data(TagId::ParaCharShape)
         .chunks_exact(8)
         .map(|b| {
@@ -2014,7 +2035,7 @@ fn ck_sample_156_metadata_and_body_match_hwp5_records() {
         .map(|pair| (pair[0].1, String::from_utf16(&text[pair[0].0.max(8)..pair[1].0]).unwrap()))
         .collect();
 
-    let parsed = parse_body_text(wire, &version()).unwrap();
+    let parsed = parse_body_text(&wire, &version()).unwrap();
     let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
     let runs = &doc.sections()[0].paragraphs[0].runs;
     let start = runs
@@ -2111,26 +2132,20 @@ fn ck_mixed_clickhere_matches_hwpx_ranges_and_fill_policy() {
     ));
 }
 
-/// 원본 표본 156, Section0 레코드 94..100 (1-based), 문단 전체를 그대로 보존.
-/// 이것을 실패시키는 것: 251자를 71(251)로 평탄화하거나 본문을 필드 밖/두 번 방출.
+/// 이것을 실패시키는 것: 여러 본문 서식을 평탄화하거나 unclosed/object 경고 subject 변조.
 #[test]
-fn ck_sample_156_preserves_six_body_shape_spans() {
+fn synthetic_clickhere_preserves_six_spans_and_projection_warnings() {
     use hwpforge_core::field_inventory::FieldInventory;
     use hwpforge_smithy_hwpx::{FillError, HwpxDecoder, HwpxFiller, PackageReader};
-    let wire =
-        include_bytes!("../../../../../tests/fixtures/nested_controls/clickhere-mixed-156.bin");
-    let mut parsed = parse_body_text(wire, &version()).unwrap();
-    // The fixture references the source document's paragraph style 52; this
-    // focused package has only one paragraph style. Character shapes stay intact.
-    parsed.paragraphs[0].para_shape_id = 0;
-    let (doc, _) = crate::projection::project_to_core(vec![parsed]).unwrap();
-    let body = ck_body_shapes(&doc.sections()[0].paragraphs[0].runs);
-    assert_eq!(
-        body.iter().map(|(s, t)| (*s, t.chars().count())).collect::<Vec<_>>(),
-        [(71, 2), (52, 38), (49, 1), (50, 46), (53, 41), (49, 123)]
-    );
+    let wire = synthetic_unclosed_clickhere();
+    let parsed = parse_body_text(&wire, &version()).unwrap();
+    let (doc, warnings) = crate::projection::project_to_core(vec![parsed]).unwrap();
+    r4_assert_projection_warnings(&warnings, &["field.unclosed", "field.object"]);
+    let runs = &doc.sections()[0].paragraphs[0].runs;
+    assert!(matches!(runs.last().unwrap().content.as_control(), Some(hwpforge_core::Control::PageNumber { .. })));
+    let body = ck_body_shapes(runs);
+    assert_eq!(body, SYNTHETIC_FIELD_SPANS.iter().map(|(shape, text)| (*shape as usize, text.to_string())).collect::<Vec<_>>());
     let text: String = body.iter().map(|(_, t)| t.as_str()).collect();
-    assert_eq!(text.chars().count(), 251);
     let bytes = ck_encode(doc);
     let decoded = HwpxDecoder::decode(&bytes).unwrap();
     assert_eq!(ck_body_shapes(&decoded.document.sections()[0].paragraphs[0].runs), body);
@@ -2140,6 +2155,7 @@ fn ck_sample_156_preserves_six_body_shape_spans() {
     let xml = PackageReader::new(&bytes).unwrap().read_section_xml(0).unwrap();
     assert_eq!(xml.matches("type=\"CLICK_HERE\"").count(), 1);
     assert_eq!(xml.matches("<hp:fieldEnd ").count(), 1);
+    assert_eq!(xml.matches("<hp:pageNum ").count(), 1);
     // Every non-space piece occurs exactly once in the emitted field body.
     for (_, piece) in body.iter().filter(|(_, t)| t.trim().chars().count() > 1) {
         assert_eq!(xml.matches(piece.as_str()).count(), 1);

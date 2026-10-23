@@ -1043,15 +1043,13 @@ Other truncations/nonzero short trailers still fail; no catch-all EOF fallback.
 
 Image's six-byte base block and remaining `extra_data`, and gradation's named
 fields, colors, optional `shape` u32 / `blur_center` u8 and `extra_data`, retain
-their existing parser contract. The observed final zero byte is optional (r3's
-five gradients are 70 bytes). No nonzero transparency or multi-stop (>2) gradient
+their existing parser contract. The final zero byte is optional (a two-color
+gradient with shape and blur-center fields is 70 bytes). No nonzero transparency or multi-stop (>2) gradient
 was observed here; these observations do not establish new semantics for opaque
 extensions. This patch does not change image/gradation projection or public types.
 
-`tests/fixtures/border_fill/r3-border-fills.bin` contains only r3's 41 original
-BORDER_FILL TLVs (2,086 bytes), with portable provenance in `manifest.json`.
-Tests cover all raw colors/five line slots, 52/53-byte color boundaries,
-nonzero alpha, declared extra lengths, image/gradient fixed-length boundaries,
+In-memory synthetic BORDER_FILL records cover all raw colors/five line slots,
+52/53-byte color boundaries, nonzero alpha, declared extra lengths, image/gradient fixed-length boundaries,
 and diagnostic context. Parse failures preserve the original placeholder/ID
 policy but use `ParserFallback` rather than `UnsupportedTag { offset: 0 }`.
 
